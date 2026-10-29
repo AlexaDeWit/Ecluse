@@ -3,27 +3,22 @@
 -- SPDX-License-Identifier: MIT
 
 -- | Native RubyGems reads bind the actual origin and charged complete-response reader.
-module Ecluse.Core.Registry.RubyGems.Metadata (rubyGemsChargeFactors, prepareGemRead, gemReadWith, finishGemFull, finishGemSelected) where
+module Ecluse.Core.Registry.RubyGems.Metadata (rubyGemsChargeFactors, prepareGemRead, gemReadWith, finishGemFull) where
 
-import Data.Map.Strict qualified as Map
-
-import Ecluse.Core.Package (PackageInfo (infoVersions), PackageName)
+import Ecluse.Core.Package (PackageInfo, PackageName)
 import Ecluse.Core.Registry (UrlFormationError (UnparseableUrl))
 import Ecluse.Core.Registry.CachedDocument (CachedDoc, rubyGemsCached)
 import Ecluse.Core.Registry.JsonStream (StreamResult (..))
-import Ecluse.Core.Registry.Metadata (MetadataError (MetadataUndecodable), VersionDoc (..), VersionRead (..))
-import Ecluse.Core.Registry.Metadata.Fetch.Preparation (PrepareRead (..))
+import Ecluse.Core.Registry.Metadata (MetadataError)
+import Ecluse.Core.Registry.Metadata.Fetch.Preparation (PrepareRead (..), bindToOrigin)
 import Ecluse.Core.Registry.Metadata.Fetch.Types (EcosystemRead (..))
-import Ecluse.Core.Registry.Metadata.Projection (streamError)
+import Ecluse.Core.Registry.Metadata.Projection (finishSelectedVersion, streamError)
 import Ecluse.Core.Registry.Origin (OriginClient (..), originBaseUrl)
-import Ecluse.Core.Registry.Request (baseRequestUrl)
 import Ecluse.Core.Registry.RubyGems.Document (selectGemVersion)
 import Ecluse.Core.Registry.RubyGems.Reader (GemRead (..), GemReadResult (..), readGemInfoCharged)
 import Ecluse.Core.Registry.RubyGems.Request (gemInfoRequestUnder)
 import Ecluse.Core.Security (Limits)
-import Ecluse.Core.Security.Egress (registryUrlText)
 import Ecluse.Core.Server.Admission.Types (ChargeFactors (..))
-import Ecluse.Core.Version (Version, renderVersion)
 
 -- | ARM64 charges combine public captures with labelled synthetic listings.
 rubyGemsChargeFactors :: ChargeFactors
@@ -39,33 +34,20 @@ prepareGemRead = PrepareRead (\_ origin -> pure (Right (gemReadWith (ocChargeFul
 -- | Keep full and selected reads under the same captured source authority.
 gemReadWith :: (Int -> IO ()) -> (Int -> IO ()) -> Text -> EcosystemRead
 gemReadWith fullPay selectedPay sourceBase =
-    EcosystemRead
-        { erRequest = \base credential name -> do
-            unless (registryUrlText (baseRequestUrl base) == sourceBase) (Left (UnparseableUrl "RubyGems reader belongs to another origin"))
-            gemInfoRequestUnder base credential name
-        , erUniqueFields = []
-        , erWalkFull = \limits name _ -> readGemInfoCharged fullPay limits name sourceBase FullRead
-        , erFinishFull = \limits name base streamed -> do
-            unless (base == sourceBase) (Left MetadataUndecodable)
-            finishGemFull limits name base streamed
-        , erWalkSelected = \limits name version -> readGemInfoCharged selectedPay limits name sourceBase (SelectedRead version)
-        , erFinishSelected = \limits name base version streamed -> do
-            unless (base == sourceBase) (Left MetadataUndecodable)
-            finishGemSelected limits name base version streamed
-        }
+    bindToOrigin
+        (UnparseableUrl "RubyGems reader belongs to another origin")
+        sourceBase
+        EcosystemRead
+            { erRequest = gemInfoRequestUnder
+            , erUniqueFields = []
+            , erWalkFull = \limits name _ -> readGemInfoCharged fullPay limits name sourceBase FullRead
+            , erFinishFull = finishGemFull
+            , erWalkSelected = \limits name version -> readGemInfoCharged selectedPay limits name sourceBase (SelectedRead version)
+            , erFinishSelected = \limits _ _ -> finishSelectedVersion gemReadInfo (\version result -> fst rubyGemsCached <$> selectGemVersion version (gemReadDocument result)) limits
+            }
 
 -- | Retain policy facts and native rows from one fully consumed named response.
 finishGemFull :: Limits -> PackageName -> Text -> StreamResult GemReadResult -> Either MetadataError (PackageInfo, CachedDoc)
 finishGemFull limits _ _ streamed = do
     result <- first (streamError limits) (streamValue streamed)
     pure (gemReadInfo result, fst rubyGemsCached (gemReadDocument result))
-
--- | Selected source state includes every supported platform for the exact raw version.
-finishGemSelected :: Limits -> PackageName -> Text -> Version -> StreamResult GemReadResult -> Either MetadataError VersionRead
-finishGemSelected limits _ _ version streamed = do
-    result <- first (streamError limits) (streamValue streamed)
-    let selected = do
-            details <- Map.lookup (renderVersion version) (infoVersions (gemReadInfo result))
-            document <- selectGemVersion version (gemReadDocument result)
-            pure (VersionDoc details (Just (fst rubyGemsCached document)))
-    pure (VersionRead selected (streamBytes streamed) Nothing)
