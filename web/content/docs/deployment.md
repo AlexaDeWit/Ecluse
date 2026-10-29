@@ -483,7 +483,7 @@ responses, and Istio compresses only through a resource your cluster may not all
 
 | Response | Compressed by Écluse |
 |---|---|
-| An admitted npm packument, PyPI Simple index, or Cargo sparse index, when `Accept-Encoding` prefers gzip | Yes, gzip at level 1 |
+| An admitted npm packument, PyPI Simple index, Cargo sparse index, or RubyGems Compact Index `/versions` or `/info` reply or compact specification, when `Accept-Encoding` prefers gzip | Yes, gzip at level 1 |
 | Artifacts, Core Metadata sidecars, probes, `/-/ping`, refusals, publish replies | No |
 
 With compression on, a listing and its `304` carry `Vary: Accept-Encoding`. A gzip listing carries
