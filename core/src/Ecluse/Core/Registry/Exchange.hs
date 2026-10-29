@@ -17,6 +17,7 @@ module Ecluse.Core.Registry.Exchange (
 
     -- * The serve-path cap
     withinServeCap,
+    withinServeCapOr,
 
     -- * Source digests
     digestingRead,
@@ -135,10 +136,14 @@ runExchangeUsingObserved observe control client progress request readResponse =
 
 -- | Fail an action that outlives the floor's serve-path cap with the transport timeout, about one sweep late.
 withinServeCap :: Deadlines -> ProgressFloor -> (FetchFault -> e) -> IO (Either e a) -> IO (Either e a)
-withinServeCap deadlines progress inject action =
-    fromMaybe (Left (inject capExceeded)) <$> timeout deadlines (floorServeCapMicros progress) action
+withinServeCap deadlines progress inject = withinServeCapOr deadlines progress (Left (inject capExceeded))
   where
     capExceeded = FetchTransport (transportFault TransportTimeout ("the upstream exchange outlived its " <> seconds (floorServeCapMicros progress) <> "-second serve-path cap"))
+
+-- | Answer @expired@ once an action outlives the floor's serve-path cap, about one sweep late.
+withinServeCapOr :: Deadlines -> ProgressFloor -> a -> IO a -> IO a
+withinServeCapOr deadlines progress expired action =
+    fromMaybe expired <$> timeout deadlines (floorServeCapMicros progress) action
 
 belowFloor :: ProgressFloor -> FetchFault
 belowFloor progress =
