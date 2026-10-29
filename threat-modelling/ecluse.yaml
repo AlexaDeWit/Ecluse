@@ -1031,7 +1031,7 @@ elements:
   - kind: process
     id: 0ec10e5e-0000-4000-8000-000000000021
     name: Mirror worker
-    description: The demand-driven worker copies every supported file of an admitted version. It verifies exact source bytes, records expected PyPI and Cargo identities and source read data before upload, and prepares bounded native metadata without executing it. Current file and companion proof precedes completion acknowledgement.
+    description: The demand-driven worker copies every supported file of an admitted version. It verifies exact source bytes, records expected PyPI, Cargo, and RubyGems identities and source read data before upload, and prepares bounded native metadata without executing it. Current file and companion proof precedes completion acknowledgement.
     outOfScope: false
     reasonOutOfScope: ""
   - kind: store
@@ -1527,7 +1527,7 @@ elements:
     name: |-
       Listing request
       and response
-    description: The caller requests npm metadata, a PyPI Simple listing, or a Cargo sparse index. npm and PyPI combine authorised private and admitted public content. Cargo separates crates.io replacement from its private alternate. Local discovery and manifests direct archive downloads through Écluse.
+    description: The caller requests npm metadata, a PyPI Simple listing, a Cargo sparse index, or RubyGems Compact Index `/versions` discovery and on-demand `/info` records. npm, PyPI, and RubyGems combine authorised private and admitted public content. Cargo separates crates.io replacement from its private alternate. Local discovery and manifests direct archive downloads through Écluse.
     outOfScope: false
     reasonOutOfScope: ""
     protocol: HTTPS
@@ -1959,7 +1959,7 @@ mitigations:
       - 0ec10e5e-0000-4000-8000-00000000010b
   - id: mit-private-refusal-stops-read
     title: Private refusal stops the read
-    prose: "Private authentication or authorisation refusal never permits public substitution. npm and PyPI map private 401 or 403 to local 403 before parsing the error body. Cargo preserves native 401 with a Cargo challenge for credential-provider retry. A true 403 remains refusal. A private 404 permits public fallback only where source selection supports it and only for non-first-party packages. Cargo's private alternate never falls back. Discovery inability stays explicit and can prevent new-client bootstrap during a trusted-registry outage."
+    prose: "Private authentication or authorisation refusal never permits public substitution. npm and PyPI map private 401 or 403 to local 403 before parsing the error body. Cargo preserves native 401 with a Cargo challenge for credential-provider retry. A true 403 remains refusal. RubyGems preserves the private 401 or 403 status on metadata and archive reads. A private 404 permits public fallback only where source selection supports it and only for non-first-party packages. Cargo's private alternate never falls back. Discovery inability stays explicit and can prevent new-client bootstrap during a trusted-registry outage."
     status: implemented
     threats:
       - 0ec10e5e-0000-4000-8000-00000000010b
@@ -2134,7 +2134,7 @@ mitigations:
       - 9d92a448-e04d-46b6-8b8d-bc353dacdb97
   - id: mit-canonical-advisory-identity
     title: Canonical advisory package identity
-    prose: "Pilot canonicalises package names before it stores advisory segments: PyPI by PEP 503, while npm and RubyGems keep their spelling. Denial and remediation consumers query the canonical key, so the Dredger's candidate selection and the shared rules use one identity. Pilot canonicalises configured exports itself and does not rely on the OSV schema's normalisation rule. Schema epoch 4 introduced this stored meaning. Current epoch 5 preserves it, and consumers refuse earlier epochs."
+    prose: "Pilot canonicalises package names before it stores advisory segments: PyPI by PEP 503 and Cargo by its ASCII-lowercase index name, while npm and RubyGems keep their spelling. Denial and remediation consumers query the canonical key, so the Dredger's candidate selection and the shared rules use one identity. Pilot canonicalises configured exports itself and does not rely on the OSV schema's normalisation rule. Schema epoch 4 introduced this stored meaning. Current epoch 5 preserves it, and consumers refuse earlier epochs."
     status: implemented
     threats:
       - 36f3684d-f2b4-4cd4-a017-6b390bc77a46
