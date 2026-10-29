@@ -25,3 +25,10 @@ spec = describe "cargoCredential" $ do
         redirectCount attached `shouldBe` 0
     it "does not invent a credential for an empty value" $
         credentialRecover cargoCredential [("Authorization", "")] `shouldBe` Nothing
+    it "recovers nothing from more than one Authorization line" $
+        credentialRecover cargoCredential [("Authorization", "first"), ("Authorization", "second")] `shouldBe` Nothing
+    it "keeps a tab inside the recovered token" $
+        credentialRecover cargoCredential [("Authorization", "native\ttoken")] `shouldBe` Just (bareCredential (mkSecret "native\ttoken"))
+    it "recovers nothing from a control byte or a byte outside visible ASCII" $
+        for_ ["native\x01token", "native\xC3\xA9token"] $ \raw ->
+            credentialRecover cargoCredential [("Authorization", raw)] `shouldBe` Nothing
