@@ -28,7 +28,7 @@ import Ecluse.Core.Registry.Publish (
     MirrorTransport (MirrorTransport, ptClient, ptLimits, ptMintCredential, ptTracing),
     newMirrorPublish,
  )
-import Ecluse.Core.Registry.RubyGems.Credential (rubyCodeArtifactPublishCredential, rubyCodeArtifactReadCredential)
+import Ecluse.Core.Registry.RubyGems.Credential (rubyCodeArtifactPublishCredential)
 import Ecluse.Core.Registry.RubyGems.Publish (rubyPublishCodecWith)
 import Ecluse.Core.Security (Limits (maxMirrorArtifactBytes), Origin (UntrustedOrigin), thgPublicHostPort)
 import Ecluse.Core.Security.Egress (registryUrlText)
@@ -104,7 +104,7 @@ mirrorPublishFor env deps targets artifactMaxBytes eco = do
     let transport = mirrorTransportFor env deps target
         bounded = transport{ptLimits = (ptLimits transport){maxMirrorArtifactBytes = artifactMaxBytes}}
         codec = case (eco, ptBackendTag target) of
-            (RubyGems, TagCodeArtifact) -> rubyPublishCodecWith rubyCodeArtifactReadCredential rubyCodeArtifactPublishCredential (metadataChargeFactors (pdMetadata deps))
+            (RubyGems, TagCodeArtifact) -> rubyPublishCodecWith rubyCodeArtifactPublishCredential (metadataChargeFactors (pdMetadata deps))
             _ -> publishCodec publish
     pure (newMirrorPublish bounded (ptMirrorUrl target) (ptUploadUrl target) codec, publishMirrorRequirements publish)
 
