@@ -17,13 +17,14 @@ import Ecluse.Core.Registry.Origin (OriginClient (ocBaseRequest, ocToken))
 import Ecluse.Core.Registry.Request (artifactGet, artifactRequestByUrl, requestAt)
 import Ecluse.Core.Registry.RubyGems.Credential (rubyReadCredential)
 import Ecluse.Core.Registry.RubyGems.Metadata (prepareGemRead)
-import Ecluse.Core.Registry.RubyGems.Project (projectName)
+import Ecluse.Core.Registry.RubyGems.Project (projectName, rubyGemsNameChars)
 import Ecluse.Core.Registry.RubyGems.Publish (rubyPublish)
+import Ecluse.Core.Registry.RubyGems.Request (gemPath)
 import Ecluse.Core.Registry.RubyGems.Route (rubyGemsRouteSpecs, rubyGemsRouter)
 import Ecluse.Core.Registry.RubyGems.Serving (assembleRubyGemsDocument, serialiseRubyGemsDocument)
 import Ecluse.Core.Rules.Types (RuleType (AllowScopeType, DenyIfDeprecatedType, DenyInstallTimeExecutionType))
 import Ecluse.Core.Server.Admission.Types (ChargeFactors)
-import Ecluse.Core.Server.Path (encodeComponent, mkFilename, unFilename)
+import Ecluse.Core.Server.Path (mkFilename, unFilename)
 
 -- | Activation requires observed resource factors supplied by composition.
 rubyGemsAdapter :: ChargeFactors -> RegistryAdapter
@@ -53,12 +54,12 @@ rubyGemsAdapter factors =
             AdapterArtifact
                 { artifactByFile = \origin _ raw -> do
                     file <- maybeToRight (UnparseableUrl "invalid RubyGems artifact filename") (mkFilename raw)
-                    artifactGet rubyReadCredential (ocToken origin) <$> requestAt (ocBaseRequest origin) ("gems/" <> encodeComponent (unFilename file))
+                    artifactGet rubyReadCredential (ocToken origin) <$> requestAt (ocBaseRequest origin) (gemPath (unFilename file))
                 , artifactByUrl = artifactRequestByUrl rubyReadCredential
                 , artifactHosts = []
                 , artifactPrivateAddressing = AdmittedIndexedArtifactLocation
                 }
         , adapterProjectName = rightToMaybe . projectName
         , adapterPublish = Just (rubyPublish factors)
-        , adapterMaintenance = AdapterMaintenance Nothing Nothing (mkNameAlphabet "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._-")
+        , adapterMaintenance = AdapterMaintenance Nothing Nothing (mkNameAlphabet rubyGemsNameChars)
         }
