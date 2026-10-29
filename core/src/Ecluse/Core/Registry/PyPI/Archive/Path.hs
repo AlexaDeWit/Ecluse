@@ -8,7 +8,7 @@ module Ecluse.Core.Registry.PyPI.Archive.Path (checkPath, metadataPath) where
 
 import Data.Text qualified as T
 import Ecluse.Core.Package (PackageName)
-import Ecluse.Core.Registry (ParseError (..))
+import Ecluse.Core.Registry (ParseError, parseRefusal)
 import Ecluse.Core.Registry.Archive.Path (checkPath)
 import Ecluse.Core.Registry.PyPI.Project (DistributionKind (..), FileCoordinate (..), fileCoordinate)
 import Ecluse.Core.Version (Version)
@@ -22,7 +22,4 @@ metadataPath package version kind parts = case (kind, parts) of
   where
     matchesIdentity stem = case fileCoordinate package (stem <> ".tar.gz") of
         Just coordinate | fcVersion coordinate == version -> Right True
-        _ -> bad "archive metadata directory disagrees with admitted identity"
-
-bad :: Text -> Either ParseError a
-bad = Left . ParseError
+        _ -> parseRefusal "archive metadata directory disagrees with admitted identity"
