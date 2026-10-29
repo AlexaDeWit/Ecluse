@@ -7,16 +7,20 @@ module Ecluse.Core.Registry.Metadata.Fetch.Preparation (
     PrepareRead (PrepareRead),
     staticRead,
     prepareRead,
+    bindToOrigin,
     canChargeFullReadWorkspace,
     prepareManifest,
     prepareVersion,
 ) where
 
 import Ecluse.Core.Package (PackageName)
-import Ecluse.Core.Registry.Metadata (MetadataError, VersionRead)
+import Ecluse.Core.Registry (UrlFormationError)
+import Ecluse.Core.Registry.Metadata (MetadataError (MetadataUndecodable), VersionRead)
 import Ecluse.Core.Registry.Metadata.Fetch (fetchManifest, fetchVersion)
-import Ecluse.Core.Registry.Metadata.Fetch.Types (EcosystemRead, ManifestFetch)
+import Ecluse.Core.Registry.Metadata.Fetch.Types (EcosystemRead (..), ManifestFetch)
 import Ecluse.Core.Registry.Origin (OriginClient)
+import Ecluse.Core.Registry.Request (baseRequestUrl)
+import Ecluse.Core.Security.Egress (registryUrlText)
 import Ecluse.Core.Telemetry.Span (TracingPort)
 import Ecluse.Core.Version (Version)
 
@@ -34,6 +38,26 @@ prepareRead :: PrepareRead -> TracingPort -> OriginClient -> IO (Either Metadata
 prepareRead = \case
     StaticRead nativeRead -> \_ _ -> pure (Right nativeRead)
     PrepareRead prepare -> prepare
+
+{- | Hold a prepared reader to the origin at @root@: a request under another base is refused with
+@refusal@, and a finish located against another base is undecodable.
+-}
+bindToOrigin :: UrlFormationError -> Text -> EcosystemRead -> EcosystemRead
+bindToOrigin refusal root EcosystemRead{erRequest, erUniqueFields, erWalkFull, erFinishFull, erWalkSelected, erFinishSelected} =
+    EcosystemRead
+        { erRequest = \base credential name -> do
+            unless (registryUrlText (baseRequestUrl base) == root) (Left refusal)
+            erRequest base credential name
+        , erUniqueFields
+        , erWalkFull
+        , erFinishFull = \limits name base streamed -> do
+            unless (base == root) (Left MetadataUndecodable)
+            erFinishFull limits name base streamed
+        , erWalkSelected
+        , erFinishSelected = \limits name base version streamed -> do
+            unless (base == root) (Left MetadataUndecodable)
+            erFinishSelected limits name base version streamed
+        }
 
 -- | Whether preparation can bind the selected origin's full-read workspace callback into its reader.
 canChargeFullReadWorkspace :: PrepareRead -> Bool
