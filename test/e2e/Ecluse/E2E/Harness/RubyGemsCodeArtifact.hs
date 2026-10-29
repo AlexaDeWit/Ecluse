@@ -35,13 +35,14 @@ import Network.Wai qualified as Wai
 
 import Ecluse.Core.Ecosystem (Ecosystem (RubyGems))
 import Ecluse.Core.Server.Path (encodeComponent)
-import Ecluse.E2E.Harness.Advisories (advisoryBucket, createAdvisoryBucket)
+import Ecluse.E2E.Harness.Advisories (createAdvisoryBucket)
 import Ecluse.E2E.Harness.CodeArtifact
-import Ecluse.E2E.Harness.Docker (ministackAwsEnv, withStubFault)
+import Ecluse.E2E.Harness.CodeArtifact.Roles (PublicationAuthority (..), codeArtifactProxyRoleEnv, codeArtifactSweepRoleEnv)
+import Ecluse.E2E.Harness.Docker (withStubFault)
 import Ecluse.E2E.Harness.RubyGemsCodeArtifact.Fixtures (buildSweepAdvisories, firstPartyName)
-import Ecluse.E2E.Harness.RubyGemsGateway (ObservedRubyProxy, rubyProxy, withObservedRubyProxy)
+import Ecluse.E2E.Harness.NativeEdge (ObservedNativeProxy, observedProxy, withObservedNativeProxy)
 import Ecluse.E2E.Harness.RubyGemsRegistry
-import Ecluse.E2E.Harness.Stub (StubFault (RubyGemsCodeArtifactBackend), StubRoute (PyPICodeArtifactData, RubyGemsPublic), stubUrl)
+import Ecluse.E2E.Harness.Stub (StubFault (RubyGemsCodeArtifactBackend))
 import Ecluse.E2E.Harness.Types
 import Ecluse.Test.Contract.Sweep.Types (PackageFixture (..))
 import Ecluse.Test.Registry.RubyGems.Fixtures
@@ -58,7 +59,7 @@ data RubySweepPlane = RubySweepPlane
 -- | The client endpoint and directly observed physical repository remain paired.
 data RubySweepStore = RubySweepStore
     { rssPlane :: RubySweepPlane
-    , rssObserved :: ObservedRubyProxy
+    , rssObserved :: ObservedNativeProxy
     , rssRepository :: Text
     , rssReadUrl :: Text
     , rssPublishUrl :: Text
@@ -132,8 +133,8 @@ cacheReader registry request = do
 
 -- | Every ordinary role uses the actual product listener behind the observed native TLS edge.
 withSweepProxy :: RubySweepPlane -> [(Text, Text)] -> Maybe Text -> [String] -> (RubySweepStore -> IO a) -> IO a
-withSweepProxy plane extra queue args action = withObservedRubyProxy config (rspGlobal plane) $ \observed -> do
-    let base = e2eBaseUrl (rubyProxy observed) <> "/rubygems/"
+withSweepProxy plane extra queue args action = withObservedNativeProxy config (rspGlobal plane) $ \observed -> do
+    let base = e2eBaseUrl (observedProxy observed) <> "/rubygems/"
     action (RubySweepStore plane observed "mirror" base base False)
   where
     config = defaultE2EConfig{ecExtraEnv = proxyRoleEnv <> extra, ecQueueUrl = queue, ecArgs = args}
@@ -150,13 +151,11 @@ directStore store = store{rssReadUrl = base, rssPublishUrl = base, rssDirect = T
 
 -- | The native Ruby endpoint path must agree with the production CodeArtifact format mapping.
 repositoryUrl :: Text -> Text
-repositoryUrl repository = stubUrl PyPICodeArtifactData <> "ruby/" <> repository <> "/"
+repositoryUrl = codeArtifactRepositoryUrl RubyGems
 
 -- | Inventory comes from production CodeArtifact response readers over actual physical files.
 storeInventory :: RubySweepStore -> IO (Map Text [Text])
-storeInventory store = do
-    names <- storeNamesUnder store ""
-    Map.fromList <$> traverse (\name -> (name,) <$> storeVersions store name) names
+storeInventory store = codeArtifactInventory (rspControl (rssPlane store)) (rssRepository store)
 
 -- | Whole native versions are independent of the product's retained mirror records.
 storeVersions :: RubySweepStore -> Text -> IO [Text]
@@ -173,7 +172,7 @@ storeArtifactBytes store name version = do
     let registry = rspRegistry (rssPlane store)
         url = "http://127.0.0.1:" <> show (rubyRegistryPort registry) <> "/gems/" <> encodeComponent (releaseFilename release)
     initial <- Http.parseRequest (toString url)
-    response <- Http.httpLbs initial{Http.requestHeaders = [("Host", encodeUtf8 (nativeHost (rssRepository store)))]} (e2eManager (rubyProxy (rssObserved store)))
+    response <- Http.httpLbs initial{Http.requestHeaders = [("Host", encodeUtf8 (nativeHost (rssRepository store)))]} (e2eManager (observedProxy (rssObserved store)))
     pure (statusCode (Http.responseStatus response), Http.responseBody response)
 
 -- | Native client requests preserve method, actual response bytes and target-specific credentials.
@@ -182,39 +181,16 @@ storeRequest store path method body = do
     initial <- Http.parseRequest (toString ((if method == "POST" then rssPublishUrl store else rssReadUrl store) <> path))
     let credential = if method == "POST" then (if rssDirect store then "Bearer " else "") <> encodeUtf8 rubyRegistryToken else basicCredential
         request = initial{Http.method = method, Http.requestHeaders = [("Authorization", credential), ("Content-Type", "application/octet-stream")], Http.requestBody = maybe (Http.RequestBodyBS "") Http.RequestBodyBS body, Http.redirectCount = 0}
-    response <- Http.httpLbs request (e2eManager (rubyProxy (rssObserved store)))
+    response <- Http.httpLbs request (e2eManager (observedProxy (rssObserved store)))
     pure (statusCode (Http.responseStatus response), Http.responseBody response)
 
 -- | Service roles retain separate mirror/cache coordinates, credentials and TLS roots.
 sweepRoleEnv :: [(Text, Text)]
-sweepRoleEnv =
-    [ ("ECLUSE_SERVER__PORT", "4873")
-    , ("ECLUSE_SERVER__PUBLIC_URL", "http://127.0.0.1:4873")
-    , ("ECLUSE_MOUNTS__NPM__ENABLED", "false")
-    , ("ECLUSE_MOUNTS__PYPI__ENABLED", "false")
-    , ("ECLUSE_MOUNTS__CARGO__ENABLED", "false")
-    , ("ECLUSE_MOUNTS__RUBYGEMS__ENABLED", "true")
-    , ("ECLUSE_MOUNTS__RUBYGEMS__PUBLIC_UPSTREAM__REGISTRY__URL", stubUrl RubyGemsPublic)
-    , ("ECLUSE_MOUNTS__RUBYGEMS__PRIVATE_UPSTREAM__CODE_ARTIFACT__URL", repositoryUrl "cache")
-    , ("ECLUSE_MOUNTS__RUBYGEMS__MIRROR_TARGET__CODE_ARTIFACT__URL", repositoryUrl "mirror")
-    , ("ECLUSE_OBSERVABILITY__LOG_FORMAT", "json")
-    , ("SSL_CERT_FILE", "/certs/bundle.pem")
-    ]
-        <> ministackAwsEnv
+sweepRoleEnv = codeArtifactSweepRoleEnv RubyGems
 
 -- | Source rows persist remotely across independently restarted product roles.
 proxyRoleEnv :: [(Text, Text)]
-proxyRoleEnv =
-    filter ((/= "ECLUSE_SERVER__PUBLIC_URL") . fst) sweepRoleEnv
-        <> [ ("ECLUSE_MIRROR_STATE__URL", "s3://" <> advisoryBucket <> "/rubygems-dredger")
-           , ("ECLUSE_MOUNTS__RUBYGEMS__MIRROR_TARGET__CODE_ARTIFACT__UPLOAD_URL", repositoryUrl "mirror")
-           , ("ECLUSE_MOUNTS__RUBYGEMS__PUBLICATION_TARGET__CODE_ARTIFACT__URL", repositoryUrl "mirror")
-           , ("ECLUSE_MOUNTS__RUBYGEMS__PUBLICATION_TARGET__CODE_ARTIFACT__UPLOAD_URL", repositoryUrl "mirror")
-           , ("ECLUSE_MOUNTS__RUBYGEMS__PUBLICATION_TARGET__CODE_ARTIFACT__TOKEN", "Bearer " <> rubyRegistryToken)
-           , ("ECLUSE_MOUNTS__RUBYGEMS__FIRST_PARTY", firstPartyName)
-           , ("ECLUSE_SERVER__AUTH_TOKEN", rubyRegistryToken)
-           , ("ECLUSE_CACHE__TTL", "1")
-           ]
+proxyRoleEnv = codeArtifactProxyRoleEnv RubyGems (PublicationAuthority "" [("TOKEN", "Bearer " <> rubyRegistryToken)] firstPartyName rubyRegistryToken)
 
 -- | Withhold only the named native archive while leaving its public metadata available.
 withSourceWithheld :: RubySweepPlane -> Text -> Text -> IO a -> IO a
@@ -226,18 +202,12 @@ withSourceWithheld plane name version action = do
 
 -- | A per-version backend refusal preserves cache bytes until a later authorised sweep.
 withDeleteRefusal :: RubySweepPlane -> IO a -> IO a
-withDeleteRefusal plane = withFixtureValue (cafRefusedDeletes (rspControl plane)) ["cache"]
+withDeleteRefusal plane = withCodeArtifactDeleteRefusal (rspControl plane) "cache"
 
 -- | Consent refusal must leave both physical repositories unchanged.
 withConsentWithheld :: RubySweepPlane -> IO a -> IO a
-withConsentWithheld plane action = do
-    let variable = cafTags (rspControl plane)
-    tags <- readTVarIO variable
-    withFixtureValue variable (Map.adjust (Map.delete "ecluse-dredger-consent") "mirror" tags) action
+withConsentWithheld plane = withCodeArtifactConsentRemoved (rspControl plane) "mirror"
 
 -- | A refillable target must fail adoption checks before native version deletion.
 withUnsafeMirror :: RubySweepPlane -> IO a -> IO a
-withUnsafeMirror plane action = do
-    let variable = cafUpstreams (rspControl plane)
-    links <- readTVarIO variable
-    withFixtureValue variable (Map.insert "mirror" ["cache"] links) action
+withUnsafeMirror plane = withCodeArtifactUpstreams (rspControl plane) "mirror" ["cache"]
