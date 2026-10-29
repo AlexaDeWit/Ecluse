@@ -117,11 +117,14 @@ spec = do
                 simpleStatus refused `shouldBe` status403
                 finalEvents <- readIORef hits
                 map fst finalEvents `shouldBe` [["private", "versions"], ["public", "versions"], ["private", "versions"], ["private", "versions"]]
-        it "returns a complete replacement for Range with a matching validator" $
+        it "honours matching validators before replacing modified Range responses" $
             withDirectorySources $ \runtime binding _ _ -> do
                 original <- capture runtime binding "GET" "/versions" []
                 validator <- maybe (expectationFailure "missing directory ETag" >> fail "missing directory ETag") pure (lookup "ETag" (simpleHeaders original))
-                replacement <- capture runtime binding "GET" "/versions" [("Range", "bytes=10-"), ("If-None-Match", validator)]
+                unchanged <- capture runtime binding "GET" "/versions" [("Range", "bytes=10-"), ("If-None-Match", validator)]
+                simpleStatus unchanged `shouldBe` status304
+                simpleBody unchanged `shouldBe` ""
+                replacement <- capture runtime binding "GET" "/versions" [("Range", "bytes=10-"), ("If-None-Match", "\"old-directory\"")]
                 simpleStatus replacement `shouldBe` status200
                 simpleBody replacement `shouldBe` simpleBody original
                 lookup "Content-Range" (simpleHeaders replacement) `shouldBe` Nothing
@@ -439,6 +442,9 @@ spec = do
                     map simpleStatus [plain, packed] `shouldBe` [status200, status200]
                     GZip.decompress (simpleBody packed) `shouldBe` simpleBody plain
                     lookup "Content-Encoding" (simpleHeaders packed) `shouldBe` Just "gzip"
+                    when (path == "/versions" || "/info/" `BS.isPrefixOf` path) $ do
+                        lookup "Repr-Digest" (simpleHeaders plain) `shouldSatisfy` isJust
+                        lookup "Repr-Digest" (simpleHeaders packed) `shouldBe` lookup "Repr-Digest" (simpleHeaders plain)
                     map (lookup "Vary" . simpleHeaders) [plain, packed] `shouldBe` replicate 2 (Just "Accept-Encoding")
                     plainTag <- responseTag plain
                     gzipTag <- responseTag packed
@@ -455,6 +461,10 @@ spec = do
                             simpleBody matched `shouldBe` ""
                             lookup "ETag" (simpleHeaders matched) `shouldBe` Just tag
                             lookup "Vary" (simpleHeaders matched) `shouldBe` Just "Accept-Encoding"
+                            ranged <- serve method (("Range", "bytes=10-") : ("If-None-Match", tag) : offered)
+                            simpleStatus ranged `shouldBe` status304
+                            simpleBody ranged `shouldBe` ""
+                            lookup "ETag" (simpleHeaders ranged) `shouldBe` Just tag
                     crossed <- serve "GET" [("Accept-Encoding", "gzip"), ("If-None-Match", plainTag)]
                     simpleStatus crossed `shouldBe` status200
                     excluded <- serve "GET" [("Accept-Encoding", "gzip;q=0, identity;q=0"), ("If-None-Match", "*")]
@@ -473,7 +483,9 @@ spec = do
 
 metadataPaths :: [ByteString]
 metadataPaths =
-    [ "/quick/Marshal.4.8/ecluse-fixture-root-1.0.0.gemspec.rz"
+    [ "/versions"
+    , "/info/ecluse-fixture-root"
+    , "/quick/Marshal.4.8/ecluse-fixture-root-1.0.0.gemspec.rz"
     ]
 
 compressing :: MountBinding -> MountBinding

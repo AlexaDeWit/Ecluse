@@ -35,7 +35,7 @@ rubySweepClientOps =
                 logs <- proxyContainerLogs (rubyProxy (rssObserved store))
                 putTextLn ("unexpected RubyGems maintenance artifact response for " <> name <> "@" <> version <> ": " <> show status <> "\nBody:\n" <> decodeUtf8 body <> "\nProxy logs:\n" <> logs)
             pure response
-        , clientMetadataStatus = \store name -> fst <$> storeRequest store ("api/v1/dependencies?gems=" <> encodeComponent name) "GET" Nothing
+        , clientMetadataStatus = \store name -> fst <$> storeRequest store ("info/" <> encodeComponent name) "GET" Nothing
         }
 
 withProject :: RubySweepStore -> (RubyProject -> IO a) -> IO a

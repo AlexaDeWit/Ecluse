@@ -15,10 +15,8 @@ import Data.Text qualified as T
 import Data.Time (UTCTime (UTCTime), fromGregorian, nominalDay)
 import Foreign.StablePtr (deRefStablePtr, freeStablePtr, newStablePtr)
 import Network.HTTP.Types (hContentType, methodGet, status200, statusCode)
-import Network.HTTP.Types.URI (renderQuery)
 import Network.Wai (Application, Request (..), defaultRequest, responseLBS, responseStatus)
 import Network.Wai.Handler.Warp (testWithApplication)
-import Network.Wai.Test (setPath)
 import Test.Hspec
 import UnliftIO.Exception (bracket, evaluate, throwIO)
 
@@ -186,11 +184,9 @@ listingOperation name = case pkgEcosystem name of
     Npm -> ordinary (T.splitOn "/" (renderPackageName name))
     PyPI -> ordinary ["simple", renderPackageName name]
     Cargo -> ordinary (T.splitOn "/" (cargoShard (renderPackageName name)))
-    RubyGems -> (pathInfo native, native)
+    RubyGems -> ordinary ["info", renderPackageName name]
   where
     ordinary segments = (segments, defaultRequest{requestMethod = methodGet})
-    -- An empty Dependencies API query skips package admission and both census checkpoints.
-    native = setPath defaultRequest{requestMethod = methodGet} ("/api/v1/dependencies" <> renderQuery True [("gems", Just (encodeUtf8 (renderPackageName name)))])
 
 {- Serve the capture with its locations on this origin's own authority, as projection keeps no other.
 The body is rebased once, so the origin holds the same bytes at every sample. -}

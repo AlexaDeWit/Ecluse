@@ -49,7 +49,8 @@ rubyMirrorProofContract = DeclaredGroup metadata $ \recorder ->
         it (label "interruption" "resumes a genuinely partial multi-platform write after process restart") interrupted
         it (label "upstream-removal" "keeps a completed version available after its public membership disappears") removed
         it (label "conclusive-absence" "preserves authorised private reads when the project state is conclusively absent") absentProject
-        for_ [("missing-archive", MissingArchive), ("checksum-mutation", ChangedChecksum), ("missing-state", MissingState), ("missing-compact", MissingCompact), ("corrupt-state", CorruptState), ("private-auth", PrivateAuthorisation)] $ \(name, fault) ->
+        it (label "missing-compact" "refuses the missing compact specification while preserving complete native installs") missingCompact
+        for_ [("missing-archive", MissingArchive), ("checksum-mutation", ChangedChecksum), ("missing-state", MissingState), ("corrupt-state", CorruptState), ("private-auth", PrivateAuthorisation)] $ \(name, fault) ->
             it (label name "refuses an incomplete or unauthorised completed-mirror view") (faultCase fault)
   where
     fixture = rubyWriteFixture "mirror-proof" ["read", "mirror", "client-install"]
@@ -163,7 +164,28 @@ absentProject plane = withPlatform plane $ \registry releases config -> do
             proxyStatus (rubyProxy observed) infoPath `shouldReturn` 200
             platformClient observed releases
 
-data MirrorFault = MissingArchive | ChangedChecksum | MissingState | MissingCompact | CorruptState | PrivateAuthorisation
+missingCompact :: GlobalDataPlane -> IO ()
+missingCompact plane = withPlatform plane $ \registry releases config -> do
+    complete plane registry releases config
+    before <- withObservedRubyProxy config{ecArgs = ["proxy", "--no-worker"]} plane $ \observed -> do
+        response <- proxyGet (rubyProxy observed) infoPath
+        fst response `shouldBe` 200
+        pure response
+    release <- rubyRelease releases "ecluse-fixture-platform" "1.0.0" "ruby"
+    deleteCompactState plane release
+    withStubFault plane (RubyGemsBackend (rubyRegistryPort registry) True) $
+        withObservedRubyProxy config{ecArgs = ["proxy", "--no-worker"]} plane $ \observed -> do
+            let proxy = rubyProxy observed
+            rubyPublicReachable proxy `shouldReturn` False
+            proxyStatus proxy ("/rubygems/" <> toText (releaseCompactPath release)) `shouldReturn` 503
+            proxyGet proxy infoPath `shouldReturn` before
+            for_ (filter ((/= releaseFilename release) . releaseFilename) releases) $ \sibling ->
+                proxyGet proxy ("/rubygems/" <> toText (releaseCompactPath sibling)) `shouldReturn` (200, LBS.fromStrict (releaseCompact sibling))
+            for_ releases $ \artifact ->
+                proxyGet proxy (rubyArchiveRoute artifact) `shouldReturn` (200, LBS.fromStrict (releaseArchive artifact))
+            platformClient observed releases
+
+data MirrorFault = MissingArchive | ChangedChecksum | MissingState | CorruptState | PrivateAuthorisation
 
 faultCase :: MirrorFault -> GlobalDataPlane -> IO ()
 faultCase fault plane = withPlatform plane $ \registry releases config -> do
@@ -174,7 +196,6 @@ faultCase fault plane = withPlatform plane $ \registry releases config -> do
         MissingArchive -> setRubyRegistryFault registry "rubygems-mirror" (RubyRegistryMissingArchive (releaseFilename release))
         ChangedChecksum -> seedRubyRegistry registry "rubygems-mirror" [release{releaseInfoRow = T.replace (releaseChecksum release) (T.replicate 64 "0") (releaseInfoRow release)}]
         MissingState -> updateMirrorStateObject plane mirrorStateKey (pendingSourceState release)
-        MissingCompact -> deleteCompactState plane release
         CorruptState -> mutateState plane "PUT" "{invalid retained RubyGems state"
         PrivateAuthorisation -> setRubyRegistryFault registry "rubygems-mirror" RubyRegistryRequireRead
     withStubFault plane (RubyGemsBackend (rubyRegistryPort registry) True) $
@@ -184,7 +205,6 @@ faultCase fault plane = withPlatform plane $ \registry releases config -> do
                     _ -> 503
                 path = case fault of
                     MissingArchive -> rubyArchiveRoute release
-                    MissingCompact -> "/rubygems/" <> toText (releaseCompactPath release)
                     _ -> infoPath
             proxyStatus (rubyProxy observed) path `shouldReturn` expected
             rubyConsumer (rubyProxy observed) currentBundler $ \project -> do

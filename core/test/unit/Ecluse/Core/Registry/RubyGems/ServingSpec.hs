@@ -1,12 +1,12 @@
 -- SPDX-FileCopyrightText: 2026 Alexandra de Wit
 --
 -- SPDX-License-Identifier: MIT
-{-# LANGUAGE ImportQualifiedPost #-}
 
 module Ecluse.Core.Registry.RubyGems.ServingSpec (spec) where
 
 import Data.Aeson (Value (Null))
 import Data.ByteString qualified as BS
+import Data.List (lookup)
 import Data.Map.Strict qualified as Map
 import Test.Hspec
 
@@ -22,6 +22,7 @@ import Ecluse.Core.Security (defaultLimits)
 import Ecluse.Core.Snapshot (Snapshot (Snapshot))
 import Ecluse.Core.Version (renderVersion)
 import Ecluse.Test.Registry.Metadata.Fetch (heldManifest)
+import Ecluse.Test.Registry.RubyGems.Reference (RubyInfoRow (..), referenceInfo)
 import Ecluse.Test.Snapshot (digestOf)
 import Ecluse.Test.Support (expectRight)
 
@@ -49,6 +50,14 @@ spec = describe "Ruby native winning-source assembly" $ do
         let served = assembleRubyGemsDocument "https://proxy.test" (Map.singleton 0 (raw manifest)) plan Nothing
         encoded <- toStrict <$> expectRight (serialiseRubyGemsDocument served)
         encoded `shouldBe` bytes
+        rows <- expectRight (referenceInfo encoded)
+        map rowVersion rows `shouldBe` ["1.0.0", "2.0.0", "3.0.0"]
+        map rowPlatform rows `shouldBe` replicate 3 "ruby"
+        map (lookup "checksum" . rowFields) rows
+            `shouldBe` [ Just "646c0b16ba8b286beb737cc2e18ceb32b9cd42f7c7903ca3adc9b2896f489885"
+                       , Just "1a64355f223fb775b48257611ad5822fcb421d61174b8d2fdebce7a86847908f"
+                       , Just "5bc7e3193eec05c1d1d649d7ff829d78798c9ca71a0836c03010815d71532cb8"
+                       ]
     it "refuses a foreign source instead of serialising JSON" $
         serialiseRubyGemsDocument (fst npmCached Null) `shouldBe` Left RenderRefused
   where

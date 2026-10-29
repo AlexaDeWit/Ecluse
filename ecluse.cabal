@@ -32,6 +32,7 @@ extra-source-files:
   bench/corpus/rubygems/README.md
   bench/corpus/pins.json
   bench/load/floors.json
+  bench/load/rubygems-calibration.json
   core/test/unit/fixtures/npm/*.json
   core/test/unit/fixtures/json-stream/*.json
   core/test/unit/fixtures/json-stream/README.md

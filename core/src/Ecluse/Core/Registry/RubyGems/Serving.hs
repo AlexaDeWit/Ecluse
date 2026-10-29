@@ -1,7 +1,6 @@
 -- SPDX-FileCopyrightText: 2026 Alexandra de Wit
 --
 -- SPDX-License-Identifier: MIT
-{-# LANGUAGE ImportQualifiedPost #-}
 
 -- | Preserve exact admitted installation rows in Compact Index responses.
 module Ecluse.Core.Registry.RubyGems.Serving (
@@ -10,7 +9,7 @@ module Ecluse.Core.Registry.RubyGems.Serving (
 ) where
 
 import Data.Aeson (Value (Null))
-import Data.ByteString qualified as BS
+import Data.ByteString.Lazy qualified as LBS
 import Data.Map.Strict qualified as Map
 
 import Ecluse.Core.Package.Merge (MergePlan, SourceId)
@@ -33,4 +32,4 @@ assembleRubyGemsDocument _ bySource plan base = case anchor of
 serialiseRubyGemsDocument :: CachedDoc -> Either RenderRefused LByteString
 serialiseRubyGemsDocument cached = do
     document <- maybeToRight RenderRefused (snd rubyGemsCached cached)
-    pure (fromStrict (gemHeader document <> BS.concat [grSource row <> "\n" | row <- gemRows document]))
+    pure (LBS.fromChunks (gemHeader document : concatMap (\row -> [grSource row, "\n"]) (gemRows document)))

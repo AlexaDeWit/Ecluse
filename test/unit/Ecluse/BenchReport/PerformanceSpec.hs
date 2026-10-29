@@ -50,7 +50,7 @@ spec = do
         it "requires native route, request and coordinate-complexity outcomes independently" $ do
             let rows = benchmarkRequiredRows "rubygems" ["nokogiri (large)"]
             rows `shouldContain` ["native/ecosystem: rubygems.route.match.malformed native coordinate"]
-            for_ ["gem action", "quick specification action", "named batch action", "request building metadata request", "request building artifact request", "request building compact specification request"] $ \nativeRow ->
+            for_ ["gem action", "quick specification action", "native info action", "request building metadata request", "request building artifact request", "request building compact specification request"] $ \nativeRow ->
                 rows `shouldContain` ["ecosystem: rubygems.route.match." <> nativeRow]
     describe "makePerformanceReceipt" $ do
         it "keeps an invocation failure despite successful measured rows" $

@@ -10,7 +10,7 @@ import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as LBS
 import Network.HTTP.Client (brRead, responseBody, responseStatus)
 import Network.HTTP.Types (statusCode)
-import Network.HTTP.Types.Header (hIfNoneMatch, hRange)
+import Network.HTTP.Types.Header (hRange)
 import Network.Wai (Request (requestHeaders), ResponseReceived)
 import UnliftIO (withRunInIO)
 
@@ -38,7 +38,6 @@ import Ecluse.Core.Server.Admission.Meter (MemoryTicket, awaitingFlight, charge,
 import Ecluse.Core.Server.Admission.Types (FlightKey (FlightKey))
 import Ecluse.Core.Server.Cache (resolveDirectory)
 import Ecluse.Core.Server.Context
-import Ecluse.Core.Server.Encoding (MetadataCompression (IdentityOnly))
 import Ecluse.Core.Server.Pipeline.Packument (PackumentReplies (..), answerMetadataBytes, mapPackumentReplies, withObservedAdmittedDocument)
 import Ecluse.Core.Server.Pipeline.Shared (edgeTokenMatches, forwardedCredential, shedMessage, unauthorisedMessage, withListingAdmission)
 import Ecluse.Core.Server.Response (mkRefusal)
@@ -160,8 +159,9 @@ fetchDirectory pay limits control client base credential = do
 answerCompact :: PackumentDeps -> MemoryTicket -> Request -> ByteString -> Handler RubyResponse
 answerCompact deps ticket request bytes
     | BS.length bytes > maxMetadataBytes (pdLimits deps) = pure (directoryFailure (MetadataBoundExceeded (BodyTooLarge (MetadataBodyLimit (maxMetadataBytes (pdLimits deps))))))
-    | otherwise = answerMetadataBytes replies deps{pdMetadataCompression = IdentityOnly} ticket replacement bytes
+    | otherwise = answerMetadataBytes replies deps ticket replacement bytes
   where
+    -- Bundler verifies the decoded native file against Repr-Digest.
     digest = "sha-256=\"" <> (convertToBase Base64 (hash bytes :: Digest SHA256) :: ByteString) <> "\""
     replies =
         rubyReplies
@@ -170,7 +170,7 @@ answerCompact deps ticket request bytes
             }
     replacement =
         if any ((== hRange) . fst) (requestHeaders request)
-            then request{requestHeaders = filter (\(key, _) -> key /= hRange && key /= hIfNoneMatch) (requestHeaders request)}
+            then request{requestHeaders = filter ((/= hRange) . fst) (requestHeaders request)}
             else request
 
 directoryFailure :: MetadataError -> RubyResponse

@@ -227,8 +227,10 @@ Filtered or merged info bytes differ from upstream bytes, so forwarding an upstr
 Écluse emits an explicit blank hint when the transformed MD5 is unknown.
 Bundler 2.6.9 and 4.0.23 then revalidate `/info` while retaining archive SHA-256 verification.
 This is the tested client contract, not a claim of compatibility with every Compact Index client.
-Responses use validators and `Repr-Digest` for the selected bytes.
-Rewritten directories and info files return complete `200` replacements when clients request byte ranges.
+Responses use validators for the selected content coding.
+`Repr-Digest` describes the decoded native file. Supported Bundler clients decompress gzip before checking that digest.
+Modified directories and info files return complete `200` replacements when clients request byte ranges.
+Matching validators return `304` after current caller authorisation, including ranged requests.
 Client caches can retain removed names, metadata or installed packages. New archive requests still enforce current authorisation and admission.
 
 [CodeArtifact](https://docs.aws.amazon.com/codeartifact/latest/ug/bundler-compatibility.html) limits `/versions` and `/names` to 5,000 gems.
