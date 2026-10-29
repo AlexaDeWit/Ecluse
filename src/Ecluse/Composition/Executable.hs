@@ -25,7 +25,7 @@ import Ecluse.Composition (
     BootWiring,
     PublishBudget (PublishBudget, pbBodyBudget, pbMaxRequestBytes),
     ResolveAdapter,
-    WiringPorts (WiringPorts, wpBuildCredentials, wpClock, wpReporters, wpResolveAdapter, wpRuleDeps),
+    WiringPorts (WiringPorts, wpBuildCredentials, wpClock, wpDeadlines, wpReporters, wpResolveAdapter, wpRuleDeps),
     firstPartyName,
     resolveBootWiring,
  )
@@ -323,7 +323,7 @@ serve path prepares its, and the shared first-party predicate. A mount declaring
 sweepPolicyFor :: Limits -> Deadlines -> (Ecosystem -> RuleDeps) -> VettedMount -> IO (Ecosystem, SweepPolicy)
 sweepPolicyFor limits deadlines ruleDepsFor vetted = do
     prepared <- prepare deps configured
-    provider <- if eco == Cargo then Just <$> newCargoInstallEvidence limits else pure Nothing
+    provider <- if eco == Cargo then Just <$> newCargoInstallEvidence deadlines limits else pure Nothing
     budget <- newInstallEvidenceBudget deadlines limits
     pure (eco, SweepPolicy{spRules = prepared, spConfigured = map prRule configured, spDeps = deps, spProject = project, spFirstParty = firstParty, spInstallEvidence = provider, spInstallBudget = budget, spInstallLimits = limits})
   where
@@ -413,6 +413,7 @@ planMirrorWiring logEnv deadlines resolveAdapter buildQueue buildCredentials rol
                 , wpResolveAdapter = resolveAdapter
                 , wpClock = getCurrentTime
                 , wpRuleDeps = ruleDeps
+                , wpDeadlines = deadlines
                 }
     -- The wiring reads the rule deps and the publish budget above, so it follows them rather than
     -- accumulating with them.
