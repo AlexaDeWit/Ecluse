@@ -5,7 +5,7 @@
 -- | Discovery templates cannot grant an archive authority or change its native logical filename.
 module Ecluse.Core.Registry.Cargo.DiscoverySpec (spec) where
 
-import Data.Aeson (Value, eitherDecodeStrict)
+import Data.Aeson (Value, eitherDecodeStrict, object, (.=))
 import Data.ByteString qualified as BS
 import Data.Text qualified as T
 import Network.HTTP.Client (defaultManagerSettings, newManager)
@@ -99,7 +99,13 @@ spec = describe "Cargo discovery" $ do
         sum charges `shouldBe` 4 * BS.length body + 128 * length charges
     it "renders only the supplied local routes" $
         (eitherDecodeStrict (renderCargoDiscovery "https://proxy.test/cargo/crates/{crate}/{version}/{crate}-{version}.crate" (Just "https://proxy.test/cargo/private") True) :: Either String Value)
-            `shouldSatisfy` isRight
+            `shouldBe` Right
+                ( object
+                    [ "dl" .= ("https://proxy.test/cargo/crates/{crate}/{version}/{crate}-{version}.crate" :: Text)
+                    , "api" .= ("https://proxy.test/cargo/private" :: Text)
+                    , "auth-required" .= True
+                    ]
+                )
   where
     hosts = ecosystemArtifactAuthorities cargoArtifactHosts
     origin = "https://index.crates.io"
