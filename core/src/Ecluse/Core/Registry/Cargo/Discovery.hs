@@ -35,7 +35,7 @@ import Ecluse.Core.Registry (FetchFault (FetchUrlUnformable))
 import Ecluse.Core.Registry.Cargo.Project (projectName)
 import Ecluse.Core.Registry.Cargo.Request (cargoArtifactHosts, cargoConfigRequest, cargoPrefix)
 import Ecluse.Core.Registry.Cargo.Wire (CargoRecordError (..), decodeCargoRecord)
-import Ecluse.Core.Registry.Exchange (boundedChargedRead, formThen, withSuccessBodyUsing)
+import Ecluse.Core.Registry.Exchange (boundedIncrementalRead, formThen, withSuccessBodyUsing)
 import Ecluse.Core.Registry.Metadata (MetadataError (MetadataBoundExceeded, MetadataUndecodable), metadataResponse)
 import Ecluse.Core.Registry.Origin (OriginClient (..), originBaseUrl)
 import Ecluse.Core.Registry.Public (ReadControl (..))
@@ -80,7 +80,7 @@ cargoDiscovery _ origin = do
     limits = ocLimits origin
     bound = MetadataBodyLimit (min 65536 (maxMetadataBytes limits))
     control = maybe Uncontrolled (\handle -> Controlled handle (fromMaybe Listing (ocReadKind origin))) (ocPublicControl origin)
-    exchange = withSuccessBodyUsing control (ocClient origin) (progressFloor limits) (boundedChargedRead (ocChargeFullRead origin) bound)
+    exchange = withSuccessBodyUsing control (ocClient origin) (progressFloor limits) (boundedIncrementalRead (ocChargeFullRead origin) bound)
 
 -- | Validate bounded discovery against predeclared authority and the selected origin.
 parseDiscoveryWithDepth :: Int -> AllowedHostPorts -> Text -> ByteString -> Either MetadataError CargoDiscovery
