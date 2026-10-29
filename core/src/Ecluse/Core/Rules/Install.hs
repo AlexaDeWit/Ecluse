@@ -10,8 +10,10 @@ module Ecluse.Core.Rules.Install (
     InstallEvidenceContext (..),
     InstallEvidenceRole (..),
     InstallArtifactRead,
+    unreadInstallSignal,
     unavailableInstallArtifactRead,
     installEvidenceMode,
+    installEvidenceReads,
     InstallEvidenceBudget (..),
     InstallEvidenceBudgetExceeded (..),
     InstallEvidenceFlightBudget (..),
@@ -43,6 +45,10 @@ data InstallEvidenceRole = InstallPublicAdmission | InstallWorkerReadmission | I
 -- | Charge buffered bytes before retention. The reader checks this artifact's approved authority.
 type InstallArtifactRead = Limits -> Artifact -> (Int -> IO ()) -> IO (Either ReadFault ByteString)
 
+-- | The permanent fault for an artifact that no bound reader may reach.
+unreadInstallSignal :: ReadFault
+unreadInstallSignal = ReadFault WontResolve EvaluationFailed InstallSignalUnread
+
 -- | Refuse required resolution when no reader is bound, without attempting transport.
 unavailableInstallArtifactRead :: InstallArtifactRead
 unavailableInstallArtifactRead _ _ _ = pure (Left (ReadFault WontResolve EvaluationFailed InstallSignalUnread))
@@ -65,6 +71,12 @@ newtype InstallEvidenceProvider = InstallEvidenceProvider
 -- | An absent provider preserves projected facts for ecosystems that do not require resolution.
 installEvidenceMode :: Maybe InstallEvidenceProvider -> InstallEvidenceMode
 installEvidenceMode = maybe ProjectedInstallFacts (const RequireInstallResolution)
+
+-- | Build the operation's context only when a provider exists. Without one, no version has an evidence read.
+installEvidenceReads :: Maybe InstallEvidenceProvider -> IO InstallEvidenceContext -> IO (PackageDetails -> IO (Maybe InstallEvidenceRead))
+installEvidenceReads provider context = case provider of
+    Nothing -> pure (const (pure Nothing))
+    Just evidence -> context >>= newInstallEvidenceReads evidence
 
 -- | Keep one bounded reservation alive through an operation's evidence evaluation.
 newtype InstallEvidenceBudget = InstallEvidenceBudget
