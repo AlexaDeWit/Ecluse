@@ -2,16 +2,54 @@
 --
 -- SPDX-License-Identifier: MIT
 
--- | Native requests bound actual upstream chunks and examined source documents independently.
+{- | Native requests pass the edge check and admission, run under the serve-path cap, and bound
+actual upstream chunks and examined source documents independently.
+-}
 module Ecluse.Core.Registry.RubyGems.Handlers.Budget (
+    withNativeRequest,
     newNativeReadBudget,
     newNativeDocumentBudget,
 ) where
 
+import Network.HTTP.Types (ResponseHeaders)
+import Network.Wai (Request, ResponseReceived)
+import UnliftIO (withRunInIO)
 import UnliftIO.Exception (throwIO)
 
-import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), LimitError (BodyTooLarge))
+import Ecluse.Core.Registry.Exchange (withinServeCapOr)
+import Ecluse.Core.Registry.Exchange.Types (ExchangeClient (ecDeadlines))
+import Ecluse.Core.Registry.RubyGems.Route.Response (RubyResponse, rubyReplies)
+import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), LimitError (BodyTooLarge), Limits (progressFloor))
+import Ecluse.Core.Server.Admission.Meter (MemoryTicket)
+import Ecluse.Core.Server.Context (Handler, MountBinding (bindingPackumentDeps), PackumentDeps (pdInboundToken, pdLimits), ServeRuntime (srPublicClient), ctxMount, ctxRuntime)
 import Ecluse.Core.Server.Pipeline.Origin (ObservedReadBoundExceeded (ObservedReadBoundExceeded))
+import Ecluse.Core.Server.Pipeline.Packument (PackumentReplies (packumentUnauthorised, packumentUnavailable))
+import Ecluse.Core.Server.Pipeline.Shared (edgeTokenMatches, forwardedCredential, shedMessage, unauthorisedMessage)
+import Ecluse.Core.Server.Response (mkRefusal)
+
+{- | Refuse a caller the edge does not authorise, then run @action@ under @admit@ and the serve-path
+cap, answering @expired@ once the cap passes and handing the result to @continue@.
+-}
+withNativeRequest ::
+    (ServeRuntime -> (ResponseHeaders -> Handler ResponseReceived) -> (MemoryTicket -> Handler a) -> (a -> Handler ResponseReceived) -> Handler ResponseReceived) ->
+    Request ->
+    (RubyResponse -> Handler ResponseReceived) ->
+    (PackumentDeps -> a) ->
+    (MemoryTicket -> PackumentDeps -> Handler a) ->
+    (a -> Handler ResponseReceived) ->
+    Handler ResponseReceived
+withNativeRequest admit request refuse expired action continue = do
+    mount <- asks ctxMount
+    runtime <- asks ctxRuntime
+    let deps = bindingPackumentDeps mount
+    if not (edgeTokenMatches (pdInboundToken deps) (forwardedCredential mount request))
+        then refuse (packumentUnauthorised rubyReplies [] (mkRefusal Nothing unauthorisedMessage))
+        else
+            admit
+                runtime
+                (\headers -> refuse (packumentUnavailable rubyReplies headers (mkRefusal Nothing shedMessage)))
+                (\ticket -> withRunInIO $ \run -> withinServeCapOr (ecDeadlines (srPublicClient runtime)) (progressFloor (pdLimits deps)) (expired deps) (run (action ticket deps)))
+                continue
 
 -- | Refuse before another source chunk reaches its parser when cumulative input exceeds the cap.
 newNativeReadBudget :: Int -> IO (Int -> IO ())

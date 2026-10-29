@@ -12,15 +12,13 @@ import Network.HTTP.Client (brRead, responseBody, responseStatus)
 import Network.HTTP.Types (statusCode)
 import Network.HTTP.Types.Header (hRange)
 import Network.Wai (Request (requestHeaders), ResponseReceived)
-import UnliftIO (evaluate, withRunInIO)
+import UnliftIO (evaluate)
 
 import Ecluse.Core.Credential (ClientCredential)
-import Ecluse.Core.Deadline qualified as Deadline
 import Ecluse.Core.Package (PackageName)
 import Ecluse.Core.Registry (BodyOutcome (SuccessBody, UnreadStatus), FetchFault (FetchBoundExceeded, FetchUrlUnformable))
 import Ecluse.Core.Registry.CachedDocument (rubyGemsCached)
 import Ecluse.Core.Registry.Exchange (formThen, runExchangeUsing)
-import Ecluse.Core.Registry.Exchange.Types (ExchangeClient (ecDeadlines))
 import Ecluse.Core.Registry.JsonStream (StreamResult (streamValue), readStepsWithEnd)
 import Ecluse.Core.Registry.Metadata (MetadataError (..), metadataResponse)
 import Ecluse.Core.Registry.Metadata.RecordStream (finishRecordSteps)
@@ -28,27 +26,30 @@ import Ecluse.Core.Registry.Public (ReadControl (..))
 import Ecluse.Core.Registry.Request (BaseRequest, sealRequest)
 import Ecluse.Core.Registry.RubyGems.Directory
 import Ecluse.Core.Registry.RubyGems.Document (GemDocument (..), GemRow (..))
-import Ecluse.Core.Registry.RubyGems.Handlers.Budget (newNativeDocumentBudget, newNativeReadBudget)
+import Ecluse.Core.Registry.RubyGems.Handlers.Budget (newNativeDocumentBudget, newNativeReadBudget, withNativeRequest)
 import Ecluse.Core.Registry.RubyGems.Request (gemDirectoryRequestUnder)
 import Ecluse.Core.Registry.RubyGems.Route.Response (RubyResponse, rubyReplies)
 import Ecluse.Core.Registry.RubyGems.Serving (serialiseRubyGemsDocument)
-import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), LimitError (BodyTooLarge), Limits (..), floorServeCapMicros)
+import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), LimitError (BodyTooLarge), Limits (..))
 import Ecluse.Core.Security.Egress (registryUrlText)
 import Ecluse.Core.Server.Admission.Meter (MemoryTicket, awaitingFlight, charge, chargePart, newChargePart, newChargeRegion, servingPart, stepDown)
 import Ecluse.Core.Server.Admission.Types (FlightKey (FlightKey))
 import Ecluse.Core.Server.Cache (resolveDirectory)
 import Ecluse.Core.Server.Context
 import Ecluse.Core.Server.Pipeline.Packument (PackumentReplies (..), answerDigestedMetadataBytes, mapPackumentReplies, withObservedAdmittedDocument)
-import Ecluse.Core.Server.Pipeline.Shared (edgeTokenMatches, forwardedCredential, shedMessage, unauthorisedMessage, withListingAdmission)
+import Ecluse.Core.Server.Pipeline.Shared (forwardedCredential, withListingAdmission)
 import Ecluse.Core.Server.Response (mkRefusal)
 import Ecluse.Core.Telemetry.Metrics (CacheStore (FullStore))
 import Ecluse.Core.Telemetry.Upstream (PublicReadKind (Listing))
 
 -- | Share admission and a whole-request deadline across discovery and response assembly.
 serveDirectory :: Request -> (RubyResponse -> IO ResponseReceived) -> Handler ResponseReceived
-serveDirectory request =
-    withCompactRequest
+serveDirectory request respond =
+    withNativeRequest
+        withListingAdmission
         request
+        (liftIO . respond)
+        (const (directoryFailure (MetadataHttpFailure 503)))
         ( \ticket deps -> do
             runtime <- asks ctxRuntime
             mount <- asks ctxMount
@@ -92,12 +93,16 @@ serveDirectory request =
                                     let merged = maybe shared (mergeDirectories shared) privateView
                                     answerBody [privateRead, publicRead] ("---\n" <> directoryBytes merged)
         )
+        (liftIO . respond)
 
 -- | Per-gem admission preserves exact winning installation rows and archive checksums.
 serveInfo :: PackageName -> Request -> (RubyResponse -> IO ResponseReceived) -> Handler ResponseReceived
-serveInfo name request =
-    withCompactRequest
+serveInfo name request respond =
+    withNativeRequest
+        withListingAdmission
         request
+        (liftIO . respond)
+        (const (directoryFailure (MetadataHttpFailure 503)))
         ( \ticket deps -> do
             observe <- liftIO (newNativeReadBudget (maxMetadataBytes (pdLimits deps)))
             check <- liftIO (newNativeDocumentBudget (maxMetadataBytes (pdLimits deps)) (Left (directoryFailure MetadataUndecodable)))
@@ -125,27 +130,7 @@ serveInfo name request =
                         Left _ -> pure (directoryFailure MetadataUndecodable)
                         Right encoded -> answerCompact deps ticket request (LBS.toStrict encoded)
         )
-
-withCompactRequest :: Request -> (MemoryTicket -> PackumentDeps -> Handler RubyResponse) -> (RubyResponse -> IO ResponseReceived) -> Handler ResponseReceived
-withCompactRequest request action respond = do
-    mount <- asks ctxMount
-    runtime <- asks ctxRuntime
-    let deps = bindingPackumentDeps mount
-        reply = liftIO . respond
-    if not (edgeTokenMatches (pdInboundToken deps) (forwardedCredential mount request))
-        then reply (packumentUnauthorised rubyReplies [] (mkRefusal Nothing unauthorisedMessage))
-        else
-            withListingAdmission
-                runtime
-                (\headers -> reply (packumentUnavailable rubyReplies headers (mkRefusal Nothing shedMessage)))
-                ( \ticket -> withRunInIO $ \run ->
-                    fromMaybe (directoryFailure (MetadataHttpFailure 503))
-                        <$> Deadline.timeout
-                            (ecDeadlines (srPublicClient runtime))
-                            (floorServeCapMicros (progressFloor (pdLimits deps)))
-                            (run (action ticket deps))
-                )
-                reply
+        (liftIO . respond)
 
 fetchDirectory :: (Int -> IO ()) -> Limits -> ReadControl -> ExchangeClient -> BaseRequest -> Maybe ClientCredential -> IO (Either MetadataError GemDirectory)
 fetchDirectory pay limits control client base credential = do
