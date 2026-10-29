@@ -12,7 +12,7 @@ import Network.HTTP.Client (brRead, responseBody, responseStatus)
 import Network.HTTP.Types (statusCode)
 import Network.HTTP.Types.Header (hRange)
 import Network.Wai (Request (requestHeaders), ResponseReceived)
-import UnliftIO (withRunInIO)
+import UnliftIO (evaluate, withRunInIO)
 
 import Ecluse.Core.Credential (ClientCredential)
 import Ecluse.Core.Deadline qualified as Deadline
@@ -34,7 +34,7 @@ import Ecluse.Core.Registry.RubyGems.Route.Response (RubyResponse, rubyReplies)
 import Ecluse.Core.Registry.RubyGems.Serving (serialiseRubyGemsDocument)
 import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), LimitError (BodyTooLarge), Limits (..), floorServeCapMicros)
 import Ecluse.Core.Security.Egress (registryUrlText)
-import Ecluse.Core.Server.Admission.Meter (MemoryTicket, awaitingFlight, charge, newChargeRegion, servingFlight)
+import Ecluse.Core.Server.Admission.Meter (MemoryTicket, awaitingFlight, charge, chargePart, newChargePart, newChargeRegion, servingPart, stepDown)
 import Ecluse.Core.Server.Admission.Types (FlightKey (FlightKey))
 import Ecluse.Core.Server.Cache (resolveDirectory)
 import Ecluse.Core.Server.Context
@@ -52,14 +52,20 @@ serveDirectory request =
         ( \ticket deps -> do
             runtime <- asks ctxRuntime
             mount <- asks ctxMount
+            privateRead <- liftIO (newChargePart ticket)
+            publicRead <- liftIO (newChargePart ticket)
             let credential = forwardedCredential mount request
                 limits = pdLimits deps
-                fetch = fetchDirectory (charge ticket) limits
                 publicKey = registryUrlText (pdPublicBaseUrl deps) <> "\0" <> show (maxMetadataBytes limits, maxVersionCount limits, maxArtifactCount limits)
                 flight = FlightKey FullStore (toShort ("rubygems-directory:" <> encodeUtf8 publicKey))
+                -- Once the body exists nothing reaches the released reads' views, so their charges go back before it is sent.
+                answerBody released body = do
+                    bytes <- evaluate body
+                    liftIO (traverse_ (`stepDown` 0) released)
+                    answerCompact deps ticket request bytes
             private <- case pdPrivateBase deps of
                 Nothing -> pure (Right Nothing)
-                Just base -> fmap Just <$> liftIO (fetch Uncontrolled (srPrivateClient runtime) base credential)
+                Just base -> fmap Just <$> liftIO (fetchDirectory (chargePart privateRead) limits Uncontrolled (srPrivateClient runtime) base credential)
             case private of
                 Left fault -> pure (directoryFailure fault)
                 Right privateView -> do
@@ -72,11 +78,11 @@ serveDirectory request =
                                         resolveDirectory
                                             (srMetadataCache runtime)
                                             publicKey
-                                            (fetchDirectory (charge (servingFlight flight ticket)) limits (Controlled (srPublicControl runtime) Listing) (srPublicClient runtime) (pdPublicBase deps) Nothing)
+                                            (fetchDirectory (chargePart (servingPart flight publicRead)) limits (Controlled (srPublicControl runtime) Listing) (srPublicClient runtime) (pdPublicBase deps) Nothing)
                     case public of
                         Left fault -> case privateView of
                             Nothing -> pure (directoryFailure fault)
-                            Just own -> answerCompact deps ticket request ("---\n" <> directoryBytes own)
+                            Just own -> answerBody [publicRead] ("---\n" <> directoryBytes own)
                         Right shared -> do
                             let privateBytes = maybe 0 (BS.length . directoryBytes) privateView
                             if BS.length (directoryBytes shared) + privateBytes + 4 > maxMetadataBytes limits
@@ -84,7 +90,7 @@ serveDirectory request =
                                 else do
                                     liftIO (charge ticket (2 * (directoryWeight shared + privateBytes) + maybe 0 (directoryMergeWorkspace shared) privateView + 4096))
                                     let merged = maybe shared (mergeDirectories shared) privateView
-                                    answerCompact deps ticket request ("---\n" <> directoryBytes merged)
+                                    answerBody [privateRead, publicRead] ("---\n" <> directoryBytes merged)
         )
 
 -- | Per-gem admission preserves exact winning installation rows and archive checksums.
