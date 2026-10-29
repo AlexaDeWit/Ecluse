@@ -25,6 +25,7 @@ module Ecluse.Core.Registry.Origin (
 ) where
 
 import Ecluse.Core.Credential (ClientCredential)
+import Ecluse.Core.Registry.Exchange (accumulatingCharge)
 import Ecluse.Core.Registry.Exchange.Types (ExchangeClient)
 import Ecluse.Core.Registry.Public (PublicControl)
 import Ecluse.Core.Registry.Request (BaseRequest, baseRequestUrl, mkBaseRequest)
@@ -105,9 +106,13 @@ chargingFullReadWorkspace pay (OriginFor client) = OriginFor client{ocChargeFull
 chargingSelectedMetadata :: (Int -> IO ()) -> OriginFor posture -> OriginFor posture
 chargingSelectedMetadata pay (OriginFor client) = OriginFor client{ocChargeSelectedRead = pay}
 
--- | Pay a native read's full-read chunks at the full-read factor and its selected workspace at face value.
-chargingNativeReads :: ChargeFactors -> (Int -> IO ()) -> OriginFor posture -> OriginFor posture
-chargingNativeReads factors pay = chargingSelectedMetadata pay . chargingFullReads (pay . scaleCharge (cfFullReadPermille factors))
+{- | Bind one high-water payer to a native read: the selected workspace at face value, and the
+running total of the incremental full-read charges at the full-read factor.
+-}
+chargingNativeReads :: ChargeFactors -> (Int -> IO ()) -> OriginFor posture -> IO (OriginFor posture)
+chargingNativeReads factors pay origin = do
+    fullRead <- accumulatingCharge (pay . scaleCharge (cfFullReadPermille factors))
+    pure (chargingSelectedMetadata pay (chargingFullReads fullRead origin))
 
 -- | Control anonymous public reads, optionally assigning one kind to both metadata operations.
 controlPublicOrigin :: PublicControl -> Maybe PublicReadKind -> OriginFor Public -> OriginFor Public
