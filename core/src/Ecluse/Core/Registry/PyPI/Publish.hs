@@ -42,7 +42,7 @@ pypiPublishCodec =
             source <- maybeToRight (PublishSourceUnavailable "PyPI snapshot has no paired source metadata") (vdRaw doc >>= snd pypiSimpleCached)
             inventory <- checkedMirrorInventory package version doc (PyPIMirrorRead source)
             pure (inventory, ())
-        , pcPrepareUpload = \limits charge inventory () file bytes -> do
+        , pcPrepareUpload = \_ limits charge inventory () file bytes -> do
             extracted <- archiveMetadata limits charge (inventoryPackage inventory) (inventoryVersion inventory) (artFilename (expectedArtifact file)) (verifiedBytes bytes)
             case first (PublishSourceUnavailable . parseErrorMessage) extracted of
                 Left fault -> pure (Left fault)

@@ -75,7 +75,7 @@ spec = describe "public install evidence boundary" $ do
             doc <- cargoSourceVersion (cargoIndexRecord release)
             withStub status200 (fromStrict (releaseArchive release)) $ \stub -> do
                 runtime <- testServeRuntime deadlines noopMetricsPort
-                provider <- newCargoInstallEvidence (pdLimits (dependencies stub))
+                provider <- newCargoInstallEvidence deadlines (pdLimits (dependencies stub))
                 let deps = (dependencies stub){pdInstallEvidence = Just provider}
                     artifact :| _ = pkgArtifacts (vdDetails doc)
                     admitted = (vdDetails doc){pkgArtifacts = artifact{artUrl = stubLocalhostUrl stub <> "/archive"} :| []}
@@ -99,7 +99,7 @@ spec = describe "public install evidence boundary" $ do
                     pure (status200, [], fromStrict (releaseArchive release))
             withRoutedStubIO reply $ \stub -> do
                 runtime <- testServeRuntime deadlines noopMetricsPort
-                provider <- newCargoInstallEvidence (pdLimits (dependencies stub))
+                provider <- newCargoInstallEvidence deadlines (pdLimits (dependencies stub))
                 let deps = (dependencies stub){pdInstallEvidence = Just provider}
                     artifact :| _ = pkgArtifacts (vdDetails doc)
                     admitted = (vdDetails doc){pkgArtifacts = artifact{artUrl = stubLocalhostUrl stub <> "/archive"} :| []}

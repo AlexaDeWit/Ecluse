@@ -47,6 +47,7 @@ import Ecluse.Core.Registry (
     renderUrlFormationError,
  )
 import Ecluse.Core.Registry.Adapter.Capability (AdapterArtifact (artifactByUrl))
+import Ecluse.Core.Registry.Exchange.Types (ExchangeClient (ecDeadlines))
 import Ecluse.Core.Registry.InstallEvidence (readInstallArtifact)
 import Ecluse.Core.Registry.Metadata (
     MetadataError (..),
@@ -534,9 +535,10 @@ retainPending charge policy job inventory file locations record = do
                     either throwError pure (sourceLocation policy (expectedArtifact file){artUrl = url})
                 let limits = (wmsLimits binding){maxMirrorArtifactBytes = maxMetadataBytes (wmsLimits binding)}
                 bytes <- fetchLocations (wsbCompanions charge) limits policy candidates
+                deadlines <- asks (ecDeadlines . wrClient)
                 checked <- case native of
                     Nothing -> pure bytes
-                    Just companion -> publishAction job (liftIO (mcValidate companion limits (wsbCompanions charge) inventory file bytes))
+                    Just companion -> publishAction job (liftIO (mcValidate companion deadlines limits (wsbCompanions charge) inventory file bytes))
                 verified <- either (throwError . stateOutcome) pure (verifySourceCompanionBytes (wmsLimits binding) (inventoryReadData inventory) file checked)
                 stateAction (retainCompanion charge binding (jobVersion job) verified record)
         _ -> pure record
