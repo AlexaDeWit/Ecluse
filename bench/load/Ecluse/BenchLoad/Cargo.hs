@@ -23,11 +23,11 @@ import Network.HTTP.Client qualified as HTTP
 import Network.HTTP.Types (hContentType, status200, status404)
 import Network.Wai (Application, Request, Response, pathInfo, rawPathInfo, responseLBS)
 
-import Ecluse.BenchLoad.CapturedArtifact (SelectedArtifact (..))
+import Ecluse.BenchLoad.CapturedArtifact (SelectedArtifact (..), selectedArtifact)
 import Ecluse.BenchLoad.Cargo.Worker (cargoWorkerScenario)
 import Ecluse.BenchLoad.Contract.Driver (LoadReadDriver (..), readLoadContract)
 import Ecluse.BenchLoad.Error (benchFail)
-import Ecluse.BenchLoad.Fixture (artifactBytes, delayUpstream, fetchChecked, httpTarget, longCacheTtl, weightedMix, withProxyOverStubs)
+import Ecluse.BenchLoad.Fixture (artifactBytes, delayUpstream, fetchChecked, httpTarget, longCacheTtl, rewriteLines, selectPinnedArtifacts, swapChecksumPreservingWidth, weightedMix, withProxyOverStubs)
 import Ecluse.BenchLoad.Harness (Driver (DriveBurst, DriveRamp), LoadKnobs (..), Scenario (..), UpstreamFixture, proxied, scenario, urlLoad)
 import Ecluse.BenchLoad.Listing (ListingSetup (..), cacheEvictsLoad, cacheFitsLoad, listingLoad, listingWorkingSet, revalidateLoad, slowReaderScenario, withListingStubs)
 import Ecluse.BenchLoad.PatternScenario (PatternProvider (..))
@@ -36,13 +36,12 @@ import Ecluse.BenchLoad.ProxyProcess (ProxyProcess)
 import Ecluse.BenchLoad.Selection (evictionEntries)
 import Ecluse.BenchLoad.Stress (WarmLoadDriver (..), herdSize, pairedLoad, rampSteps)
 import Ecluse.Core.Ecosystem (Ecosystem (Cargo))
-import Ecluse.Core.Package (PackageInfo (infoVersions))
 import Ecluse.Core.Registry.Cargo.Discovery (renderCargoDiscovery)
 import Ecluse.Core.Registry.Cargo.Request (cargoArtifactHosts)
 import Ecluse.Core.Registry.Metadata (Manifest (manifestInfo))
 import Ecluse.Core.Security (ecosystemArtifactAuthorities)
 import Ecluse.Core.Version (mkVersion)
-import Ecluse.Test.Corpus (CorpusPackage (cpPackage, cpWeight), cargoCaptureUpstream, cargoCorpusPackages, cpName, readCorpusPins)
+import Ecluse.Test.Corpus (CorpusPackage (cpPackage, cpWeight), cargoCaptureUpstream, cargoCorpusPackages, cpName)
 import Ecluse.Test.Corpus.Cargo (cargoCaptureDiscovery, cargoVersionKeys)
 import Ecluse.Test.Corpus.Subset (newestCargoShare)
 import Ecluse.Test.Json (withKeys)
@@ -267,16 +266,15 @@ rampScenario =
 -- | Resolve captured native pins through the production full read before load starts.
 selectWarmArtifacts :: [CorpusPackage] -> Map Text LByteString -> IO (Map Text SelectedArtifact)
 selectWarmArtifacts packages captures = do
-    pins <- readCorpusPins (.: "cargoPins") >>= either (benchFail . toText) pure
     discovery <- either (benchFail . show) pure cargoCaptureDiscovery
-    fmap Map.fromList $ forM packages $ \package -> do
-        let name = cpName package
-        version <- maybe (benchFail ("missing Cargo workload pin: " <> name)) pure (Map.lookup name pins)
-        bytes <- maybe (benchFail ("missing Cargo capture: " <> name)) pure (Map.lookup name captures)
-        manifest <- captureManifest (cargoRead discovery) cargoCaptureUpstream (cpPackage package) [LBS.toStrict bytes] >>= either (benchFail . show) pure
-        unless (Map.member version (infoVersions (manifestInfo manifest))) (benchFail ("Cargo workload pin absent: " <> name <> "@" <> version))
-        route <- maybe (benchFail "Cargo workload pin has no archive route") pure (cargoArtifactPath (cpPackage package) (mkVersion Cargo version))
-        pure (name, SelectedArtifact route ("https://static.crates.io/crates/" <> name <> "/" <> name <> "-" <> version <> ".crate"))
+    selectPinnedArtifacts "cargoPins" (select discovery) packages captures
+  where
+    select discovery package version bytes = do
+        captured <- captureManifest (cargoRead discovery) cargoCaptureUpstream (cpPackage package) [bytes]
+        pure $ do
+            manifest <- first show captured
+            let route = maybeToRight "Cargo workload pin has no archive route" (cargoArtifactPath (cpPackage package) (mkVersion Cargo version))
+            selectedArtifact version ("Cargo workload pin absent: " <> cpName package <> "@" <> version) (const route) (manifestInfo manifest)
 
 preflightListings :: [Text] -> IO ()
 preflightListings = traverse_ (void . checkedIndex) . ordNub
@@ -322,7 +320,7 @@ indexStub _ latency payload captures = \request respond -> do
     capturedBodies = Map.map (relayBody payload) captures
 
 relayBody :: LByteString -> LByteString -> Either Text LByteString
-relayBody payload original = fromStrict . BS.intercalate "\n" <$> traverse replaceLine (BS.split 10 (LBS.toStrict original))
+relayBody payload = rewriteLines (\_ line -> replaceLine line)
   where
     digest = hexSha256Of (LBS.toStrict payload)
     replaceLine bytes
@@ -332,13 +330,7 @@ relayBody payload original = fromStrict . BS.intercalate "\n" <$> traverse repla
                 [line] -> indexValue line
                 _ -> Left "Cargo relay fixture has ambiguous native framing"
             previous <- first toText (parseEither (.: "cksum") fields)
-            let before = "\"cksum\":\"" <> previous <> "\""
-                after = "\"cksum\":\"" <> digest <> "\""
-                originalLine = decodeUtf8 bytes
-            unless (before `T.isInfixOf` originalLine) (Left "Cargo relay fixture has no exact checksum field")
-            let replaced = encodeUtf8 (T.replace before after originalLine)
-            unless (BS.length replaced == BS.length bytes) (Left "Cargo relay fixture changed its captured wire size")
-            pure replaced
+            swapChecksumPreservingWidth "Cargo" ("\"cksum\":\"" <> previous <> "\"") ("\"cksum\":\"" <> digest <> "\"") bytes
 
 crateStub :: Int -> LByteString -> Application
 crateStub = crateStubWith (const (pure []))
