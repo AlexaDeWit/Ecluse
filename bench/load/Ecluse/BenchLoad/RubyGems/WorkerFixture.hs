@@ -22,7 +22,7 @@ import Data.ByteString.Lazy qualified as LBS
 import Data.List (lookup)
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
-import Network.HTTP.Types (hContentType, status200, status400, status404, status503)
+import Network.HTTP.Types (hContentType, status200, status400, status404)
 import Network.Wai (Application, pathInfo, requestHeaders, requestMethod, responseLBS, strictRequestBody)
 import System.Directory (createDirectoryIfMissing)
 import System.Exit (ExitCode (ExitSuccess))
@@ -32,7 +32,7 @@ import System.Process (readProcessWithExitCode)
 
 import Ecluse.BenchLoad.Error (benchFail)
 import Ecluse.BenchLoad.Fixture (delayUpstream)
-import Ecluse.BenchLoad.WorkerState (stateAppFor)
+import Ecluse.BenchLoad.WorkerState (WorkerTarget (..), acceptUpload, countRequest, newWorkerTarget, resetWorkerTarget, targetStateApp)
 import Ecluse.Core.Ecosystem (Ecosystem (RubyGems))
 import Ecluse.Core.Package (PackageName, mkPackageName)
 import Ecluse.Core.Version (Version, mkVersion)
@@ -45,10 +45,7 @@ data WorkerFixture = WorkerFixture
     , wfSpecs :: Map Text ByteString
     , wfInfo :: ByteString
     , wfRows :: Map Text ByteString
-    , wfTarget :: IORef (Map Text ByteString)
-    , wfObjects :: IORef (Map ByteString (ByteString, ByteString))
-    , wfCounts :: IORef (Map Text Int)
-    , wfReject :: IORef Bool
+    , wfState :: WorkerTarget
     }
 
 -- | Ruby builds payload-sized archives before timing. The manifest authenticates every retained body.
@@ -77,14 +74,11 @@ newWorkerFixture payloadBytes = do
             pure (releaseFilename release, source)
         let files = Map.fromList [(releaseFilename release, releaseArchive release) | release <- releases]
             specs = Map.fromList [(toText (releaseCompactPath release), releaseCompact release) | release <- releases]
-        WorkerFixture files specs info (Map.fromList native) <$> newIORef mempty <*> newIORef mempty <*> newIORef mempty <*> newIORef False
+        WorkerFixture files specs info (Map.fromList native) <$> newWorkerTarget
 
 -- | Target archives and durable objects reset together outside each measured job interval.
 resetWorkerFixture :: WorkerFixture -> IO ()
-resetWorkerFixture fixture = do
-    writeIORef (wfTarget fixture) mempty
-    writeIORef (wfObjects fixture) mempty
-    writeIORef (wfCounts fixture) mempty
+resetWorkerFixture = resetWorkerTarget . wfState
 
 -- | A generic artifact triggers the complete four-platform version.
 fixtureTrigger :: Text
@@ -103,9 +97,9 @@ sourceApp :: Int -> WorkerFixture -> Application
 sourceApp latency fixture request respond = do
     delayUpstream latency
     case pathInfo request of
-        ["info", "ecluse-fixture-platform"] -> count fixture "source-info" >> respond (responseLBS status200 [(hContentType, "text/plain")] (fromStrict (wfInfo fixture)))
-        ["gems", filename] | Just bytes <- Map.lookup filename (wfFiles fixture) -> count fixture "source-file" >> respond (responseLBS status200 [] (fromStrict bytes))
-        segments | Just bytes <- Map.lookup (T.intercalate "/" segments) (wfSpecs fixture) -> count fixture "source-quick" >> respond (responseLBS status200 [] (fromStrict bytes))
+        ["info", "ecluse-fixture-platform"] -> countRequest (wfState fixture) "source-info" >> respond (responseLBS status200 [(hContentType, "text/plain")] (fromStrict (wfInfo fixture)))
+        ["gems", filename] | Just bytes <- Map.lookup filename (wfFiles fixture) -> countRequest (wfState fixture) "source-file" >> respond (responseLBS status200 [] (fromStrict bytes))
+        segments | Just bytes <- Map.lookup (T.intercalate "/" segments) (wfSpecs fixture) -> countRequest (wfState fixture) "source-quick" >> respond (responseLBS status200 [] (fromStrict bytes))
         _ -> respond (responseLBS status404 [] "missing")
 
 -- | Publication succeeds only for exact independently built bytes after durable inventory exists.
@@ -114,40 +108,25 @@ targetApp latency fixture request respond = do
     delayUpstream latency
     case (requestMethod request, pathInfo request) of
         ("GET", ["info", "ecluse-fixture-platform"]) -> do
-            count fixture "target-info"
-            files <- readIORef (wfTarget fixture)
+            countRequest (wfState fixture) "target-info"
+            files <- readIORef (wtFiles (wfState fixture))
             let rows = [row | (filename, row) <- Map.toList (wfRows fixture), Map.member filename files]
             respond (responseLBS status200 [(hContentType, "text/plain")] (fromStrict ("---\n" <> foldMap (<> "\n") rows)))
         ("GET", ["gems", filename]) -> do
-            files <- readIORef (wfTarget fixture)
+            files <- readIORef (wtFiles (wfState fixture))
             respond (maybe (responseLBS status404 [] "missing") (responseLBS status200 [] . fromStrict) (Map.lookup filename files))
         ("GET", segments) | Just bytes <- Map.lookup (T.intercalate "/" segments) (wfSpecs fixture) -> do
-            files <- readIORef (wfTarget fixture)
+            files <- readIORef (wtFiles (wfState fixture))
             respond (if Map.size files == Map.size (wfFiles fixture) then responseLBS status200 [] (fromStrict bytes) else responseLBS status404 [] "missing")
         ("POST", ["api", "v1", "gems"]) -> do
             bytes <- LBS.toStrict <$> strictRequestBody request
             if lookup hContentType (requestHeaders request) /= Just "application/octet-stream"
                 then respond (responseLBS status400 [] "RubyGems upload has the wrong content type")
                 else case [(filename, expected) | (filename, expected) <- Map.toList (wfFiles fixture), expected == bytes] of
-                    [(filename, _)] -> do
-                        count fixture "upload-attempt"
-                        reject <- readIORef (wfReject fixture)
-                        objects <- readIORef (wfObjects fixture)
-                        if reject
-                            then respond (responseLBS status503 [] "injected upload rejection")
-                            else
-                                if Map.null objects
-                                    then respond (responseLBS status400 [] "upload preceded durable inventory")
-                                    else do
-                                        modifyIORef' (wfTarget fixture) (Map.insert filename bytes)
-                                        count fixture "upload"
-                                        respond (responseLBS status200 [] "accepted")
+                    [(filename, _)] -> acceptUpload (wfState fixture) filename bytes (responseLBS status200 [] "accepted") >>= respond
                     _ -> respond (responseLBS status400 [] "RubyGems upload differs from every independent native archive")
         _ -> respond (responseLBS status404 [] "missing")
 
 -- | The same conditional object fixture supplies durable source state for every ecosystem.
 stateApp :: Int -> WorkerFixture -> Application
-stateApp latency fixture = stateAppFor (wfObjects fixture) (wfCounts fixture) latency
-
-count :: WorkerFixture -> Text -> IO ()
-count fixture label = atomicModifyIORef' (wfCounts fixture) (\counts -> (Map.insertWith (+) label 1 counts, ()))
+stateApp latency = targetStateApp latency . wfState
