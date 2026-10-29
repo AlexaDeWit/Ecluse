@@ -9,14 +9,20 @@ import Data.ByteString qualified as BS
 import Test.Hspec
 
 import Ecluse.Core.Registry.JsonStream (Steps (..), StreamResult (..), readStepsWithEnd)
-import Ecluse.Core.Registry.Metadata.RecordStream (finishRecordSteps, recordSteps)
+import Ecluse.Core.Registry.Metadata.RecordStream (finishRecordSteps, recordFragmentCharge, recordSteps)
 import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), LimitError (TooManyArtifacts))
+import Ecluse.Core.Server.MemoryModel (bufferedChunkCharge, decodedDocumentCharge)
 import Ecluse.Test.Registry.JsonStream (heldChunks)
 import Ecluse.Test.Support (expectRight)
 
--- | Pin physical LF boundaries and propagate a consumer's structural refusal.
+-- | Pin physical LF boundaries, a consumer's structural refusal, and the shared fragment charge.
 spec :: Spec
-spec = describe "recordSteps" $ do
+spec = do
+    framingSpec
+    fragmentChargeSpec
+
+framingSpec :: Spec
+framingSpec = describe "recordSteps" $ do
     it "preserves every physical record at each byte split" $ do
         let body = "one\n\ntwo\nthree"
         for_ [1 .. BS.length body - 1] $ \cut -> do
@@ -30,3 +36,11 @@ spec = describe "recordSteps" $ do
         let consume rows _ bytes = if length rows == 1 then Left (TooManyArtifacts 2 1) else Right (bytes : rows)
             steps = recordSteps (\_ previous bytes -> pure (previous + BS.length bytes)) consume Finished []
         readStepsWithEnd id finishRecordSteps (MetadataBodyLimit 1024) steps next `shouldReturn` Left (TooManyArtifacts 2 1)
+
+fragmentChargeSpec :: Spec
+fragmentChargeSpec = describe "recordFragmentCharge" $ do
+    it "adds the fragment's decode and buffer charges to what the record already reserved" $ do
+        let fragment = "{\"a\":1}"
+        recordFragmentCharge 7 fragment `shouldBe` 7 + decodedDocumentCharge fragment + bufferedChunkCharge (BS.length fragment)
+    it "saturates at maxBound instead of wrapping" $
+        recordFragmentCharge maxBound "x" `shouldBe` maxBound
