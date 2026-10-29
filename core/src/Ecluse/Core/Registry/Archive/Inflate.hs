@@ -4,7 +4,7 @@
 {-# LANGUAGE ImportQualifiedPost #-}
 
 -- | A scoped inflater over the existing streaming-commons ABI, with deterministic release on every exit.
-module Ecluse.Core.Registry.Archive.Inflate (InflateFormat (..), withInflatedChunks, splitArchiveCharge) where
+module Ecluse.Core.Registry.Archive.Inflate (InflateFormat (..), withInflatedChunks, inflateBounded, splitArchiveCharge) where
 
 import Control.Concurrent.MVar qualified as MVar
 import Data.ByteString qualified as BS
@@ -29,6 +29,21 @@ withInflatedChunks format charge bytes consume = do
     charge (32768 + 7168 + chunkBytes)
     output <- mallocForeignPtrBytes chunkBytes
     bracket (newIORef (Fresh 0 bytes)) close $ \owner -> consume (nextChunk format owner output)
+
+-- | Collect one payload of at most @bound@ inflated bytes, paying @73728 + 3 * held@ before keeping each chunk.
+inflateBounded :: InflateFormat -> Text -> Int -> (Int -> IO ()) -> ByteString -> IO (Either ParseError ByteString)
+inflateBounded format refusal bound charge bytes = withInflatedChunks format charge bytes (collect 0 [])
+  where
+    collect seen held pull =
+        pull >>= \case
+            Left fault -> pure (Left fault)
+            Right chunk
+                | BS.null chunk -> pure (Right (BS.concat (reverse held)))
+                | BS.length chunk > bound - seen -> pure (Left (ParseError refusal))
+                | otherwise -> do
+                    let next = seen + BS.length chunk
+                    charge (73728 + 3 * next)
+                    collect next (chunk : held) pull
 
 chunkBytes :: Int
 chunkBytes = 32768
