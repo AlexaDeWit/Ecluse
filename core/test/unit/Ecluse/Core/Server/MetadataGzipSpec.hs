@@ -17,6 +17,7 @@ import Ecluse.Core.Server.Admission (newServeAdmissionTuned, withServeAdmission)
 import Ecluse.Core.Server.Admission.Meter (MeterSettings (..), charge, meterSnapshot, newMemoryMeter, withMemoryEntry)
 import Ecluse.Core.Server.Admission.Types (MeterSnapshot (snChargedBytes))
 import Ecluse.Core.Server.MetadataGzip (GzipBody (..), gzipBufferChargeBytes, gzipLazyBody, gzipMetadata, gzipWorkspaceBytes)
+import Ecluse.Server.Admission.Support (ChargeRefused (..))
 import Ecluse.Test.Port (noopMetricsPort)
 import Ecluse.Test.Support (incompressibleBytes)
 
@@ -89,8 +90,3 @@ spec = describe "gzipMetadata" $ do
         , ("repetitive", BS.concat (replicate 20000 "{\"version\":\"1.2.3\",\"dist\":{}},"))
         , ("incompressible", incompressibleBytes 150000)
         ]
-
-data ChargeRefused = ChargeRefused
-    deriving stock (Eq, Show)
-
-instance Exception ChargeRefused

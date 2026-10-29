@@ -26,7 +26,6 @@ import Test.Hspec
 import Test.Hspec.Hedgehog (hedgehog, modifyMaxSuccess)
 import UnliftIO.Async (async, wait)
 import UnliftIO.Concurrent (threadDelay)
-import UnliftIO.Exception (throwIO)
 
 import Ecluse.Core.Deadline (Deadlines)
 import Ecluse.Core.Fault (TransportCause (TransportTimeout, TransportUnreachable), TransportFault (tfCause, tfDetail))
@@ -38,6 +37,7 @@ import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), LimitError (BodyTooL
 import Ecluse.Core.Server.Cache.Store (SingleFlight, newSingleFlightWithBackend, resolveSingleFlight)
 import Ecluse.Core.Server.MemoryModel (bufferedChunkCharge)
 import Ecluse.Core.Snapshot (ContentDigest, digestFromContext)
+import Ecluse.Server.Admission.Support (ChargeRefused (..), refuseCharge)
 import Ecluse.Test.Deadline (withExchangeClient)
 import Ecluse.Test.Poll (awaitUntil)
 import Ecluse.Test.Registry.JsonStream (heldChunks)
@@ -73,7 +73,7 @@ chargeSpec = describe "cumulative charging" $ do
         total `shouldReturn` maxBound
 
     it "retains the addition when the charge callback fails" $ do
-        (add, total) <- accumulatingChargeFrom 7 (const (throwIO ChargeRefused))
+        (add, total) <- accumulatingChargeFrom 7 refuseCharge
         add 4 `shouldThrow` (== ChargeRefused)
         total `shouldReturn` 11
 
@@ -91,11 +91,6 @@ chargeSpec = describe "cumulative charging" $ do
             next <- heldChunks ["abc", "defgh"]
             boundedReader (\n -> modifyIORef' paid (<> [n])) (MetadataBodyLimit 64) next `shouldReturn` Right (8, "abcdefgh")
             readIORef paid `shouldReturn` expected
-
-data ChargeRefused = ChargeRefused
-    deriving stock (Eq, Show)
-
-instance Exception ChargeRefused
 
 singleAttemptSpec :: Spec
 singleAttemptSpec = do
