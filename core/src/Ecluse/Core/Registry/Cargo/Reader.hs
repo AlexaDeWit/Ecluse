@@ -8,7 +8,6 @@ module Ecluse.Core.Registry.Cargo.Reader (
     CargoIndexResult (..),
     readCargoIndexCharged,
     cargoIndexSteps,
-    finishCargoSteps,
 ) where
 
 import Data.Aeson (Value (Null))
@@ -27,9 +26,9 @@ import Ecluse.Core.Registry.Json.Packed (Packed, docTable)
 import Ecluse.Core.Registry.Json.Writer (packTree)
 import Ecluse.Core.Registry.JsonStream (Steps (..), isJsonSpace, readStepsWithEnd)
 import Ecluse.Core.Registry.Metadata.Fetch.Types (DocumentWalk)
-import Ecluse.Core.Registry.Metadata.RecordStream (finishRecordSteps, recordSteps)
+import Ecluse.Core.Registry.Metadata.RecordStream (finishRecordSteps, recordFragmentCharge, recordSteps)
 import Ecluse.Core.Security (Limits (maxNestingDepth), checkArtifactCount, checkVersionCountOf)
-import Ecluse.Core.Server.MemoryModel (bufferedChunkCharge, decodedDocumentCharge)
+import Ecluse.Core.Server.MemoryModel (saturatingCharge)
 import Ecluse.Core.Strict (strictElements)
 import Ecluse.Core.Version (Version, renderVersion)
 import Ecluse.Core.Version.Cargo (cargoUniquenessKey, parseCargo)
@@ -62,11 +61,7 @@ data Scan = Scan
 -- | Reserve current-row workspace and any retained selected row before buffering or decoding.
 readCargoIndexCharged :: (Int -> IO ()) -> CargoDiscovery -> Limits -> PackageName -> CargoRead -> DocumentWalk CargoIndexResult
 readCargoIndexCharged pay discovery limits name mode bound _ =
-    readStepsWithEnd id finishCargoSteps bound (cargoIndexSteps pay discovery limits name mode)
-
--- | Close an incomplete final record with the same empty-chunk signal as the streaming reader.
-finishCargoSteps :: (Monad m) => Steps m a -> m (Steps m a)
-finishCargoSteps = finishRecordSteps
+    readStepsWithEnd id finishRecordSteps bound (cargoIndexSteps pay discovery limits name mode)
 
 -- | Frame and project native records while reserving current and retained selected-row workspace.
 cargoIndexSteps :: (Monad m) => (Int -> m ()) -> CargoDiscovery -> Limits -> PackageName -> CargoRead -> Steps m CargoIndexResult
@@ -86,10 +81,9 @@ cargoIndexSteps pay discovery limits name mode = recordSteps reserve consume (Fi
         FullRead -> scan{scanInvalid = invalid : scanInvalid scan}
         SelectedRead _ -> scan
     reserve scan previous fragment = do
-        let cost = saturated (toInteger previous + toInteger (decodedDocumentCharge fragment) + toInteger (bufferedChunkCharge (BS.length fragment)))
-        pay (saturated (toInteger (scanKeptCharge scan) + toInteger cost))
+        let cost = recordFragmentCharge previous fragment
+        pay (saturatingCharge (toInteger (scanKeptCharge scan) + toInteger cost))
         pure cost
-    saturated = fromInteger . min (toInteger (maxBound :: Int))
     consume !scan rowCharge bytes
         | BS.all isJsonSpace bytes = Right scan{scanOrdinal = scanOrdinal scan + 1}
         | otherwise = do

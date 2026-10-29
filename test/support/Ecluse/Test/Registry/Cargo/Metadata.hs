@@ -26,12 +26,13 @@ import Ecluse.Core.Package (PackageInfo, PackageName, mkPackageName, renderPacka
 import Ecluse.Core.Registry.CachedDocument (CachedDoc)
 import Ecluse.Core.Registry.Cargo.Discovery (CargoDiscovery, discoveryIndex, parseDiscoveryWithDepth)
 import Ecluse.Core.Registry.Cargo.Metadata (cargoReadWith, finishCargoFull)
-import Ecluse.Core.Registry.Cargo.Reader (CargoIndexResult, CargoRead (FullRead), cargoIndexSteps, finishCargoSteps, readCargoIndexCharged)
+import Ecluse.Core.Registry.Cargo.Reader (CargoIndexResult, CargoRead (FullRead), cargoIndexSteps, readCargoIndexCharged)
 import Ecluse.Core.Registry.Cargo.Request (cargoArtifactHosts)
 import Ecluse.Core.Registry.Cargo.Route.Internal (artifactCoordinate)
 import Ecluse.Core.Registry.JsonStream (StreamResult)
 import Ecluse.Core.Registry.Metadata (MetadataError (MetadataBoundExceeded))
 import Ecluse.Core.Registry.Metadata.Fetch.Types (DocumentWalk, EcosystemRead)
+import Ecluse.Core.Registry.Metadata.RecordStream (finishRecordSteps)
 import Ecluse.Core.Security (AllowedHostPorts, BodyLimit (MetadataBodyLimit), LimitError, Limits (maxMetadataBytes), ecosystemArtifactAuthorities)
 import Ecluse.Core.Version (Version, mkVersion, renderVersion)
 import Ecluse.Test.Registry.Cargo.Fixtures qualified as Fixtures
@@ -66,7 +67,7 @@ readCargoIndex = readCargoIndexCharged (const pass)
 -- | Run captured chunks through production framing without another native parser.
 readCargoIndexChunks :: CargoDiscovery -> Limits -> PackageName -> CargoRead -> BodyLimit -> [ByteString] -> Either LimitError (StreamResult CargoIndexResult)
 readCargoIndexChunks discovery limits name mode bound =
-    readStepsChunks finishCargoSteps bound (cargoIndexSteps (const (pure ())) discovery limits name mode)
+    readStepsChunks finishRecordSteps bound (cargoIndexSteps (const (pure ())) discovery limits name mode)
 
 -- | A native identity with no filesystem or network fixture dependency.
 cargoTestName :: PackageName
