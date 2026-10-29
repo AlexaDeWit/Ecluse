@@ -21,6 +21,7 @@ import Ecluse.Core.Registry.Adapter.Types (RegistryAdapter (adapterArtifact, ada
 import Ecluse.Core.Registry.Cargo.Execution (newCargoInstallEvidence)
 import Ecluse.Core.Registry.Cargo.Metadata (prepareCargoRead)
 import Ecluse.Core.Registry.Cargo.Publish (cargoPublishCodec)
+import Ecluse.Core.Registry.Exchange (accumulatingCharge)
 import Ecluse.Core.Registry.Metadata (versionEvaluation)
 import Ecluse.Core.Registry.Metadata.Fetch.Preparation (prepareVersion)
 import Ecluse.Core.Registry.Origin (OriginClient (ocChargeFullRead, ocChargeSelectedRead))
@@ -72,7 +73,9 @@ cargoPolicy adapter environment = do
     pure
         WorkerPolicy
             { wpFirstParty = const False
-            , wpResolveVersion = \pay name version -> versionEvaluation <$> prepareVersion prepareCargoRead passthroughTracingPort sourceOrigin{ocChargeFullRead = pay . scaleCharge (cfFullReadPermille factors), ocChargeSelectedRead = pay} name version
+            , wpResolveVersion = \pay name version -> do
+                fullRead <- accumulatingCharge (pay . scaleCharge (cfFullReadPermille factors))
+                versionEvaluation <$> prepareVersion prepareCargoRead passthroughTracingPort sourceOrigin{ocChargeFullRead = fullRead, ocChargeSelectedRead = pay} name version
             , wpInstallEvidence = Just evidence
             , wpRules = weRules environment
             , wpMinIntegrity = defaultMinIntegrity
