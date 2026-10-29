@@ -5,11 +5,8 @@
 -- | Native load includes per-gem info, directory discovery, compact specifications and platform copies.
 module Ecluse.BenchLoad.RubyGems (InfoWorkload (..), infoPackages, RelayShape (..), RelayFixture (..), relayFixture, relayArtifactFixture, rubyGemsFixture, rubyGemsPrivateCopy, rubyGemsPatternProvider, rubyGemsLoadNotes, infoStubWithArtifacts, selectWarmArtifacts) where
 
-import Data.Aeson ((.:))
-import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as LBS
 import Data.List (lookup)
-import Data.List.NonEmpty qualified as NE
 import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import Data.Text qualified as T
@@ -17,10 +14,10 @@ import Network.HTTP.Client qualified as HTTP
 import Network.HTTP.Types (hContentLength, hContentType, status200, status404)
 import Network.Wai (Application, pathInfo, rawPathInfo, responseLBS)
 
-import Ecluse.BenchLoad.CapturedArtifact (SelectedArtifact (..))
+import Ecluse.BenchLoad.CapturedArtifact (SelectedArtifact (..), selectedArtifact)
 import Ecluse.BenchLoad.Contract.Driver (LoadReadDriver (..), readLoadContract)
 import Ecluse.BenchLoad.Error (benchFail)
-import Ecluse.BenchLoad.Fixture (artifactBytes, delayUpstream, fetchChecked, httpTarget, longCacheTtl, preflightDistinct, weightedMix, withProxyOverStubs)
+import Ecluse.BenchLoad.Fixture (absentUpstream, artifactBytes, delayUpstream, fetchChecked, httpTarget, longCacheTtl, preflightDistinct, rewriteLines, selectPinnedArtifacts, swapChecksumPreservingWidth, weightedMix, withProxyOverStubs)
 import Ecluse.BenchLoad.Harness (Driver (DriveBurst, DriveRamp), LoadKnobs (..), Scenario (..), Target, UpstreamFixture, proxied, scenario, urlLoad)
 import Ecluse.BenchLoad.Listing (ListingSetup (..), listingLoad, listingWorkingSet, revalidateLoad, slowReaderScenario, withListingStubs)
 import Ecluse.BenchLoad.PatternScenario (PatternProvider (..))
@@ -32,10 +29,9 @@ import Ecluse.BenchLoad.RubyGems.WorkerFixture qualified as Worker
 import Ecluse.BenchLoad.Selection (evictionEntries)
 import Ecluse.BenchLoad.Stress (WarmLoadDriver (..), herdSize, pairedLoad, rampSteps)
 import Ecluse.Core.Ecosystem (Ecosystem (RubyGems))
-import Ecluse.Core.Package (PackageDetails (pkgArtifacts), PackageInfo (infoVersions), artFilename)
 import Ecluse.Core.Registry.Metadata (Manifest (manifestInfo))
 import Ecluse.Core.Registry.RubyGems.Metadata (gemReadWith)
-import Ecluse.Test.Corpus (CorpusPackage (cpPackage, cpWeight), cpName, readCorpusPins, rubyGemsCaptureUpstream, rubyGemsCorpusPackages)
+import Ecluse.Test.Corpus (CorpusPackage (cpPackage, cpWeight), cpName, rubyGemsCaptureUpstream, rubyGemsCorpusPackages)
 import Ecluse.Test.Corpus.Subset (newestRubyGemsShare)
 import Ecluse.Test.Package (hexSha256Of)
 import Ecluse.Test.Registry.JsonStream (sliceChunks)
@@ -192,7 +188,7 @@ relayFixture privateHit shape knobs =
   where
     latency = lkUpstreamLatencyMicros knobs
     actual = relayArtifactFixture shape latency (artifactBytes (lkPayloadBytes knobs))
-    absent = missingStub latency
+    absent = absentUpstream latency
 
 artifactScenario :: Bool -> Scenario
 artifactScenario privateHit = scenario name description $ \knobs use -> do
@@ -227,7 +223,7 @@ quickScenario = scenario "quick-gemspec" "Admit an exact native platform coordin
     fixture <- Worker.newWorkerFixture (lkPayloadBytes knobs)
     let latency = lkUpstreamLatencyMicros knobs
         urls port = [localhost port <> "/rubygems/" <> path | path <- Map.keys (Worker.wfSpecs fixture)]
-    withProxyOverStubs RubyGems knobs 0 Nothing (missingStub latency) (Worker.sourceApp latency fixture) urls $ \proxy targets -> do
+    withProxyOverStubs RubyGems knobs 0 Nothing (absentUpstream latency) (Worker.sourceApp latency fixture) urls $ \proxy targets -> do
         for_ (zip (Map.toAscList (Worker.wfSpecs fixture)) targets) $ \((_, original), target) -> do
             response <- fetchChecked status200 [] target
             unless (HTTP.responseBody response == fromStrict original) (benchFail "RubyGems compact specification bytes differ")
@@ -265,16 +261,9 @@ changingInfoStub revisions _ latency captures artifacts =
 
 -- | Workload pins resolve through the production full reader before any timed request starts.
 selectWarmArtifacts :: [CorpusPackage] -> Map Text LByteString -> IO (Map Text SelectedArtifact)
-selectWarmArtifacts packages captures = do
-    pins <- readCorpusPins (.: "rubygemsPins") >>= either (benchFail . toText) pure
-    fmap Map.fromList $ forM packages $ \package -> do
-        let name = cpName package
-        version <- maybe (benchFail ("missing RubyGems workload pin: " <> name)) pure (Map.lookup name pins)
-        bytes <- maybe (benchFail ("missing RubyGems native capture: " <> name)) pure (Map.lookup name captures)
-        manifest <- captureManifest (gemReadWith (const pass) (const pass) "https://rubygems.org") rubyGemsCaptureUpstream (cpPackage package) [toStrict bytes] >>= either (benchFail . show) pure
-        details <- maybe (benchFail ("RubyGems pin is absent from the native capture: " <> name <> "@" <> version)) pure (Map.lookup version (infoVersions (manifestInfo manifest)))
-        let filename = artFilename (NE.head (pkgArtifacts details))
-        pure (name, SelectedArtifact ("gems/" <> filename) ("https://rubygems.org/gems/" <> filename))
+selectWarmArtifacts = selectPinnedArtifacts "rubygemsPins" $ \package version bytes -> do
+    manifest <- captureManifest (gemReadWith (const pass) (const pass) "https://rubygems.org") rubyGemsCaptureUpstream (cpPackage package) [bytes] >>= either (benchFail . show) pure
+    pure (selectedArtifact version ("RubyGems pin is absent from the native capture: " <> cpName package <> "@" <> version) (Right . ("gems/" <>)) (manifestInfo manifest))
 
 infoStub :: Int -> LByteString -> Map Text LByteString -> Application
 infoStub latency payload captures =
@@ -310,9 +299,6 @@ gemStubWith deliver latency bytes request respond = do
         ["gems", filename] | filename `elem` [cpName package <> "-9999.0.2.gem" | package <- rubyGemsCorpusPackages] -> deliver bytes request respond
         _ -> respond (responseLBS status404 [] "missing")
 
-missingStub :: Int -> Application
-missingStub latency _ respond = delayUpstream latency >> respond (responseLBS status404 [] "missing")
-
 relayBody :: LByteString -> LByteString -> Either Text LByteString
 relayBody payload original = do
     rows <- referenceInfo (toStrict original)
@@ -320,18 +306,8 @@ relayBody payload original = do
         previous <- maybeToRight "RubyGems relay row has no checksum" (lookup "checksum" (rowFields row))
         pure (rowPosition row, previous)
     let digest = hexSha256Of (toStrict payload)
-    fromStrict . BS.intercalate "\n" <$> traverse (replace checksums digest) (zip [0 ..] (BS.split 10 (toStrict original)))
-  where
-    replace checksums digest (position, bytes) = case Map.lookup position checksums of
-        Nothing -> Right bytes
-        Just previous -> do
-            let before = "checksum:" <> previous
-                after = "checksum:" <> digest
-                raw = decodeUtf8 bytes
-            unless (before `T.isInfixOf` raw) (Left "RubyGems relay row has no exact checksum field")
-            let result = encodeUtf8 (T.replace before after raw)
-            unless (BS.length result == BS.length bytes) (Left "RubyGems relay fixture changed its native wire width")
-            pure result
+        swap bytes previous = swapChecksumPreservingWidth "RubyGems" ("checksum:" <> previous) ("checksum:" <> digest) bytes
+    rewriteLines (\position bytes -> maybe (Right bytes) (swap bytes) (Map.lookup position checksums)) original
 
 preflightListings :: [Text] -> IO ()
 preflightListings = traverse_ checked . ordNub
