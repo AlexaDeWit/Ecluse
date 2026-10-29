@@ -84,6 +84,13 @@ uploadCoordinateSpec = describe "configured Cargo read and upload coordinates" $
             refusalsIn role (withPublicationUpload Cargo url mounts) `shouldBe` [PublicationTargetOnPublicUpstream Cargo PyPI url]
             refusalsIn role (withMirrorUpload Cargo url mounts) `shouldBe` [MirrorTargetOnPublicUpstream Cargo PyPI url]
 
+    it "refuses publication and mirror APIs on their own mount's public host, whatever the port" $ do
+        mounts <- cargoMounts
+        let url = "https://public.example.test:8443/api"
+        for_ endpointRoles $ \role -> do
+            refusalsIn role (withPublicationUpload Cargo url mounts) `shouldBe` [PublicationTargetOnPublicUpstream Cargo Cargo url]
+            refusalsIn role (withMirrorUpload Cargo url mounts) `shouldBe` [MirrorTargetOnPublicUpstream Cargo Cargo url]
+
     it "keeps the mirror API's private-store collapse advisory specific to the writing role" $ do
         mounts <- cargoMounts
         let url = "https://pypi-private.example.test"
