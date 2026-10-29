@@ -33,7 +33,8 @@ server:
   # helpMessage: Contact platform engineering for access
   # Seconds the graceful shutdown waits for in-flight requests and artifact streams.
   shutdownDrainTimeout: 30
-  # Gzip each admitted npm packument, PyPI Simple index, and Cargo sparse index for a client whose
+  # Gzip each admitted npm packument, PyPI Simple index, Cargo sparse index, RubyGems Compact
+  # Index reply (/versions and /info), and RubyGems compact specification for a client whose
   # Accept-Encoding prefers gzip, at level 1, compressed per response. Artifacts,
   # probes, refusals, and publish replies stay uncompressed, and the metadata cache
   # holds identity bytes. The compression costs CPU on every gzipped response, and
