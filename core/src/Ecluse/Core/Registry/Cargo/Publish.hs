@@ -40,7 +40,7 @@ import Ecluse.Core.Registry.MirrorUpload
 import Ecluse.Core.Registry.MirrorUpload.Internal (checkedMirrorUploadData)
 import Ecluse.Core.Registry.Origin (OriginClient (ocLimits, ocToken), originBaseUrl)
 import Ecluse.Core.Registry.Publish (PublishCodec (..), relayPublishRequest)
-import Ecluse.Core.Registry.Request (attachCredential, joinPath, metadataGet, parseRequestEither)
+import Ecluse.Core.Registry.Request (apiEndpoint, attachCredential, joinPath, metadataGet, parseRequestEither)
 import Ecluse.Core.Registry.ServedDocument (stringField)
 import Ecluse.Core.Security.Egress (RegistryUrl, registryUrlText)
 import Ecluse.Core.Security.Limits (Limits (maxMetadataBytes))
@@ -150,8 +150,7 @@ relayRequest origin name body = do
 
 bodyRequest :: Text -> Maybe ClientCredential -> RequestBody -> Either UrlFormationError Request
 bodyRequest target credential body = do
-    when (T.any (`elem` ['?', '#']) target) (Left (UnparseableUrl "Cargo API root must not contain a query or fragment"))
-    base <- parseRequestEither (T.dropWhileEnd (== '/') target <> "/api/v1/crates/new")
+    base <- apiEndpoint (UnparseableUrl "Cargo API root must not contain a query or fragment") target "api/v1/crates/new"
     pure . attachCredential cargoCredential credential $
         base
             { method = "PUT"
