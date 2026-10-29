@@ -11,6 +11,7 @@ module Ecluse.Test.EcosystemBench (
     ecosystemBenchFor,
     benchmarkEcosystems,
     checkBenchmarkCoverage,
+    checkCoverageAgainst,
 ) where
 
 import Prelude hiding (universe)
@@ -89,11 +90,13 @@ benchmarkEcosystems = map (ebEcosystem . fst) benchmarkRegistrations
 
 -- | Compare providers with both reviewed obligations and the production adapter registry.
 checkBenchmarkCoverage :: [Ecosystem] -> Either Text ()
-checkBenchmarkCoverage actual = do
+checkBenchmarkCoverage = checkCoverageAgainst (filter (isJust . adapterFor) universe)
+
+-- | 'checkBenchmarkCoverage' against the given production ecosystems, so a missing adapter is testable.
+checkCoverageAgainst :: [Ecosystem] -> [Ecosystem] -> Either Text ()
+checkCoverageAgainst production actual = do
     checkProviderCoverage actual
     unless (sort actual == sort production) (Left ("measurement providers differ from production adapters: " <> show production))
-  where
-    production = filter (isJust . adapterFor) universe
 
 checkProviderCoverage :: [Ecosystem] -> Either Text ()
 checkProviderCoverage actual =
