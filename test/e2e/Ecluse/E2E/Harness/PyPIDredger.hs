@@ -1,7 +1,6 @@
 -- SPDX-FileCopyrightText: 2026 Alexandra de Wit
 --
 -- SPDX-License-Identifier: MIT
-{-# LANGUAGE ImportQualifiedPost #-}
 
 -- | Native stores, isolated AWS routing and running product roles for PyPI sweep evidence.
 module Ecluse.E2E.Harness.PyPIDredger (

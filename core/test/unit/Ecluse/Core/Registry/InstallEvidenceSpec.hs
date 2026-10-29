@@ -1,6 +1,5 @@
 -- SPDX-FileCopyrightText: 2026 Alexandra de Wit
 -- SPDX-License-Identifier: MIT
-{-# LANGUAGE ImportQualifiedPost #-}
 
 -- | Evidence budgets account for absolute regions and bound the actual artifact transport.
 module Ecluse.Core.Registry.InstallEvidenceSpec (spec) where

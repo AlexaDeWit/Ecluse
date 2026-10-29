@@ -1,6 +1,5 @@
 -- SPDX-FileCopyrightText: 2026 Alexandra de Wit
 -- SPDX-License-Identifier: MIT
-{-# LANGUAGE ImportQualifiedPost #-}
 
 -- | Public evidence uses anonymous bounded transport and never crosses first-party or authority guards.
 module Ecluse.Core.Server.InstallEvidenceSpec (spec) where
