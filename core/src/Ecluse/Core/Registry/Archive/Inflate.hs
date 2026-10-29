@@ -14,7 +14,7 @@ import Foreign.ForeignPtr (ForeignPtr, mallocForeignPtrBytes, withForeignPtr)
 import Foreign.Ptr (castPtr)
 import UnliftIO.Exception (bracket, mask_, throwIO)
 
-import Ecluse.Core.Registry (ParseError (..))
+import Ecluse.Core.Registry (ParseError (..), parseRefusal)
 import Ecluse.Core.Zlib (ZlibFault (InvalidZlibState, ZlibAllocationFailed), advanceStream, initialiseInflate, openStream, releaseInflate)
 
 -- | Raw deflate, one zlib stream, or a bounded sequence of gzip members.
@@ -39,7 +39,7 @@ inflateBounded format refusal bound charge bytes = withInflatedChunks format cha
             Left fault -> pure (Left fault)
             Right chunk
                 | BS.null chunk -> pure (Right (BS.concat (reverse held)))
-                | BS.length chunk > bound - seen -> pure (Left (ParseError refusal))
+                | BS.length chunk > bound - seen -> pure (parseRefusal refusal)
                 | otherwise -> do
                     let next = seen + BS.length chunk
                     charge (73728 + 3 * next)
