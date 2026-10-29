@@ -107,7 +107,7 @@ canonicalManifestSource :: ManifestSource
 canonicalManifestSource =
     ManifestSource
         { manifestBaseUrl = "https://registry.ecluse.example"
-        , manifestEcosystems = Npm :| [PyPI, Cargo]
+        , manifestEcosystems = Npm :| [PyPI, Cargo, RubyGems]
         }
 
 -- | Assemble the OpenAPI 3 document, a __pure__ function of the source.
