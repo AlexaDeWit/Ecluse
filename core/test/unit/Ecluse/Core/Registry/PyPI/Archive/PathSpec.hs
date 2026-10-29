@@ -7,7 +7,8 @@ module Ecluse.Core.Registry.PyPI.Archive.PathSpec (spec) where
 
 import Data.Text qualified as T
 import Ecluse.Core.Registry (ParseError (..))
-import Ecluse.Core.Registry.PyPI.Archive.Path (checkPath, metadataPath)
+import Ecluse.Core.Registry.Archive.Path (checkPath)
+import Ecluse.Core.Registry.PyPI.Archive.Path (metadataPath)
 import Ecluse.Core.Registry.PyPI.Project (DistributionKind (..))
 import Ecluse.Test.Package (pypiVersion, unscopedPyPI)
 import Test.Hspec
