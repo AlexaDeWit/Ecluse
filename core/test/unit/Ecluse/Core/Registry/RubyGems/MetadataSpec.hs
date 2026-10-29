@@ -9,7 +9,6 @@ import Data.ByteString qualified as BS
 import Data.List (lookup)
 import Data.Map.Strict qualified as Map
 import Test.Hspec
-import UnliftIO.Exception (throwIO)
 
 import Ecluse.Core.Ecosystem (Ecosystem (RubyGems))
 import Ecluse.Core.Package (PackageDetails, PackageInfo (..), hashValue, renderPackageName)
@@ -23,6 +22,7 @@ import Ecluse.Core.Registry.RubyGems.Metadata (gemReadWith)
 import Ecluse.Core.Registry.RubyGems.Project (coordinatePlatform, coordinateVersion, projectName, unGemPlatform)
 import Ecluse.Core.Security (Limits, defaultLimits)
 import Ecluse.Core.Version (mkVersion, renderVersion)
+import Ecluse.Server.Admission.Support (ChargeRefused (ChargeRefused), refuseCharge)
 import Ecluse.Test.Contract.Catalogue (caseLabel)
 import Ecluse.Test.Contract.Metadata.Projection (CallerBoundProjectionDriver (..), MetadataFraming (CallerBoundRecords), ProjectionDriver (..), callerBoundProjectionContract)
 import Ecluse.Test.Port (passthroughTracingPort)
@@ -64,8 +64,8 @@ spec = do
             map observe (gemRows document) `shouldBe` map referenceObservation expected
     it "stops before another fragment when the native workspace reservation refuses" $ do
         name <- expectRight (projectName "fixture")
-        let refused = gemReadWith (const (throwIO WorkspaceRefused)) (const pass) origin
-        readManifest refused passthroughTracingPort (terms origin defaultLimits) name (heldBody ["---\n", fixtureRow "1.0.0"]) `shouldThrow` (== WorkspaceRefused)
+        let refused = gemReadWith refuseCharge (const pass) origin
+        readManifest refused passthroughTracingPort (terms origin defaultLimits) name (heldBody ["---\n", fixtureRow "1.0.0"]) `shouldThrow` (== ChargeRefused)
 
 projectionDriver :: CallerBoundProjectionDriver
 projectionDriver =
@@ -113,8 +113,3 @@ observe row = (grEntryKey row, renderVersion (coordinateVersion (grCoordinate ro
 
 referenceObservation :: RubyInfoRow -> (EntryKey, Text, Text, [(Text, [Text])], Maybe Text)
 referenceObservation row = (RecordEntry (rowPosition row), rowVersion row, rowPlatform row, rowDependencies row, lookup "checksum" (rowFields row))
-
-data WorkspaceRefused = WorkspaceRefused
-    deriving stock (Eq, Show)
-
-instance Exception WorkspaceRefused
