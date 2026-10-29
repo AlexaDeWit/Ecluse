@@ -52,8 +52,9 @@ data OriginClient = OriginClient
     , ocChargeFullReadWorkspace :: Int -> IO ()
     -- ^ Reserve the full reader's absolute row workspace separately from retained source bytes.
     , ocChargeFullRead :: Int -> IO ()
-    -- ^ Pays each decompressed chunk's own charge, never a running total, before the parser sees it.
-    -- A high-water payer must be wrapped in 'accumulatingCharge'.
+    {- ^ Pays each decompressed chunk's own charge, never a running total, before the parser sees it.
+    A high-water payer must be wrapped in 'accumulatingCharge'.
+    -}
     }
 
 -- | Build an origin with caller-supplied limits, transport, and credential posture.
