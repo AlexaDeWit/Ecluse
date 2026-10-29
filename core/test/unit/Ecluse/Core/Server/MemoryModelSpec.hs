@@ -11,10 +11,15 @@ import Hedgehog.Range qualified as Range
 import Test.Hspec
 import Test.Hspec.Hedgehog (hedgehog)
 
-import Ecluse.Core.Server.MemoryModel (chargeForResident, expandWireBytes, expandWireBytesInteger)
+import Ecluse.Core.Server.MemoryModel (chargeForResident, expandWireBytes, expandWireBytesInteger, saturatingCharge)
 
 spec :: Spec
-spec = describe "chargeForResident" $ do
+spec = do
+    residentSpec
+    saturationSpec
+
+residentSpec :: Spec
+residentSpec = describe "chargeForResident" $ do
     it "preserves ordinary expansion while retaining overflow-sized state terms" $ do
         expandWireBytes 331 `shouldBe` 2482
         expandWireBytesInteger 331 `shouldBe` 2482
@@ -30,3 +35,10 @@ spec = describe "chargeForResident" $ do
     it "charges nothing for nothing, and one compact byte for one heap byte" $ do
         chargeForResident 0 `shouldBe` 0
         chargeForResident 1 `shouldBe` 1
+
+saturationSpec :: Spec
+saturationSpec = describe "saturatingCharge" $
+    it "keeps an Int-sized charge and clamps below zero and past maxBound" $ do
+        saturatingCharge 4096 `shouldBe` 4096
+        saturatingCharge (-1) `shouldBe` 0
+        saturatingCharge (toInteger (maxBound :: Int) + 1) `shouldBe` maxBound
