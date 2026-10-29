@@ -2146,6 +2146,7 @@ library ecluse-e2e-test-support
     Ecluse.E2E.Fixtures.PyPI.Dredger
     Ecluse.E2E.Harness.PyPIMirror
     Ecluse.E2E.Harness.CodeArtifact
+    Ecluse.E2E.Harness.CodeArtifact.Roles
     Ecluse.E2E.Harness.PyPIDredger
     Ecluse.E2E.Harness.PyPIDredger.Client
     Ecluse.E2E.Harness.Sweep
@@ -2174,6 +2175,7 @@ library ecluse-e2e-test-support
     Ecluse.E2E.Harness.Cargo
     Ecluse.E2E.Harness.Container
     Ecluse.E2E.Harness.Lifecycle
+    Ecluse.E2E.Harness.NativeEdge
     Ecluse.E2E.Harness.Collector
     Ecluse.E2E.Harness.Docker
     Ecluse.E2E.Harness.Npm
