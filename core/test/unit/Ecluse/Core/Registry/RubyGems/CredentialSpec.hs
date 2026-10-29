@@ -40,7 +40,7 @@ spec = do
         it "uses declared CodeArtifact service presentations and pins redirects" $ do
             request <- parseRequestOrFail "https://registry.test/ruby/repository"
             let key = Just (bareCredential (mkSecret "secret"))
-                reading = attachCredential rubyCodeArtifactReadCredential key request
+                reading = attachCredential rubyReadCredential (Just (ClientCredential (Just "aws") (mkSecret "secret"))) request
                 writing = attachCredential rubyCodeArtifactPublishCredential key request
             lookup "Authorization" (Client.requestHeaders reading) `shouldBe` Just "Basic YXdzOnNlY3JldA=="
             lookup "Authorization" (Client.requestHeaders writing) `shouldBe` Just "Bearer secret"

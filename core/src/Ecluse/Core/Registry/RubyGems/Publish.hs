@@ -54,11 +54,11 @@ rubyPublish factors =
 
 -- | Ordinary private registries use Basic reads and literal native publication keys.
 rubyPublishCodec :: ChargeFactors -> PublishCodec
-rubyPublishCodec = rubyPublishCodecWith rubyReadCredential rubyPublishCredential
+rubyPublishCodec = rubyPublishCodecWith rubyPublishCredential
 
--- | Declared backend roles select read and write credential presentation independently.
-rubyPublishCodecWith :: CredentialMapping -> CredentialMapping -> ChargeFactors -> PublishCodec
-rubyPublishCodecWith readCredential writeCredential factors =
+-- | Declared backend roles select the write credential presentation. Reads present the backend's Basic pair.
+rubyPublishCodecWith :: CredentialMapping -> ChargeFactors -> PublishCodec
+rubyPublishCodecWith writeCredential factors =
     PublishCodec
         { pcPrepareSource = \name version doc -> do
             source <- maybeToRight (PublishSourceUnavailable "RubyGems snapshot has no paired native source") (vdRaw doc >>= snd rubyGemsCached)
@@ -74,9 +74,9 @@ rubyPublishCodecWith readCredential writeCredential factors =
                 checkedMirrorUploadData inventory file verified checked
         , pcMirrorCompanion = Just rubyMirrorCompanion
         , pcNativeComplete = \_ _ _ -> False
-        , pcTargetRead = PrepareRead $ \origin -> fmap (\native -> native{erRequest = \base credential name -> attachCredential readCredential credential <$> gemInfoRequestUnder base Nothing name}) <$> prepareRead prepareGemRead origin
+        , pcTargetRead = PrepareRead $ \origin -> fmap (\native -> native{erRequest = \base credential name -> attachCredential rubyReadCredential credential <$> gemInfoRequestUnder base Nothing name}) <$> prepareRead prepareGemRead origin
         , pcTargetReadPermille = cfFullReadPermille factors
-        , pcProbeRequest = \target credential name -> metadataGet readCredential credential "text/plain" <$> (gemInfoUrl target name >>= parseRequestEither)
+        , pcProbeRequest = \target credential name -> metadataGet rubyReadCredential credential "text/plain" <$> (gemInfoUrl target name >>= parseRequestEither)
         , pcVersionListWalk = Nothing
         , pcPrepareTarget = \_ target -> pure (Right target)
         , pcPublishRequest = \target credential _ upload -> first (PublishFetch . FetchUrlUnformable) (bodyRequest writeCredential target credential NoPublishExtras (uploadBytes upload))

@@ -22,7 +22,7 @@ import Ecluse.Core.Registry.Metadata (VersionDoc (..))
 import Ecluse.Core.Registry.MirrorUpload
 import Ecluse.Core.Registry.Origin (OriginClient (ocChargeFullReadWorkspace), originClient)
 import Ecluse.Core.Registry.Publish (MirrorPublish (mpProbeInventory), MirrorTransport (..), PublishCodec (..), PublishPlan (PublishPlan), newMirrorPublish)
-import Ecluse.Core.Registry.RubyGems.Credential (rubyCodeArtifactPublishCredential, rubyCodeArtifactReadCredential)
+import Ecluse.Core.Registry.RubyGems.Credential (rubyCodeArtifactPublishCredential)
 import Ecluse.Core.Registry.RubyGems.Document
 import Ecluse.Core.Registry.RubyGems.Project (projectName)
 import Ecluse.Core.Registry.RubyGems.Projection (projectGemRows)
@@ -95,7 +95,7 @@ spec = describe "RubyGems publication" $ do
                     _ -> expectationFailure "native publication replaced the verified byte body"
                 pcNativeComplete (pkgName details) (pkgVersion details) (PackageInfo (pkgName details) (Map.singleton "1.0.0" details) mempty []) `shouldBe` False
 
-    for_ [("declared CodeArtifact roles", rubyPublishCodecWith rubyCodeArtifactReadCredential rubyCodeArtifactPublishCredential factors, "Bearer worker-key"), ("generic roles with username aws", rubyPublishCodec factors, "worker-key")] $ \(label, codec, expectedKey) ->
+    for_ [("declared CodeArtifact roles", rubyPublishCodecWith rubyCodeArtifactPublishCredential factors, "Bearer worker-key"), ("generic roles with username aws", rubyPublishCodec factors, "worker-key")] $ \(label, codec, expectedKey) ->
         it ("uses Basic reads and the selected native writer mapping for " <> label) $ do
             listing <- readFileBS "test/fixtures/rubygems/info/ecluse-fixture-root"
             archive <- readFileBS "test/fixtures/rubygems/gems/ecluse-fixture-root-1.0.0.gem"
