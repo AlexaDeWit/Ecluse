@@ -2107,14 +2107,12 @@ library ecluse-e2e-test-support
     Ecluse.E2E.Fixtures.Cargo
     Ecluse.E2E.Fixtures.Cargo.Advisories
     Ecluse.E2E.Fixtures.Cargo.Dredger
-    Ecluse.E2E.Harness.CargoGateway
     Ecluse.E2E.Harness.CargoRegistry
     Ecluse.E2E.Harness.CargoDredger
     Ecluse.E2E.Harness.CargoDredger.Client
     Ecluse.E2E.Cargo.InstallE2ESpec
     Ecluse.E2E.Fixtures.RubyGems
     Ecluse.E2E.Harness.RubyGems
-    Ecluse.E2E.Harness.RubyGemsGateway
     Ecluse.E2E.Harness.RubyGemsRegistry
     Ecluse.E2E.RubyGems.InstallE2ESpec
     Ecluse.E2E.Drivers.RubyGems
