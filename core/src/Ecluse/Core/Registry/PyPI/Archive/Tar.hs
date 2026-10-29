@@ -12,7 +12,7 @@ import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 
 import Ecluse.Core.Package (PackageName)
-import Ecluse.Core.Registry (ParseError (..))
+import Ecluse.Core.Registry (ParseError, parseRefusal)
 import Ecluse.Core.Registry.Archive.Path (checkPath)
 import Ecluse.Core.Registry.Archive.Tar (TarDecode, TarMember (Regular), resolveTarMember, scanTar, tarContents, tarMembers)
 import Ecluse.Core.Registry.PyPI.Archive.Path (metadataPath)
@@ -29,19 +29,16 @@ extractTar limits charge package version withSource = do
         Right (Left bytes) -> pure (Right bytes)
         Right (Right target) -> do
             secondPass <- scanTar limits charge (Right . (== target) . T.intercalate "/") withSource
-            pure $ secondPass >>= maybe (bad "metadata link target has no regular-file content") Right . Map.lookup target . tarContents
+            pure $ secondPass >>= maybe (parseRefusal "metadata link target has no regular-file content") Right . Map.lookup target . tarContents
   where
     select = metadataPath package version Sdist
     locate scan = do
         selected <- filterM (checkPath >=> select) (Map.keys (tarMembers scan))
         path <- case selected of
-            [] -> bad "archive has no Core Metadata"
+            [] -> parseRefusal "archive has no Core Metadata"
             [path] -> Right path
-            _ -> bad "ambiguous archive Core Metadata"
+            _ -> parseRefusal "ambiguous archive Core Metadata"
         target <- resolveTarMember limits scan path
         case Map.lookup target (tarMembers scan) of
             Just Regular -> pure (maybe (Right target) Left (Map.lookup target (tarContents scan)))
-            _ -> bad "Core Metadata link does not name a regular file"
-
-bad :: Text -> Either ParseError a
-bad = Left . ParseError
+            _ -> parseRefusal "Core Metadata link does not name a regular file"
