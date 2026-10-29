@@ -42,9 +42,9 @@ import System.Exit (ExitCode (ExitSuccess))
 import Test.Hspec (expectationFailure)
 
 import Ecluse.Core.Ecosystem (Ecosystem (Cargo, RubyGems))
-import Ecluse.E2E.Harness.CargoGateway (cargoTraffic, observedProxy, withObservedCargoProxy)
 import Ecluse.E2E.Harness.Client (clientReport)
 import Ecluse.E2E.Harness.Docker (awaitContainerLog, containerLogs, withE2EWith)
+import Ecluse.E2E.Harness.NativeEdge (nativeTraffic, observedProxy, withObservedNativeProxy)
 import Ecluse.E2E.Harness.Types
 import Ecluse.Test.Contract.Serving qualified as Serving
 import Ecluse.Test.Contract.Telemetry (hasPopulatedTraceId)
@@ -54,7 +54,7 @@ import Ecluse.Test.Log (lineMessage)
 withClientProxyWith :: E2EConfig -> (E2E -> IO a) -> GlobalDataPlane -> IO a
 withClientProxyWith config action plane
     | any (`elem` topologyMounts (gdpTopology plane)) [Cargo, RubyGems] =
-        withObservedCargoProxy config plane (\observed -> action (observedProxy observed) <* cargoTraffic observed)
+        withObservedNativeProxy config plane (\observed -> action (observedProxy observed) <* nativeTraffic observed)
     | otherwise = withE2EWith config action plane
 
 -- | The HTTP status of a @GET@ to a proxy path (e.g. @\/npm\/e2e-allow@).
