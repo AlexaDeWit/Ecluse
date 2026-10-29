@@ -10,6 +10,7 @@ import Data.Aeson (Value (..), encode, object, (.=))
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as LBS
+import Data.Map.Strict qualified as Map
 import Network.HTTP.Client (defaultManagerSettings, newManager)
 import Network.HTTP.Types (ResponseHeaders)
 import Network.HTTP.Types.Status (Status, status200, status401, status403, status404, status500)
@@ -30,6 +31,7 @@ import Ecluse.Core.Registry.Publish (MirrorTransport (..), PublishCodec (pcNativ
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Core.Security.Limits (BodyLimit (MetadataBodyLimit), LimitError (BodyTooLarge), Limits (maxMetadataBytes), defaultLimits)
 import Ecluse.Core.Server.Admission.Types (ChargeFactors (ChargeFactors))
+import Ecluse.Core.Version (renderVersion)
 import Ecluse.Test.Deadline (withExchangeClient)
 import Ecluse.Test.Package (hexSha256Of)
 import Ecluse.Test.Port (passthroughTracingPort)
@@ -197,7 +199,7 @@ spec = do
             release <- cargoPublicationFixture
             doc <- cargoSourceVersion (cargoIndexRecord release)
             let details = vdDetails doc
-            pcNativeComplete codec (pkgName details) (pkgVersion details) (PackageInfo (pkgName details) mempty mempty []) `shouldBe` False
+            pcNativeComplete codec (pkgName details) (pkgVersion details) (PackageInfo (pkgName details) (Map.singleton (renderVersion (pkgVersion details)) details) mempty []) `shouldBe` False
             mirrorStateRequirement (publishMirrorRequirements (cargoPublish factors)) `shouldBe` DurableVersionState
     describe "Cargo first-party claims" $ do
         it "refuses authorised-name disagreement and query or fragment API roots before sending a credential" $
