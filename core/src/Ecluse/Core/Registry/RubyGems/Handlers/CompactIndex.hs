@@ -38,7 +38,7 @@ import Ecluse.Core.Server.Admission.Meter (MemoryTicket, awaitingFlight, charge,
 import Ecluse.Core.Server.Admission.Types (FlightKey (FlightKey))
 import Ecluse.Core.Server.Cache (resolveDirectory)
 import Ecluse.Core.Server.Context
-import Ecluse.Core.Server.Pipeline.Packument (PackumentReplies (..), answerMetadataBytes, mapPackumentReplies, withObservedAdmittedDocument)
+import Ecluse.Core.Server.Pipeline.Packument (PackumentReplies (..), answerDigestedMetadataBytes, mapPackumentReplies, withObservedAdmittedDocument)
 import Ecluse.Core.Server.Pipeline.Shared (edgeTokenMatches, forwardedCredential, shedMessage, unauthorisedMessage, withListingAdmission)
 import Ecluse.Core.Server.Response (mkRefusal)
 import Ecluse.Core.Telemetry.Metrics (CacheStore (FullStore))
@@ -165,14 +165,15 @@ fetchDirectory pay limits control client base credential = do
 answerCompact :: PackumentDeps -> MemoryTicket -> Request -> ByteString -> Handler RubyResponse
 answerCompact deps ticket request bytes
     | BS.length bytes > maxMetadataBytes (pdLimits deps) = pure (directoryFailure (MetadataBoundExceeded (BodyTooLarge (MetadataBodyLimit (maxMetadataBytes (pdLimits deps))))))
-    | otherwise = answerMetadataBytes replies deps ticket replacement bytes
+    | otherwise = answerDigestedMetadataBytes replies deps ticket replacement digest bytes
   where
-    -- Bundler verifies the decoded native file against Repr-Digest.
-    digest = "sha-256=\"" <> (convertToBase Base64 (hash bytes :: Digest SHA256) :: ByteString) <> "\""
+    -- One SHA-256 serves the strong ETag and Repr-Digest, which Bundler checks against the decoded native file.
+    digest = hash bytes :: Digest SHA256
+    reprDigest = "sha-256=\"" <> (convertToBase Base64 digest :: ByteString) <> "\""
     replies =
         rubyReplies
-            { packumentOk = \headers -> packumentOk rubyReplies (("Repr-Digest", digest) : headers)
-            , packumentNotModified = \headers -> packumentNotModified rubyReplies (("Repr-Digest", digest) : headers)
+            { packumentOk = \headers -> packumentOk rubyReplies (("Repr-Digest", reprDigest) : headers)
+            , packumentNotModified = \headers -> packumentNotModified rubyReplies (("Repr-Digest", reprDigest) : headers)
             }
     replacement =
         if any ((== hRange) . fst) (requestHeaders request)
