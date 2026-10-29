@@ -16,11 +16,11 @@ module Ecluse.BenchLoad.WorkerState (
 import Data.ByteString.Lazy qualified as LBS
 import Data.List (lookup)
 import Data.Map.Strict qualified as Map
-import Network.HTTP.Types (hContentType, status200, status304, status400, status404, status412, status503)
+import Network.HTTP.Types (hContentType, status200, status400, status412, status503)
 import Network.Wai (Application, Response, rawPathInfo, requestHeaders, requestMethod, responseLBS, strictRequestBody)
 
 import Ecluse.BenchLoad.Fixture (delayUpstream)
-import Ecluse.Test.Package (hexSha256Of)
+import Ecluse.BenchLoad.ObjectStore (conditionalObjectRead, objectRevision)
 
 -- | One run's target copy, durable objects, request counts and injected upload rejection.
 data WorkerTarget = WorkerTarget
@@ -74,16 +74,13 @@ stateAppFor objectsRef countsRef latency request respond = do
         headers = requestHeaders request
     objects <- readIORef objectsRef
     case (requestMethod request, Map.lookup key objects) of
-        ("GET", Nothing) -> respond (responseLBS status404 [(hContentType, "application/xml")] "<Error><Code>NoSuchKey</Code><Message>missing</Message></Error>")
-        ("GET", Just (revision, bytes))
-            | lookup "If-None-Match" headers == Just revision -> respond (responseLBS status304 [("ETag", revision)] "")
-            | otherwise -> respond (responseLBS status200 [("ETag", revision)] (LBS.fromStrict bytes))
+        ("GET", stored) -> respond (conditionalObjectRead request stored)
         ("PUT", previous) -> do
             bytes <- LBS.toStrict <$> strictRequestBody request
             let condition = case previous of
                     Nothing -> lookup "If-None-Match" headers == Just "*"
                     Just (storedRevision, _) -> lookup "If-Match" headers == Just storedRevision
-                nextRevision = "\"" <> encodeUtf8 (hexSha256Of bytes) <> "\""
+                nextRevision = objectRevision bytes
             if condition
                 then do
                     modifyIORef' objectsRef (Map.insert key (nextRevision, bytes))
