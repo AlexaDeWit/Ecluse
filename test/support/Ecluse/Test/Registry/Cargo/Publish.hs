@@ -14,10 +14,8 @@ module Ecluse.Test.Registry.Cargo.Publish (
     observeCargoRelay,
 ) where
 
-import Codec.Compression.GZip qualified as GZip
 import Data.Aeson (Value (..), object, toJSON, (.=))
 import Data.Aeson.KeyMap qualified as KeyMap
-import Data.ByteString.Lazy qualified as LBS
 import Data.Text qualified as T
 import Network.HTTP.Client (defaultManagerSettings, newManager)
 import Network.HTTP.Types.Status (status200)
@@ -38,8 +36,7 @@ import Ecluse.Core.Security.Egress (RegistryUrl)
 import Ecluse.Core.Server.Admission.Types (ChargeFactors (ChargeFactors))
 import Ecluse.Test.Deadline (withExchangeClient)
 import Ecluse.Test.Package (hexSha256Of)
-import Ecluse.Test.Registry.Archive (tarBytes)
-import Ecluse.Test.Registry.Cargo.Fixtures (CargoRelease (..), minimalCargoRelease)
+import Ecluse.Test.Registry.Cargo.Fixtures (CargoRelease (..), cargoCrateArchive, minimalCargoRelease)
 import Ecluse.Test.Registry.Cargo.Metadata (cargoTestDiscovery, cargoTestName)
 import Ecluse.Test.Registry.Cargo.Reference (UploadFrame, referenceUpload)
 import Ecluse.Test.Stub (Captured (capBody, capMethod), allCaptured, stubBaseUrl, withRoutedStub)
@@ -64,7 +61,7 @@ observeCargoRelay registryAt bytes =
 cargoPublicationFixture :: IO CargoRelease
 cargoPublicationFixture = do
     let manifest = "[package]\nname='fixture'\nversion='1.0.0'\nauthors=['Ecluse contributors']\ndescription='Owned Cargo registry contract fixture'\nlicense='MIT'\nrust-version='1.74'\n"
-    bytes <- LBS.toStrict . GZip.compress <$> tarBytes [("fixture-1.0.0/README.md", "owned readme"), ("fixture-1.0.0/Cargo.toml", manifest), ("fixture-1.0.0/src/lib.rs", "pub fn owned() {}\n")]
+    bytes <- cargoCrateArchive "fixture" "1.0.0" [("README.md", "owned readme"), ("Cargo.toml", manifest), ("src/lib.rs", "pub fn owned() {}\n")]
     pure (minimalCargoRelease "fixture" "1.0.0"){releaseArchive = bytes, releaseChecksum = hexSha256Of bytes, releaseReadme = "owned readme"}
 
 -- | Literal resolver declarations pair native normalisation controls with an independently authored upload.
@@ -108,7 +105,7 @@ cargoResolverMetadata =
 -- | The effective manifest remains independent of the literal upload claims.
 cargoResolverArchive :: IO ByteString
 cargoResolverArchive =
-    LBS.toStrict . GZip.compress <$> tarBytes [("fixture-1.0.0/README.md", "owned readme"), ("fixture-1.0.0/Cargo.toml", cargoResolverManifest), ("fixture-1.0.0/build.rs", "fn main() {}\n"), ("fixture-1.0.0/src/lib.rs", "pub fn owned() {}\n")]
+    cargoCrateArchive "fixture" "1.0.0" [("README.md", "owned readme"), ("Cargo.toml", cargoResolverManifest), ("build.rs", "fn main() {}\n"), ("src/lib.rs", "pub fn owned() {}\n")]
 
 -- | Native registry interning can retain a different equivalent spelling from the archived declaration.
 cargoResolverAgreements :: [Value]

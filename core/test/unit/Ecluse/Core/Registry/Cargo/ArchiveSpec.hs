@@ -23,6 +23,7 @@ import Ecluse.Core.Registry.Cargo.Manifest (publishMetadataValue)
 import Ecluse.Core.Security.Limits (Limits (..), defaultLimits)
 import Ecluse.Server.Admission.Support (ChargeRefused (..), refuseCharge)
 import Ecluse.Test.Registry.Archive (paxRecord, tarBytes)
+import Ecluse.Test.Registry.Cargo.Fixtures (cargoCrateArchive)
 import Ecluse.Test.Support (expectRight)
 
 spec :: Spec
@@ -194,7 +195,7 @@ manifest :: ByteString
 manifest = "[package]\nname='example'\nversion='1.2.3'\n"
 
 fixture :: [(FilePath, ByteString)] -> IO ByteString
-fixture entries = compress <$> tarBytes [("example-1.2.3/" <> path, content) | (path, content) <- entries]
+fixture = cargoCrateArchive "example" "1.2.3"
 
 compress :: BSL.ByteString -> ByteString
 compress = BSL.toStrict . GZip.compress

@@ -205,7 +205,7 @@ archiveRequests :: [NativeRequest] -> [NativeRequest]
 archiveRequests = filter (T.isSuffixOf ".crate" . nativeRequestPath)
 
 archivePath :: Text -> Text
-archivePath name = "/crates/" <> name <> "/" <> cargoVersion <> "/" <> name <> "-" <> cargoVersion <> ".crate"
+archivePath name = "/" <> cargoArchivePathFor name cargoVersion
 
 publicArchives :: NativeTraffic -> [(Text, Int)]
 publicArchives traffic = [(nativeRequestPath request, nativeRequestStatus request) | request <- archiveRequests (nativeUpstreamRequests traffic), nativeRequestHost request == "cargo-upstream"]
