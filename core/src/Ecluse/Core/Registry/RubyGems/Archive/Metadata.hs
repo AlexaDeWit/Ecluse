@@ -36,7 +36,7 @@ data GemMetadata = GemMetadata
 parseGemMetadata :: YamlValue -> Either ParseError GemMetadata
 parseGemMetadata document = do
     fields <- tagged "Gem::Specification" document
-    name <- yamlField "name" fields >>= yamlText >>= projectName
+    name <- yamlField "name" fields >>= yamlNativeText >>= projectName
     version <- yamlField "version" fields >>= nativeVersion
     platform <- yamlField "platform" fields >>= nativePlatform
     specificationVersion <- yamlField "specification_version" fields >>= yamlText
@@ -75,7 +75,7 @@ nativeVersion :: YamlValue -> Either ParseError Version
 nativeVersion value = do
     fields <- tagged "Gem::Version" value
     unless (Map.keys fields == ["version"]) (bad "invalid Gem::Version YAML fields")
-    raw <- yamlField "version" fields >>= yamlText
+    raw <- yamlField "version" fields >>= yamlNativeText
     unless (isJust (parseGem raw)) (bad "invalid gem metadata version")
     pure (mkVersion RubyGems raw)
 
@@ -99,7 +99,7 @@ nativeDependency :: YamlValue -> Either ParseError (Maybe GemDependency)
 nativeDependency value = do
     fields <- tagged "Gem::Dependency" value
     unless (all (`elem` ["name", "requirement", "type", "prerelease", "version_requirements"]) (Map.keys fields)) (bad "unsupported Gem::Dependency YAML field")
-    name <- yamlField "name" fields >>= yamlText >>= projectName
+    name <- yamlField "name" fields >>= yamlNativeText >>= projectName
     wanted <- yamlField "requirement" fields >>= nativeRequirement
     for_ (Map.lookup "version_requirements" fields) $ \other -> do
         old <- nativeRequirement other
@@ -114,18 +114,18 @@ nativeDependency value = do
 
 nativePlatform :: YamlValue -> Either ParseError GemPlatform
 nativePlatform value = case value of
-    YamlScalar _ text -> mkGemPlatform text
+    YamlScalar{} -> yamlNativeText value >>= mkGemPlatform
     _ -> do
         fields <- tagged "Gem::Platform" value
         unless (Map.keys fields == ["cpu", "os", "version"]) (bad "invalid Gem::Platform YAML fields")
         cpu <- yamlField "cpu" fields >>= optionalPart
-        os <- yamlField "os" fields >>= yamlText
+        os <- yamlField "os" fields >>= yamlNativeText
         version <- yamlField "version" fields >>= optionalPart
         mkGemPlatform (T.intercalate "-" (catMaybes [cpu, Just os, version]))
   where
     optionalPart raw = do
-        text <- yamlText raw
-        pure (if T.null text || yamlTag raw == Y.NullTag then Nothing else Just text)
+        text <- yamlNativeString raw
+        pure (text >>= \part -> part <$ guard (not (T.null part)))
 
 bad :: Text -> Either ParseError a
 bad = Left . ParseError
