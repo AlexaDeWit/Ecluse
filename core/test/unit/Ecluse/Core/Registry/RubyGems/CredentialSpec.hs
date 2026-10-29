@@ -54,7 +54,7 @@ spec = do
             fmap rubyOtpHeaders (rubyPublishExtras [("OTP", "123456"), ("X-Secret", "ignored")])
                 `shouldBe` Right [("OTP", "123456")]
         it "keeps OTP values redacted" $
-            show (RubyPublishOtp (mkSecret "123456")) `shouldSatisfy` (not . T.isInfixOf "123456")
+            show (PublishOneTimePassword (mkSecret "123456")) `shouldSatisfy` (not . T.isInfixOf "123456")
         it "refuses duplicate, empty, control and oversized values" $
             for_ [[("OTP", "a"), ("OTP", "b")], [("OTP", "")], [("OTP", "a\r\nb")], [("OTP", " ")], [("OTP", encodeUtf8 (T.replicate 1025 "a"))]] $ \headers ->
                 rubyPublishExtras headers `shouldSatisfy` isLeft
