@@ -26,7 +26,7 @@ import Ecluse.E2E.Fixtures.Cargo
 import Ecluse.E2E.Fixtures.Contracts (concreteFamily)
 import Ecluse.E2E.Harness
 import Ecluse.E2E.Harness.Cargo
-import Ecluse.E2E.Harness.CargoGateway
+import Ecluse.E2E.Harness.NativeEdge
 import Ecluse.E2E.InstallationE2ESpec (codedArtifact)
 import Ecluse.Test.Contract.Ecosystem (FamilyFixture)
 import Ecluse.Test.Contract.Install
@@ -37,15 +37,15 @@ import Ecluse.Test.Registry.Cargo.Fixtures
 -- | Accepted and denied clients own fresh native caches and compiler outputs.
 cargoInstallationFamily :: FamilyFixture (InstallationDriver Bool)
 cargoInstallationFamily = concreteFamily (cargoReadFixture "installation" ["read", "client-install"]) $ \recorder action plane ->
-    timedFixture recorder (withObservedCargoProxy defaultE2EConfig plane) (action . installation)
+    timedFixture recorder (withObservedNativeProxy defaultE2EConfig plane) (action . installation)
 
-installation :: ObservedCargoProxy -> InstallationDriver Bool
+installation :: ObservedNativeProxy -> InstallationDriver Bool
 installation observed =
     InstallationDriver
         { installationAccepted = InstallDriver install True
         , installationDenied =
             InstallDriver
-                ( withObservedCargoProxy
+                ( withObservedNativeProxy
                     cargoDeniedConfig
                     plane
                     ( \denied -> cargoConsumer (observedProxy denied) currentCargo $ \project -> do
@@ -72,7 +72,7 @@ installation observed =
             [checksum] -> pure checksum
             _ -> fail "Cargo did not advertise one exact checksum"
     install = cargoConsumer proxy currentCargo $ \project -> do
-        invocation <- observeCargo (cargoTraffic observed) project ["build"]
+        invocation <- observeCargo (nativeTraffic observed) project ["build"]
         when (crExit (cargoInvocationClient invocation) == ExitSuccess) $ do
             assertCargoRouting (cargoInvocationTraffic invocation)
             assertCargoAssets project (cargoInvocationTraffic invocation)
@@ -90,47 +90,47 @@ cargoInstallInto proxy toolchain name version = cargoConsumer proxy toolchain $ 
     runCargo project ["build"]
 
 -- | Require archive requests at both proxy listeners and at the public fixture.
-assertCargoRouting :: CargoTraffic -> IO ()
+assertCargoRouting :: NativeTraffic -> IO ()
 assertCargoRouting = assertCargoViewRouting "/cargo" "cargo-upstream"
 
 -- | Require matching native archive exchanges through one local view and its actual origin.
-assertCargoViewRouting :: Text -> Text -> CargoTraffic -> IO ()
+assertCargoViewRouting :: Text -> Text -> NativeTraffic -> IO ()
 assertCargoViewRouting view origin traffic = do
-    let archives = filter (T.isSuffixOf ".crate" . cargoRequestPath)
-        throughView = filter (T.isPrefixOf (view <> "/crates/") . cargoRequestPath) . archives
-        clients = throughView (cargoClientRequests traffic)
-        forwards = throughView (cargoProxyRequests traffic)
-        upstream = filter ((== origin) . cargoRequestHost) (archives (cargoUpstreamRequests traffic))
-    let discovery = filter ((== view <> "/config.json") . cargoRequestPath) (cargoClientRequests traffic)
+    let archives = filter (T.isSuffixOf ".crate" . nativeRequestPath)
+        throughView = filter (T.isPrefixOf (view <> "/crates/") . nativeRequestPath) . archives
+        clients = throughView (nativeClientRequests traffic)
+        forwards = throughView (nativeProxyRequests traffic)
+        upstream = filter ((== origin) . nativeRequestHost) (archives (nativeUpstreamRequests traffic))
+    let discovery = filter ((== view <> "/config.json") . nativeRequestPath) (nativeClientRequests traffic)
     discovery `shouldSatisfy` (not . null)
-    map cargoRequestScheme discovery `shouldSatisfy` all (== "https")
+    map nativeRequestScheme discovery `shouldSatisfy` all (== "https")
     clients `shouldSatisfy` (not . null)
-    map cargoRequestScheme clients `shouldSatisfy` all (== "https")
-    ordNub (map cargoRequestHost clients) `shouldBe` ordNub (map cargoRequestHost discovery)
+    map nativeRequestScheme clients `shouldSatisfy` all (== "https")
+    ordNub (map nativeRequestHost clients) `shouldBe` ordNub (map nativeRequestHost discovery)
     forwards `shouldSatisfy` (not . null)
     upstream `shouldSatisfy` (not . null)
-    map cargoRequestPath clients `shouldMatchList` map cargoRequestPath forwards
-    map (T.drop (T.length view) . cargoRequestPath) clients `shouldMatchList` map cargoRequestPath upstream
+    map nativeRequestPath clients `shouldMatchList` map nativeRequestPath forwards
+    map (T.drop (T.length view) . nativeRequestPath) clients `shouldMatchList` map nativeRequestPath upstream
 
 -- | Every cached native archive needs a successful HTTPS request and a matching product exchange.
-assertCargoAssets :: CargoProject -> CargoTraffic -> IO ()
+assertCargoAssets :: CargoProject -> NativeTraffic -> IO ()
 assertCargoAssets project traffic = do
     tree <- cargoTree project
-    let archives = filter (T.isSuffixOf ".crate" . cargoRequestPath)
-        clients = archives (cargoClientRequests traffic)
-        forwards = archives (cargoProxyRequests traffic)
+    let archives = filter (T.isSuffixOf ".crate" . nativeRequestPath)
+        clients = archives (nativeClientRequests traffic)
+        forwards = archives (nativeProxyRequests traffic)
         cached = [toText (takeFileName path) | (path, TreeFile _ _) <- Map.toList tree, take 3 (splitDirectories path) == ["home", "registry", "cache"], ".crate" `T.isSuffixOf` toText path]
-        discovery = filter (T.isSuffixOf "/config.json" . cargoRequestPath) (cargoClientRequests traffic)
+        discovery = filter (T.isSuffixOf "/config.json" . nativeRequestPath) (nativeClientRequests traffic)
         throughCargoView path = any (`T.isPrefixOf` path) ["/cargo/crates/", "/cargo/private/crates/"]
-        exchange request = (cargoRequestMethod request, cargoRequestPath request, cargoRequestStatus request)
+        exchange request = (nativeRequestMethod request, nativeRequestPath request, nativeRequestStatus request)
     clients `shouldSatisfy` (not . null)
     discovery `shouldSatisfy` (not . null)
-    map cargoRequestScheme (clients <> discovery) `shouldSatisfy` all (== "https")
-    map cargoRequestPath clients `shouldSatisfy` all throughCargoView
-    map cargoRequestStatus clients `shouldSatisfy` all (== 200)
-    ordNub (map cargoRequestHost clients) `shouldBe` ordNub (map cargoRequestHost discovery)
+    map nativeRequestScheme (clients <> discovery) `shouldSatisfy` all (== "https")
+    map nativeRequestPath clients `shouldSatisfy` all throughCargoView
+    map nativeRequestStatus clients `shouldSatisfy` all (== 200)
+    ordNub (map nativeRequestHost clients) `shouldBe` ordNub (map nativeRequestHost discovery)
     map exchange clients `shouldMatchList` map exchange forwards
-    ordNub (map (T.takeWhileEnd (/= '/') . cargoRequestPath) clients) `shouldMatchList` ordNub cached
+    ordNub (map (T.takeWhileEnd (/= '/') . nativeRequestPath) clients) `shouldMatchList` ordNub cached
 
 -- | Disable all ordinary admission paths for the native denial control.
 cargoDeniedConfig :: E2EConfig

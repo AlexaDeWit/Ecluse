@@ -31,11 +31,8 @@ module Ecluse.E2E.Harness.Cargo (
     cargoGraph,
     cargoLock,
     cargoTree,
-    CargoRequest (..),
-    CargoTraffic (..),
     CargoInvocation (..),
     observeCargo,
-    cargoTrafficSince,
 ) where
 
 import Data.Aeson qualified as Aeson
@@ -47,6 +44,7 @@ import System.FilePath (takeDirectory, (</>))
 import UnliftIO.Environment (getEnvironment)
 
 import Ecluse.E2E.Harness.Client (compilerEnvironmentKeys, runClient, withClientDir)
+import Ecluse.E2E.Harness.NativeEdge (NativeTraffic, nativeTrafficSince)
 import Ecluse.E2E.Harness.Types (ClientResult (..), E2E, clientCertificateBundle)
 import Ecluse.Test.InstalledTree (InstalledTree, snapshotTree)
 import Ecluse.Test.Registry.Cargo.Fixtures (CargoCrate (..), cargoRoot, cargoVersion)
@@ -252,48 +250,18 @@ cargoLock project = do
 cargoTree :: CargoProject -> IO InstalledTree
 cargoTree project = snapshotTree (cargoDirectory project) ["home/registry", "installed", "Cargo.lock"]
 
--- | A captured request keeps its scheme, authority, method, path and status for bypass assertions.
-data CargoRequest = CargoRequest
-    { cargoRequestScheme :: Text
-    , cargoRequestHost :: Text
-    , cargoRequestMethod :: Text
-    , cargoRequestPath :: Text
-    , cargoRequestStatus :: Int
-    }
-    deriving stock (Eq, Show)
-
--- | The existing fixture observers supply independent incoming, proxy and upstream request inventories.
-data CargoTraffic = CargoTraffic
-    { cargoClientRequests :: [CargoRequest]
-    , cargoProxyRequests :: [CargoRequest]
-    , cargoUpstreamRequests :: [CargoRequest]
-    }
-    deriving stock (Eq, Show)
-
 -- | Native output and all three request inventories belong to one isolated command interval.
 data CargoInvocation = CargoInvocation
     { cargoInvocationClient :: ClientResult
-    , cargoInvocationTraffic :: CargoTraffic
+    , cargoInvocationTraffic :: NativeTraffic
     }
     deriving stock (Show)
 
 -- | Slice append-only fixture logs around a native command. Shared contracts own the resulting assertions.
-observeCargo :: IO CargoTraffic -> CargoProject -> [String] -> IO CargoInvocation
+observeCargo :: IO NativeTraffic -> CargoProject -> [String] -> IO CargoInvocation
 observeCargo observations project arguments = do
     before <- observations
     result <- runCargo project arguments
     after <- observations
-    traffic <- cargoTrafficSince before after
+    traffic <- nativeTrafficSince before after
     pure (CargoInvocation result traffic)
-
--- | Keep the same append-only checks for one command or a complete native installation.
-cargoTrafficSince :: CargoTraffic -> CargoTraffic -> IO CargoTraffic
-cargoTrafficSince before after = do
-    client <- delta (cargoClientRequests before) (cargoClientRequests after)
-    proxy <- delta (cargoProxyRequests before) (cargoProxyRequests after)
-    upstream <- delta (cargoUpstreamRequests before) (cargoUpstreamRequests after)
-    pure (CargoTraffic client proxy upstream)
-  where
-    delta previous current = do
-        unless (length current >= length previous) (fail "Cargo request inventory reset during a command")
-        pure (drop (length previous) current)
