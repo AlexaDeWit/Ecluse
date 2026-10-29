@@ -19,7 +19,7 @@ import Data.Text.Short (ShortText)
 import Data.Text.Short qualified as TS
 
 import Ecluse.Core.Package (PackageName)
-import Ecluse.Core.Registry (ParseError (..))
+import Ecluse.Core.Registry (ParseError, parseRefusal)
 
 -- | How one ecosystem spells and compares first-party names.
 data FirstPartyGrammar ecosystem = FirstPartyGrammar
@@ -62,7 +62,7 @@ parseFirstPartyEntry grammar entry = case T.stripSuffix "*" entry of
     Nothing -> OwnedName <$> fpProjectName grammar entry
   where
     invalid :: Either ParseError a
-    invalid = Left (ParseError ("invalid " <> fpLabel grammar <> " first-party entry: " <> show entry))
+    invalid = parseRefusal ("invalid " <> fpLabel grammar <> " first-party entry: " <> show entry)
     endsAtSeparator = maybe False (fpSeparator grammar . snd) . T.unsnoc
 
 -- | Whether any entry owns the name. A name without an ownership key is never owned.
