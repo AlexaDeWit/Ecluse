@@ -43,7 +43,7 @@ import Data.Set qualified as Set
 
 import Ecluse.Core.Ecosystem (Ecosystem (Cargo, Npm, PyPI, RubyGems))
 import Ecluse.Core.Package (Artifact (..), Hash, HashAlg (SHA256), PackageDetails (..), PackageInfo (infoVersions), PackageName, mkHash, pkgEcosystem)
-import Ecluse.Core.Package.Entry (EntryKey)
+import Ecluse.Core.Package.Entry (EntryKey, validEntryKey)
 import Ecluse.Core.Package.Hash (canonicalHashValue, computeDigest, hexDigestText)
 import Ecluse.Core.Package.Integrity (IntegrityResult (..), assertedAlg, authoritativeDigest, verifyIntegrity)
 import Ecluse.Core.Registry (MirrorArtifact (..), PublishFault (PublishIntegrityMismatch, PublishSourceUnavailable))
@@ -56,7 +56,7 @@ import Ecluse.Core.Registry.PyPI.Project (fileCoordinate, projectFile, projectNa
 import Ecluse.Core.Registry.PyPI.Wire (IndexFile (ifEntryKey, ifFilename))
 import Ecluse.Core.Registry.RubyGems.Document (GemDocument, restrictGemDocument)
 import Ecluse.Core.Registry.RubyGems.SourceState (validateGemSource)
-import Ecluse.Core.Registry.ServedDocument (uniqueEntries, validEntryKey)
+import Ecluse.Core.Registry.ServedDocument (uniqueEntries)
 import Ecluse.Core.Server.Path (mkFilename, unFilename)
 import Ecluse.Core.Version (Version, renderVersion)
 
