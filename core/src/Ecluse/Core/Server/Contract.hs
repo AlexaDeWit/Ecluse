@@ -41,6 +41,7 @@ module Ecluse.Core.Server.Contract (
     PassthroughBody (..),
     PassthroughResponse,
     passthroughResponse,
+    plainTextRefusal,
     passthroughContract,
 
     -- * Combining closed alternatives
@@ -53,7 +54,7 @@ module Ecluse.Core.Server.Contract (
 
 import Autodocodec (JSONCodec, toJSONVia)
 import Data.Aeson qualified as Aeson
-import Network.HTTP.Types (Header, Status, hContentType)
+import Network.HTTP.Types (Header, Status, hCacheControl, hContentType)
 import Network.Wai (Response, StreamingBody, responseLBS, responseStream)
 
 {- | The structural shape of a response body and the media type it is served under, kept
@@ -251,6 +252,11 @@ data PassthroughResponse = PassthroughResponse Status [Header] PassthroughBody
 -- | Build a transparent response value for 'passthroughContract'.
 passthroughResponse :: Status -> [Header] -> PassthroughBody -> PassthroughResponse
 passthroughResponse = PassthroughResponse
+
+-- | A local plain-text refusal for 'passthroughContract' that clients must not store.
+plainTextRefusal :: Status -> [Header] -> Text -> PassthroughResponse
+plainTextRefusal status headers message =
+    PassthroughResponse status ((hContentType, "text/plain") : (hCacheControl, "no-store") : headers) (PassthroughBytes (fromStrict (encodeUtf8 message)))
 
 {- | An OpenAPI @default@ contract for a transparent upstream relay. The proxy forwards arbitrary
 upstream statuses and media types, so any finite status set beside it would be inaccurate.

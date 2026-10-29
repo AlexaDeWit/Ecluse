@@ -6,7 +6,10 @@
 module Ecluse.Core.Server.Pipeline.Packument.Response (
     MetadataResponse,
     metadataReplies,
+    keepPrivateUnauthorised,
 ) where
+
+import Network.HTTP.Types (ResponseHeaders)
 
 import Ecluse.Core.Server.Contract (
     ResponseChoice (FirstResponse, SecondResponse),
@@ -62,3 +65,9 @@ metadataReplies forbiddenText refusalBody =
   where
     forbiddenReply headers message = SecondResponse (SecondResponse (SecondResponse (FirstResponse (refusalValue headers message))))
     refusalValue headers message = responseValue headers (refusalBody message)
+
+-- | Answer a private origin's 401 with @replies@' 401 and every other private refusal with its 403.
+keepPrivateUnauthorised :: PackumentReplies response -> Int -> ResponseHeaders -> Refusal -> response
+keepPrivateUnauthorised replies code
+    | code == 401 = packumentUnauthorised replies
+    | otherwise = packumentForbidden replies
