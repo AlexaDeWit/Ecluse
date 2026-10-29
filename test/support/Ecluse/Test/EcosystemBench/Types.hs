@@ -7,6 +7,7 @@ Raw corpus bytes cross the interface, while prepared serving uses the production
 -}
 module Ecluse.Test.EcosystemBench.Types (
     EcosystemBench (..),
+    CorpusFraming (..),
     LoadedEntry (..),
     RequestBuild (..),
     RouteCase (..),
@@ -42,6 +43,8 @@ data EcosystemBench = EcosystemBench
     , ebTreeDocument :: CachedDoc -> Maybe CachedDoc
     , ebKeepVersions :: PackageInfo -> Set Text -> Value -> Value
     , ebHeavyBase :: Int -> Value -> Value
+    , ebFraming :: CorpusFraming
+    -- ^ How a capture becomes the 'Value' that 'ebKeepVersions' and 'ebHeavyBase' rewrite.
     , ebSynthetic :: Int -> ByteString
     -- ^ Positive counts produce that many distinct releases under 'ebSyntheticName'.
     , ebSyntheticName :: PackageName
@@ -70,6 +73,13 @@ data EcosystemBench = EcosystemBench
     , ebRequestBuilds :: [RequestBuild]
     -- ^ The upstream requests a serve builds for one package, as its origin builds them.
     }
+
+-- | The byte framing of a capture, so a transform never sends native records down the JSON path.
+data CorpusFraming
+    = -- | One JSON document, decoded and encoded with Aeson.
+      JsonFraming
+    | -- | Native records with the format's own decoder and encoder.
+      NativeFraming (ByteString -> Either Text Value) (Value -> Either Text ByteString)
 
 -- | A capture and its production read. Lazy fields preserve the original tuple's evaluation boundaries.
 data LoadedEntry = LoadedEntry
