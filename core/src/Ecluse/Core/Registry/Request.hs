@@ -23,6 +23,7 @@ module Ecluse.Core.Registry.Request (
     artifactRequestByUrl,
     artifactGet,
     joinPath,
+    apiEndpoint,
     sidecarUrl,
     parseRequestEither,
 
@@ -170,11 +171,23 @@ parseRequestEither url =
         Just request -> Right (sealRequest request)
         Nothing -> Left (UnparseableUrl url)
 
+{- | Parse an already-encoded API path under a configured root. A root with a query or a fragment
+is refused with @refusal@, because the joined path would land inside it.
+-}
+apiEndpoint :: UrlFormationError -> Text -> Text -> Either UrlFormationError Request
+apiEndpoint refusal root path = do
+    when (T.any queryOrFragment root) (Left refusal)
+    joinPath root path >>= parseRequestEither
+
 -- | Append the companion suffix to the path while preserving query and fragment text.
 sidecarUrl :: Text -> Text
 sidecarUrl url = path <> ".metadata" <> suffix
   where
-    (path, suffix) = T.break (\character -> character == '?' || character == '#') url
+    (path, suffix) = T.break queryOrFragment url
+
+-- The characters that end a URL's path.
+queryOrFragment :: Char -> Bool
+queryOrFragment c = c == '?' || c == '#'
 
 {- | An upstream base URL and its one parse, so a request under it appends its path rather than
 parsing the joined URL again. 'mkBaseRequest' is the only builder.
@@ -196,7 +209,7 @@ mkBaseRequest url = BaseRequest url directory
   where
     text = registryUrlText url
     directory
-        | T.any (\c -> c == '?' || c == '#') text = Nothing
+        | T.any queryOrFragment text = Nothing
         | otherwise = rightToMaybe (joinPath text "" >>= parseRequestEither)
 
 -- | The URL the base was parsed from.
