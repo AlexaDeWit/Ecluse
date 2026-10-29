@@ -35,7 +35,7 @@ spec = do
         it "checks compressed SHA-256 before allocating decoder workspace" $ do
             bytes <- fixture [("Cargo.toml", manifest)]
             requests <- newIORef ([] :: [Int])
-            result <- inspectCargoArchive defaultLimits (\wanted -> modifyIORef' requests (wanted :)) "example" "1.2.3" (BS.replicate 64 48 & decodeUtf8) bytes
+            result <- inspectCargoArchive defaultLimits (\wanted -> modifyIORef' requests (wanted :)) "example" "1.2.3" (Just (BS.replicate 64 48 & decodeUtf8)) bytes
             void result `shouldBe` Left (ParseError "Cargo compressed archive disagrees with its admitted SHA-256")
             readIORef requests `shouldReturn` []
         it "uses only the effective manifest and enumerates later build scripts" $ do
@@ -116,12 +116,12 @@ spec = do
         it "propagates a resource charge refusal as a fault" $ do
             bytes <- fixture [("Cargo.toml", manifest)]
             let refuse _ = throwIO ChargeRefused
-            inspectCargoArchive defaultLimits refuse "example" "1.2.3" (sha256Hex bytes) bytes `shouldThrow` (== ChargeRefused)
+            inspectCargoArchive defaultLimits refuse "example" "1.2.3" (Just (sha256Hex bytes)) bytes `shouldThrow` (== ChargeRefused)
     describe "cargoPublicationMetadata" $ do
         it "preserves publication claims and their reservation when README capture is disabled" $ do
             bytes <- fixture [("Cargo.toml", manifest <> "readme=false\nlicense='MIT'\n"), ("README.md", BS.singleton 255)]
             retained <- newIORef 0
-            archive <- inspectCargoArchive defaultLimits (writeIORef retained) "example" "1.2.3" (sha256Hex bytes) bytes >>= expectRight
+            archive <- inspectCargoArchive defaultLimits (writeIORef retained) "example" "1.2.3" (Just (sha256Hex bytes)) bytes >>= expectRight
             held <- readIORef retained
             held `shouldSatisfy` (> 0)
             payments <- newIORef ([] :: [Int])
@@ -201,13 +201,13 @@ compress :: BSL.ByteString -> ByteString
 compress = BSL.toStrict . GZip.compress
 
 inspect :: Limits -> ByteString -> IO (Either ParseError CargoArchiveMetadata)
-inspect limits bytes = inspectCargoArchive limits (const (pure ())) "example" "1.2.3" (sha256Hex bytes) bytes
+inspect limits bytes = inspectCargoArchive limits (const (pure ())) "example" "1.2.3" (Just (sha256Hex bytes)) bytes
 
 peakCharge :: ByteString -> IO Int
 peakCharge bytes = do
     peak <- newIORef 0
     let charge wanted = modifyIORef' peak (max wanted)
-    void (inspectCargoArchive defaultLimits charge "example" "1.2.3" (sha256Hex bytes) bytes >>= expectRight)
+    void (inspectCargoArchive defaultLimits charge "example" "1.2.3" (Just (sha256Hex bytes)) bytes >>= expectRight)
     readIORef peak
 
 data ChargeRefused = ChargeRefused
