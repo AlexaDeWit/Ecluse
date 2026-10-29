@@ -135,11 +135,10 @@ selectPackage counting ports counters mount ctx name stored
     served = [storedVersion s | s <- stored, storedPresence s == VersionServed]
     decideAll evidence = do
         decide <- newEvaluatorWithInstallRead (installEvidenceMode (smInstallEvidence mount)) ctx (smRules mount)
-        evidenceReads <- case smInstallEvidence mount of
-            Nothing -> pure (const (pure Nothing))
-            Just provider ->
-                newInstallEvidenceReads
-                    provider
+        evidenceReads <-
+            installEvidenceReads
+                (smInstallEvidence mount)
+                ( pure
                     InstallEvidenceContext
                         { ieLimits = smInstallLimits mount
                         , ieRole = InstallStoreRevocation
@@ -148,6 +147,7 @@ selectPackage counting ports counters mount ctx name stored
                         , ieFlightBudget = Nothing
                         , ieDiagnostic = \fault -> auditError (sweepAudit ports) (renderPackageName name <> ": " <> renderInability (rfDetail fault))
                         }
+                )
         let decideSubject version = do
                 let (ev, details) = evidence version
                 installRead <- maybe (pure Nothing) evidenceReads details

@@ -51,7 +51,7 @@ unreadInstallSignal = ReadFault WontResolve EvaluationFailed InstallSignalUnread
 
 -- | Refuse required resolution when no reader is bound, without attempting transport.
 unavailableInstallArtifactRead :: InstallArtifactRead
-unavailableInstallArtifactRead _ _ _ = pure (Left (ReadFault WontResolve EvaluationFailed InstallSignalUnread))
+unavailableInstallArtifactRead _ _ _ = pure (Left unreadInstallSignal)
 
 -- | One operation owns its reader, deadline and two separate absolute memory reservations.
 data InstallEvidenceContext = InstallEvidenceContext
