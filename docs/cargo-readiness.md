@@ -19,4 +19,3 @@ The [approved design](https://github.com/AlexaDeWit/Ecluse/issues/1883#issuecomm
 records the client baseline, trust boundary, complete serving contract, and delivery requirements.
 The runtime adapter requires measured native charge factors.
 Ordinary arm64 CI must supply those observations. A missing factor remains an explicit failure.
-The protocol contract does not establish that CI, native calibration, or final review passed for a particular commit.
