@@ -47,7 +47,7 @@ cargoReadWith fullPay selectedPay discovery =
         (discoveryIndex discovery)
         EcosystemRead
             { erRequest = cargoIndexRequest
-            , erUniqueFields = ["vers", "cksum"]
+            , erUniqueFields = []
             , erWalkFull = \limits name _ -> readCargoIndexCharged fullPay discovery limits name FullRead
             , erFinishFull = \limits _ _ -> finishCargoFull limits
             , erWalkSelected = \limits name version -> readCargoIndexCharged selectedPay discovery limits name (SelectedRead version)
