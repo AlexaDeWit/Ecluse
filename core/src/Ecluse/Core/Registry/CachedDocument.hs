@@ -178,7 +178,19 @@ integerBytes value
 
 -- | RubyGems retains native artifact rows without reconstructing installation metadata from policy facts.
 rubyGemsCached :: (GemDocument -> CachedDoc, CachedDoc -> Maybe GemDocument)
-rubyGemsCached = (\document -> CachedRubyGems document (gemBytes document), \case CachedRubyGems document _ -> Just document; _ -> Nothing)
+rubyGemsCached = (\document -> CachedRubyGems document (gemBytes document), project)
+  where
+    project = \case
+        CachedRubyGems document _ -> Just document
+        CachedNpm _ _ -> Nothing
+        CachedPyPISimple _ _ -> Nothing
+        PackedNpm _ -> Nothing
+        RenderedNpm _ -> Nothing
+        PackedPyPI _ -> Nothing
+        RenderedPyPI _ -> Nothing
+        CachedCargo _ _ -> Nothing
+        PackedCargo _ -> Nothing
+        RenderedCargo _ -> Nothing
 
 gemBytes :: GemDocument -> Int64
 gemBytes document = 64 + nativeTextBytes (renderPackageName (gemName document)) + fromIntegral (BS.length (gemHeader document)) + sum (map rowBytes (gemRows document))
