@@ -286,8 +286,9 @@ dropReasonLabel = \case
     MissingReceipt -> "missing receipt"
     UndecodableBody -> "undecodable body"
 
--- | Read npm, Cargo and RubyGems identities through their grammars before the worker accepts them.
--- PyPI names pass as given.
+{- | Read npm, Cargo and RubyGems identities through their grammars before the worker accepts them.
+PyPI names pass as given.
+-}
 mirrorJobPackage :: Ecosystem -> Maybe Text -> Text -> Either Text PackageName
 mirrorJobPackage eco namespace rawName = case eco of
     Npm -> first parseErrorMessage (projectName npmWireName)
