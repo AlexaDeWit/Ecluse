@@ -250,6 +250,7 @@ library ecluse-core
     Ecluse.Core.Registry.Exchange
     Ecluse.Core.Registry.Exchange.Observe
     Ecluse.Core.Registry.Exchange.Types
+    Ecluse.Core.Registry.FirstParty
     Ecluse.Core.Registry.Json.Intern
     Ecluse.Core.Registry.Json.Packed
     Ecluse.Core.Registry.Json.Scratch
