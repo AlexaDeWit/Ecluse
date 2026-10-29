@@ -7,13 +7,11 @@
 module Ecluse.Core.Registry.RubyGems.Credential (
     rubyReadCredential,
     rubyPublishCredential,
-    rubyCodeArtifactReadCredential,
     rubyCodeArtifactPublishCredential,
     rubyPublishExtras,
     rubyOtpHeaders,
 ) where
 
-import Data.ByteArray.Encoding (Base (Base64), convertToBase)
 import Data.ByteString qualified as BS
 import Network.HTTP.Types.Header (RequestHeaders, hAuthorization)
 
@@ -30,12 +28,6 @@ rubyReadCredential = pypiCredential
 -- | A publication key is the complete native header value, including any configured scheme.
 rubyPublishCredential :: CredentialMapping
 rubyPublishCredential = credentialMapping bareAuthorization hAuthorization (encodeUtf8 . unSecret . credSecret)
-
--- | A declared CodeArtifact service role supplies its fixed Basic username.
-rubyCodeArtifactReadCredential :: CredentialMapping
-rubyCodeArtifactReadCredential = credentialMapping (credentialRecover rubyReadCredential) hAuthorization render
-  where
-    render credential = "Basic " <> convertToBase Base64 (encodeUtf8 ("aws:" <> unSecret (credSecret credential)) :: ByteString)
 
 -- | A declared CodeArtifact writer presents its minted service token as Bearer.
 rubyCodeArtifactPublishCredential :: CredentialMapping
