@@ -27,6 +27,7 @@ module Ecluse.Core.Registry.Exchange (
     accumulatingCharge,
     accumulatingChargeFrom,
     boundedChargedRead,
+    boundedIncrementalRead,
 
     -- * Request formation
     formThen,
@@ -208,6 +209,10 @@ boundedChargedRead :: (Int -> IO ()) -> BodyLimit -> IO ByteString -> IO (Either
 boundedChargedRead charge limits readChunk = do
     retain <- accumulatingCharge charge
     boundedRead limits (chargedRead (retain . bufferedChunkCharge) readChunk)
+
+-- | Pay each buffered chunk's own charge, never a running total, before the bounded reader retains it.
+boundedIncrementalRead :: (Int -> IO ()) -> BodyLimit -> IO ByteString -> IO (Either LimitError (Int, ByteString))
+boundedIncrementalRead charge limits = boundedRead limits . chargedRead (\bytes -> let cost = bufferedChunkCharge bytes in when (cost > 0) (charge cost))
 
 -- | Report request-formation and exchange failures through the same error channel.
 formThen ::
