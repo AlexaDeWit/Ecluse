@@ -119,6 +119,8 @@ checks every deadline in the process every 100 ms, so each one ends about 100 ms
 plus the sweep and scheduling. Arming a deadline adds it to a list for the arming thread's core, so
 request threads never wait on each other to arm one, as they would on GHC's process-wide timer
 queue. Amazonka's S3 calls and the OSV and EPSS fetches keep their own clients' timers.
+The mirror worker has no serve-path cap, so it bounds Cargo and RubyGems archive preparation and
+RubyGems companion validation at the 60-second request timeout, on the same sweeper.
 
 The npm, PyPI, and Cargo adapters stream artifact responses without hashing their bodies. Integrity on this path depends
 on the client checking the preserved metadata hashes. The proxy therefore asks the upstream for
