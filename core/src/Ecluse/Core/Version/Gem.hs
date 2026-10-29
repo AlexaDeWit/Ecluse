@@ -40,9 +40,9 @@ parseGem raw = do
         segs = T.splitOn "." (T.replace "-" ".pre." stripped)
     guard (not (T.null stripped))
     guard (all validSeg segs)
-    let toks = concatMap segTokens segs
-    guard (not (null toks))
-    pure (GemKey (strictElements (canonicalSegments toks)))
+    let segments = map segTokens segs
+    guard (not (all null segments))
+    pure (GemKey (strictElements (canonicalSegments segments)))
   where
     validSeg s = not (T.null s) && T.all isAsciiAlphaNum s
     segTokens = map classifyRun . digitRuns
@@ -63,13 +63,17 @@ compareGemTokens (x : xs) (y : ys) = compare x y <> compareGemTokens xs ys
 compareGemTokens (x : xs) [] = compare x (VNum 0) <> compareGemTokens xs []
 compareGemTokens [] (y : ys) = compare (VNum 0) y <> compareGemTokens [] ys
 
--- Gem::Version drops trailing zeros independently from release and prerelease tokens.
-canonicalSegments :: [VToken] -> [VToken]
-canonicalSegments toks =
-    let (release, prerelease) = span isNumeric toks
-     in dropTrailingZeros release <> dropTrailingZeros prerelease
+-- Gem::Version#canonical_segments: drop the trailing zeros and, for a prerelease, the first run
+-- of zeros that starts a segment and directly precedes a letter.
+canonicalSegments :: [[VToken]] -> [VToken]
+canonicalSegments segments = dropWhileEnd (== VNum 0) (if all isNumeric tokens then tokens else dropFirstZeroRun starts)
   where
-    dropTrailingZeros = dropWhileEnd (== VNum 0)
+    tokens = concat segments
+    starts = concatMap (zip (True : repeat False)) segments
+    dropFirstZeroRun = \case
+        held@((True, VNum 0) : _) | (_, rest@((_, VStr _) : _)) <- span ((== VNum 0) . snd) held -> map snd rest
+        (_, token) : rest -> token : dropFirstZeroRun rest
+        [] -> []
 
 isNumeric :: VToken -> Bool
 isNumeric = \case
