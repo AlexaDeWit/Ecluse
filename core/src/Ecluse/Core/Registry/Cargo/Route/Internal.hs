@@ -292,7 +292,7 @@ serveDiscovery view request respond = do
                     (\headers -> reply (discoveryError status503 headers shedMessage))
                     ( \ticket -> do
                         let origin = (mountOrigin deps (srPrivateClient rt) base token){ocChargeFullRead = charge ticket . scaleCharge (cfFullReadPermille (metadataChargeFactors (pdMetadata deps)))}
-                        tryAny (liftIO (cargoDiscovery (srTracing rt) origin)) <&> \case
+                        tryAny (liftIO (cargoDiscovery origin)) <&> \case
                             Right (Right discovery) -> discoveryReply (discoveryAuthRequired discovery)
                             Right (Left (MetadataAuthorisationFailure 401)) -> discoveryError status401 challenge "authentication required"
                             Right (Left (MetadataAuthorisationFailure 403)) -> discoveryError status403 [] "private registry refused access"

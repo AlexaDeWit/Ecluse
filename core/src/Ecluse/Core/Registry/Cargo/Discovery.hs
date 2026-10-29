@@ -41,7 +41,6 @@ import Ecluse.Core.Registry.Origin (OriginClient (..), originBaseUrl)
 import Ecluse.Core.Registry.Public (ReadControl (..))
 import Ecluse.Core.Security (AllowedHostPorts, BodyLimit (MetadataBodyLimit), LimitError (BodyTooLarge), Limits (maxMetadataBytes, maxNestingDepth, progressFloor), ecosystemArtifactAuthorities)
 import Ecluse.Core.Server.Path (Filename, encodeComponent, mkFilename)
-import Ecluse.Core.Telemetry.Span (TracingPort)
 import Ecluse.Core.Telemetry.Upstream (PublicReadKind (Listing))
 import Ecluse.Core.Text (httpPrefix, httpsPrefix, isPrefixOfLowered)
 import Ecluse.Core.Version (Version, mkVersion, renderVersion)
@@ -70,8 +69,8 @@ discoveryOrigin :: CargoDiscovery -> ArtifactOrigin
 discoveryOrigin (CargoDiscovery _ _ _ _ origin) = origin
 
 -- | Read bounded discovery through the same transport and public control as index metadata.
-cargoDiscovery :: TracingPort -> OriginClient -> IO (Either MetadataError CargoDiscovery)
-cargoDiscovery _ origin = do
+cargoDiscovery :: OriginClient -> IO (Either MetadataError CargoDiscovery)
+cargoDiscovery origin = do
     response <- formThen FetchUrlUnformable exchange (cargoConfigRequest (ocBaseRequest origin) (ocToken origin))
     pure $ do
         (_, bytes) <- metadataResponse response

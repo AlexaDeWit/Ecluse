@@ -37,7 +37,7 @@ cargoChargeFactors = ChargeFactors{cfFullReadPermille = 1700, cfKeptPermille = 1
 
 -- | Prepare after the selected origin receives its caller or service credential. Boot performs no discovery.
 prepareCargoRead :: PrepareRead
-prepareCargoRead = PrepareRead (\tracing origin -> fmap (cargoReadWith (ocChargeFullReadWorkspace origin) (ocChargeSelectedRead origin)) <$> cargoDiscovery tracing origin)
+prepareCargoRead = PrepareRead (\origin -> fmap (cargoReadWith (ocChargeFullReadWorkspace origin) (ocChargeSelectedRead origin)) <$> cargoDiscovery origin)
 
 -- | Full and selected reads reserve row workspace through separate absolute callbacks.
 cargoReadWith :: (Int -> IO ()) -> (Int -> IO ()) -> CargoDiscovery -> EcosystemRead
