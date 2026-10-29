@@ -4,6 +4,8 @@ These files contain complete original sparse index responses from crates.io.
 `../pins.json` records each source, capture time, byte size and SHA-256.
 Workload pins select releases without cutting the captured release lists.
 No crate archive is executed or included in this corpus.
+`BENCH_CORPUS_ECOSYSTEM=cargo task gen-bench-corpus` replaces these snapshots.
+`BENCH_CORPUS_VERIFY=1` authenticates the committed bytes without network access.
 
 The crates.io team maintains the index: https://github.com/rust-lang/crates.io-index.
 The source index repository declares no separate licence for these response bodies.
