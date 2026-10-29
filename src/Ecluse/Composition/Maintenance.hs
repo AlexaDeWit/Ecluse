@@ -58,7 +58,7 @@ import Ecluse.Core.Package (artUrl)
 import Ecluse.Core.Registry.Adapter.Capability (AdapterArtifact (artifactByUrl))
 import Ecluse.Core.Registry.Exchange (singleAttemptSettings)
 import Ecluse.Core.Registry.Exchange.Types (ExchangeClient (ExchangeClient), untracedExchange)
-import Ecluse.Core.Registry.InstallEvidence (readInstallArtifact)
+import Ecluse.Core.Registry.InstallEvidence (boundedArtifactLimits, readInstallArtifact)
 import Ecluse.Core.Registry.Maintenance (
     StoreFacts (factBudget),
     StoreMaintenance (storeFacts, storeReadArtifact),
@@ -85,10 +85,8 @@ import Ecluse.Core.Registry.Maintenance.Upstream (UpstreamSafety (Undecidable, U
 import Ecluse.Core.Registry.Origin (OriginClient, originClient)
 import Ecluse.Core.Registry.Public (ReadControl (Uncontrolled))
 import Ecluse.Core.Registry.Sweep.Pacing (derivedCapacity)
-import Ecluse.Core.Rules.Effectful (ReadFault (ReadFault))
-import Ecluse.Core.Rules.Install (InstallArtifactRead)
-import Ecluse.Core.Rules.Types (Inability (EvaluationFailed, InstallSignalUnread), Transience (WontResolve))
-import Ecluse.Core.Security (Limits (maxMirrorArtifactBytes, maxVersionCount), authorityLabel, hostPortAddress)
+import Ecluse.Core.Rules.Install (InstallArtifactRead, unreadInstallSignal)
+import Ecluse.Core.Security (Limits (maxVersionCount), authorityLabel, hostPortAddress)
 import Ecluse.Core.Security.Egress (RegistryUrl, registryUrlText)
 import Ecluse.Core.Telemetry.Span (TracingPort)
 import Ecluse.Runtime.Maintenance.CodeArtifact (newCodeArtifactCacheMaintenance, newCodeArtifactCacheObservation, newCodeArtifactMaintenance, newCodeArtifactObservation, newCodeArtifactUpstreamProbe)
@@ -268,17 +266,15 @@ storeManifestRead ports limits cleared client name = do
 storeArtifactRead :: StorePorts -> Limits -> ClearedBackend -> ExchangeClient -> InstallArtifactRead
 storeArtifactRead ports limits cleared client bounded artifact pay =
     case cbArtifact cleared of
-        Nothing -> pure (Left unavailable)
+        Nothing -> pure (Left unreadInstallSignal)
         Just native
-            | hostPortAddress (artUrl artifact) /= hostPortAddress (registryUrlText (cbUrl cleared)) -> pure (Left unavailable)
+            | hostPortAddress (artUrl artifact) /= hostPortAddress (registryUrlText (cbUrl cleared)) -> pure (Left unreadInstallSignal)
             | otherwise -> do
                 token <- traverse mintSecret (spCredential ports)
                 let credential = case cbControl cleared of
                         ClearedProtocol store -> (ClientCredential (cbUsername cleared) <$> token) <|> (bareCredential <$> cpsToken store)
                         _ -> ClientCredential (cbUsername cleared) <$> token
-                readInstallArtifact (limits{maxMirrorArtifactBytes = min (maxMirrorArtifactBytes limits) (maxMirrorArtifactBytes bounded)}) client Uncontrolled (artifactByUrl native credential (artUrl artifact)) pay
-  where
-    unavailable = ReadFault WontResolve EvaluationFailed InstallSignalUnread
+                readInstallArtifact (boundedArtifactLimits limits bounded) client Uncontrolled (artifactByUrl native credential (artUrl artifact)) pay
 
 storeOrigin :: Limits -> ClearedBackend -> ExchangeClient -> Maybe ClientCredential -> OriginClient
 storeOrigin limits cleared client = originClient limits client (cbUrl cleared)

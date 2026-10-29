@@ -72,12 +72,12 @@ import Ecluse.Core.Package (PackageName)
 import Ecluse.Core.Registry.Adapter (
     RegistryAdapter,
     adapterArtifact,
+    adapterInstallEvidence,
     adapterMetadata,
     adapterProjectName,
     adapterPublish,
  )
 import Ecluse.Core.Registry.Adapter.Capability (AdapterArtifact (artifactHosts))
-import Ecluse.Core.Registry.Cargo.Execution (newCargoInstallEvidence)
 import Ecluse.Core.Registry.Cargo.FirstParty (cargoFirstPartyName)
 import Ecluse.Core.Registry.Npm.Publish (npmPublishAllowed)
 import Ecluse.Core.Registry.PyPI.FirstParty (pypiFirstPartyName)
@@ -245,7 +245,7 @@ packumentDepsFor ctx adapter mount mcfg = do
     -- 'pdAdvisoryEtag' reads the current ETag through those same 'RuleDeps', so no generation is pinned at boot.
     let ruleDeps = wcRuleDeps ctx (mountEcosystem mount)
     prepared <- prepare ruleDeps (mountPolicy mount)
-    installEvidence <- if mountEcosystem mount == Cargo then Just <$> newCargoInstallEvidence (wcDeadlines ctx) (wcLimits ctx) else pure Nothing
+    installEvidence <- traverse (\build -> build (wcDeadlines ctx) (wcLimits ctx)) (adapterInstallEvidence adapter)
     let regs = mountRegistries mount
         app = wcApp ctx
     pure
