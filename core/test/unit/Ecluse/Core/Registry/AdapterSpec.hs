@@ -54,3 +54,13 @@ spec = describe "adapterFor (the ecosystem adapter registry)" $ do
     it "resolves RubyGems with its initial measured native charge factors" $ do
         (adapterEcosystem <$> adapterFor RubyGems) `shouldBe` Just RubyGems
         (metadataChargeFactors . adapterMetadata <$> adapterFor RubyGems) `shouldBe` Just rubyGemsChargeFactors
+
+    it "blocks exactly RubyGems' install, deprecation and scope types with their reasons" $
+        (adapterRuleBlocks <$> adapterFor RubyGems)
+            `shouldBe` Just
+                ( Map.fromList
+                    [ (DenyInstallTimeExecutionType, "RubyGems native builds are normal installation behaviour. This rule is unsupported for the ecosystem.")
+                    , (DenyIfDeprecatedType, "RubyGems metadata supplies no supported deprecation flag.")
+                    , (AllowScopeType, "RubyGems package names have no scope.")
+                    ]
+                )
