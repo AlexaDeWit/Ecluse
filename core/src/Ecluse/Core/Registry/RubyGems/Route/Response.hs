@@ -13,8 +13,8 @@ module Ecluse.Core.Registry.RubyGems.Route.Response (
 import Network.HTTP.Types (status200, status304, status400, status401, status403, status404, status406, status500, status502, status503)
 
 import Ecluse.Core.Server.Contract (BodySchema (SchemaOpaque, SchemaText), ResponseChoice (..), ResponseContract, ResponseValue, chooseContract, emptyContract, mediaContract, responseValue)
-import Ecluse.Core.Server.Pipeline.Packument (PackumentReplies (..))
-import Ecluse.Core.Server.Pipeline.Packument.Response (MetadataResponse, metadataReplies)
+import Ecluse.Core.Server.Pipeline.Packument (PackumentReplies (..), mapPackumentReplies)
+import Ecluse.Core.Server.Pipeline.Packument.Response (MetadataResponse, keepPrivateUnauthorised, metadataReplies)
 import Ecluse.Core.Server.Response (renderRefusal)
 import Ecluse.Core.Server.Response.Summary (detailedRejections)
 
@@ -38,20 +38,7 @@ rubyContract media =
 
 -- | Preserve the shared failure classification while encoding native response bytes.
 rubyReplies :: PackumentReplies RubyResponse
-rubyReplies =
-    PackumentReplies
-        { packumentForbiddenText = packumentForbiddenText base
-        , packumentOk = \headers -> SecondResponse . packumentOk base headers
-        , packumentNotModified = SecondResponse . packumentNotModified base
-        , packumentUnauthorised = \headers -> SecondResponse . packumentUnauthorised base headers
-        , packumentPrivateRefused = \code headers -> SecondResponse . (if code == 401 then packumentUnauthorised base else packumentForbidden base) headers
-        , packumentForbidden = \headers -> SecondResponse . packumentForbidden base headers
-        , packumentNotFound = \headers -> SecondResponse . packumentNotFound base headers
-        , packumentNotAcceptable = \headers -> SecondResponse . packumentNotAcceptable base headers
-        , packumentInternal = \headers -> SecondResponse . packumentInternal base headers
-        , packumentBadGateway = \headers -> SecondResponse . packumentBadGateway base headers
-        , packumentUnavailable = \headers -> SecondResponse . packumentUnavailable base headers
-        }
+rubyReplies = mapPackumentReplies SecondResponse base{packumentPrivateRefused = keepPrivateUnauthorised base}
   where
     base = metadataReplies detailedRejections (fromStrict . encodeUtf8 . renderRefusal)
 

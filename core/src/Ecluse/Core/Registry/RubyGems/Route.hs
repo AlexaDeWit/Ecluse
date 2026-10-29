@@ -13,14 +13,14 @@ module Ecluse.Core.Registry.RubyGems.Route (
 ) where
 
 import Data.List.NonEmpty qualified as NE
-import Network.HTTP.Types (ResponseHeaders, Status, mkStatus, status404, status405, status500)
+import Network.HTTP.Types (mkStatus, status404, status405, status500)
 
 import Ecluse.Core.Registry.RubyGems.Handlers.CompactIndex (serveDirectory, serveInfo)
 import Ecluse.Core.Registry.RubyGems.Handlers.Coordinate (serveCompactSpec, serveGemArtifact)
 import Ecluse.Core.Registry.RubyGems.Project (gemFileStem, projectName)
 import Ecluse.Core.Registry.RubyGems.Route.Response (rubyContract, rubyReplies)
 import Ecluse.Core.Server.Context (MountRouter, ResponseAction (..), RouteAction (RouteAction))
-import Ecluse.Core.Server.Contract (BodySchema (SchemaOpaque), PassthroughBody (..), PassthroughResponse, RequestSpec (RequestSpec), ResponseChoice (..), ResponseContract, ResponseValue, chooseContract, emptyContract, passthroughContract, passthroughResponse, responseValue)
+import Ecluse.Core.Server.Contract (BodySchema (SchemaOpaque), PassthroughBody (..), PassthroughResponse, RequestSpec (RequestSpec), ResponseChoice (..), ResponseContract, ResponseValue, chooseContract, emptyContract, passthroughContract, passthroughResponse, plainTextRefusal, responseValue)
 import Ecluse.Core.Server.Path (Filename, mkFilename, unFilename)
 import Ecluse.Core.Server.Pipeline.Packument (PackumentReplies (..))
 import Ecluse.Core.Server.Pipeline.Publish (PublishReplies (..), servePublish)
@@ -76,7 +76,7 @@ rubyGemsRoutes =
         MethodRead
         AcceptsAnything
         [SegLit "gems", SegCapSuffix nativeCapture ".gem"]
-        (\method -> \case [file] -> Just (RunPipeline (SecondResponse (localError status500 [] "internal server error")) (\request respond -> serveGemArtifact artifactReplies method file request (respond . SecondResponse) (respond . FirstResponse))); _ -> Nothing)
+        (\method -> \case [file] -> Just (RunPipeline (SecondResponse (plainTextRefusal status500 [] "internal server error")) (\request respond -> serveGemArtifact artifactReplies method file request (respond . SecondResponse) (respond . FirstResponse))); _ -> Nothing)
         "Read an admitted gem archive"
         "Resolves the exact native coordinate before current artifact admission and caller-authorised relay."
         Nothing
@@ -86,7 +86,7 @@ rubyGemsRoutes =
         MethodPost
         AcceptsAnything
         (map SegLit ["api", "v1", "gems"])
-        (\_ captures -> RunPipeline (localError status500 [] "internal server error") (servePublish publishReplies Nothing) <$ guard (null captures))
+        (\_ captures -> RunPipeline (plainTextRefusal status500 [] "internal server error") (servePublish publishReplies Nothing) <$ guard (null captures))
         "Publish a first-party gem"
         "Validates the complete native archive and package identity before relaying unchanged bytes under publication authority. Disabled publication returns 405."
         (Just (RequestSpec "The complete built .gem archive." True (SchemaOpaque "application/octet-stream")))
@@ -118,8 +118,8 @@ artifactContract = passthroughContract "Relays the selected gem archive and pres
 artifactReplies :: TarballReplies PassthroughResponse
 artifactReplies =
     TarballReplies
-        { tarballError = \status headers -> localError status headers . renderRefusal
-        , tarballPrivateRefused = \code headers -> localError (mkStatus code "") headers . renderRefusal
+        { tarballError = \status headers -> plainTextRefusal status headers . renderRefusal
+        , tarballPrivateRefused = \code headers -> plainTextRefusal (mkStatus code "") headers . renderRefusal
         , tarballStream = \status headers -> passthroughResponse status headers . PassthroughStream
         , tarballEmpty = \status headers -> passthroughResponse status headers PassthroughEmpty
         }
@@ -131,13 +131,10 @@ publishReplies :: PublishReplies PassthroughResponse
 publishReplies =
     PublishReplies
         { publishAllowedMethods = "POST"
-        , publishDisabledReply = \headers _ -> localError status405 headers "publishing is not enabled on this mount"
+        , publishDisabledReply = \headers _ -> plainTextRefusal status405 headers "publishing is not enabled on this mount"
         , publishRelayed = \status headers -> passthroughResponse status headers . PassthroughBytes
-        , publishError = localError
+        , publishError = plainTextRefusal
         }
-
-localError :: Status -> ResponseHeaders -> Text -> PassthroughResponse
-localError status headers = passthroughResponse status (("Content-Type", "text/plain") : ("Cache-Control", "no-store") : headers) . PassthroughBytes . fromStrict . encodeUtf8
 
 notFoundContract :: ResponseContract (ResponseValue ())
 notFoundContract = emptyContract status404 "No native route claims this path."
