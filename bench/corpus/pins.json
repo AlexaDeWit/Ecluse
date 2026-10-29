@@ -37,6 +37,15 @@
       "nokogiri",
       "rspec",
       "activesupport"
+    ],
+    "cargo": [
+      "tokio",
+      "serde",
+      "clap",
+      "hyper",
+      "windows",
+      "openssl-src",
+      "libgit2-sys"
     ]
   },
   "pypiPins": {
