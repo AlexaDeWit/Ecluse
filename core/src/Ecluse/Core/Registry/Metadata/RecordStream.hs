@@ -3,12 +3,13 @@
 -- SPDX-License-Identifier: MIT
 
 -- | Charged LF framing keeps native consumers responsible for record syntax and state.
-module Ecluse.Core.Registry.Metadata.RecordStream (recordSteps, finishRecordSteps) where
+module Ecluse.Core.Registry.Metadata.RecordStream (recordSteps, recordFragmentCharge, finishRecordSteps) where
 
 import Data.ByteString qualified as BS
 
 import Ecluse.Core.Registry.JsonStream (Steps (..))
 import Ecluse.Core.Security (LimitError)
+import Ecluse.Core.Server.MemoryModel (bufferedChunkCharge, decodedDocumentCharge, saturatingCharge)
 
 -- | Charge fragments before retention and consume every physical record through EOF.
 recordSteps :: (Monad m) => (s -> Int -> ByteString -> m Int) -> (s -> Int -> ByteString -> Either LimitError s) -> (s -> Steps m a) -> s -> Steps m a
@@ -33,6 +34,12 @@ recordSteps reserve consume complete = await [] 0
                 Right next
                     | BS.length rest == 1 -> pure (await [] 0 next)
                     | otherwise -> splitLines next [] 0 (BS.drop 1 rest)
+
+{- | The workspace of a partly buffered record once it holds this fragment: what earlier fragments
+reserved, plus the fragment's decode and buffer charges, saturated at 'maxBound'.
+-}
+recordFragmentCharge :: Int -> ByteString -> Int
+recordFragmentCharge previous fragment = saturatingCharge (toInteger previous + toInteger (decodedDocumentCharge fragment) + toInteger (bufferedChunkCharge (BS.length fragment)))
 
 -- | Close an unterminated final record without inventing a source byte.
 finishRecordSteps :: (Monad m) => Steps m a -> m (Steps m a)
