@@ -22,6 +22,7 @@ module Ecluse.Composition.Support (
     withRubyInstallBlock,
     rubyInstallRefusal,
     rubyScopeRefusal,
+    rubyDeprecationRefusal,
     cargoDeprecationRefusal,
     privateUpstreamUrl,
     collapsingMirrorTarget,
@@ -166,6 +167,10 @@ rubyInstallRefusal = RuleBlockedOnMount RubyGems DenyInstallTimeExecutionType "R
 -- | A shared scope rule also refuses the unscoped Ruby mount.
 rubyScopeRefusal :: BootError
 rubyScopeRefusal = RuleBlockedOnMount RubyGems AllowScopeType "RubyGems package names have no scope."
+
+-- | A deprecation deny refuses the Ruby mount, whose metadata carries no deprecation flag.
+rubyDeprecationRefusal :: BootError
+rubyDeprecationRefusal = RuleBlockedOnMount RubyGems DenyIfDeprecatedType "RubyGems metadata supplies no supported deprecation flag."
 
 -- | The private upstream the composition fixtures declare.
 privateUpstreamUrl :: (IsString s) => s
