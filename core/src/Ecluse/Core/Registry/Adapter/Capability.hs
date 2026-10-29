@@ -103,7 +103,10 @@ data PublishRequestBody = PublishRequestBody
     }
 
 -- | Checked native publication headers. Secrets never enter durable mirror state.
-data PublishExtras = NoPublishExtras | RubyPublishOtp Secret
+data PublishExtras
+    = NoPublishExtras
+    | -- | A one-time password the caller presented for this publication.
+      PublishOneTimePassword Secret
     deriving stock (Eq, Show)
 
 -- | Worker reads use cached facts, charged chunks, or native workspace reservations.
