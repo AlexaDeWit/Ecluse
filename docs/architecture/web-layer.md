@@ -155,8 +155,8 @@ then completion removes the flight registration. This path does not weigh, encod
 full entries. A subsequent full read fetches again, so an earlier listing does not make a later
 selected-version read an upstream-free operation.
 
-One selected provider owns all three retention capabilities: full metadata, selected versions,
-and assembled responses. Its constructor assigns one storage class to every capability.
+One selected provider owns all four retention capabilities: full metadata, selected versions,
+assembled responses, and the public RubyGems directory. Its constructor assigns one storage class to every capability.
 The composition root chooses the shipped local provider without an external dependency.
 Local full retention is absent even if an adapter supplies full operations. Unsupported capabilities
 stay uncached, and a failed provider never falls back to a retained local copy.
@@ -203,11 +203,12 @@ The view owns revision bytes and charges their length and cache key before reten
 PyPI fragment structure has its own allowance. Other fragment shapes retain the selected-entry allowance.
 Work reservations for decoding, updates, workers and encoding remain independent of this cache charge.
 
-Selected-version and assembled stores share one byte bound and one entry bound. Neither store
-reserves a static share. Under pressure, the inserting store evicts its least-recently used entries
-until the aggregate fits or its eviction floor stops it. The shipped floors are zero.
-One store cannot evict another store's live entries. Reads and retaining inserts reclaim expired
-entries across both stores, so TTL bounds this unfairness to one TTL window during active use.
+The selected-version, assembled, and public RubyGems directory stores share one TTL, one byte bound
+and one entry bound. No store reserves a static share. Under pressure, the inserting store evicts its
+least-recently used entries until the aggregate fits or its eviction floor stops it. The shipped
+floors are zero. One store cannot evict another store's live entries. Reads and retaining inserts
+reclaim expired entries across every store, so TTL bounds this unfairness to one TTL window during
+active use. No gauge reports the directory store's bytes.
 Per-store recency and expiry indexes change with the entries and aggregate accounting in one
 transaction. Recency updates add work to cache hits but avoid sorting a whole store during eviction.
 

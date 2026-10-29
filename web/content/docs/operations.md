@@ -551,8 +551,10 @@ and `ecluse.metadata_cache.assembled.resident_bytes` gauges report accounted byt
 eviction, and expiry removal. `ecluse.metadata_cache.entries` reports the full store's entry count.
 The shipped local backend never retains full metadata. Full-store entries and resident bytes stay
 zero, and local full reads report misses or collapsed active work without capacity refusals.
-Selected-version and assembled stores share one byte bound and one entry bound, with no reserved shares. A full listing followed by
-a selected-version read can therefore fetch upstream twice. No external cache service is required.
+Selected-version, assembled, and public RubyGems directory stores share `cache.ttl`, one byte bound
+and one entry bound, with no reserved shares. No gauge reports the directory store's bytes.
+A full listing followed by a selected-version read can fetch upstream twice, because no store keeps
+the full document. No external cache service is required.
 Boot and `check-config` output report these local capabilities. `cache.maxBytes` applies only to
 eligible local retention. Increasing it cannot enable full retention.
 Each store evicts its own least-recently used entries under shared pressure. It cannot evict another
@@ -564,8 +566,8 @@ from authorised inputs. A failed write skips retention. Neither failure uses a r
 Recency hints and occupancy reporting do not require a remote provider to use local LRU or report
 exact server memory. Provider occupancy, when available, reports its charged bytes and entry count.
 
-Local expiry removal checks both stores on access or a retaining insert, without a background timer.
-If both stores are idle, their gauges can retain expired charges until the next operation.
+Local expiry removal checks every store on access or a retaining insert, without a background timer.
+If the stores are idle, their gauges can retain expired charges until the next operation.
 
 ### Credential expiry
 
