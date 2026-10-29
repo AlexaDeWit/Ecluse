@@ -14,6 +14,7 @@ module Ecluse.Core.Version.Gem (
     parseGem,
     renderGem,
     isGemStable,
+    gemRequirementOperators,
 ) where
 
 import Data.List (dropWhileEnd)
@@ -55,6 +56,10 @@ renderGem (GemKey tokens) = T.intercalate "." (map renderToken tokens)
 -- | Whether a gem version is stable: every token is numeric, so no prerelease marker.
 isGemStable :: GemKey -> Bool
 isGemStable (GemKey toks) = all isNumeric toks
+
+-- | The comparison operators a @Gem::Requirement@ clause may use.
+gemRequirementOperators :: [Text]
+gemRequirementOperators = ["=", "!=", ">", "<", ">=", "<=", "~>"]
 
 -- Compare gem token lists, zero-padding the shorter side.
 compareGemTokens :: [VToken] -> [VToken] -> Ordering

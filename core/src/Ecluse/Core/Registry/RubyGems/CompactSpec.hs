@@ -30,7 +30,7 @@ import Ecluse.Core.Registry.RubyGems.Marshal
 import Ecluse.Core.Registry.RubyGems.Project
 import Ecluse.Core.Security.Limits (Limits (..))
 import Ecluse.Core.Version (Version, mkVersion, renderVersion)
-import Ecluse.Core.Version.Gem (parseGem)
+import Ecluse.Core.Version.Gem (gemRequirementOperators, parseGem)
 
 -- | Native installation facts from the supported historical and current specification layouts.
 data GemSpecification = GemSpecification
@@ -166,7 +166,7 @@ requirement value = case stripInstanceVariables value of
   where
     clause (MArray [operator, version]) = do
         op <- marshalText operator
-        unless (op `elem` ["=", "!=", ">", "<", ">=", "<=", "~>"]) (parseRefusal "unsupported gem requirement operator")
+        unless (op `elem` gemRequirementOperators) (parseRefusal "unsupported gem requirement operator")
         raw <- renderVersion <$> gemVersion version
         pure (op <> " " <> raw)
     clause _ = parseRefusal "invalid gem requirement clause"

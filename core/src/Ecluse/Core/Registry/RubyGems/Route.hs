@@ -13,12 +13,11 @@ module Ecluse.Core.Registry.RubyGems.Route (
 ) where
 
 import Data.List.NonEmpty qualified as NE
-import Data.Text qualified as T
 import Network.HTTP.Types (ResponseHeaders, Status, mkStatus, status404, status405, status500)
 
 import Ecluse.Core.Registry.RubyGems.Handlers.CompactIndex (serveDirectory, serveInfo)
 import Ecluse.Core.Registry.RubyGems.Handlers.Coordinate (serveCompactSpec, serveGemArtifact)
-import Ecluse.Core.Registry.RubyGems.Project (projectName)
+import Ecluse.Core.Registry.RubyGems.Project (gemFileStem, projectName)
 import Ecluse.Core.Registry.RubyGems.Route.Response (rubyContract, rubyReplies)
 import Ecluse.Core.Server.Context (MountRouter, ResponseAction (..), RouteAction (RouteAction))
 import Ecluse.Core.Server.Contract (BodySchema (SchemaOpaque), PassthroughBody (..), PassthroughResponse, RequestSpec (RequestSpec), ResponseChoice (..), ResponseContract, ResponseValue, chooseContract, emptyContract, passthroughContract, passthroughResponse, responseValue)
@@ -107,7 +106,7 @@ nameCapture = Capture "gem" "The native gem name." consume (\file -> [unFilename
         _ -> Nothing
 
 nativeCapture :: Capture Filename
-nativeCapture = Capture "coordinate" "The native package, raw version and platform filename stem." consume (\file -> [T.dropEnd 4 (unFilename file)])
+nativeCapture = Capture "coordinate" "The native package, raw version and platform filename stem." consume (\file -> maybeToList (gemFileStem (unFilename file)))
   where
     consume = \case
         stem : rest -> (,rest) <$> mkFilename (stem <> ".gem")
