@@ -36,13 +36,8 @@ module Ecluse.Core.Worker (
     Liveness (..),
     alwaysLive,
     heartbeatLivenessNow,
-
-    -- * Integrity verification
-    IntegrityResult (..),
-    verifyIntegrity,
 ) where
 
-import Ecluse.Core.Package.Integrity (IntegrityResult (..), verifyIntegrity)
 import Ecluse.Core.Worker.Job
 import Ecluse.Core.Worker.Liveness
 import Ecluse.Core.Worker.Loop
