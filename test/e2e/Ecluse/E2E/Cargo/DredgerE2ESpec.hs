@@ -298,7 +298,7 @@ safetyCases recorder = aroundAll acquire $ do
         requests <- codeArtifactDeleteRequests (Native.cspControl plane)
         run <- Native.withUnsafeMirror plane (runNativeSweep plane [] Apply (FullIdentity (packageName deniedPackage)))
         sweepExit run `shouldNotBe` ExitSuccess
-        T.toLower (sweepOutput run) `shouldSatisfy` T.isInfixOf "upstream"
+        sweepOutput run `shouldSatisfy` T.isInfixOf "refills itself, so a delete changes nothing: the repository has an upstream (cache)"
         ((,) <$> Native.storeInventory mirror <*> Native.storeInventory cache) `shouldReturn` previousInventory
         codeArtifactDeleteRequests (Native.cspControl plane) `shouldReturn` requests
     it (caseLabel "cargo/dredger-native-safety/native-yank-not-deletion" "keeps yank separate from physical removal and observes CodeArtifact deleting the native archive") $ \(plane, mirror, _) -> do
