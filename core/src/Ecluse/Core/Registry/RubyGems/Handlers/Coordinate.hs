@@ -13,10 +13,9 @@ import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import Network.HTTP.Types (Method)
 import Network.Wai (Request, ResponseReceived)
-import UnliftIO (try, withRunInIO)
+import UnliftIO (try)
 
 import Ecluse.Core.Cve.Types (DbEtag)
-import Ecluse.Core.Deadline qualified as Deadline
 import Ecluse.Core.Mirror.State (recordVersion, versionFiles)
 import Ecluse.Core.Package (Artifact (artFilename), PackageDetails (pkgArtifacts, pkgName, pkgVersion), PackageName)
 import Ecluse.Core.Package.Merge (Provenance (..))
@@ -24,19 +23,18 @@ import Ecluse.Core.Registry (BodyOutcome (..), FetchFault (FetchUrlUnformable))
 import Ecluse.Core.Registry.Adapter.Capability (AdapterMetadata (metadataChargeFactors))
 import Ecluse.Core.Registry.CachedDocument (rubyGemsCached)
 import Ecluse.Core.Registry.Exchange (boundedChargedRead, chargedRead, formThen, withSuccessBodyUsing)
-import Ecluse.Core.Registry.Exchange.Types (ExchangeClient (ecDeadlines))
 import Ecluse.Core.Registry.Public (ReadControl (..))
 import Ecluse.Core.Registry.Request (artifactRequestByUrl)
 import Ecluse.Core.Registry.RubyGems.CompactSpec (compactSpecBytes, validateCompactSpec)
 import Ecluse.Core.Registry.RubyGems.Credential (rubyReadCredential)
 import Ecluse.Core.Registry.RubyGems.Document (GemDocument (..), GemRow (..))
-import Ecluse.Core.Registry.RubyGems.Handlers.Budget (newNativeDocumentBudget, newNativeReadBudget)
+import Ecluse.Core.Registry.RubyGems.Handlers.Budget (newNativeDocumentBudget, newNativeReadBudget, withNativeRequest)
 import Ecluse.Core.Registry.RubyGems.Project (candidateCoordinates, coordinateFilename, coordinateName, coordinateVersion)
 import Ecluse.Core.Registry.RubyGems.Request (gemCompactSpecUrl)
 import Ecluse.Core.Registry.RubyGems.Route.Response (RubyResponse, rubyBadRequest, rubyReplies)
 import Ecluse.Core.Rules.Types (EvalContext (ctxAdvisoryEtag))
 import Ecluse.Core.Security.Egress (RegistryUrl, registryUrlText)
-import Ecluse.Core.Security.Limits (BodyLimit (MetadataBodyLimit), Limits (..), floorServeCapMicros)
+import Ecluse.Core.Security.Limits (BodyLimit (MetadataBodyLimit), Limits (..))
 import Ecluse.Core.Server.Admission.Budget (scaleCharge)
 import Ecluse.Core.Server.Admission.Meter (MemoryTicket, charge, newChargeRegion)
 import Ecluse.Core.Server.Admission.Types (ChargeFactors (cfOutputPermille))
@@ -46,7 +44,7 @@ import Ecluse.Core.Server.Path (Filename, unFilename)
 import Ecluse.Core.Server.Pipeline.Internal (VersionVerdict (VersionVerdict), logDenials, recordDenials, statusServeDecision)
 import Ecluse.Core.Server.Pipeline.Origin (ObservedReadBoundExceeded (ObservedReadBoundExceeded))
 import Ecluse.Core.Server.Pipeline.Packument (DocumentRejectionObserver (..), PackumentReplies (..), answerMetadataBytes, mapPackumentReplies, noSurvivors, withObservedAdmittedDocument)
-import Ecluse.Core.Server.Pipeline.Shared (edgeTokenMatches, forwardedCredential, shedMessage, unauthorisedMessage, withListingAdmission, withMetadataAdmission)
+import Ecluse.Core.Server.Pipeline.Shared (forwardedCredential, withListingAdmission, withMetadataAdmission)
 import Ecluse.Core.Server.Pipeline.Tarball (headTarball, serveTarball)
 import Ecluse.Core.Server.Pipeline.Tarball.Types (TarballReplies)
 import Ecluse.Core.Server.Response (RejectReason (..), Rejection (rejectionReason), ServeDecision (Reject), mkRefusal, packumentStatus)
@@ -56,22 +54,15 @@ import Ecluse.Core.Version (renderVersion)
 
 -- | Resolve the exact native filename before entering the shared artifact relay.
 serveGemArtifact :: TarballReplies response -> Method -> Filename -> Request -> (response -> IO ResponseReceived) -> (RubyResponse -> IO ResponseReceived) -> Handler ResponseReceived
-serveGemArtifact replies method file request respond refuse = withNativeReadEdge request (liftIO . refuse) $ do
-    rt <- asks ctxRuntime
-    deps <- asks (bindingPackumentDeps . ctxMount)
-    let expired = Left (packumentUnavailable rubyReplies [] (mkRefusal Nothing "the coordinate lookup exceeded its deadline"))
-    withMetadataAdmission
-        rt
-        (\headers -> liftIO (refuse (packumentUnavailable rubyReplies headers (mkRefusal Nothing shedMessage))))
-        ( \ticket -> withRunInIO $ \run ->
-            fromMaybe expired
-                <$> Deadline.timeout
-                    (ecDeadlines (srPublicClient rt))
-                    (floorServeCapMicros (progressFloor (pdLimits deps)))
-                    ( run $ do
-                        observe <- liftIO (newNativeReadBudget (maxMetadataBytes (pdLimits deps)))
-                        resolveCoordinate ticket observe request file
-                    )
+serveGemArtifact replies method file request respond refuse =
+    withNativeRequest
+        withMetadataAdmission
+        request
+        (liftIO . refuse)
+        (const (Left (packumentUnavailable rubyReplies [] (mkRefusal Nothing "the coordinate lookup exceeded its deadline"))))
+        ( \ticket deps -> do
+            observe <- liftIO (newNativeReadBudget (maxMetadataBytes (pdLimits deps)))
+            resolveCoordinate ticket observe request file
         )
         ( \case
             Left failure -> liftIO (refuse failure)
@@ -82,25 +73,17 @@ serveGemArtifact replies method file request respond refuse = withNativeReadEdge
 
 -- | Validate original compact bytes after current coordinate admission, including retained mirror source data.
 serveCompactSpec :: Filename -> Request -> (RubyResponse -> IO ResponseReceived) -> Handler ResponseReceived
-serveCompactSpec file request respond = withNativeReadEdge request (liftIO . respond) $ do
-    rt <- asks ctxRuntime
-    deps <- asks (bindingPackumentDeps . ctxMount)
-    let reply = liftIO . respond
-        expired = packumentUnavailable rubyReplies [] (mkRefusal (pdHelp deps) "the compact specification request exceeded its deadline")
-    withListingAdmission
-        rt
-        (\headers -> reply (packumentUnavailable rubyReplies headers (mkRefusal Nothing shedMessage)))
-        ( \ticket -> withRunInIO $ \run ->
-            fromMaybe expired
-                <$> Deadline.timeout
-                    (ecDeadlines (srPublicClient rt))
-                    (floorServeCapMicros (progressFloor (pdLimits deps)))
-                    ( run $ do
-                        observe <- liftIO (newNativeReadBudget (maxMetadataBytes (pdLimits deps)))
-                        resolveCoordinate ticket observe request file >>= either pure (fetchCompact ticket observe request)
-                    )
+serveCompactSpec file request respond =
+    withNativeRequest
+        withListingAdmission
+        request
+        (liftIO . respond)
+        (\deps -> packumentUnavailable rubyReplies [] (mkRefusal (pdHelp deps) "the compact specification request exceeded its deadline"))
+        ( \ticket deps -> do
+            observe <- liftIO (newNativeReadBudget (maxMetadataBytes (pdLimits deps)))
+            resolveCoordinate ticket observe request file >>= either pure (fetchCompact ticket observe request)
         )
-        reply
+        (liftIO . respond)
 
 data CandidateRead a
     = CandidateAbsent
@@ -113,15 +96,12 @@ data CoordinateRejection = CoordinateRejection PackageName Text (Maybe DbEtag) R
 
 resolveCoordinate :: MemoryTicket -> (Int -> IO ()) -> Request -> Filename -> Handler (Either RubyResponse (GemRow, Provenance))
 resolveCoordinate ticket observe request file = do
-    mount <- asks ctxMount
-    let deps = bindingPackumentDeps mount
-    if not (edgeTokenMatches (pdInboundToken deps) (forwardedCredential mount request))
-        then pure (Left (packumentUnauthorised rubyReplies [] (mkRefusal Nothing unauthorisedMessage)))
-        else case candidateCoordinates (maxMetadataBytes (pdLimits deps)) file of
-            Left _ -> pure (Left (rubyBadRequest "the native coordinate is invalid or ambiguous"))
-            Right candidates -> do
-                checkDocument <- liftIO (newNativeDocumentBudget (maxMetadataBytes (pdLimits deps)) (CandidateRefused (rubyBadRequest "the coordinate lookup exceeds its cumulative metadata bound")))
-                collect deps observe checkDocument candidates 0 [] Nothing (Set.toAscList (Set.fromList (map coordinateName candidates)))
+    deps <- asks (bindingPackumentDeps . ctxMount)
+    case candidateCoordinates (maxMetadataBytes (pdLimits deps)) file of
+        Left _ -> pure (Left (rubyBadRequest "the native coordinate is invalid or ambiguous"))
+        Right candidates -> do
+            checkDocument <- liftIO (newNativeDocumentBudget (maxMetadataBytes (pdLimits deps)) (CandidateRefused (rubyBadRequest "the coordinate lookup exceeds its cumulative metadata bound")))
+            collect deps observe checkDocument candidates 0 [] Nothing (Set.toAscList (Set.fromList (map coordinateName candidates)))
   where
     collect deps observer checkDocument candidates spent matches denied = \case
         [] -> case matches of
@@ -247,10 +227,3 @@ fetchCompact ticket observe request (row, provenance) = do
 sourceLocation :: PackumentDeps -> Provenance -> Maybe RegistryUrl
 sourceLocation deps TrustedSource = pdPrivateBaseUrl deps
 sourceLocation deps GatedSource = Just (pdPublicBaseUrl deps)
-
-withNativeReadEdge :: Request -> (RubyResponse -> Handler ResponseReceived) -> Handler ResponseReceived -> Handler ResponseReceived
-withNativeReadEdge request refuse action = do
-    mount <- asks ctxMount
-    if edgeTokenMatches (pdInboundToken (bindingPackumentDeps mount)) (forwardedCredential mount request)
-        then action
-        else refuse (packumentUnauthorised rubyReplies [] (mkRefusal Nothing unauthorisedMessage))
