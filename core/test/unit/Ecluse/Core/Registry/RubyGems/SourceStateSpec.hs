@@ -7,7 +7,6 @@ module Ecluse.Core.Registry.RubyGems.SourceStateSpec (spec) where
 
 import Control.Monad (foldM)
 import Data.Aeson.Types (parseEither)
-import Data.ByteString.Char8 qualified as BS8
 import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import Data.Text qualified as T
@@ -35,6 +34,7 @@ import Ecluse.Core.Server.MirrorView (mirrorVersionView)
 import Ecluse.Core.Server.Path (unFilename)
 import Ecluse.Core.Version (Version, mkVersion)
 import Ecluse.Test.Deadline (withSweeper)
+import Ecluse.Test.Registry.RubyGems.Fixtures (loadFixtureInfo)
 import Ecluse.Test.Support (expectRight)
 
 spec :: Spec
@@ -121,9 +121,7 @@ nativeVersion = mkVersion RubyGems "1.0.0"
 
 fixture :: IO (GemDocument, PackageDetails, MirrorInventory)
 fixture = do
-    name <- expectRight (projectName "ecluse-fixture-platform")
-    bytes <- readFileBS "test/fixtures/rubygems/info/ecluse-fixture-platform"
-    rows <- traverse (\(position, raw) -> expectRight (decodeInfoRow name (RecordEntry position) raw)) (zip [1 ..] (filter (not . BS8.null) (drop 1 (BS8.lines bytes))))
+    (name, rows) <- loadFixtureInfo "ecluse-fixture-platform"
     members <- maybe (fail "fixture has no native rows") pure (nonEmpty rows)
     let artifacts = fmap (\row -> let filename = unFilename (coordinateFilename (grCoordinate row)) in Artifact (grEntryKey row) filename ("https://public.test/gems/" <> filename) [grChecksum row] Nothing Nothing) members
         firstRow :| otherRows = members

@@ -37,7 +37,7 @@ import UnliftIO.STM (checkSTM)
 
 import Ecluse.Core.Security.Limits (BodyLimit (PublishRequestBodyLimit), boundedRead)
 import Ecluse.E2E.Harness.Container (withBridgeApplication)
-import Ecluse.E2E.Harness.RubyGemsGateway (RubyRequest (..))
+import Ecluse.E2E.Harness.NativeEdge (NativeRequest (..))
 import Ecluse.Test.Poll (pollUntil)
 import Ecluse.Test.Registry.RubyGems.Fixtures
 import Ecluse.Test.Registry.RubyGems.Reference (runRubyReference)
@@ -69,7 +69,7 @@ data RubyArtifactResponse = RubyArtifactResponse
 data RubyRegistry = RubyRegistry
     { rubyRegistryPort :: Int
     , rubyRegistryInventory :: TVar (Map (Text, Text) RubyRelease)
-    , rubyRegistryRequests :: TVar [RubyRequest]
+    , rubyRegistryRequests :: TVar [NativeRequest]
     , rubyRegistryUploads :: TVar [(Text, ByteString)]
     , rubyRegistryLostReplies :: TVar [(Text, Text)]
     , rubyRegistryFaults :: TVar (Map Text RubyRegistryFault)
@@ -163,7 +163,7 @@ rubyRegistryApplication registry request respond = do
         method = Wai.requestMethod request
         path = decodeUtf8 (Wai.rawPathInfo request <> Wai.rawQueryString request)
         send status headers body = do
-            atomically (modifyTVar' (rubyRegistryRequests registry) (<> [RubyRequest "https" host (decodeUtf8 method) path (statusCode status)]))
+            atomically (modifyTVar' (rubyRegistryRequests registry) (<> [NativeRequest "https" host (decodeUtf8 method) path (statusCode status)]))
             respond (Wai.responseLBS status headers (if method == "HEAD" then "" else body))
     atomically (modifyTVar' (rubyRegistryHeaders registry) (<> [(host, method, path, Wai.requestHeaders request)]))
     atomically (modifyTVar' (rubyRegistryCredentials registry) (<> [(host, method, lookup "Authorization" (Wai.requestHeaders request))]))
@@ -230,7 +230,7 @@ serveArchive registry host request release send respond = do
             if artifactReplyChunked reply && Wai.requestMethod request /= "HEAD"
                 then do
                     let path = decodeUtf8 (Wai.rawPathInfo request <> Wai.rawQueryString request)
-                    atomically (modifyTVar' (rubyRegistryRequests registry) (<> [RubyRequest "https" host (decodeUtf8 (Wai.requestMethod request)) path (statusCode status)]))
+                    atomically (modifyTVar' (rubyRegistryRequests registry) (<> [NativeRequest "https" host (decodeUtf8 (Wai.requestMethod request)) path (statusCode status)]))
                     respond (Wai.responseStream status headers (\write flush -> for_ (artifactReplyChunks reply) (\chunk -> write (byteString chunk) >> flush)))
                 else send status headers body
 
