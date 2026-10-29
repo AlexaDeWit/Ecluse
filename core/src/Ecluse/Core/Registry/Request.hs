@@ -16,6 +16,7 @@ module Ecluse.Core.Registry.Request (
     credentialRecover,
     attachCredential,
     authorizationUnder,
+    bareAuthorization,
 
     -- * Request building
     metadataGet,
@@ -32,8 +33,10 @@ module Ecluse.Core.Registry.Request (
     requestAt,
 ) where
 
+import Data.ByteString qualified as BS
 import Data.Char (isHexDigit)
 import Data.Text qualified as T
+import Data.Text.Encoding qualified as TE
 import Network.HTTP.Client (Request (decompress, redirectCount, requestHeaders), parseRequest)
 import Network.HTTP.Client qualified as Client
 import Network.HTTP.Types.Header (
@@ -46,7 +49,7 @@ import Network.HTTP.Types.Header (
 import Text.Show (showsPrec)
 
 import Ecluse.Core.BuildIdentity (identifyRequest)
-import Ecluse.Core.Credential (ClientCredential)
+import Ecluse.Core.Credential (ClientCredential, bareCredential, mkSecret)
 import Ecluse.Core.Registry (UrlFormationError (EmptyBaseUrl, UnparseableUrl))
 import Ecluse.Core.Security.Egress (RegistryUrl, registryUrlText)
 import Ecluse.Core.Text (isAsciiAlphaNum, joinUrlPath)
@@ -113,6 +116,16 @@ authorizationUnder scheme headers = do
     let (presented, rest) = T.break (== ' ') (decodeUtf8 raw)
     guard (T.toLower presented == T.toLower scheme)
     pure (T.dropWhile (== ' ') rest)
+
+{- | A scheme-less credential from exactly one non-empty @Authorization@ line whose bytes are all
+in RFC 9110's field-value set: visible ASCII, space and tab. Any other presentation yields 'Nothing'.
+-}
+bareAuthorization :: RequestHeaders -> Maybe ClientCredential
+bareAuthorization headers = case [value | (name, value) <- headers, name == hAuthorization] of
+    [value] | not (BS.null value), BS.all fieldByte value -> bareCredential . mkSecret <$> rightToMaybe (TE.decodeUtf8' value)
+    _ -> Nothing
+  where
+    fieldByte byte = byte == 0x09 || (byte >= 0x20 && byte <= 0x7E)
 
 -- | Negotiate compressed metadata under the ecosystem's media type and credential presentation.
 metadataGet :: CredentialMapping -> Maybe ClientCredential -> ByteString -> Request -> Request
