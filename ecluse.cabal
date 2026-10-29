@@ -1621,6 +1621,7 @@ test-suite ecluse-unit
     Ecluse.BenchLoad.Cargo.CopyState
     Ecluse.BenchLoad.Cargo.Worker
     Ecluse.BenchLoad.Cargo.WorkerFixture
+    Ecluse.BenchLoad.ObjectStore
     Ecluse.BenchLoad.WorkerState
     Ecluse.BenchLoad.PyPI.WorkerFixture
     Ecluse.BenchLoad.PatternScenario
@@ -2548,6 +2549,7 @@ executable bench-load
     Ecluse.BenchLoad.Cargo.CopyState
     Ecluse.BenchLoad.Cargo.Worker
     Ecluse.BenchLoad.Cargo.WorkerFixture
+    Ecluse.BenchLoad.ObjectStore
     Ecluse.BenchLoad.WorkerState
     Ecluse.BenchLoad.PyPI.WorkerFixture
     Ecluse.BenchLoad.Oha
