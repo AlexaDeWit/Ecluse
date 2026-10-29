@@ -217,11 +217,10 @@ checkPublicationIndex limits (CargoPublishMetadata (Object metadata)) (Object in
     projected <- traverse indexDependency nativeDeps
     unless (length expectedDeps == length projected) (bad "Cargo manifest and index dependency counts disagree")
     registry <- parseSource cratesIoIndex
-    compared <- traverse (uploadDependency registry) projected
-    byIdentity <- foldM (insertDependency limits) Map.empty compared
-    for_ expectedDeps $ \declaration -> do
-        expected <- uploadDependency registry declaration
-        key <- dependencyKey limits expected
+    byIdentity <- traverse (uploadDependency registry) projected >>= foldM (insertDependency limits) Map.empty
+    declared <- traverse (uploadDependency registry) expectedDeps >>= foldM (insertDependency limits) Map.empty
+    unless (Map.keysSet declared == Map.keysSet byIdentity) (bad "Cargo manifest and index dependency identities disagree")
+    for_ (Map.toList declared) $ \(key, expected) -> do
         actual <- maybe (bad "Cargo manifest and index dependency identities disagree") Right (Map.lookup key byIdentity)
         checkDependency expected actual
     sourceFeatures <- indexFeatures index
