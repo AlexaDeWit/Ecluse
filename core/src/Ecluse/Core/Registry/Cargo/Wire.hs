@@ -22,6 +22,7 @@ import Data.Scientific (toBoundedInteger)
 import Ecluse.Core.Registry.JsonStream (isJsonSpace)
 import Ecluse.Core.Registry.ServedDocument (stringField)
 import Ecluse.Core.Security (LimitError (TooDeeplyNested))
+import Ecluse.Core.Server.MemoryModel (saturatingCharge)
 import Ecluse.Core.Version.Cargo (cargoUniquenessKey, parseCargo)
 
 -- | Malformed rows drop individually. Resource refusals stop the whole source read.
@@ -40,7 +41,7 @@ decodeCargoRecord depth bytes = do
 
 -- | Reserve bounded native parser trees and comparison structures before retaining them.
 cargoTreeCharge :: Integer -> Int
-cargoTreeCharge bytes = fromInteger (min (toInteger (maxBound :: Int)) (65536 + 64 * max 0 bytes))
+cargoTreeCharge bytes = saturatingCharge (65536 + 64 * max 0 bytes)
 
 -- | A syntactically native version claims uniqueness even when another record field is invalid.
 recordIdentity :: Value -> Maybe Text

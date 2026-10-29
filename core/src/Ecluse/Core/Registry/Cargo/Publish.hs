@@ -45,6 +45,7 @@ import Ecluse.Core.Registry.ServedDocument (stringField)
 import Ecluse.Core.Security.Egress (RegistryUrl, registryUrlText)
 import Ecluse.Core.Security.Limits (Limits (maxMetadataBytes))
 import Ecluse.Core.Server.Admission.Types (ChargeFactors (cfFullReadPermille))
+import Ecluse.Core.Server.MemoryModel (saturatingCharge)
 import Ecluse.Core.Telemetry.Span (TracingPort)
 import Ecluse.Core.Version (renderVersion)
 
@@ -122,7 +123,7 @@ uploadClaims limits charge registry body = do
         Left fault -> pure (Left (PublishMalformed fault))
         Right (upload, metadataCost) -> do
             let archive = Body.uploadArchive upload
-                withMetadata cost = charge (fromInteger (min (toInteger (maxBound :: Int)) (toInteger metadataCost + toInteger cost)))
+                withMetadata cost = charge (saturatingCharge (toInteger metadataCost + toInteger cost))
             inspected <- inspectCargoArchive limits withMetadata (Body.uploadName upload) (Body.uploadVersion upload) Nothing archive
             case inspected of
                 Left fault -> pure (Left (PublishMalformed fault))

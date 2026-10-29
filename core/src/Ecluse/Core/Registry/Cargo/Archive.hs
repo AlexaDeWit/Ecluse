@@ -32,6 +32,7 @@ import Ecluse.Core.Registry.CachedDocument (estimateValueBytes)
 import Ecluse.Core.Registry.Cargo.Manifest (CargoManifest, CargoPublishMetadata, checkPublicationIndex, checkUploadAgreement, decodeManifest, manifestExecution, manifestTextPaths, publicationMetadata, publishMetadataValue)
 import Ecluse.Core.Registry.Cargo.Wire (cargoTreeCharge)
 import Ecluse.Core.Security.Limits (Limits (..))
+import Ecluse.Core.Server.MemoryModel (saturatingCharge)
 
 -- | The inspected source bytes, checked against the admitted SHA-256 when one exists.
 data CargoArchiveMetadata = CargoArchiveMetadata
@@ -103,13 +104,13 @@ cargoPublicationAgreement limits charge archive source metadata = do
     let inputs = [source, publishMetadataValue metadata]
         workspace = sum (map (toInteger . cargoTreeCharge . toInteger . estimateValueBytes) inputs)
         retained = toInteger (caRetainedBytes archive) + toInteger (caManifestWorkspace archive)
-    charge (fromInteger (min (toInteger (maxBound :: Int)) (retained + workspace)))
+    charge (saturatingCharge (retained + workspace))
     evaluate (checkPublicationIndex limits metadata source)
 
 -- | Reuse the retained effective manifest without a text extraction or another archive pass.
 cargoUploadAgreement :: Limits -> (Int -> IO ()) -> Int -> Text -> Value -> CargoArchiveMetadata -> IO (Either ParseError ())
 cargoUploadAgreement limits charge uploadWorkspace registry upload metadata = do
-    charge (fromInteger (min (toInteger (maxBound :: Int)) (sum (map toInteger [caRetainedBytes metadata, caManifestWorkspace metadata, uploadWorkspace]))))
+    charge (saturatingCharge (sum (map toInteger [caRetainedBytes metadata, caManifestWorkspace metadata, uploadWorkspace])))
     evaluate (checkUploadAgreement limits registry (caManifest metadata) upload)
 
 archiveFacts :: Text -> TarScan -> Either ParseError (ByteString, Set Text, Int)
