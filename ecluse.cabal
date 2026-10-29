@@ -1489,6 +1489,7 @@ test-suite ecluse-core-unit
     Ecluse.Rules.Remediation.Support
     Ecluse.Rules.Support
     Ecluse.Security.Support
+    Ecluse.Server.Admission.Support
     Ecluse.Test.CollectorSpec
     Ecluse.Test.Container.ImageSpec
     Ecluse.Test.Corpus.SubsetSpec
