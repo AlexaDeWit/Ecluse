@@ -74,11 +74,11 @@ rubyPublishCodecWith readCredential writeCredential factors =
                 checkedMirrorUploadData inventory file verified checked
         , pcMirrorCompanion = Just rubyMirrorCompanion
         , pcNativeComplete = \_ _ _ -> False
-        , pcTargetRead = PrepareRead $ \tracing origin -> fmap (\native -> native{erRequest = \base credential name -> attachCredential readCredential credential <$> gemInfoRequestUnder base Nothing name}) <$> prepareRead prepareGemRead tracing origin
+        , pcTargetRead = PrepareRead $ \origin -> fmap (\native -> native{erRequest = \base credential name -> attachCredential readCredential credential <$> gemInfoRequestUnder base Nothing name}) <$> prepareRead prepareGemRead origin
         , pcTargetReadPermille = cfFullReadPermille factors
         , pcProbeRequest = \target credential name -> metadataGet readCredential credential "text/plain" <$> (gemInfoUrl target name >>= parseRequestEither)
         , pcVersionListWalk = Nothing
-        , pcPrepareTarget = \_ _ target -> pure (Right target)
+        , pcPrepareTarget = \_ target -> pure (Right target)
         , pcPublishRequest = \target credential _ upload -> first (PublishFetch . FetchUrlUnformable) (bodyRequest writeCredential target credential NoPublishExtras (uploadBytes upload))
         , pcPublishOutcome = classifyPublish
         }

@@ -29,7 +29,7 @@ rubyGemsChargeFactors =
 
 -- | Bind charging callbacks without performing discovery or metadata IO at boot.
 prepareGemRead :: PrepareRead
-prepareGemRead = PrepareRead (\_ origin -> pure (Right (gemReadWith (ocChargeFullReadWorkspace origin) (ocChargeSelectedRead origin) (originBaseUrl origin))))
+prepareGemRead = PrepareRead (\origin -> pure (Right (gemReadWith (ocChargeFullReadWorkspace origin) (ocChargeSelectedRead origin) (originBaseUrl origin))))
 
 -- | Keep full and selected reads under the same captured source authority.
 gemReadWith :: (Int -> IO ()) -> (Int -> IO ()) -> Text -> EcosystemRead
