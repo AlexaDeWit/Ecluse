@@ -11,7 +11,6 @@ module Ecluse.Core.Registry.RubyGems.Publish (
     classifyPublish,
 ) where
 
-import Data.Text qualified as T
 import Network.HTTP.Client (Request (method, requestBody, requestHeaders), RequestBody (RequestBodyBS))
 import Network.HTTP.Types.Header (hContentType)
 import UnliftIO.Exception (evaluate)
@@ -29,7 +28,7 @@ import Ecluse.Core.Registry.MirrorUpload
 import Ecluse.Core.Registry.MirrorUpload.Internal (checkedMirrorUploadData)
 import Ecluse.Core.Registry.Origin (OriginClient (ocToken), originBaseUrl)
 import Ecluse.Core.Registry.Publish (PublishCodec (..), relayPublishRequest)
-import Ecluse.Core.Registry.Request (CredentialMapping, attachCredential, metadataGet, parseRequestEither)
+import Ecluse.Core.Registry.Request (CredentialMapping, apiEndpoint, attachCredential, metadataGet, parseRequestEither)
 import Ecluse.Core.Registry.RubyGems.Archive
 import Ecluse.Core.Registry.RubyGems.CompactSpec (checkGemSpecification)
 import Ecluse.Core.Registry.RubyGems.Credential
@@ -96,8 +95,7 @@ uploadClaims limits charge _ body = do
 
 bodyRequest :: CredentialMapping -> Text -> Maybe ClientCredential -> PublishExtras -> ByteString -> Either UrlFormationError Request
 bodyRequest credentialMapping target credential extras bytes = do
-    when (T.any (`elem` ['?', '#']) target) (Left (UnparseableUrl "RubyGems publication root contains a query or fragment"))
-    base <- parseRequestEither (T.dropWhileEnd (== '/') target <> "/api/v1/gems")
+    base <- apiEndpoint (UnparseableUrl "RubyGems publication root contains a query or fragment") target "api/v1/gems"
     pure . attachCredential credentialMapping credential $
         base
             { method = "POST"
