@@ -8,9 +8,9 @@ module Ecluse.Core.Registry.RubyGems.Projection (projectGemRows) where
 import Control.Monad (foldM)
 import Data.List.NonEmpty qualified as NE
 import Data.Map.Strict qualified as Map
-import Data.Set qualified as Set
 
 import Ecluse.Core.Package (Artifact (..), Availability (Available), CodeExecSignal (CodeExecUnknown), PackageDetails (..), PackageInfo (..), PackageName, renderPackageName)
+import Ecluse.Core.Package.Entry (distinctKeys)
 import Ecluse.Core.Registry.Metadata (MetadataError (MetadataBoundExceeded, MetadataNameMismatch, MetadataUndecodable))
 import Ecluse.Core.Registry.RubyGems.Document (GemRow (..))
 import Ecluse.Core.Registry.RubyGems.Project (coordinateFilename, coordinateName, coordinateVersion)
@@ -25,7 +25,7 @@ import Ecluse.Core.Version (renderVersion)
 projectGemRows :: Limits -> PackageName -> Text -> [GemRow] -> Either MetadataError PackageInfo
 projectGemRows limits name base rows = do
     first MetadataBoundExceeded (checkArtifactCount limits (length rows))
-    unless (Set.size (Set.fromList (map (unFilename . coordinateFilename . grCoordinate) rows)) == length rows && Set.size (Set.fromList (map grEntryKey rows)) == length rows) (Left MetadataUndecodable)
+    unless (distinctKeys (map (unFilename . coordinateFilename . grCoordinate) rows) && distinctKeys (map grEntryKey rows)) (Left MetadataUndecodable)
     versions <- foldM insert Map.empty rows
     first MetadataBoundExceeded (checkVersionCountOf limits (Map.size versions))
     let !settled = Map.map settle versions

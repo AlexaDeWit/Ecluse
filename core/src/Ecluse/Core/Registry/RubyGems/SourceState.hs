@@ -20,7 +20,7 @@ import Data.Set qualified as Set
 import Data.Time (UTCTime)
 
 import Ecluse.Core.Package
-import Ecluse.Core.Package.Entry (EntryKey (RecordEntry))
+import Ecluse.Core.Package.Entry (EntryKey (RecordEntry), distinctKeys, validRecordKey)
 import Ecluse.Core.Registry (ParseError (..))
 import Ecluse.Core.Registry.RubyGems.Document
 import Ecluse.Core.Registry.RubyGems.Project
@@ -57,12 +57,12 @@ parseGemSource = withObject "RubyGems source" $ \fields -> do
             >>= traverse
                 ( withObject "RubyGems source row" $ \entry -> do
                     position <- entry .: "position"
-                    when (position < 0) (fail "invalid RubyGems source position")
+                    unless (validRecordKey (RecordEntry position)) (fail "invalid RubyGems source position")
                     bytes <- entry .: "source" >>= decodeBytes
                     either (fail . show) pure (decodeInfoRow name (RecordEntry position) bytes)
                 )
     let keys = map grEntryKey rows
-    unless (Set.size (Set.fromList keys) == length keys) (fail "duplicate RubyGems source position")
+    unless (distinctKeys keys) (fail "duplicate RubyGems source position")
     pure (GemDocument name header rows)
 
 -- | Require each retained row to agree with its admitted artifact and exact native identity.
@@ -71,7 +71,7 @@ validateGemSource details document = do
     unless (gemName document == pkgName details) (Left "RubyGems source names another package")
     let entries = Map.fromList [(grEntryKey row, row) | row <- gemRows document]
         expected = Set.fromList (map artEntryKey (toList (pkgArtifacts details)))
-    unless (all nativeKey (Map.keys entries)) (Left "RubyGems source position is not a physical record")
+    unless (all validRecordKey (Map.keys entries)) (Left "RubyGems source position is not a physical record")
     unless (Map.keysSet entries == expected && Map.size entries == length (gemRows document) && Set.size expected == length (pkgArtifacts details)) (Left "RubyGems source membership disagrees with its artifacts")
     unless (pkgInstallCode details == CodeExecUnknown && pkgAvailability details == Available) (Left "RubyGems source has inconsistent policy facts")
     for_ (pkgArtifacts details) $ \artifact -> do
@@ -94,10 +94,6 @@ decodeBytes = either fail pure . sourceBytes
 
 sourceBytes :: Text -> Either String ByteString
 sourceBytes encoded = convertFromBase Base64 (encodeUtf8 encoded :: ByteString)
-
-nativeKey :: EntryKey -> Bool
-nativeKey (RecordEntry position) = position >= 0
-nativeKey _ = False
 
 -- | Any unknown platform time leaves the complete version's source age unknown.
 gemSourcePublishedAt :: GemDocument -> Maybe UTCTime
