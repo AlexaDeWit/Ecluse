@@ -26,6 +26,10 @@ INFO
 cat > "$temporary/https.cjs" <<'JS'
 const fs = require("fs");
 const { EventEmitter } = require("events");
+const jsonFailures = { name: '{"name":"other","versions":{"1":{}}}', empty: '{"name":"example","versions":{}}', malformed: "{" };
+const compactIndexFailures = {
+  empty: "---\n", malformed: "---\n1.0.0 dep:>= 0\n", unterminated: "---\n1.0.0 |checksum:aa", utf8: "---\n\xff\n"
+};
 require("https").get = (source, options, callback) => {
   if (options.headers["accept-encoding"] !== "identity") throw new Error("missing identity request");
   const npm = source === "https://registry.npmjs.org/example";
@@ -48,10 +52,10 @@ require("https").get = (source, options, callback) => {
       response.emit("aborted");
       return;
     }
-    let body = fs.readFileSync(process.env.CAPTURE_TEST_ROOT + (npm ? "/npm.json" : ruby ? "/rubygems.json" : "/pypi.json"));
-    if (process.env.CAPTURE_TEST_CASE === "name") body = Buffer.from('{"name":"other","versions":{"1":{}}}');
-    if (process.env.CAPTURE_TEST_CASE === "empty") body = Buffer.from('{"name":"example","versions":{}}');
-    if (process.env.CAPTURE_TEST_CASE === "malformed") body = Buffer.from("{");
+    const replacement = (ruby ? compactIndexFailures : jsonFailures)[process.env.CAPTURE_TEST_CASE];
+    const body = replacement === undefined
+      ? fs.readFileSync(process.env.CAPTURE_TEST_ROOT + (npm ? "/npm.json" : ruby ? "/rubygems.json" : "/pypi.json"))
+      : Buffer.from(replacement, "latin1");
     response.emit("data", body.subarray(0, 13));
     response.emit("data", body.subarray(13));
     response.emit("end");
@@ -89,14 +93,32 @@ for failure in http media encoded aborted name empty malformed; do
   cmp "$temporary/before.json" "$temporary/pins.json"
   cmp "$temporary/npm.json" "$temporary/npm/example.full.json"
 done
-for failure in http media encoded aborted name empty malformed; do
-  if BENCH_CORPUS_ECOSYSTEM=rubygems CAPTURE_TEST_CASE="$failure" bash "$here/gen-bench-corpus.sh" "$temporary/pins.json" "$temporary/npm" > "$temporary/error" 2>&1; then
-    echo "RubyGems capture accepted $failure failure" >&2
+# Each case must fail with its own message and leave the catalogue unchanged.
+expect_refusal() {
+  if BENCH_CORPUS_ECOSYSTEM="$1" CAPTURE_TEST_CASE="$2" bash "$here/gen-bench-corpus.sh" "$temporary/pins.json" "$temporary/npm" < /dev/null > "$temporary/error" 2>&1; then
+    echo "$1 capture accepted $2 failure" >&2
+    exit 1
+  fi
+  if ! grep -qF "$3" "$temporary/error"; then
+    echo "$1 $2 failure did not report: $3" >&2
+    cat "$temporary/error" >&2
     exit 1
   fi
   cmp "$temporary/before.json" "$temporary/pins.json"
+}
+while IFS='|' read -r failure message; do
+  expect_refusal rubygems "$failure" "$message"
   cmp "$temporary/rubygems.json" "$temporary/rubygems/example.info"
-done
+done <<'CASES'
+http|registry returned HTTP 503
+media|unexpected media type text/html
+encoded|expected identity content encoding
+aborted|response aborted
+empty|malformed or empty Compact Index records
+malformed|malformed or empty Compact Index records
+unterminated|incomplete Compact Index body
+utf8|not valid for encoding utf-8
+CASES
 printf '\n' >> "$temporary/npm/example.full.json"
 if BENCH_CORPUS_VERIFY=1 bash "$here/gen-bench-corpus.sh" "$temporary/pins.json" "$temporary/npm" > "$temporary/error" 2>&1; then
   echo "verification accepted changed bytes" >&2
