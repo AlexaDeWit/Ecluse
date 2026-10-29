@@ -201,8 +201,8 @@ captureMetadataRequests ::
 captureMetadataRequests eco build cleared credential = withSweeper $ \deadlines -> do
     adapter <- maybe (fail "missing adapter") pure (adapterFor eco)
     captured <- newIORef []
-    let capture tracing origin name = do
-            nativeRead <- prepareRead (metadataRead (adapterMetadata adapter)) tracing origin >>= either (fail . show) pure
+    let capture _ origin name = do
+            nativeRead <- prepareRead (metadataRead (adapterMetadata adapter)) origin >>= either (fail . show) pure
             request <- either (fail . show) pure (erRequest nativeRead (ocBaseRequest origin) (ocToken origin) name)
             modifyIORef' captured (<> [request])
             pure (Left MetadataAbsent)
