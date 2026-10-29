@@ -10,6 +10,8 @@ module Ecluse.BenchLoad.ProxyProcess (
     AdvisoryFeed (..),
     advisoryBucket,
     mirrorStateBucket,
+    copyStatePublicHost,
+    copyStatePrivateHost,
     podShapeFromEnv,
     serveProxyFlag,
     proxyEnvironment,
@@ -168,6 +170,14 @@ data AdvisoryFeed = AdvisoryFeed
 -- | The bucket holding the managed-read fixture's project record.
 mirrorStateBucket :: Text
 mirrorStateBucket = "ecluse-bench-mirror-state"
+
+-- | The public upstream host a native private-copy state fixture reads its sources from.
+copyStatePublicHost :: Text
+copyStatePublicHost = "localhost"
+
+-- | The private upstream host a native private-copy state fixture keys its records by.
+copyStatePrivateHost :: Text
+copyStatePrivateHost = "127.0.0.1"
 
 -- | The pod shape in @BENCH_LOAD_POD@, unlimited when unset.
 podShapeFromEnv :: IO PodShape
