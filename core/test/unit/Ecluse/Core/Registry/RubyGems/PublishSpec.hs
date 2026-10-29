@@ -32,7 +32,7 @@ import Ecluse.Core.Security (Limits (maxMirrorArtifactBytes), defaultLimits)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Core.Server.Admission.Types (ChargeFactors (ChargeFactors))
 import Ecluse.Server.Admission.Support (refuseCharge)
-import Ecluse.Test.Deadline (withExchangeClient)
+import Ecluse.Test.Deadline (withExchangeClient, withSweeper)
 import Ecluse.Test.Port (passthroughTracingPort)
 import Ecluse.Test.Registry.Publish (publishOnlyFile)
 import Ecluse.Test.Stub (Captured (..), allCaptured, headerValue, stubBaseUrl, withRoutedStub)
@@ -85,7 +85,7 @@ spec = describe "RubyGems publication" $ do
                     _ -> fail "expected one native archive"
                 verified <- expectRight (verifyMirrorBytes file archive)
                 verifyMirrorBytes file (archive <> "changed") `shouldSatisfy` isLeft
-                upload <- pcPrepareUpload defaultLimits (const pass) inventory source file verified >>= expectRight
+                upload <- withSweeper (\deadlines -> pcPrepareUpload deadlines defaultLimits (const pass) inventory source file verified) >>= expectRight
                 request <- expectRight (pcPublishRequest "https://target.test/private" (Just (bareCredential (mkSecret "worker-key"))) (PublishPlan (pkgVersion details)) upload)
                 method request `shouldBe` "POST"
                 lookup "Authorization" (requestHeaders request) `shouldBe` Just "worker-key"

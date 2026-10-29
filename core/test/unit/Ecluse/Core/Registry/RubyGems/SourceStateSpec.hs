@@ -34,6 +34,7 @@ import Ecluse.Core.Security (defaultLimits)
 import Ecluse.Core.Server.MirrorView (mirrorVersionView)
 import Ecluse.Core.Server.Path (unFilename)
 import Ecluse.Core.Version (Version, mkVersion)
+import Ecluse.Test.Deadline (withSweeper)
 import Ecluse.Test.Support (expectRight)
 
 spec :: Spec
@@ -109,7 +110,7 @@ spec = describe "RubyGems durable source" $ do
     retain inventory record file = do
         row <- expectRight (mirrorRow inventory file)
         bytes <- readFileBS ("test/fixtures/rubygems/quick/Marshal.4.8/" <> toString (coordinateStem (grCoordinate row)) <> ".gemspec.rz")
-        original <- mcValidate rubyMirrorCompanion defaultLimits (const pass) inventory file bytes >>= expectRight
+        original <- withSweeper (\deadlines -> mcValidate rubyMirrorCompanion deadlines defaultLimits (const pass) inventory file bytes) >>= expectRight
         original `shouldBe` bytes
         checked@(VerifiedCompanionBytes _ reference _) <- expectRight (verifySourceCompanionBytes defaultLimits (inventoryReadData inventory) file original)
         expectRight (retainCompanionReference nativeVersion checked reference record)
