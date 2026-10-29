@@ -17,10 +17,10 @@ import Data.Set qualified as Set
 import Data.Text.Encoding qualified as TE
 
 import Ecluse.Core.Registry.JsonStream (Steps (..))
-import Ecluse.Core.Registry.Metadata.RecordStream (recordSteps)
+import Ecluse.Core.Registry.Metadata.RecordStream (recordFragmentCharge, recordSteps)
 import Ecluse.Core.Registry.RubyGems.Project (projectName)
 import Ecluse.Core.Security (Limits (..), checkArtifactCount, checkVersionCountOf)
-import Ecluse.Core.Server.MemoryModel (bufferedChunkCharge, decodedDocumentCharge)
+import Ecluse.Core.Server.MemoryModel (decodedDocumentCharge, saturatingCharge)
 
 -- | Sorted complete rows carry an explicit blank info-file hint.
 newtype GemDirectory = GemDirectory {directoryBytes :: ByteString}
@@ -37,10 +37,9 @@ directorySteps :: (Monad m) => (Int -> m ()) -> Limits -> Steps m GemDirectory
 directorySteps pay limits = recordSteps reserve consume complete (Scan False False 0 0 0 Map.empty)
   where
     reserve (Scan _ _ _ retained workspace _) previous fragment = do
-        let cost = toInteger previous + toInteger (decodedDocumentCharge fragment) + toInteger (bufferedChunkCharge (BS.length fragment))
-            needed = 2 * toInteger retained + toInteger workspace + cost
-        pay (saturate needed)
-        pure (saturate cost)
+        let cost = recordFragmentCharge previous fragment
+        pay (saturatingCharge (2 * toInteger retained + toInteger workspace + toInteger cost))
+        pure cost
     consume (Scan header bad count retained workspace rows) _ bytes
         | not header = Right (Scan (bytes == "---") bad count retained workspace rows)
         | BS.null bytes = Right (Scan header bad count retained workspace rows)
@@ -58,8 +57,6 @@ directorySteps pay limits = recordSteps reserve consume complete (Scan False Fal
     complete (Scan header bad _ _ _ rows)
         | not header || bad = Failed "RubyGems directory is malformed or has no header delimiter"
         | otherwise = Finished (GemDirectory (BS.concat [name <> " " <> versions <> " \n" | (name, versions) <- Map.toAscList rows, not (BS.null versions)]))
-
-    saturate = fromInteger . min (toInteger (maxBound :: Int))
 
 decodeRow :: ByteString -> Maybe (ByteString, ByteString)
 decodeRow bytes = do
