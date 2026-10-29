@@ -68,8 +68,11 @@ data SweepMount = SweepMount
     , smStore :: SweepStore
     -- ^ The store's own calls. Every backend-varying fact is a value on it.
     , smInstallEvidence :: Maybe InstallEvidenceProvider
+    -- ^ The native install-evidence provider. 'Nothing' keeps the projected install facts.
     , smInstallBudget :: InstallEvidenceBudget
+    -- ^ The bounded reservation each evidence evaluation holds for its reads and inspection.
     , smInstallLimits :: Limits
+    -- ^ The limits evidence reads and archive inspection are held to.
     , smRules :: [PreparedRule]
     -- ^ The mount's prepared rules that apply at revocation.
     , smConfigured :: [Rule]
