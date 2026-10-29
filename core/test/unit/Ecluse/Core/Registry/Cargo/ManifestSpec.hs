@@ -243,6 +243,15 @@ spec = do
                     Object fields -> Object (KeyMap.insert "deps" (toJSON ([] :: [Value])) fields)
                     value -> value
             checkPublicationIndex defaultLimits metadata changed `shouldBe` Left (ParseError "Cargo manifest and index dependency counts disagree")
+        it "refuses two manifest dependencies that share one index identity" $ do
+            let dependencyRow name = object ["name" .= (name :: Text), "req" .= ("^1" :: Text), "target" .= ("cfg(unix)" :: Text)]
+                row deps = object ["name" .= ("example" :: Text), "vers" .= ("1.2.3" :: Text), "deps" .= map dependencyRow deps]
+            single <- expectRight (parse (basic <> "[target.'cfg(unix)'.dependencies]\nshared='1'\n"))
+            singleMetadata <- expectRight (publicationMetadata single Map.empty)
+            checkPublicationIndex defaultLimits singleMetadata (row ["shared"]) `shouldSatisfy` isRight
+            spaced <- expectRight (parse (basic <> "[target.'cfg(unix)'.dependencies]\nshared='1'\n[target.'cfg( unix )'.dependencies]\nshared='1'\n"))
+            spacedMetadata <- expectRight (publicationMetadata spaced Map.empty)
+            checkPublicationIndex defaultLimits spacedMetadata (row ["shared", "unrelated"]) `shouldBe` Left (ParseError "Cargo index repeats a dependency identity")
         it "refuses unresolved dependency sources after a valid version declaration" $ do
             for_ ["path='local'", "git='https://registry.test/source'", "branch='main'", "rev='abc123'", "tag='v1'", "registry='private'", "workspace=true"] $ \source -> do
                 manifest <- expectRight (parse (basic <> "[dependencies.alias]\nversion='1'\n" <> source <> "\n"))
