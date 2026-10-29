@@ -20,6 +20,7 @@ module Ecluse.Core.Deadline (
     withEndableDeadline,
     withDeadlineFlag,
     timeout,
+    inspectionDeadline,
 ) where
 
 import Control.Exception (asyncExceptionFromException, asyncExceptionToException, handleJust, throwTo)
@@ -31,6 +32,8 @@ import Text.Show (showString, showsPrec)
 import UnliftIO.Concurrent (ThreadId, forkIOWithUnmask, killThread, myThreadId, threadDelay)
 import UnliftIO.Exception (bracket, onException, uninterruptibleMask_)
 import UnliftIO.MVar (isEmptyMVar)
+
+import Ecluse.Core.Security.Limits (requestTimeoutSeconds)
 
 -- | The process's armed checks, one list for each capability.
 newtype Deadlines = Deadlines (SmallArray (IORef [Armed]))
@@ -139,6 +142,10 @@ timeout deadlines micros action
         -- Base 'handleJust', because the unliftio one never catches an asynchronous exception.
         handleJust (\caught -> if caught == expiry then Just () else Nothing) (\() -> pure Nothing) $
             Just <$> withDeadline deadlines due action
+
+-- | Return the refusal once an archive or metadata inspection outlives the request timeout, on the sweeper.
+inspectionDeadline :: Deadlines -> e -> IO (Either e a) -> IO (Either e a)
+inspectionDeadline deadlines refusal action = fromMaybe (Left refusal) <$> timeout deadlines (requestTimeoutSeconds * 1_000_000) action
 
 -- The monotonic nanoseconds this many microseconds after an instant, saturating rather than wrapping.
 nanosAfter :: Word64 -> Int -> Word64
