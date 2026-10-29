@@ -7,8 +7,13 @@ Adapters assign keys before admission. Assembly combines them with the snapshot 
 -}
 module Ecluse.Core.Package.Entry (
     EntryKey (..),
+    validEntryKey,
+    validRecordKey,
+    distinctKeys,
     AdmittedEntry (..),
 ) where
+
+import Data.Set qualified as Set
 
 import Ecluse.Core.Snapshot (ContentDigest)
 
@@ -23,6 +28,24 @@ data EntryKey
     | -- | A snapshot that contains only one artifact entry.
       SingletonEntry
     deriving stock (Eq, Ord, Show)
+
+-- | Array and record coordinates cannot precede the first source entry.
+validEntryKey :: EntryKey -> Bool
+validEntryKey = \case
+    ArrayEntry position -> position >= 0
+    RecordEntry position -> position >= 0
+    ObjectEntry _ -> True
+    SingletonEntry -> True
+
+-- | A physical row of a record stream, the only coordinate a native line-oriented source assigns.
+validRecordKey :: EntryKey -> Bool
+validRecordKey = \case
+    RecordEntry position -> position >= 0
+    _ -> False
+
+-- | No key repeats, so no stored coordinate or identity can select two entries.
+distinctKeys :: (Ord key) => [key] -> Bool
+distinctKeys keys = Set.size (Set.fromList keys) == length keys
 
 -- | The admitted coordinate and filename, without retaining the artifact's other metadata.
 data AdmittedEntry = AdmittedEntry
