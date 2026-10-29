@@ -3,17 +3,29 @@
 -- SPDX-License-Identifier: MIT
 {-# LANGUAGE ImportQualifiedPost #-}
 
--- | Local archive references remain inside their admitted root.
+-- | Archive member paths and local references remain inside their admitted root.
 module Ecluse.Core.Registry.Archive.PathSpec (spec) where
 
 import Data.Text qualified as T
 import Test.Hspec
 
 import Ecluse.Core.Registry (ParseError (..))
-import Ecluse.Core.Registry.Archive.Path (resolveArchivePath)
+import Ecluse.Core.Registry.Archive.Path (checkPath, resolveArchivePath)
 
 spec :: Spec
-spec =
+spec = do
+    describe "checkPath" $ do
+        it "accepts ordinary relative files and directories" $ do
+            checkPath "example-1/PKG-INFO" `shouldBe` Right ["example-1", "PKG-INFO"]
+            checkPath "example-1/" `shouldBe` Right ["example-1"]
+        it "rejects ambiguous and platform-dependent paths" $
+            for_ ["../PKG-INFO", "/PKG-INFO", "a/./b", "a//b", "C:/b", "a\\b"] $
+                \path -> checkPath path `shouldBe` Left (ParseError "unsafe archive path")
+        it "accepts exactly 4096 characters and refuses extra bytes and control characters" $ do
+            let path = T.replicate 4096 "a"
+            checkPath path `shouldBe` Right [path]
+            for_ [path <> "a", "a\NULb", "a\DELb"] $ \invalid ->
+                checkPath invalid `shouldBe` Left (ParseError "unsafe archive path")
     describe "resolveArchivePath" $ do
         it "normalises redundant separators and parent references inside the root" $ do
             resolveArchivePath ["example-1", "src"] ".//../data//file" `shouldBe` Right "example-1/data/file"
