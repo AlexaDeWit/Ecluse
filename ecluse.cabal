@@ -329,6 +329,7 @@ library ecluse-core
     Ecluse.Core.Registry.Cargo.Reader
     Ecluse.Core.Registry.Cargo.Projection
     Ecluse.Core.Registry.Cargo.Document
+    Ecluse.Core.Registry.Cargo.SourceState
     Ecluse.Core.Registry.RubyGems.FirstParty
     Ecluse.Core.Registry.RubyGems.Project
     Ecluse.Core.Registry.RubyGems.Document
