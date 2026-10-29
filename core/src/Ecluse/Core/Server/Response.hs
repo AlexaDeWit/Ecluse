@@ -35,6 +35,7 @@ module Ecluse.Core.Server.Response (
     Refusal (..),
     mkRefusal,
     renderRefusal,
+    refusalHelpBytes,
 ) where
 
 import Data.Semigroup (Max (Max, getMax))
@@ -232,3 +233,7 @@ mkRefusal help message = Refusal message (nonBlankHelp =<< help)
 -- | The refusal as one line: the reason, with the help message appended after a single space.
 renderRefusal :: Refusal -> Text
 renderRefusal (Refusal reason help) = maybe reason ((T.strip reason <> " ") <>) help
+
+-- | The help message alone as body bytes, absent when none is configured.
+refusalHelpBytes :: Refusal -> Maybe LByteString
+refusalHelpBytes = fmap (fromStrict . encodeUtf8) . refusalHelp
