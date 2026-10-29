@@ -13,6 +13,7 @@ module Ecluse.Core.Registry.Adapter.Types (
     AdapterServe (..),
 ) where
 
+import Ecluse.Core.Deadline (Deadlines)
 import Ecluse.Core.Ecosystem (Ecosystem)
 import Ecluse.Core.Registry.Adapter.Capability (
     AdapterArtifact,
@@ -22,7 +23,9 @@ import Ecluse.Core.Registry.Adapter.Capability (
     ProjectName,
  )
 import Ecluse.Core.Registry.Request (CredentialMapping)
+import Ecluse.Core.Rules.Install (InstallEvidenceProvider)
 import Ecluse.Core.Rules.Types (RuleType)
+import Ecluse.Core.Security (Limits)
 import Ecluse.Core.Server.Context (MountRouter, PackumentDeps)
 import Ecluse.Core.Server.RouteDescription (RouteSpec)
 
@@ -50,6 +53,8 @@ data RegistryAdapter = RegistryAdapter
     -}
     , adapterMaintenance :: AdapterMaintenance
     -- ^ The store maintenance verbs. Either may be absent, and a Dredger then refuses the mount.
+    , adapterInstallEvidence :: Maybe (Deadlines -> Limits -> IO InstallEvidenceProvider)
+    -- ^ The native install-evidence provider, built once per mount. 'Nothing' keeps projected install facts.
     }
 
 {- | The ecosystem's web-facing serve surface. Both routing fields are derived from one
