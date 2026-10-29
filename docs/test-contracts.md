@@ -26,6 +26,7 @@ Replacement: test/contracts/Ecluse/Test/Contract/Metadata/Fetch.hs.
 Both npm and PyPI run the same body with their original raw documents and builders.
 The original adapter-completeness example and native fixture registration remain in FetchSpec.
 Each prefix below expands under core.metadata.fetch for npm, PyPI, Cargo and RubyGems.
+RubyGems' caller-bound framing replaces held-name-mismatch with held-origin-mismatch.
 
 | Case suffix | Preserved assertions |
 | --- | --- |
@@ -51,7 +52,7 @@ The fetch obligations define the required cases for each ecosystem, including Ca
 
 ### Metadata projection
 
-The projection contract distinguishes `SingleDocument` and `RecordStream` input.
+The projection contract distinguishes `SingleDocument`, `RecordStream` and `CallerBoundRecords` input.
 npm and PyPI retain their exact whole-document errors for malformed, absent, and conflicting identities.
 Cargo full reads report invalid entries for unusable native rows.
 Selected reads exclude unusable rows from matching versions without retaining invalid-entry diagnostics.
@@ -61,6 +62,7 @@ The native Cargo tests keep duplicate-version and EOF scanning controls beside t
 Originals: core/test/unit/Ecluse/Core/Registry/Npm/MetadataSpec.hs and PyPI/MetadataSpec.hs.
 Replacement: test/contracts/Ecluse/Test/Contract/Metadata/Projection.hs.
 Each suffix expands under core.metadata.projection for npm, PyPI, Cargo and RubyGems.
+RubyGems runs the caller-bound variant, with name-binding and origin-binding in place of missing-name and name-mismatch.
 
 | Case suffix | Original examples and assertions |
 | --- | --- |
