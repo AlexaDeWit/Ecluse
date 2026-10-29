@@ -8,6 +8,7 @@ module Ecluse.Core.Registry.RubyGems.Marshal (
     decodeMarshal,
     marshalText,
     stripInstanceVariables,
+    inertNodeBudget,
 ) where
 
 import Data.Bits (shiftL)
@@ -86,9 +87,7 @@ readValue depth = do
                 Just (Just (value, cost, height)) -> do
                     cursor <- get
                     when (depth + height > maxNestingDepth (bounds cursor)) (refuse "Marshal referenced depth exceeds its bound")
-                    let cap = min (maxArtifactCount (bounds cursor)) (maxMetadataBytes (bounds cursor) `div` 8)
-                    when (cost > cap - nodes cursor) (refuse "Marshal reference work exceeds its bound")
-                    modify' (\current -> current{nodes = nodes current + cost})
+                    spendNodes "Marshal reference work exceeds its bound" cost
                     pure value
                 _ -> refuse "invalid or cyclic Marshal object reference"
         91 -> tracked (MArray <$> counted (readValue (depth + 1)))
@@ -161,11 +160,18 @@ referenceSymbol = do
     maybe (refuse "invalid Marshal symbol reference") pure (IntMap.lookup index table)
 
 countNode :: Decoder ()
-countNode = do
-    limits <- gets bounds
-    count <- gets nodes
-    when (count >= maxMetadataBytes limits `div` 8 || count >= maxArtifactCount limits) (refuse "Marshal node count exceeds its bound")
-    modify' (\cursor -> cursor{nodes = count + 1})
+countNode = spendNodes "Marshal node count exceeds its bound" 1
+
+-- Spend node work against the inert budget, refusing with the reason once it would pass the budget.
+spendNodes :: Text -> Int -> Decoder ()
+spendNodes reason amount = do
+    cursor <- get
+    when (amount > inertNodeBudget (bounds cursor) - nodes cursor) (refuse reason)
+    modify' (\current -> current{nodes = nodes current + amount})
+
+-- | The node and alias work one inert Marshal or YAML decode may do.
+inertNodeBudget :: Limits -> Int
+inertNodeBudget limits = min (maxArtifactCount limits) (maxMetadataBytes limits `div` 8)
 
 counted :: Decoder a -> Decoder [a]
 counted parse = do

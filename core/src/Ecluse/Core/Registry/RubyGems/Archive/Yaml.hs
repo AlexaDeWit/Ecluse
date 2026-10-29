@@ -27,6 +27,7 @@ import Text.Libyaml qualified as Y
 import UnliftIO.Exception (try)
 
 import Ecluse.Core.Registry (ParseError (..))
+import Ecluse.Core.Registry.RubyGems.Marshal (inertNodeBudget)
 import Ecluse.Core.Security.Limits (Limits (..))
 
 -- | Tags identify data schema only. No class lookup or object construction occurs.
@@ -129,8 +130,7 @@ valueDepth = \case
 consume :: Int -> Decoder ()
 consume amount = do
     cursor <- get
-    let cap = min (maxArtifactCount (ysLimits cursor)) (maxMetadataBytes (ysLimits cursor) `div` 8)
-    when (amount > cap - ysNodes cursor) (refuse "YAML node or alias work exceeds its bound")
+    when (amount > inertNodeBudget (ysLimits cursor) - ysNodes cursor) (refuse "YAML node or alias work exceeds its bound")
     modify' (\current -> current{ysNodes = ysNodes current + amount})
 
 checkTag :: Y.Tag -> Decoder ()
