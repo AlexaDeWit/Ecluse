@@ -57,8 +57,15 @@ import Ecluse.Test.Support (expectRight)
 
 spec :: Spec
 spec = do
-    it (caseLabel "integration/cargo/source-layout" "requires distinct public replacement and private alternate identities") $
+    it (caseLabel "integration/cargo/source-layout" "requires distinct public replacement and private alternate identities") $ do
         servingLayout cargoServingDriver `shouldBe` SeparateRegistries
+        withCargoProxy defaultReply defaultReply $ \proxy -> do
+            roots <- forM ["/cargo/config.json", "/cargo/private/config.json"] $ \path -> do
+                response <- getPathWith [("Authorization", "caller")] path (proxyApp proxy)
+                simpleStatus response `shouldBe` status200
+                (dl, _, _, _) <- expectRight (Reference.referenceDiscovery (toStrict (simpleBody response)))
+                pure (T.takeWhile (/= '{') dl)
+            roots `shouldBe` ["http://ecluse.test/cargo/crates/", "http://ecluse.test/cargo/private/crates/"]
     servingContract "cargo" cargoServingDriver
     discoverySpec
     servingSpec
