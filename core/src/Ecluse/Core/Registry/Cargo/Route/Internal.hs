@@ -58,17 +58,18 @@ import Ecluse.Core.Server.Contract (
     optionalBodyContract,
     passthroughContract,
     passthroughResponse,
+    plainTextRefusal,
     responseValue,
  )
 import Ecluse.Core.Server.Path (Filename, mkFilename)
 import Ecluse.Core.Server.Pipeline.Origin (mountOrigin)
 import Ecluse.Core.Server.Pipeline.Packument (PackumentReplies (..), packumentAction)
-import Ecluse.Core.Server.Pipeline.Packument.Response (MetadataResponse, metadataReplies)
+import Ecluse.Core.Server.Pipeline.Packument.Response (MetadataResponse, keepPrivateUnauthorised, metadataReplies)
 import Ecluse.Core.Server.Pipeline.Publish (PublishReplies (..), servePublish)
 import Ecluse.Core.Server.Pipeline.Shared (edgeTokenMatches, forwardedCredential, shedMessage, withMetadataAdmission)
 import Ecluse.Core.Server.Pipeline.Tarball (tarballAction)
 import Ecluse.Core.Server.Pipeline.Tarball.Types (TarballReplies (..))
-import Ecluse.Core.Server.Response (Refusal, refusalHelp, renderRefusal)
+import Ecluse.Core.Server.Response (Refusal, refusalHelpBytes, renderRefusal)
 import Ecluse.Core.Server.Response.Summary (detailedRejections)
 import Ecluse.Core.Server.Route (Capture (..), MediaNegotiation (AcceptsAnything), MethodMatch (MethodPut, MethodRead), PatternSeg (SegCap, SegLit), Route (Route), RouteName (RouteName), routerOf, safeSegment)
 import Ecluse.Core.Server.RouteDescription (RouteSpec, catchAllSpecs, specsOf, unsupportedPathParam)
@@ -221,22 +222,16 @@ indexReplies :: CargoView -> PackumentReplies IndexResponse
 indexReplies view =
     base
         { packumentUnauthorised = \headers -> packumentUnauthorised quiet (challenge <> headers)
-        , packumentPrivateRefused = \code ->
-            if code == 401
-                then packumentUnauthorised (indexReplies PrivateRegistry)
-                else packumentForbidden quiet
+        , packumentPrivateRefused = keepPrivateUnauthorised (indexReplies PrivateRegistry)
         , packumentNotFound = packumentNotFound quiet
         }
   where
     base = metadataReplies detailedRejections (refusalBytes view)
-    quiet = metadataReplies detailedRejections helpBytes
+    quiet = metadataReplies detailedRejections refusalHelpBytes
 
 refusalBytes :: CargoView -> Refusal -> Maybe LByteString
 refusalBytes PublicReplacement = Just . fromStrict . encodeUtf8 . renderRefusal
-refusalBytes PrivateRegistry = helpBytes
-
-helpBytes :: Refusal -> Maybe LByteString
-helpBytes = fmap (fromStrict . encodeUtf8) . refusalHelp
+refusalBytes PrivateRegistry = refusalHelpBytes
 
 -- | Native archives share streamed responses and local refusal status codes.
 artifactContract :: ResponseContract PassthroughResponse
@@ -308,9 +303,6 @@ discoveryError status headers message =
                 then FirstResponse value
                 else SecondResponse $ if status == status403 then FirstResponse value else SecondResponse value
 
-localError :: Status -> ResponseHeaders -> Text -> PassthroughResponse
-localError status headers message = passthroughResponse status (("Content-Type", "text/plain") : ("Cache-Control", "no-store") : headers) (PassthroughBytes (fromStrict (encodeUtf8 message)))
-
 challenge :: ResponseHeaders
 challenge = [("WWW-Authenticate", "Cargo")]
 
@@ -321,9 +313,9 @@ publishReplies :: PublishReplies PassthroughResponse
 publishReplies =
     PublishReplies
         { publishAllowedMethods = "PUT"
-        , publishDisabledReply = \headers _ -> localError status405 headers "publishing is not enabled on this view"
+        , publishDisabledReply = \headers _ -> plainTextRefusal status405 headers "publishing is not enabled on this view"
         , publishRelayed = \status headers body -> passthroughResponse status (if status == status401 then challenge <> headers else headers) (PassthroughBytes body)
-        , publishError = \status headers -> localError status (if status == status401 then challenge <> headers else headers)
+        , publishError = \status headers -> plainTextRefusal status (if status == status401 then challenge <> headers else headers)
         }
 
 notFound :: RouteAction
