@@ -40,11 +40,11 @@ import UnliftIO (bracket_)
 import Ecluse.Core.Ecosystem (Ecosystem (Cargo))
 import Ecluse.E2E.Fixtures.Cargo.Dredger (buildDredgerReleases, firstPartyName)
 import Ecluse.E2E.Harness.Advisories (createAdvisoryBucket)
-import Ecluse.E2E.Harness.NativeEdge
 import Ecluse.E2E.Harness.CargoRegistry
 import Ecluse.E2E.Harness.CodeArtifact
 import Ecluse.E2E.Harness.CodeArtifact.Roles (PublicationAuthority (..), codeArtifactProxyRoleEnv, codeArtifactSweepRoleEnv)
 import Ecluse.E2E.Harness.Docker (withStubFault)
+import Ecluse.E2E.Harness.NativeEdge
 import Ecluse.E2E.Harness.Stub (StubFault (CargoCodeArtifactBackend))
 import Ecluse.E2E.Harness.Types
 import Ecluse.Test.Registry.Cargo.Fixtures

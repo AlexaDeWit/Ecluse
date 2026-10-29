@@ -27,8 +27,8 @@ import Network.HTTP.Types (ResponseHeaders, Status, status200, status400, status
 import Network.Wai (Application, Request, Response, ResponseReceived, getRequestBodyChunk, pathInfo, requestHeaderHost, requestHeaders, requestMethod, responseLBS, responseRaw)
 
 import Ecluse.Core.Security.Limits (BodyLimit (PublishRequestBodyLimit), boundedRead)
-import Ecluse.E2E.Harness.NativeEdge (NativeRequest (..))
 import Ecluse.E2E.Harness.Container (withBridgeApplication)
+import Ecluse.E2E.Harness.NativeEdge (NativeRequest (..))
 import Ecluse.E2E.Harness.Stub (StubRoute (CargoMirror, CargoPrivate, CargoPublic), stubUrl)
 import Ecluse.Test.Package (hexSha256Of)
 import Ecluse.Test.Poll (pollUntil)

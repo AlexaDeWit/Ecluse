@@ -23,9 +23,9 @@ import Ecluse.E2E.Fixtures.Cargo
 import Ecluse.E2E.Fixtures.Contracts (ConcreteFixture (..))
 import Ecluse.E2E.Harness
 import Ecluse.E2E.Harness.Cargo
-import Ecluse.E2E.Harness.NativeEdge
 import Ecluse.E2E.Harness.CargoRegistry
 import Ecluse.E2E.Harness.MirrorState (mirrorRetryAttempts, mutateMirrorStateObject)
+import Ecluse.E2E.Harness.NativeEdge
 import Ecluse.Test.Contract.Catalogue (caseLabel)
 import Ecluse.Test.Contract.Phase (timedFixture)
 import Ecluse.Test.Contract.Runner (DeclaredGroup (..))

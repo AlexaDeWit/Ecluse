@@ -25,12 +25,12 @@ import Ecluse.E2E.Harness.Advisories (advisoryStoreEnv, publishAdvisoryExport)
 import Ecluse.E2E.Harness.Cargo (CargoProject)
 import Ecluse.E2E.Harness.CargoDredger qualified as Native
 import Ecluse.E2E.Harness.CargoDredger.Client (cargoSweepClientOps)
-import Ecluse.E2E.Harness.NativeEdge (observedProxy)
 import Ecluse.E2E.Harness.CargoRegistry (awaitCargoRegistry)
 import Ecluse.E2E.Harness.Client (shouldSucceed)
 import Ecluse.E2E.Harness.CodeArtifact (codeArtifactDeleteRequests, creditCodeArtifactDeletes, withCodeArtifactDeleteAudit)
 import Ecluse.E2E.Harness.Docker (RoleRun (..), awaitContainerLog, containerLogs, runRoleOnce, sharedMirrorQueue, withDataPlane, withMirrorRole)
 import Ecluse.E2E.Harness.Lifecycle (timedFixtureWith)
+import Ecluse.E2E.Harness.NativeEdge (observedProxy)
 import Ecluse.E2E.Harness.Proxy (awaitProxyLog)
 import Ecluse.E2E.Harness.Sweep
 import Ecluse.E2E.Harness.Types (GlobalDataPlane, Topology (..))

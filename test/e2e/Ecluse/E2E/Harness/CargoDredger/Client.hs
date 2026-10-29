@@ -11,8 +11,8 @@ import System.Exit (ExitCode (ExitFailure, ExitSuccess))
 
 import Ecluse.E2E.Harness.Cargo
 import Ecluse.E2E.Harness.CargoDredger
-import Ecluse.E2E.Harness.NativeEdge (observedProxy)
 import Ecluse.E2E.Harness.CargoRegistry (cargoRegistryToken)
+import Ecluse.E2E.Harness.NativeEdge (observedProxy)
 import Ecluse.E2E.Harness.Types
 import Ecluse.Test.Contract.Sweep.Types (ClientOps (..))
 import Ecluse.Test.Registry.Cargo.Fixtures

@@ -20,9 +20,9 @@ import Ecluse.E2E.Harness
 import Ecluse.E2E.Harness.Cargo
 import Ecluse.E2E.Harness.CargoDredger qualified as Native
 import Ecluse.E2E.Harness.CargoDredger.Client (cargoSweepClientOps)
-import Ecluse.E2E.Harness.NativeEdge
 import Ecluse.E2E.Harness.CargoRegistry
 import Ecluse.E2E.Harness.CodeArtifact (codeArtifactDeleteRequests)
+import Ecluse.E2E.Harness.NativeEdge
 import Ecluse.E2E.Harness.Sweep (minAgeRule, permissiveRules, renderRules)
 import Ecluse.Test.Contract.Catalogue (caseLabel)
 import Ecluse.Test.Contract.Phase (timedFixture)
