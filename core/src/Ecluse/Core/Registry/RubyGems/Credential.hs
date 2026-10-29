@@ -15,14 +15,13 @@ module Ecluse.Core.Registry.RubyGems.Credential (
 
 import Data.ByteArray.Encoding (Base (Base64), convertToBase)
 import Data.ByteString qualified as BS
-import Data.Text.Encoding qualified as TE
 import Network.HTTP.Types.Header (RequestHeaders, hAuthorization)
 
-import Ecluse.Core.Credential (ClientCredential (..), bareCredential, mkSecret, unSecret)
+import Ecluse.Core.Credential (ClientCredential (..), mkSecret, unSecret)
 import Ecluse.Core.Registry (ParseError (ParseError), PublishBodyFault (PublishMalformed))
 import Ecluse.Core.Registry.Adapter.Capability (PublishExtras (..))
 import Ecluse.Core.Registry.PyPI.Credential (pypiCredential)
-import Ecluse.Core.Registry.Request (CredentialMapping, credentialMapping, credentialRecover)
+import Ecluse.Core.Registry.Request (CredentialMapping, bareAuthorization, credentialMapping, credentialRecover)
 
 -- | Preserve the caller's complete Basic pair for authorised private reads.
 rubyReadCredential :: CredentialMapping
@@ -30,7 +29,7 @@ rubyReadCredential = pypiCredential
 
 -- | A publication key is the complete native header value, including any configured scheme.
 rubyPublishCredential :: CredentialMapping
-rubyPublishCredential = credentialMapping recoverKey hAuthorization (encodeUtf8 . unSecret . credSecret)
+rubyPublishCredential = credentialMapping bareAuthorization hAuthorization (encodeUtf8 . unSecret . credSecret)
 
 -- | A declared CodeArtifact service role supplies its fixed Basic username.
 rubyCodeArtifactReadCredential :: CredentialMapping
@@ -41,13 +40,6 @@ rubyCodeArtifactReadCredential = credentialMapping (credentialRecover rubyReadCr
 -- | A declared CodeArtifact writer presents its minted service token as Bearer.
 rubyCodeArtifactPublishCredential :: CredentialMapping
 rubyCodeArtifactPublishCredential = credentialMapping (credentialRecover rubyPublishCredential) hAuthorization (("Bearer " <>) . encodeUtf8 . unSecret . credSecret)
-
-recoverKey :: RequestHeaders -> Maybe ClientCredential
-recoverKey headers = case [value | (name, value) <- headers, name == hAuthorization] of
-    [value] | not (BS.null value), BS.all printable value -> bareCredential . mkSecret <$> rightToMaybe (TE.decodeUtf8' value)
-    _ -> Nothing
-  where
-    printable byte = byte >= 32 && byte <= 126
 
 -- | Reject duplicate or malformed OTP headers before publication body allocation.
 rubyPublishExtras :: RequestHeaders -> Either PublishBodyFault PublishExtras
