@@ -11,12 +11,12 @@ module Ecluse.Core.Registry.Cargo.Reader (
     finishCargoSteps,
 ) where
 
-import Data.Aeson (Value (Null, Object))
+import Data.Aeson (Value (Null))
 import Data.ByteString qualified as BS
 import Data.Map.Strict qualified as Map
 import Data.Primitive.SmallArray (smallArrayFromList)
 
-import Ecluse.Core.Package (InvalidEntry, InvalidEntryKind (InvalidVersionManifest), PackageDetails, PackageInfo (..), PackageName, mkInvalidEntry)
+import Ecluse.Core.Package (InvalidEntry, InvalidEntryKind (InvalidVersionManifest), PackageDetails (pkgVersion), PackageInfo (..), PackageName, mkInvalidEntry)
 import Ecluse.Core.Package.Entry (EntryKey (RecordEntry))
 import Ecluse.Core.Registry.CachedDocument (CachedDoc, cargoCached, cargoPacked)
 import Ecluse.Core.Registry.Cargo.Discovery (CargoDiscovery)
@@ -28,7 +28,6 @@ import Ecluse.Core.Registry.Json.Writer (packTree)
 import Ecluse.Core.Registry.JsonStream (Steps (..), isJsonSpace, readStepsWithEnd)
 import Ecluse.Core.Registry.Metadata.Fetch.Types (DocumentWalk)
 import Ecluse.Core.Registry.Metadata.RecordStream (finishRecordSteps, recordSteps)
-import Ecluse.Core.Registry.ServedDocument (stringField)
 import Ecluse.Core.Security (Limits (maxNestingDepth), checkArtifactCount, checkVersionCountOf)
 import Ecluse.Core.Server.MemoryModel (bufferedChunkCharge, decodedDocumentCharge)
 import Ecluse.Core.Strict (strictElements)
@@ -112,9 +111,7 @@ cargoIndexSteps pay discovery limits name mode = recordSteps reserve consume (Fi
                         Right details -> do
                             let artifacts = scanArtifacts observed + 1
                             checkArtifactCount limits artifacts
-                            let raw = case value of
-                                    Object fields -> fromMaybe "" (stringField "vers" fields)
-                                    _ -> ""
+                            let raw = renderVersion (pkgVersion details)
                                 selected = case mode of FullRead -> True; SelectedRead version -> renderVersion version == raw
                                 rows = case nativeIdentity of
                                     Just unique
