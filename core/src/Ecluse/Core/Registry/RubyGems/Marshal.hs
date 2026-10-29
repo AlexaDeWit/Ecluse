@@ -17,7 +17,7 @@ import Data.IntMap.Strict qualified as IntMap
 import Data.Set qualified as Set
 import Data.Text.Encoding qualified as TE
 
-import Ecluse.Core.Registry (ParseError (..))
+import Ecluse.Core.Registry (ParseError (..), parseRefusal)
 import Ecluse.Core.Security.Limits (Limits (..))
 
 -- | A data tree with resolved, acyclic references and no executable hooks.
@@ -50,9 +50,9 @@ type Decoder = StateT Cursor (Either ParseError)
 -- | Decode exactly one object, refusing unsupported tags, cycles and invalid references.
 decodeMarshal :: Limits -> ByteString -> Either ParseError MarshalValue
 decodeMarshal limits bytes = do
-    when (BS.length bytes > maxMetadataBytes limits) (bad "Marshal body exceeds its byte bound")
+    when (BS.length bytes > maxMetadataBytes limits) (parseRefusal "Marshal body exceeds its byte bound")
     (value, cursor) <- runStateT parser (Cursor bytes IntMap.empty IntMap.empty 0 0 limits)
-    unless (BS.null (remaining cursor)) (bad "Marshal has trailing bytes")
+    unless (BS.null (remaining cursor)) (parseRefusal "Marshal has trailing bytes")
     pure value
   where
     parser = do
@@ -109,7 +109,7 @@ readHash depth = do
     hashKey value = case stripInstanceVariables value of
         MString bytes -> Right (False, bytes)
         MSymbol bytes -> Right (True, bytes)
-        _ -> bad "unsupported Marshal hash key"
+        _ -> parseRefusal "unsupported Marshal hash key"
 
 tracked :: Decoder MarshalValue -> Decoder MarshalValue
 tracked parse = do
@@ -217,10 +217,7 @@ takeBytes count = do
     pure bytes
 
 refuse :: Text -> Decoder a
-refuse = lift . bad
-
-bad :: Text -> Either ParseError a
-bad = Left . ParseError
+refuse = lift . parseRefusal
 
 -- | Remove inert encoding and instance-variable wrappers when reading scalar fields.
 stripInstanceVariables :: MarshalValue -> MarshalValue
@@ -231,4 +228,4 @@ stripInstanceVariables value = value
 marshalText :: MarshalValue -> Either ParseError Text
 marshalText value = case stripInstanceVariables value of
     MString bytes -> first (const (ParseError "Marshal string is not UTF-8")) (TE.decodeUtf8' bytes)
-    _ -> bad "expected Marshal string"
+    _ -> parseRefusal "expected Marshal string"
