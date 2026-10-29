@@ -49,12 +49,11 @@ import Ecluse.BenchLoad.Error (benchFail)
 import Ecluse.BenchLoad.Harness (Driver (DriveHttp), LoadKnobs (..), Target, proxied, urlLoad)
 import Ecluse.BenchLoad.Normalise (BaselineSource (InjectedFallback, MeasuredRtt))
 import Ecluse.BenchLoad.ProxyProcess (AdvisoryFeed (afObject), ProxyProcess, ProxySettings (..), mirrorStateBucket, proxyPort, proxySettings, withProxyProcess)
-import Ecluse.Core.Ecosystem (Ecosystem (Cargo, RubyGems), ecosystemName)
+import Ecluse.Core.Ecosystem (Ecosystem (Cargo, Npm, PyPI, RubyGems), ecosystemName)
 import Ecluse.Core.Package (PackageName, pkgEcosystem)
 import Ecluse.Test.Corpus (CorpusPackage (cpPackage, cpPath), cpName)
 import Ecluse.Test.Corpus qualified as Corpus
-import Ecluse.Test.Corpus.Cargo (encodeCargoValues)
-import Ecluse.Test.Corpus.RubyGems (encodeRubyGemsValues)
+import Ecluse.Test.EcosystemBench (CorpusFraming (JsonFraming, NativeFraming), EcosystemBench (ebFraming), ecosystemBenchFor)
 import Ecluse.Test.Wai (rebaseAuthority)
 
 -- | Boot a proxy over two stubs with the given cache TTL and optional entry bound.
@@ -77,9 +76,11 @@ withProxyPortsConfigured ecosystem knobs configure privateApp publicApp mkMix bo
                 withProxyProcess settings{psMirrorStatePort = psMirrorStatePort settings <|> nativeState} publicPort (Just privatePort) $ \proxy ->
                     body proxy (mkMix (proxyPort proxy))
   where
-    withNativeState advisory privatePort publicPort use
-        | ecosystem == Cargo = withCopyState (lkUpstreamLatencyMicros knobs) privatePort publicPort mirrorStateBucket advisory (use . Just)
-        | otherwise = use Nothing
+    withNativeState advisory privatePort publicPort use = case ecosystem of
+        Npm -> use Nothing
+        PyPI -> use Nothing
+        Cargo -> withCopyState (lkUpstreamLatencyMicros knobs) privatePort publicPort mirrorStateBucket advisory (use . Just)
+        RubyGems -> use Nothing
     knobSettings =
         (proxySettings ecosystem 60)
             { psServeMaxInFlight = lkServeMaxInFlight knobs
@@ -112,10 +113,10 @@ loadCorpusCuts cut packages = Map.fromList <$> traverse load packages
     load cp = do
         bytes <- readCapture cp
         document <- either (\reason -> benchFail ("bench-load: cannot cut " <> toText (cpPath cp) <> ": " <> toText reason)) pure (cut (cpPackage cp) (toStrict bytes))
-        body <- case pkgEcosystem (cpPackage cp) of
-            Cargo -> either benchFail evaluate (encodeCargoValues document)
-            RubyGems -> either benchFail evaluate (encodeRubyGemsValues document)
-            _ -> evaluate (toStrict (encode document))
+        provider <- maybe (benchFail ("bench-load: no corpus provider for " <> toText (cpPath cp))) pure (ecosystemBenchFor (pkgEcosystem (cpPackage cp)))
+        body <- case ebFraming provider of
+            JsonFraming -> evaluate (toStrict (encode document))
+            NativeFraming _ encodeValues -> either benchFail evaluate (encodeValues document)
         pure (cpName cp, toLazy body)
 
 -- | Each package's URL on the proxy's port, repeated by its weight.
