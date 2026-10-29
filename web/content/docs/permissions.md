@@ -15,8 +15,8 @@ reference = "/docs/deployment/#role-identities-and-least-privilege"
 
 | Service | Needs |
 | --- | --- |
-| Proxy without a worker | Queue send and queue attributes when mirroring. Advisory reads when configured. PyPI mirror-state reads and prefix listing. CodeArtifact repository descriptions for private topology checks. |
-| Mirror worker | Queue receive, delete, visibility changes, and attributes. Mirror repository reads and publication. Advisory reads. PyPI state reads, prefix listing, and conditional writes. |
+| Proxy without a worker | Queue send and queue attributes when mirroring. Advisory reads when configured. Configured mirror-state reads and prefix listing (PyPI, Cargo, RubyGems). CodeArtifact repository descriptions for private topology checks. |
+| Mirror worker | Queue receive, delete, visibility changes, and attributes. Mirror repository reads and publication. Advisory reads. Configured mirror-state reads, prefix listing, and conditional writes (PyPI, Cargo, RubyGems). |
 | Advisory publisher | Advisory object read/write and prefix-scoped listing. Access to OSV and EPSS feeds. |
 | Cleanup service | Inventory and metadata reads for both maintained stores. Consent inspection. Deletion only on those targets. Advisory reads and private topology inspection. |
 | Caller | Read permission on the private read repository. Publication permission on the first-party repository if they publish. |

@@ -21,7 +21,7 @@ Add the deny to the intended policy and make sure it applies at revocation. Upda
 
 The mirror repository and private cache each need independent maintenance credentials and consent. Keep the first-party publication repository separate.
 
-For PyPI, cleanup requires CodeArtifact. Generic PyPI registries can still support reads and writes, but do not provide this maintenance capability.
+For PyPI, Cargo, and RubyGems, cleanup requires CodeArtifact. Generic registries for those ecosystems can still support reads and writes, but do not provide this maintenance capability.
 
 ## Preview the result {#preview}
 
