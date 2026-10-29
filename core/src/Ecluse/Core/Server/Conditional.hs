@@ -4,9 +4,11 @@
 
 {- | Conditional-GET and @ETag@ handling, split by how the served body relates to upstream's.
 A pass-through body (an artifact) is upstream's bytes, so the client's validators are relayed
-upstream and an upstream @304@ is passed back. A transformed body (every merged listing) takes our
-own 'ETag', derived from the serve's inputs rather than hashed over its output. It can be stale
-only in the safe direction: a spurious @200@, never a wrong @304@, and a @304@ costs no assembly.
+upstream and an upstream @304@ is passed back. A merged listing on the packument path takes our own
+'ETag', derived from the serve's inputs rather than hashed over its output. It can be stale only in
+the safe direction (a spurious @200@, never a wrong @304@), and a @304@ costs no assembly. RubyGems
+Compact Index replies and compact specifications hash their rendered identity bytes instead, so a
+@304@ skips compression but still pays the fetch, merge or serialisation.
 -}
 module Ecluse.Core.Server.Conditional (
     -- * Our own ETag (transformed bodies)
