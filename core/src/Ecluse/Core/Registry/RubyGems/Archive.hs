@@ -16,6 +16,7 @@ module Ecluse.Core.Registry.RubyGems.Archive (
 ) where
 
 import Conduit
+import Control.Monad.Except (throwError)
 import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as BSL
 import Data.Map.Strict qualified as Map
@@ -29,7 +30,7 @@ import Ecluse.Core.Package (PackageName)
 import Ecluse.Core.Package.Hash (HashAlg (SHA512), computeDigest, hexDigestText, sha256Hex)
 import Ecluse.Core.Registry (ParseError (..), parseRefusal)
 import Ecluse.Core.Registry.Archive.Inflate (InflateFormat (GzipMembers), inflateBounded, splitArchiveCharge, withInflatedChunks)
-import Ecluse.Core.Registry.Archive.Tar (TarMember (..), scanTar, sourceReader, tarContents, tarMembers)
+import Ecluse.Core.Registry.Archive.Tar (TarMember (..), TarScan, scanTar, sourceReader, tarContents, tarMembers)
 import Ecluse.Core.Registry.RubyGems.Archive.Metadata
 import Ecluse.Core.Registry.RubyGems.Archive.Yaml
 import Ecluse.Core.Registry.RubyGems.CompactSpec (GemSpecification (..), specificationCoordinate)
@@ -52,48 +53,54 @@ instance Show GemArchive where
 inspectGemArchive :: Limits -> (Int -> IO ()) -> ByteString -> IO (Either ParseError GemArchive)
 inspectGemArchive limits charge bytes
     | BS.length bytes > maxMirrorArtifactBytes limits = pure (parseRefusal "gem archive exceeds its byte bound")
-    | otherwise = do
-        outer <- scanTar limits{maxMetadataBytes = maxMirrorArtifactBytes limits} charge (\parts -> Right (parts `elem` [["metadata.gz"], ["data.tar.gz"], ["checksums.yaml.gz"]])) (\consume -> consume (yield bytes))
-        case outer >>= envelope of
-            Left fault -> pure (Left fault)
-            Right (metadataGzip, dataGzip, checksumsGzip) -> do
-                let retained = BS.length bytes + BS.length metadataGzip + BS.length dataGzip + BS.length checksumsGzip
-                    pay extra = charge (retained + extra)
-                metadataBytes <- inflateMetadata pay metadataGzip
-                checksumBytes <- inflateMetadata (\extra -> pay (either (const 0) ((3 *) . BS.length) metadataBytes + extra)) checksumsGzip
-                case (metadataBytes, checksumBytes) of
-                    (Right raw, Right sums) -> do
-                        let nativePay extra = pay (128 * (BS.length raw + BS.length sums) + extra)
-                        parsed <- decodeYaml limits nativePay raw
-                        checksums <- decodeYaml limits nativePay sums
-                        case (parsed >>= parseGemMetadata, checksums >>= verifyChecksums metadataGzip dataGzip) of
-                            (Right metadata, Right ()) -> do
-                                (decoderCharge, treeCharge) <- splitArchiveCharge nativePay
-                                let innerLimits = limits{maxMirrorArtifactBytes = maxMirrorArtifactBytes limits - BS.length raw - BS.length sums}
-                                inner <- scanTar innerLimits treeCharge (const (Right False)) (\consume -> withInflatedChunks (GzipMembers 1) decoderCharge dataGzip (consume . sourceReader))
-                                case inner of
-                                    Left fault -> pure (Left fault)
-                                    Right scan -> do
-                                        let inventory = Map.keysSet (Map.filter (/= Directory) (tarMembers scan))
-                                        if inventory /= Set.fromList (metadataFiles metadata)
-                                            then pure (parseRefusal "gem data inventory disagrees with metadata files")
-                                            else do
-                                                digest <- evaluate (sha256Hex bytes)
-                                                Right <$> evaluate (GemArchive bytes metadata inventory digest)
-                            (Left fault, _) -> pure (Left fault)
-                            (_, Left fault) -> pure (Left fault)
-                    (Left fault, _) -> pure (Left fault)
-                    (_, Left fault) -> pure (Left fault)
+    | otherwise = runExceptT $ do
+        (metadataGzip, dataGzip, checksumsGzip) <- ExceptT (envelopeMembers limits charge bytes)
+        let pay extra = charge (BS.length bytes + BS.length metadataGzip + BS.length dataGzip + BS.length checksumsGzip + extra)
+        (raw, sums) <- ExceptT (inflateMembers limits pay metadataGzip checksumsGzip)
+        let nativePay extra = pay (128 * (BS.length raw + BS.length sums) + extra)
+        metadata <- ExceptT (decodeMembers limits nativePay metadataGzip dataGzip raw sums)
+        inventory <- ExceptT (dataInventory limits nativePay (BS.length raw + BS.length sums) dataGzip)
+        unless (inventory == Set.fromList (metadataFiles metadata)) (throwError (ParseError "gem data inventory disagrees with metadata files"))
+        digest <- evaluate (sha256Hex bytes)
+        evaluate (GemArchive bytes metadata inventory digest)
+
+-- The outer tar's metadata, data and checksum members, each still compressed.
+envelopeMembers :: Limits -> (Int -> IO ()) -> ByteString -> IO (Either ParseError (ByteString, ByteString, ByteString))
+envelopeMembers limits charge bytes = (>>= envelope) <$> scanTar limits{maxMetadataBytes = maxMirrorArtifactBytes limits} charge (\parts -> Right (parts `elem` [["metadata.gz"], ["data.tar.gz"], ["checksums.yaml.gz"]])) (\consume -> consume (yield bytes))
+
+envelope :: TarScan -> Either ParseError (ByteString, ByteString, ByteString)
+envelope scan = do
+    let members = tarMembers scan
+        mandatory = ["metadata.gz", "data.tar.gz", "checksums.yaml.gz"]
+        allowed = mandatory <> map (<> ".sig") mandatory
+    unless (all (`elem` allowed) (Map.keys members) && all (== Regular) (Map.elems members)) (parseRefusal "unsupported gem envelope member")
+    traverse_ (\name -> unless (Map.member name members) (parseRefusal "missing required gem envelope member")) mandatory
+    let content name = maybeToRight (ParseError "missing gem member payload") (Map.lookup name (tarContents scan))
+    (,,) <$> content "metadata.gz" <*> content "data.tar.gz" <*> content "checksums.yaml.gz"
+
+-- Inflate both small members, the checksums charged on top of the inflated metadata. Both always run.
+inflateMembers :: Limits -> (Int -> IO ()) -> ByteString -> ByteString -> IO (Either ParseError (ByteString, ByteString))
+inflateMembers limits pay metadataGzip checksumsGzip = do
+    metadataBytes <- inflate pay metadataGzip
+    checksumBytes <- inflate (\extra -> pay (either (const 0) ((3 *) . BS.length) metadataBytes + extra)) checksumsGzip
+    pure ((,) <$> metadataBytes <*> checksumBytes)
   where
-    inflateMetadata = inflateBounded (GzipMembers 1) "gem compressed metadata exceeds its inflated byte bound" (maxMetadataBytes limits)
-    envelope scan = do
-        let members = tarMembers scan
-            mandatory = ["metadata.gz", "data.tar.gz", "checksums.yaml.gz"]
-            allowed = mandatory <> map (<> ".sig") mandatory
-        unless (all (`elem` allowed) (Map.keys members) && all (== Regular) (Map.elems members)) (parseRefusal "unsupported gem envelope member")
-        traverse_ (\name -> unless (Map.member name members) (parseRefusal "missing required gem envelope member")) mandatory
-        let content name = maybeToRight (ParseError "missing gem member payload") (Map.lookup name (tarContents scan))
-        (,,) <$> content "metadata.gz" <*> content "data.tar.gz" <*> content "checksums.yaml.gz"
+    inflate = inflateBounded (GzipMembers 1) "gem compressed metadata exceeds its inflated byte bound" (maxMetadataBytes limits)
+
+-- Decode both YAML documents, then the metadata schema ahead of the member checksums.
+decodeMembers :: Limits -> (Int -> IO ()) -> ByteString -> ByteString -> ByteString -> ByteString -> IO (Either ParseError GemMetadata)
+decodeMembers limits nativePay metadataGzip dataGzip raw sums = do
+    parsed <- decodeYaml limits nativePay raw
+    checksums <- decodeYaml limits nativePay sums
+    pure ((parsed >>= parseGemMetadata) <* (checksums >>= verifyChecksums metadataGzip dataGzip))
+
+-- The inner data tar's non-directory members, within what the decoded metadata left of the artifact bound.
+dataInventory :: Limits -> (Int -> IO ()) -> Int -> ByteString -> IO (Either ParseError (Set Text))
+dataInventory limits nativePay decoded dataGzip = do
+    (decoderCharge, treeCharge) <- splitArchiveCharge nativePay
+    let innerLimits = limits{maxMirrorArtifactBytes = maxMirrorArtifactBytes limits - decoded}
+    inner <- scanTar innerLimits treeCharge (const (Right False)) (\consume -> withInflatedChunks (GzipMembers 1) decoderCharge dataGzip (consume . sourceReader))
+    pure (Map.keysSet . Map.filter (/= Directory) . tarMembers <$> inner)
 
 verifyChecksums :: ByteString -> ByteString -> YamlValue -> Either ParseError ()
 verifyChecksums metadataBytes dataBytes value = do
