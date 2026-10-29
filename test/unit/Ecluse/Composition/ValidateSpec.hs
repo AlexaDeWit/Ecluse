@@ -49,6 +49,7 @@ import Ecluse.Composition.Support (
     overrideEnv,
     publicGateEnv,
     pypiMirrorEnv,
+    rubyDeprecationRefusal,
     rubyInstallRefusal,
     rubyScopeRefusal,
     staticEnvVars,
@@ -314,6 +315,11 @@ ruleBlocksSpec = describe "vetBoot -- ecosystem rule blocks" $ do
         it "reports independent Ruby and PyPI installation blocks" $ do
             errors <- refusalsFor role (overrideEnv "ECLUSE_MOUNTS__RUBYGEMS__ENABLED" "true" (overrideEnv "ECLUSE_RULES" installRule bothMounts))
             errors `shouldMatchList` [rubyInstallRefusal, installBlock]
+        it "refuses a shared and a mount-specific Ruby deprecation deny" $ do
+            refusalsFor role (overrideEnv "ECLUSE_RULES" deprecatedRule rubyBeside)
+                `shouldReturn` [rubyDeprecationRefusal]
+            refusalsFor role (overrideEnv "ECLUSE_MOUNTS__RUBYGEMS__RULES" deprecatedRule rubyBeside)
+                `shouldReturn` [rubyDeprecationRefusal]
         it "clears the same-key suppression in the PyPI patch" $
             refusalsFor
                 role
@@ -340,7 +346,10 @@ ruleBlocksSpec = describe "vetBoot -- ecosystem rule blocks" $ do
                 `shouldReturn` []
   where
     bothMounts = overrideEnv "ECLUSE_MOUNTS__PYPI__ENABLED" "true" publicGateEnv
+    -- npm supports the deprecation deny, so only the Ruby mount refuses it.
+    rubyBeside = overrideEnv "ECLUSE_MOUNTS__RUBYGEMS__ENABLED" "true" publicGateEnv
     installRule = "{\"custom-code\":{\"type\":\"DenyInstallTimeExecution\"}}"
+    deprecatedRule = "{\"custom-deprecated\":{\"type\":\"DenyIfDeprecated\"}}"
     scopeRule = "{\"custom-scope\":{\"type\":\"AllowScope\",\"scope\":\"acme\"}}"
     installBlock = RuleBlockedOnMount PyPI DenyInstallTimeExecutionType "Most PyPI releases offer a source distribution, which runs its own build on install, so this rule would deny nearly every release."
     scopeBlock = RuleBlockedOnMount PyPI AllowScopeType "A PyPI project name has no scope, so this rule can never match one."
