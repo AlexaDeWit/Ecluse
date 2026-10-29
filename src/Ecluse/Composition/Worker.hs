@@ -140,8 +140,7 @@ workerPolicyFor env requirements deps publish artifactMaxBytes =
     client pay = case mirrorWorkerRead requirements of
         ChargedWorkerRead nativeRead ->
             pure . uncachedPublicMetadataClient . readCapability publicOrigin $
-                PrepareRead $ \origin ->
-                    fmap (chargingSelectedReads decodedDocumentCharge pay) <$> prepareRead nativeRead origin
+                PrepareRead (fmap (fmap (chargingSelectedReads decodedDocumentCharge pay)) . prepareRead nativeRead)
         NativeChargedWorkerRead nativeRead ->
             (\origin -> uncachedPublicMetadataClient (readCapability origin nativeRead))
                 <$> chargingNativeReads (metadataChargeFactors (pdMetadata deps)) pay publicOrigin
