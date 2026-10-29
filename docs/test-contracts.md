@@ -146,9 +146,9 @@ Its independent Aeson readers inspect native wire version and artifact digest fi
 
 ### Full package-store subjects
 
-Verdaccio npm, CodeArtifact npm, CodeArtifact PyPI and CodeArtifact Cargo each run the same ten cases through `fullPackageStoreContract`.
+Verdaccio npm and CodeArtifact npm, PyPI, Cargo and RubyGems each run the same ten cases through `fullPackageStoreContract`.
 Each ID below has the prefix `package-store/<subject>/`.
-The subjects are `verdaccio`, `codeartifact`, `codeartifact-pypi` and `codeartifact-cargo`.
+The subjects are `verdaccio`, `codeartifact`, `codeartifact-pypi`, `codeartifact-cargo` and `codeartifact-rubygems`.
 The CodeArtifact profiles run in the `backend-conformance` CI job and use the `codeartifact` backend identity.
 The six family names come from an independent completion definition, so removing a family
 from the provider catalogue cannot make its absence pass.
@@ -178,7 +178,7 @@ Credential tests use local HTTP stubs. Telemetry tests use the local Collector a
 
 ### Negative controls and lifecycle
 
-CodeArtifact registration checks reject a missing PyPI or Cargo profile before fixture acquisition.
+CodeArtifact registration checks reject a missing PyPI, Cargo or RubyGems profile before fixture acquisition.
 The npm and PyPI integrity controls alter successful production reads to change bytes, digests or consumer metadata.
 A PyPI control also removes distribution files.
 Each control requires an assertion failure and proves that the altered read ran.
