@@ -31,9 +31,9 @@ The caller's credential authorises private reads and, by default, publication. T
 
 A worker token does not give the caller private access. An explicit private authentication refusal stops the request rather than falling back to a public source.
 
-Cargo preserves native `401` and its credential-provider retry challenge. A real `403` remains a refusal.
-Private discovery follows edge authentication and the current caller's authority. It stays uncached across callers.
-Discovery failure can prevent a new Cargo client from bootstrapping during a trusted-registry outage.
+Cargo and RubyGems keep their native refusal statuses, which the [private access policy](@/docs/configuration.md#first-party-namespaces) lists.
+Cargo's private discovery follows edge authentication and the current caller's authority. It stays uncached across callers.
+The [Cargo protocol reference](@/docs/protocol-support.md#cargo) describes discovery failure during a trusted-registry outage.
 
 When `server.authToken` is set, the shared edge token also travels to the private registry. That mode cannot preserve a different registry identity for each caller.
 
