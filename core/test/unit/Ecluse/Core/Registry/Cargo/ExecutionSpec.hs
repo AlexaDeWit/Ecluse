@@ -5,10 +5,8 @@
 -- | Native evidence binds exact admitted identities and keeps private reads outside public retention.
 module Ecluse.Core.Registry.Cargo.ExecutionSpec (spec) where
 
-import Codec.Compression.GZip qualified as GZip
 import Control.Concurrent.MVar qualified as MVar
 import Data.ByteString qualified as BS
-import Data.ByteString.Lazy qualified as BSL
 import Test.Hspec
 import UnliftIO.Async (cancel, race, wait, withAsync)
 
@@ -27,7 +25,6 @@ import Ecluse.Core.Security (Limits (..), defaultLimits, mkProgressFloor)
 import Ecluse.Core.Version (mkVersion)
 import Ecluse.Test.Deadline (withSweeper)
 import Ecluse.Test.Package (sampleArtifact, sampleDetails, unsafeHash)
-import Ecluse.Test.Registry.Archive (tarBytes)
 import Ecluse.Test.Registry.Cargo.Fixtures qualified as Fixtures
 import Ecluse.Test.Registry.Cargo.Metadata (cargoTestDiscovery)
 import Ecluse.Test.Support (expectRight)
@@ -172,7 +169,7 @@ spec = describe "Cargo install evidence" $ do
         resolved recovered (details "1.2.3" archive) `shouldReturn` InstallDetermined NoCodeOnInstall
         readIORef count `shouldReturn` 1
     it "refuses unsupported effective manifests instead of asserting no execution" $ withSweeper $ \deadlines -> do
-        archive <- compress <$> tarBytes [("example-1.2.3/Cargo.toml", "[package]\nname='example'\nversion='1.2.3'\nbuild=['one.rs']\n")]
+        archive <- Fixtures.cargoCrateArchive "example" "1.2.3" [("Cargo.toml", "[package]\nname='example'\nversion='1.2.3'\nbuild=['one.rs']\n")]
         provider <- newCargoInstallEvidence deadlines defaultLimits
         evidenceReads <- newInstallEvidenceReads provider (evidenceContext (\_ _ _ -> pure (Right archive)))
         resolved evidenceReads (details "1.2.3" archive) >>= (`shouldSatisfy` permanentFailure)
@@ -249,16 +246,13 @@ fixture :: Text -> [(FilePath, ByteString)] -> IO ByteString
 fixture = namedFixture "example" "example"
 
 namedFixture :: Text -> Text -> Text -> [(FilePath, ByteString)] -> IO ByteString
-namedFixture rootName manifestName version extras = compress <$> tarBytes [(toString rootName <> "-" <> toString version <> "/" <> path, body) | (path, body) <- ("Cargo.toml", "[package]\nname='" <> encodeUtf8 manifestName <> "'\nversion='" <> encodeUtf8 version <> "'\n") : extras]
+namedFixture rootName manifestName version extras = Fixtures.cargoCrateArchive rootName version (("Cargo.toml", "[package]\nname='" <> encodeUtf8 manifestName <> "'\nversion='" <> encodeUtf8 version <> "'\n") : extras)
 
 projectedSubject :: PackageName -> Text -> Text -> ByteString -> IO PackageDetails
 projectedSubject requested name version archive = do
     discovery <- expectRight cargoTestDiscovery
     let release = (Fixtures.minimalCargoRelease name version){Fixtures.releaseArchive = archive, Fixtures.releaseChecksum = sha256Hex archive}
     expectRight (projectCargoRecord requested (RecordEntry 11) discovery (Fixtures.cargoIndexRecord release))
-
-compress :: BSL.ByteString -> ByteString
-compress = BSL.toStrict . GZip.compress
 
 unavailable :: ReadFault
 unavailable = ReadFault (WillResolve Nothing) EvaluationFailed InstallSignalUnread

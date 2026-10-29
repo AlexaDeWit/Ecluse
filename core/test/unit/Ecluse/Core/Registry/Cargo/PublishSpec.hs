@@ -5,7 +5,6 @@
 -- | Native publication preserves archive bytes and checks configured API authority before writes.
 module Ecluse.Core.Registry.Cargo.PublishSpec (spec) where
 
-import Codec.Compression.GZip qualified as GZip
 import Data.Aeson (Value (..), encode, object, (.=))
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.ByteString qualified as BS
@@ -35,8 +34,7 @@ import Ecluse.Core.Version (renderVersion)
 import Ecluse.Test.Deadline (withExchangeClient)
 import Ecluse.Test.Package (hexSha256Of)
 import Ecluse.Test.Port (passthroughTracingPort)
-import Ecluse.Test.Registry.Archive (tarBytes)
-import Ecluse.Test.Registry.Cargo.Fixtures (CargoRelease (releaseArchive, releaseChecksum), cargoIndexRecord, cargoUpload, cargoUploadMetadata, cargoUploadWithMetadata)
+import Ecluse.Test.Registry.Cargo.Fixtures (CargoRelease (releaseArchive, releaseChecksum), cargoCrateArchive, cargoIndexRecord, cargoUpload, cargoUploadMetadata, cargoUploadWithMetadata)
 import Ecluse.Test.Registry.Cargo.Metadata (cargoTestName)
 import Ecluse.Test.Registry.Cargo.Publish (cargoPublicationFixture, cargoResolverAgreements, cargoResolverArchive, cargoResolverContradictions, cargoResolverMetadata, cargoSourceVersion)
 import Ecluse.Test.Registry.Cargo.Reference (UploadFrame (..), referenceUpload)
@@ -73,7 +71,7 @@ spec = do
             withRoutedStub (targetReply "/registry") $ \stub -> do
                 original <- cargoPublicationFixture
                 let manifest = "[package]\nname='fixture'\nversion='1.0.0'\nrust-version='1.74'\n[dependencies]\ndependency='1'\n"
-                archive <- LBS.toStrict . GZip.compress <$> tarBytes [("fixture-1.0.0/Cargo.toml", manifest), ("fixture-1.0.0/src/lib.rs", "pub fn owned() {}\n")]
+                archive <- cargoCrateArchive "fixture" "1.0.0" [("Cargo.toml", manifest), ("src/lib.rs", "pub fn owned() {}\n")]
                 let release = original{releaseArchive = archive, releaseChecksum = hexSha256Of archive}
                 source <- case cargoIndexRecord release of
                     Object fields -> pure (Object (KeyMap.insert "deps" (Array (fromList [object ["name" .= ("dependency" :: Text), "req" .= ("^1" :: Text), "registry" .= Null]])) (KeyMap.delete "features" fields)))
@@ -93,7 +91,7 @@ spec = do
         it "refuses defaulted mirror links contradictions before destination discovery or upload" $ do
             original <- cargoPublicationFixture
             let manifest = "[package]\nname='fixture'\nversion='1.0.0'\nrust-version='1.74'\nlinks='native_foo'\nbuild='build.rs'\n"
-            archive <- LBS.toStrict . GZip.compress <$> tarBytes [("fixture-1.0.0/Cargo.toml", manifest), ("fixture-1.0.0/build.rs", "fn main() {}\n"), ("fixture-1.0.0/src/lib.rs", "pub fn owned() {}\n")]
+            archive <- cargoCrateArchive "fixture" "1.0.0" [("Cargo.toml", manifest), ("build.rs", "fn main() {}\n"), ("src/lib.rs", "pub fn owned() {}\n")]
             let release = original{releaseArchive = archive, releaseChecksum = hexSha256Of archive}
             for_ [(Nothing, False), (Just Null, False), (Just (String "native_bar"), False), (Just (String "native_foo"), True)] $ \(links, agrees) ->
                 withRoutedStub (targetReply "/registry") $ \stub -> do
@@ -120,7 +118,7 @@ spec = do
             -- Keep raw archive data within the shared cap, then exceed it through JSON escaping.
             for_ [(BS.replicate 1024 65, True), (BS.replicate 1024 34, False)] $ \(readme, shouldPublish) ->
                 withRoutedStub (targetReply "/registry") $ \stub -> do
-                    archive <- LBS.toStrict . GZip.compress <$> tarBytes [("fixture-1.0.0/Cargo.toml", manifest), ("fixture-1.0.0/README.md", readme), ("fixture-1.0.0/src/lib.rs", "pub fn owned() {}\n")]
+                    archive <- cargoCrateArchive "fixture" "1.0.0" [("Cargo.toml", manifest), ("README.md", readme), ("src/lib.rs", "pub fn owned() {}\n")]
                     let release = original{releaseArchive = archive, releaseChecksum = hexSha256Of archive}
                     doc <- cargoSourceVersion (cargoIndexRecord release)
                     withExchangeClient (newManager defaultManagerSettings) $ \exchanges -> do
@@ -170,8 +168,8 @@ spec = do
                         map capMethod captures `shouldBe` ["GET"]
         it "refuses checksum-verified archives and selected text faults before destination discovery" $ do
             original <- cargoPublicationFixture
-            missingManifest <- LBS.toStrict . GZip.compress <$> tarBytes [("fixture-1.0.0/src/lib.rs", "owned")]
-            invalidReadme <- LBS.toStrict . GZip.compress <$> tarBytes [("fixture-1.0.0/README.md", BS.singleton 255), ("fixture-1.0.0/Cargo.toml", "[package]\nname='fixture'\nversion='1.0.0'\nrust-version='1.74'\n")]
+            missingManifest <- cargoCrateArchive "fixture" "1.0.0" [("src/lib.rs", "owned")]
+            invalidReadme <- cargoCrateArchive "fixture" "1.0.0" [("README.md", BS.singleton 255), ("Cargo.toml", "[package]\nname='fixture'\nversion='1.0.0'\nrust-version='1.74'\n")]
             for_ [(missingManifest, "Cargo archive lacks its effective Cargo.toml"), (invalidReadme, "Cargo publication text is not UTF-8")] $ \(archive, reason) ->
                 withRoutedStub (targetReply "/registry") $ \stub -> do
                     let release = original{releaseArchive = archive, releaseChecksum = hexSha256Of archive}

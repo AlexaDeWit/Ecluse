@@ -18,6 +18,7 @@ module Ecluse.Test.Registry.Cargo.Fixtures (
     cargoLeafReleaseWithManifest,
 
     -- * Registry and publication bytes
+    cargoCrateArchive,
     cargoShard,
     cargoArchivePath,
     cargoArchivePathFor,
@@ -27,6 +28,7 @@ module Ecluse.Test.Registry.Cargo.Fixtures (
     cargoUpload,
     cargoUploadWithMetadata,
     cargoUploadMetadata,
+    cargoUploadFrame,
     cargoFixtureLock,
     writeCargoRegistry,
 ) where
@@ -182,9 +184,12 @@ cargoLeafReleaseWithManifest name version changeManifest = do
 
 packageCargoRelease :: CargoCrate -> [(FilePath, ByteString)] -> Text -> IO CargoRelease
 packageCargoRelease spec files readme = do
-    let prefix = toString (crateName spec <> "-" <> crateVersion spec)
-    archive <- LBS.toStrict . GZip.compress <$> tarBytes [(prefix </> path, bytes) | (path, bytes) <- files]
+    archive <- cargoCrateArchive (crateName spec) (crateVersion spec) files
     pure (CargoRelease spec archive (hexSha256Of archive) readme)
+
+-- | Gzip a tar of the entries beneath the native @<name>-<version>/@ archive root.
+cargoCrateArchive :: Text -> Text -> [(FilePath, ByteString)] -> IO ByteString
+cargoCrateArchive name version entries = LBS.toStrict . GZip.compress <$> tarBytes [(toString (name <> "-" <> version) </> path, bytes) | (path, bytes) <- entries]
 
 cratesIoLockSource :: Text
 cratesIoLockSource = "registry+https://github.com/rust-lang/crates.io-index"
@@ -291,13 +296,14 @@ cargoUpload release = cargoUploadWithMetadata (cargoUploadMetadata release) (rel
 -- | Reuse native length framing when malformed metadata must reach the product unchanged.
 cargoUploadWithMetadata :: Value -> ByteString -> Either Text ByteString
 cargoUploadWithMetadata value archiveBytes = do
-    metadata <- frame (LBS.toStrict (encode value))
-    archive <- frame archiveBytes
-    pure (LBS.toStrict (toLazyByteString (metadata <> archive)))
-  where
-    frame bytes = do
+    let metadata = LBS.toStrict (encode value)
+    for_ [metadata, archiveBytes] $ \bytes ->
         unless (toInteger (BS.length bytes) <= toInteger (maxBound :: Word32)) (Left "Cargo fixture exceeds a uint32 frame")
-        pure (word32LE (fromIntegral (BS.length bytes)) <> byteString bytes)
+    pure (cargoUploadFrame metadata <> cargoUploadFrame archiveBytes)
+
+-- | One native section: a uint32 little-endian length, then the bytes. Lengths past a uint32 wrap.
+cargoUploadFrame :: ByteString -> ByteString
+cargoUploadFrame bytes = LBS.toStrict (toLazyByteString (word32LE (fromIntegral (BS.length bytes)) <> byteString bytes))
 
 -- | Seed the owned consumer's complete lock graph with exact source identities and checksums.
 cargoFixtureLock :: Text -> [CargoRelease] -> Text

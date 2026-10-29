@@ -70,7 +70,7 @@ cargoNativeFixture =
 
 -- | Local archive paths retain each explicit native coordinate.
 cargoArchiveRoute :: Text -> Text -> Text
-cargoArchiveRoute name version = "/cargo/crates/" <> name <> "/" <> version <> "/" <> name <> "-" <> version <> ".crate"
+cargoArchiveRoute name version = "/cargo/" <> cargoArchivePathFor name version
 
 -- | Load only repository-owned source bytes through the independent fixture builder.
 cargoFixtureReleases :: IO [CargoRelease]

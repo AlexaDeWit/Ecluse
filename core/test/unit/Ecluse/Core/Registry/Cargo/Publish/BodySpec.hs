@@ -8,7 +8,6 @@ module Ecluse.Core.Registry.Cargo.Publish.BodySpec (spec) where
 import Data.Aeson (Value (..), encode, object, toJSON, (.=))
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.ByteString qualified as BS
-import Data.ByteString.Builder (byteString, toLazyByteString, word32LE)
 import Data.ByteString.Lazy qualified as LBS
 import Data.Text qualified as T
 import Test.Hspec
@@ -17,7 +16,7 @@ import Ecluse.Core.Registry (ParseError (..))
 import Ecluse.Core.Registry.Cargo.Publish.Body
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Core.Security.Limits (Limits (..), defaultLimits)
-import Ecluse.Test.Registry.Cargo.Fixtures (CargoRelease (releaseArchive), cargoUpload, cargoUploadMetadata)
+import Ecluse.Test.Registry.Cargo.Fixtures (CargoRelease (releaseArchive), cargoUpload, cargoUploadFrame, cargoUploadMetadata)
 import Ecluse.Test.Registry.Cargo.Publish (cargoPublicationFixture, observeCargoRelay)
 import Ecluse.Test.Registry.Cargo.Reference (UploadFrame (UploadFrame), referenceUpload)
 import Ecluse.Test.Support (expectRight)
@@ -60,27 +59,27 @@ spec = describe "Cargo upload framing" $ do
         release <- cargoPublicationFixture
         let metadata = LBS.toStrict (encode (cargoUploadMetadata release))
             archive = releaseArchive release
-            bytes = frame metadata <> frame archive
+            bytes = cargoUploadFrame metadata <> cargoUploadFrame archive
             requestLimits = defaultLimits{maxPublishRequestBytes = BS.length bytes}
             metadataLimits = defaultLimits{maxMetadataBytes = BS.length metadata}
             archiveLimits = defaultLimits{maxMirrorArtifactBytes = BS.length archive}
         for_ [requestLimits, metadataLimits, archiveLimits] $ \limits ->
             fmap uploadArchive (decodeUpload limits bytes) `shouldBe` Right archive
         decodeUpload requestLimits (bytes <> " ") `shouldBe` Left (ParseError "Cargo upload exceeds its request byte bound")
-        decodeUpload metadataLimits (frame (metadata <> " ") <> frame archive) `shouldBe` Left (ParseError "Cargo upload section exceeds its byte bound")
-        decodeUpload archiveLimits (frame metadata <> frame (archive <> " ")) `shouldBe` Left (ParseError "Cargo upload section exceeds its byte bound")
+        decodeUpload metadataLimits (cargoUploadFrame (metadata <> " ") <> cargoUploadFrame archive) `shouldBe` Left (ParseError "Cargo upload section exceeds its byte bound")
+        decodeUpload archiveLimits (cargoUploadFrame metadata <> cargoUploadFrame (archive <> " ")) `shouldBe` Left (ParseError "Cargo upload section exceeds its byte bound")
     it "rejects a fully framed empty archive before reserving metadata" $ do
         release <- cargoPublicationFixture
-        let bytes = frame (LBS.toStrict (encode (cargoUploadMetadata release))) <> frame BS.empty
+        let bytes = cargoUploadFrame (LBS.toStrict (encode (cargoUploadMetadata release))) <> cargoUploadFrame BS.empty
         paid <- newIORef ([] :: [Int])
         readUpload defaultLimits (\cost -> modifyIORef' paid (cost :)) bytes `shouldReturn` Left (ParseError "Cargo upload has no archive")
         readIORef paid `shouldReturn` []
     it "rejects duplicate identity keys and an incomplete JSON document" $ do
         release <- cargoPublicationFixture
         for_ ["{\"name\":\"fixture\",\"name\":\"other\"}", "{\"name\":\"fixture\""] $ \json ->
-            decodeUpload defaultLimits (frame json <> frame (releaseArchive release)) `shouldBe` Left (ParseError "Cargo upload metadata is malformed or exceeds its nesting bound")
+            decodeUpload defaultLimits (cargoUploadFrame json <> cargoUploadFrame (releaseArchive release)) `shouldBe` Left (ParseError "Cargo upload metadata is malformed or exceeds its nesting bound")
         paid <- newIORef ([] :: [Int])
-        readUpload defaultLimits (\cost -> modifyIORef' paid (cost :)) (frame "{" <> frame (releaseArchive release))
+        readUpload defaultLimits (\cost -> modifyIORef' paid (cost :)) (cargoUploadFrame "{" <> cargoUploadFrame (releaseArchive release))
             `shouldReturn` Left (ParseError "Cargo upload metadata is malformed or exceeds its nesting bound")
         readIORef paid `shouldReturn` [65600]
     it "refuses invalid top-level native names and versions with their owned failure category" $ do
@@ -88,7 +87,7 @@ spec = describe "Cargo upload framing" $ do
         case cargoUploadMetadata release of
             Object fields -> for_ [("name", "invalid/name", "Cargo upload name is invalid"), ("vers", "1.0", "Cargo upload version is invalid")] $ \(key, value, reason) -> do
                 let metadata = Object (KeyMap.insert key (String value) fields)
-                decodeUpload defaultLimits (frame (LBS.toStrict (encode metadata)) <> frame (releaseArchive release))
+                decodeUpload defaultLimits (cargoUploadFrame (LBS.toStrict (encode metadata)) <> cargoUploadFrame (releaseArchive release))
                     `shouldSatisfy` either (T.isInfixOf reason . parseErrorMessage) (const False)
             _ -> expectationFailure "fixture metadata is not an object"
     it "requires all native identity and metadata fields" $ do
@@ -96,7 +95,7 @@ spec = describe "Cargo upload framing" $ do
         case cargoUploadMetadata release of
             Object fields -> for_ ["name", "vers", "deps", "features", "authors", "keywords", "categories"] $ \key -> do
                 let json = LBS.toStrict (encode (Object (KeyMap.delete key fields)))
-                decodeUpload defaultLimits (frame json <> frame (releaseArchive release)) `shouldSatisfy` isLeft
+                decodeUpload defaultLimits (cargoUploadFrame json <> cargoUploadFrame (releaseArchive release)) `shouldSatisfy` isLeft
             _ -> expectationFailure "fixture metadata is not an object"
     it "rejects malformed array members, dependency fields and optional metadata" $ do
         release <- cargoPublicationFixture
@@ -108,14 +107,14 @@ spec = describe "Cargo upload framing" $ do
                             <> [(key, Number 42) | key <- ["description", "documentation", "homepage", "readme", "readme_file", "license", "license_file", "repository", "links", "rust_version"]]
                             <> [("rust_version", String version) | version <- ["^1.74", "1.74-beta", "1.74.0+build", "01.74", "1.74.0.1"]]
                 for_ invalid $ \(key, value) ->
-                    decodeUpload defaultLimits (frame (LBS.toStrict (encode (Object (KeyMap.insert key value fields)))) <> frame (releaseArchive release)) `shouldSatisfy` isLeft
+                    decodeUpload defaultLimits (cargoUploadFrame (LBS.toStrict (encode (Object (KeyMap.insert key value fields)))) <> cargoUploadFrame (releaseArchive release)) `shouldSatisfy` isLeft
                 for_ ["name", "version_req", "features", "optional", "default_features"] $ \key ->
                     for_ [KeyMap.delete key, KeyMap.insert key Null, KeyMap.insert key (Number 42)] $ \change -> do
                         let metadata = Object (KeyMap.insert "deps" (toJSON [Object (change uploadDependency)]) fields)
-                        decodeUpload defaultLimits (frame (LBS.toStrict (encode metadata)) <> frame (releaseArchive release)) `shouldSatisfy` isLeft
+                        decodeUpload defaultLimits (cargoUploadFrame (LBS.toStrict (encode metadata)) <> cargoUploadFrame (releaseArchive release)) `shouldSatisfy` isLeft
                 for_ [("name", String "invalid/name"), ("explicit_name_in_toml", String "invalid/name"), ("kind", String "unknown"), ("target", Bool True), ("registry", Bool True), ("features", toJSON [Null])] $ \(key, value) -> do
                     let metadata = Object (KeyMap.insert "deps" (toJSON [Object (KeyMap.insert key value uploadDependency)]) fields)
-                    decodeUpload defaultLimits (frame (LBS.toStrict (encode metadata)) <> frame (releaseArchive release)) `shouldSatisfy` isLeft
+                    decodeUpload defaultLimits (cargoUploadFrame (LBS.toStrict (encode metadata)) <> cargoUploadFrame (releaseArchive release)) `shouldSatisfy` isLeft
             _ -> expectationFailure "fixture metadata is not an object"
     it "preserves omitted and nullable optional fields and unrestricted author text" $ do
         release <- cargoPublicationFixture
@@ -125,7 +124,7 @@ spec = describe "Cargo upload framing" $ do
                     update current key = if includeNulls then KeyMap.insert key Null current else KeyMap.delete key current
                     dependency = if includeNulls then KeyMap.insert "kind" Null uploadDependency else foldr KeyMap.delete uploadDependency ["target", "kind", "registry", "explicit_name_in_toml"]
                     metadata = Object (KeyMap.insert "deps" (toJSON [Object dependency]) (KeyMap.insert "authors" (toJSON ["42", "<untrusted>" :: Text]) (foldl' update fields optionalFields)))
-                    bytes = frame (LBS.toStrict (encode metadata)) <> frame (releaseArchive release)
+                    bytes = cargoUploadFrame (LBS.toStrict (encode metadata)) <> cargoUploadFrame (releaseArchive release)
                 decoded <- expectRight (decodeUpload defaultLimits bytes)
                 relayMetadata decoded bytes `shouldReturn` metadata
                 uploadArchive decoded `shouldBe` releaseArchive release
@@ -164,9 +163,6 @@ relayMetadata decoded bytes = do
     UploadFrame metadata archive <- observeCargoRelay loopbackRegistryUrl bytes
     archive `shouldBe` uploadArchive decoded
     pure (Object metadata)
-
-frame :: ByteString -> ByteString
-frame bytes = LBS.toStrict (toLazyByteString (word32LE (fromIntegral (BS.length bytes)) <> byteString bytes))
 
 uploadDependency :: KeyMap.KeyMap Value
 uploadDependency = KeyMap.fromList [("name", String "dependency"), ("version_req", String "^1"), ("features", toJSON ([] :: [Text])), ("optional", Bool False), ("default_features", Bool True), ("target", Null), ("kind", String "normal"), ("registry", Null), ("explicit_name_in_toml", Null)]
