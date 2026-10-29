@@ -101,7 +101,7 @@ gemInfoSteps pay limits name base mode = recordSteps reserve consume complete in
                     | selected (renderVersion (coordinateVersion (grCoordinate row))) -> Right next{scanRows = row : scanRows next, scanKeptCharge = addCharge next charge}
                     | otherwise -> Right next
     addCharge :: Scan -> Int -> Int
-    addCharge scan charge = saturate (toInteger (scanKeptCharge scan) + toInteger charge)
+    addCharge scan charge = saturatingCharge (toInteger (scanKeptCharge scan) + toInteger charge)
     complete scan
         | not (scanHeaderDone scan) = Failed "RubyGems info response has no header delimiter"
         | otherwise =
@@ -112,4 +112,3 @@ gemInfoSteps pay limits name base mode = recordSteps reserve consume complete in
              in case projectGemRows limits name base rows of
                     Left _ -> Failed "RubyGems info projection failed"
                     Right info -> Finished (GemReadResult info{infoInvalidEntries = strictElements (reverse (scanInvalid scan) <> conflicts)} (GemDocument name (BS.intercalate "\n" (reverse (scanHeader scan)) <> "\n") rows))
-    saturate = fromInteger . min (toInteger (maxBound :: Int))
