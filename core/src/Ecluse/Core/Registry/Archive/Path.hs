@@ -1,7 +1,6 @@
 -- SPDX-FileCopyrightText: 2026 Alexandra de Wit
 --
 -- SPDX-License-Identifier: MIT
-{-# LANGUAGE ImportQualifiedPost #-}
 
 -- | Platform-independent paths for in-memory archive inspection.
 module Ecluse.Core.Registry.Archive.Path (checkPath, resolveArchivePath) where
