@@ -23,7 +23,6 @@ import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Core.Server.Path (unFilename)
 import Ecluse.Core.Version (mkVersion)
 import Ecluse.Test.Deadline (withExchangeClient)
-import Ecluse.Test.Port (passthroughTracingPort)
 import Ecluse.Test.Registry.Cargo.Metadata (cargoTestVersion, parseCargoDiscovery)
 import Ecluse.Test.Stub (stubBaseUrl, withStub)
 import Ecluse.Test.Support (expectRight, expectRightIO)
@@ -93,7 +92,7 @@ spec = describe "Cargo discovery" $ do
         withStub status200 (toLazy body) $ \stub ->
             withExchangeClient (newManager defaultManagerSettings) $ \client -> do
                 let index = originClient defaultLimits client (loopbackRegistryUrl (stubBaseUrl stub <> "/index")) Nothing
-                discovery <- expectRightIO (cargoDiscovery passthroughTracingPort index{ocChargeFullRead = \cost -> modifyIORef' recorded (cost :)})
+                discovery <- expectRightIO (cargoDiscovery index{ocChargeFullRead = \cost -> modifyIORef' recorded (cost :)})
                 discoveryDl discovery `shouldBe` "https://static.crates.io/{crate}"
         charges <- readIORef recorded
         length charges `shouldSatisfy` (>= 2)

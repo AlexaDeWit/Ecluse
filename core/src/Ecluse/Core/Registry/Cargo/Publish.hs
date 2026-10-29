@@ -46,7 +46,6 @@ import Ecluse.Core.Security.Egress (RegistryUrl, registryUrlText)
 import Ecluse.Core.Security.Limits (Limits (maxMetadataBytes))
 import Ecluse.Core.Server.Admission.Types (ChargeFactors (cfFullReadPermille))
 import Ecluse.Core.Server.MemoryModel (saturatingCharge)
-import Ecluse.Core.Telemetry.Span (TracingPort)
 import Ecluse.Core.Version (renderVersion)
 
 -- | First-party relay preserves validated native bytes and the registry's response.
@@ -133,9 +132,9 @@ uploadClaims limits charge registry body = do
                     pure $ first PublishMalformed agreement $> [Body.uploadName upload]
 
 -- | Discovery cannot grant an API root. The complete configured base path must agree before a token is attached.
-preparePublishTarget :: TracingPort -> OriginClient -> RegistryUrl -> IO (Either MetadataError RegistryUrl)
-preparePublishTarget tracing origin approved = do
-    discovered <- cargoDiscovery tracing origin
+preparePublishTarget :: OriginClient -> RegistryUrl -> IO (Either MetadataError RegistryUrl)
+preparePublishTarget origin approved = do
+    discovered <- cargoDiscovery origin
     pure $ do
         discovery <- discovered
         advertised <- maybeToRight MetadataUndecodable (discoveryApi discovery)
