@@ -13,8 +13,9 @@ import Data.Text.Encoding qualified as TE
 import GHC.Clock (getMonotonicTimeNSec)
 import UnliftIO.Exception (evaluate, finally, try)
 import UnliftIO.MVar (withMVar)
-import UnliftIO.Timeout (timeout)
 
+import Ecluse.Core.Deadline (Deadlines)
+import Ecluse.Core.Deadline qualified as Deadline
 import Ecluse.Core.Ecosystem (Ecosystem (Cargo))
 import Ecluse.Core.Fault (boundedDetail)
 import Ecluse.Core.Package
@@ -34,8 +35,8 @@ import Ecluse.Core.Server.MemoryModel (bufferedChunkCharge, expandWireBytesInteg
 import Ecluse.Core.Version (renderVersion)
 
 -- | Retain compact verified public signals for five minutes. Private store evidence never enters this cache.
-newCargoInstallEvidence :: Limits -> IO InstallEvidenceProvider
-newCargoInstallEvidence limits = do
+newCargoInstallEvidence :: Deadlines -> Limits -> IO InstallEvidenceProvider
+newCargoInstallEvidence deadlines limits = do
     pool <- newLocalPool (min 4096 (maxVersionCount limits)) (min (1024 * 1024) (maxMetadataBytes limits))
     retention <- newPooledRetention pool 300 (StoreBudget 0 0) (\(key, _) -> bufferedChunkCharge (BS.length key))
     flights <- newSingleFlightWithBackend (Just (retentionBackend LocalStorage retention))
@@ -63,7 +64,7 @@ newCargoInstallEvidence limits = do
                 try $
                     if remaining <= 0
                         then pure (Left deadlineFault)
-                        else fromMaybe (Left deadlineFault) <$> timeout (fromInteger remaining) readSubject
+                        else fromMaybe (Left deadlineFault) <$> Deadline.timeout deadlines (fromInteger remaining) readSubject
             let result = either (\InstallEvidenceBudgetExceeded -> Left (permanent "Cargo execution evidence exceeds its reserved memory envelope")) id attempted
             case result of
                 Left fault -> ieDiagnostic context fault $> InstallReadFailed fault

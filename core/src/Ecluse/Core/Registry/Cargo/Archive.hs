@@ -23,7 +23,6 @@ import Data.Text qualified as T
 import Data.Text.Encoding qualified as TE
 import Text.Show (showString, shows, showsPrec)
 import UnliftIO.Exception (evaluate)
-import UnliftIO.Timeout (timeout)
 
 import Ecluse.Core.Package.Hash (sha256Hex)
 import Ecluse.Core.Registry (ParseError (..))
@@ -32,7 +31,7 @@ import Ecluse.Core.Registry.Archive.Tar (TarMember (..), TarScan, scanTar, sourc
 import Ecluse.Core.Registry.CachedDocument (estimateValueBytes)
 import Ecluse.Core.Registry.Cargo.Manifest (CargoManifest, CargoPublishMetadata, checkPublicationIndex, checkUploadAgreement, decodeManifest, manifestExecution, manifestTextPaths, publicationMetadata, publishMetadataValue)
 import Ecluse.Core.Registry.Cargo.Wire (cargoTreeCharge)
-import Ecluse.Core.Security.Limits (Limits (..), requestTimeoutSeconds)
+import Ecluse.Core.Security.Limits (Limits (..))
 
 -- | The inspected source bytes, checked against the admitted SHA-256 when one exists.
 data CargoArchiveMetadata = CargoArchiveMetadata
@@ -52,7 +51,7 @@ instance Show CargoArchiveMetadata where
 A first-party upload carries no checksum, so only an admitted SHA-256 is compared.
 -}
 inspectCargoArchive :: Limits -> (Int -> IO ()) -> Text -> Text -> Maybe Text -> ByteString -> IO (Either ParseError CargoArchiveMetadata)
-inspectCargoArchive limits charge name version checksum bytes = deadline $ do
+inspectCargoArchive limits charge name version checksum bytes = do
     if maxMirrorArtifactBytes limits <= 0 || BS.length bytes > maxMirrorArtifactBytes limits
         then pure (bad "Cargo compressed archive exceeds its byte bound")
         else
@@ -82,7 +81,7 @@ cargoArchiveExecution metadata = manifestExecution (caManifest metadata) (cargoA
 
 -- | Capture only the selected README and licence after the manifest pass, using the same verified compressed bytes.
 cargoPublicationMetadata :: Limits -> (Int -> IO ()) -> CargoArchiveMetadata -> IO (Either ParseError CargoPublishMetadata)
-cargoPublicationMetadata limits charge metadata = deadline $
+cargoPublicationMetadata limits charge metadata =
     case manifestTextPaths (caManifest metadata) (caInventory metadata) of
         Left fault -> pure (Left fault)
         Right [] -> finish Map.empty
@@ -98,9 +97,9 @@ cargoPublicationMetadata limits charge metadata = deadline $
         charge (retained + 65536 + 8 * textBytes + 512 * Map.size content)
         evaluate (publicationMetadata (caManifest metadata) content)
 
--- | Compare mirror source claims under the archive deadline after reserving both resolver inputs.
+-- | Compare mirror source claims after reserving both resolver inputs.
 cargoPublicationAgreement :: Limits -> (Int -> IO ()) -> CargoArchiveMetadata -> Value -> CargoPublishMetadata -> IO (Either ParseError CargoPublishMetadata)
-cargoPublicationAgreement limits charge archive source metadata = deadline $ do
+cargoPublicationAgreement limits charge archive source metadata = do
     let inputs = [source, publishMetadataValue metadata]
         workspace = sum (map (toInteger . cargoTreeCharge . toInteger . estimateValueBytes) inputs)
         retained = toInteger (caRetainedBytes archive) + toInteger (caManifestWorkspace archive)
@@ -153,9 +152,6 @@ archivePass limits charge root selected bytes = do
 
 manifestMemory :: ByteString -> Int
 manifestMemory = cargoTreeCharge . toInteger . BS.length
-
-deadline :: IO (Either ParseError a) -> IO (Either ParseError a)
-deadline action = fromMaybe (bad "Cargo archive inspection exceeded its deadline") <$> timeout (requestTimeoutSeconds * 1000000) action
 
 bad :: Text -> Either ParseError a
 bad = Left . ParseError

@@ -22,6 +22,7 @@ import Ecluse.Core.Registry.Cargo.Execution (newCargoInstallEvidence)
 import Ecluse.Core.Registry.Cargo.Metadata (prepareCargoRead)
 import Ecluse.Core.Registry.Cargo.Publish (cargoPublishCodec)
 import Ecluse.Core.Registry.Exchange (accumulatingCharge)
+import Ecluse.Core.Registry.Exchange.Types (ExchangeClient (ecDeadlines))
 import Ecluse.Core.Registry.Metadata (versionEvaluation)
 import Ecluse.Core.Registry.Metadata.Fetch.Preparation (prepareVersion)
 import Ecluse.Core.Registry.Origin (OriginClient (ocChargeFullRead, ocChargeSelectedRead))
@@ -65,7 +66,7 @@ boot knobs use = do
 
 cargoPolicy :: RegistryAdapter -> WorkerEnvironment -> IO WorkerPolicy
 cargoPolicy adapter environment = do
-    evidence <- newCargoInstallEvidence defaultLimits
+    evidence <- newCargoInstallEvidence (ecDeadlines (weClient environment)) defaultLimits
     let factors = metadataChargeFactors (adapterMetadata adapter)
         targetReadRoot = weTargetReadRoot environment
         publish = newMirrorPublish (MirrorTransport (weClient environment) (pure Nothing) defaultLimits passthroughTracingPort) targetReadRoot targetReadRoot (cargoPublishCodec factors)

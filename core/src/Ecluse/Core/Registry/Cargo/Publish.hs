@@ -18,9 +18,9 @@ import Data.Text qualified as T
 import Network.HTTP.Client (Request (method, requestBody, requestHeaders), RequestBody (RequestBodyBS, RequestBodyLBS))
 import Network.HTTP.Types.Header (hAccept, hContentType)
 import UnliftIO.Exception (evaluate)
-import UnliftIO.Timeout (timeout)
 
 import Ecluse.Core.Credential (ClientCredential)
+import Ecluse.Core.Deadline (Deadlines, inspectionDeadline)
 import Ecluse.Core.Package (PackageName, hashValue)
 import Ecluse.Core.Registry (FetchFault (FetchUrlUnformable), ParseError (..), PublishBodyFault (PublishMalformed), PublishError (PublishError), PublishFault (..), UrlFormationError (UnparseableUrl), isSuccessStatus)
 import Ecluse.Core.Registry.Adapter.Capability (AdapterPublish (..), MirrorRequirements (..), MirrorStateRequirement (DurableVersionState), PublishExtras (NoPublishExtras), PublishRequestBody (..), UploadEndpointRequirement (ExplicitUploadEndpoint), UploadIdentityRequirement (TokenIdentity), WorkerMetadataRead (NativeChargedWorkerRead))
@@ -43,7 +43,7 @@ import Ecluse.Core.Registry.Publish (PublishCodec (..), relayPublishRequest)
 import Ecluse.Core.Registry.Request (attachCredential, joinPath, metadataGet, parseRequestEither)
 import Ecluse.Core.Registry.ServedDocument (stringField)
 import Ecluse.Core.Security.Egress (RegistryUrl, registryUrlText)
-import Ecluse.Core.Security.Limits (Limits (maxMetadataBytes), requestTimeoutSeconds)
+import Ecluse.Core.Security.Limits (Limits (maxMetadataBytes))
 import Ecluse.Core.Server.Admission.Types (ChargeFactors (cfFullReadPermille))
 import Ecluse.Core.Telemetry.Span (TracingPort)
 import Ecluse.Core.Version (renderVersion)
@@ -86,9 +86,9 @@ cargoPublishCodec factors =
         , pcPublishOutcome = classifyPublish
         }
 
-prepareUpload :: Limits -> (Int -> IO ()) -> MirrorInventory -> Value -> ExpectedMirrorFile -> VerifiedArtifactBytes -> IO (Either PublishFault (MirrorUploadData CargoPublishMetadata))
-prepareUpload limits charge inventory row file verified =
-    fromMaybe (Left (PublishSourceUnavailable "Cargo publication preparation exceeded its deadline")) <$> timeout (requestTimeoutSeconds * 1000000) prepare
+prepareUpload :: Deadlines -> Limits -> (Int -> IO ()) -> MirrorInventory -> Value -> ExpectedMirrorFile -> VerifiedArtifactBytes -> IO (Either PublishFault (MirrorUploadData CargoPublishMetadata))
+prepareUpload deadlines limits charge inventory row file verified =
+    inspectionDeadline deadlines (PublishSourceUnavailable "Cargo publication preparation exceeded its deadline") prepare
   where
     prepare = case sourceName row of
         Left fault -> pure (Left fault)
@@ -116,23 +116,20 @@ sourceName = \case
 
 -- | Bind resolver claims to the verified archive before any publication discovery or upstream write.
 uploadClaims :: Limits -> (Int -> IO ()) -> Text -> PublishRequestBody -> IO (Either PublishBodyFault [Text])
-uploadClaims limits charge registry body =
-    fromMaybe (Left (PublishMalformed (ParseError "Cargo upload inspection exceeded its deadline"))) <$> timeout (requestTimeoutSeconds * 1000000) inspect
-  where
-    inspect = do
-        decoded <- Body.readUpload limits charge (publishBodyBytes body)
-        case decoded of
-            Left fault -> pure (Left (PublishMalformed fault))
-            Right (upload, metadataCost) -> do
-                let archive = Body.uploadArchive upload
-                    withMetadata cost = charge (fromInteger (min (toInteger (maxBound :: Int)) (toInteger metadataCost + toInteger cost)))
-                inspected <- inspectCargoArchive limits withMetadata (Body.uploadName upload) (Body.uploadVersion upload) Nothing archive
-                case inspected of
-                    Left fault -> pure (Left (PublishMalformed fault))
-                    Right metadata -> do
-                        let logicalRegistry = "sparse+" <> T.dropWhileEnd (== '/') registry <> "/"
-                        agreement <- cargoUploadAgreement limits withMetadata metadataCost logicalRegistry (Body.uploadMetadata upload) metadata
-                        pure $ first PublishMalformed agreement $> [Body.uploadName upload]
+uploadClaims limits charge registry body = do
+    decoded <- Body.readUpload limits charge (publishBodyBytes body)
+    case decoded of
+        Left fault -> pure (Left (PublishMalformed fault))
+        Right (upload, metadataCost) -> do
+            let archive = Body.uploadArchive upload
+                withMetadata cost = charge (fromInteger (min (toInteger (maxBound :: Int)) (toInteger metadataCost + toInteger cost)))
+            inspected <- inspectCargoArchive limits withMetadata (Body.uploadName upload) (Body.uploadVersion upload) Nothing archive
+            case inspected of
+                Left fault -> pure (Left (PublishMalformed fault))
+                Right metadata -> do
+                    let logicalRegistry = "sparse+" <> T.dropWhileEnd (== '/') registry <> "/"
+                    agreement <- cargoUploadAgreement limits withMetadata metadataCost logicalRegistry (Body.uploadMetadata upload) metadata
+                    pure $ first PublishMalformed agreement $> [Body.uploadName upload]
 
 -- | Discovery cannot grant an API root. The complete configured base path must agree before a token is attached.
 preparePublishTarget :: TracingPort -> OriginClient -> RegistryUrl -> IO (Either MetadataError RegistryUrl)
