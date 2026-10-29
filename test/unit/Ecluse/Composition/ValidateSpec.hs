@@ -19,6 +19,7 @@ import Ecluse.Composition.BootError (
         MirrorStateRequired,
         MirrorTargetOnMountEndpoint,
         MirrorTargetWithoutPublish,
+        MissingAdapter,
         ProgressWindowNotBelowServeCap,
         ProgressWindowNotPositive,
         PublicationTargetOnMountEndpoint,
@@ -79,7 +80,7 @@ import Ecluse.Config (
     mountPolicy,
  )
 import Ecluse.Core.Credential (ClientCredential (credSecret), unSecret)
-import Ecluse.Core.Ecosystem (Ecosystem (Cargo, Npm, PyPI))
+import Ecluse.Core.Ecosystem (Ecosystem (Cargo, Npm, PyPI, RubyGems))
 import Ecluse.Core.Package (mkScope)
 import Ecluse.Core.Registry.Adapter (RegistryAdapter (adapterPublish), adapterFor)
 import Ecluse.Core.Registry.Sweep.Types (minimumChunkPause)
@@ -315,6 +316,10 @@ ruleBlocksSpec = describe "vetBoot -- ecosystem rule blocks" $ do
         it "reports independent Ruby and PyPI installation blocks" $ do
             errors <- refusalsFor role (overrideEnv "ECLUSE_MOUNTS__RUBYGEMS__ENABLED" "true" (overrideEnv "ECLUSE_RULES" installRule bothMounts))
             errors `shouldMatchList` [rubyInstallRefusal, installBlock]
+        it "keeps a missing adapter independent of PyPI blocks" $ do
+            config <- expectConfig (overrideEnv "ECLUSE_MOUNTS__RUBYGEMS__ENABLED" "true" (overrideEnv "ECLUSE_RULES" installRule bothMounts)) Nothing
+            void (snd (runVet role (vetBootWith (withoutAdapter RubyGems) config)))
+                `shouldBe` Left [MissingAdapter RubyGems, installBlock]
         it "refuses a shared and a mount-specific Ruby deprecation deny" $ do
             refusalsFor role (overrideEnv "ECLUSE_RULES" deprecatedRule rubyBeside)
                 `shouldReturn` [rubyDeprecationRefusal]
@@ -510,6 +515,11 @@ refusalSpec = describe "vetBoot -- the refusals its groups earn" $ do
         refusalsFor MirrorWriter (withRubyInstallBlock staticEnvVars)
             `shouldReturn` [rubyInstallRefusal]
 
+    it "refuses a mount whose ecosystem this build ships no adapter for" $ do
+        config <- expectConfig (overrideEnv "ECLUSE_MOUNTS__RUBYGEMS__ENABLED" "true" staticEnvVars) Nothing
+        void (snd (runVet MirrorWriter (vetBootWith (withoutAdapter RubyGems) config)))
+            `shouldBe` Left [MissingAdapter RubyGems]
+
     forM_
         [ ("mirror", MirrorTargetWithoutPublish PyPI, pypiMirrorEnv)
         ,
@@ -639,3 +649,7 @@ isStoreRefusal = \case
 
 vetted :: RegistryRole -> Config -> Either [BootError] ValidatedPlan
 vetted role config = snd (runVet role (vetBoot config))
+
+-- The shipped resolver with one ecosystem's adapter absent, as a build without it would resolve.
+withoutAdapter :: Ecosystem -> Ecosystem -> Maybe RegistryAdapter
+withoutAdapter missing eco = guard (eco /= missing) *> adapterFor eco
