@@ -2217,10 +2217,9 @@ Benchmark-only `MetadataRendering` separates pure captured assembly and serialis
 Ordinary arm64 CI emits native resource observations before production factors can be calibrated.
 Missing native factors remain failures. Existing npm and PyPI factors and budgets do not supply Cargo values.
 
-Ready handoff requires the existing standard load workflows with the full profile and all applicable pod shapes.
-The delivery agent obtains at least three qualifying observations per shape and commits derived floors and latency policy with source and run provenance.
+Cargo floors and latency policy derive from the standard load workflows with the full profile and every applicable pod shape.
+Each shape needs at least three qualifying observations, and the committed floors carry their source and run provenance.
 Keep adverse and disqualified observations. A provider registration or unmeasured value cannot satisfy calibration.
-Fresh independent review, final-commit CI, and a fresh-context final adversarial review remain delivery requirements.
 
 ## RubyGems native coverage and evidence limits
 
@@ -2241,16 +2240,14 @@ Native coverage must exercise these boundaries:
 - Physical maintenance deletion, first-party protection, role authority, consent, caps, and native telemetry.
 - Per-gem reads, selected compact specifications, long histories, platform multiplicity, and whole-version worker costs.
 
-The two-gem protocol experiment establishes discovery, revalidation and initial-download checksums for the two client versions.
-It does not establish production performance, policy coverage, platform coverage, or full conformance.
 Source registration alone supplies no runtime evidence. Backend fixtures supply no live AWS or IAM evidence.
-A delivery claim requires the actual native providers, independent obligations, final-commit CI receipts, and measured resource factors.
+A completion claim requires the actual native providers, independent obligations, CI receipts for the claimed commit, and measured resource factors.
 Missing providers, observations, factors, or calibration remain failures.
-RubyGems delivery uses best-effort real observations from its eight-workflow load limit, with source and run provenance.
-Keep original eligibility verdicts and adverse rows. Do not relabel failed runs as held receipts.
+RubyGems floors come from best-effort real observations.
+`bench/load/floors.json` and `bench/load/rubygems-calibration.json` record their source groups and run provenance.
+Keep original eligibility verdicts and every adverse or excluded observation. Do not relabel failed runs as held receipts.
 Use bounded focused measurements for changed paths rather than another broad workflow.
-Existing ecosystems' numeric floors and budgets remain unchanged.
-Retain adverse and excluded observations. Existing ecosystems' factors, budgets, and floors do not supply RubyGems values.
+Existing ecosystems' factors, budgets, and floors do not supply RubyGems values.
 
 ### Native RubyGems info load
 
@@ -2281,7 +2278,7 @@ Keep independent reference readers separate from production parsers.
 The directory parser must reconcile repeated update rows and removals under byte, row and name bounds.
 Measure directory acquisition, packed retention, private merge, response assembly and full-body transfer separately from per-gem policy work.
 Record captured input sizes, name counts, source digests, actual response bytes, settings, completions, failures and measurement limits.
-A prototype without production authorisation or admission does not prove production throughput or a pod memory bound.
+A directory measurement that bypasses production authorisation or admission does not prove production throughput or a pod memory bound.
 
 Archive serving uses the shared streaming relay. Preserve its authorisation, framing, conditional, HEAD, cancellation, queue and residency controls.
 Mirroring verifies copied archive bytes. Publication and mirroring retain their bounded native archive validation.
