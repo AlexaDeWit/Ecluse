@@ -27,7 +27,7 @@ import Ecluse.Core.Registry.Metadata.Fetch.Preparation (PrepareRead (PrepareRead
 import Ecluse.Core.Registry.Metadata.Fetch.Types (EcosystemRead (..))
 import Ecluse.Core.Registry.MirrorUpload
 import Ecluse.Core.Registry.MirrorUpload.Internal (checkedMirrorUploadData)
-import Ecluse.Core.Registry.Origin (OriginClient (ocChargeFullReadWorkspace, ocLimits, ocToken), originBaseUrl)
+import Ecluse.Core.Registry.Origin (OriginClient (ocToken), originBaseUrl)
 import Ecluse.Core.Registry.Publish (PublishCodec (..), relayPublishRequest)
 import Ecluse.Core.Registry.Request (CredentialMapping, attachCredential, metadataGet, parseRequestEither)
 import Ecluse.Core.Registry.RubyGems.Archive
@@ -36,7 +36,6 @@ import Ecluse.Core.Registry.RubyGems.Credential
 import Ecluse.Core.Registry.RubyGems.Document (GemRow (..))
 import Ecluse.Core.Registry.RubyGems.Metadata (prepareGemRead)
 import Ecluse.Core.Registry.RubyGems.Mirror (mirrorRow, rubyMirrorCompanion)
-import Ecluse.Core.Registry.RubyGems.Project (projectName)
 import Ecluse.Core.Registry.RubyGems.Request (gemInfoRequestUnder, gemInfoUrl)
 import Ecluse.Core.Security.Limits (Limits, requestTimeoutSeconds)
 import Ecluse.Core.Server.Admission.Types (ChargeFactors (cfFullReadPermille))
@@ -45,13 +44,7 @@ import Ecluse.Core.Server.Admission.Types (ChargeFactors (cfFullReadPermille))
 rubyPublish :: ChargeFactors -> AdapterPublish
 rubyPublish factors =
     AdapterPublish
-        { publishRelay = \origin name body -> do
-            claims <- uploadClaims (ocLimits origin) (ocChargeFullReadWorkspace origin) (originBaseUrl origin) body
-            let request = do
-                    names <- first (const (UnparseableUrl "RubyGems relay archive is invalid")) claims
-                    unless (traverse projectName names == Right [name]) (Left (UnparseableUrl "RubyGems relay name differs from the authorised package"))
-                    bodyRequest rubyPublishCredential (originBaseUrl origin) (ocToken origin) (publishBodyExtras body) (publishBodyBytes body)
-            relayPublishRequest origin request
+        { publishRelay = \origin _ body -> relayPublishRequest origin (bodyRequest rubyPublishCredential (originBaseUrl origin) (ocToken origin) (publishBodyExtras body) (publishBodyBytes body))
         , publishCredential = rubyPublishCredential
         , publishRequestExtras = rubyPublishExtras
         , publishUploadClaims = uploadClaims
