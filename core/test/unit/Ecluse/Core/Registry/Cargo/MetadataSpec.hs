@@ -14,6 +14,7 @@ import Test.Hspec
 import Ecluse.Core.Ecosystem (Ecosystem (Cargo))
 import Ecluse.Core.Package (PackageInfo (..))
 import Ecluse.Core.Package.Entry (EntryKey (RecordEntry))
+import Ecluse.Core.Package.InvalidEntry (InvalidEntryKind (InvalidVersionManifest), invalidKey, invalidKind)
 import Ecluse.Core.Registry.CachedDocument (cargoCached)
 import Ecluse.Core.Registry.Cargo.Document (cargoRecords)
 import Ecluse.Core.Registry.Cargo.Metadata (cargoReadWith, selectCargoVersionDoc)
@@ -34,8 +35,11 @@ import Ecluse.Test.Support (expectRight)
 spec :: Spec
 spec = do
     metadataProjectionContract "cargo" projectionDriver
-    it (caseLabel "core.metadata.projection.cargo.record-framing" "requires native records with independent refusal evidence") $
-        projectionFraming projectionDriver `shouldBe` RecordStream
+    it (caseLabel "core.metadata.projection.cargo.record-framing" "requires native records with independent refusal evidence") $ do
+        discovery <- expectRight cargoTestDiscovery
+        manifest <- expectRight =<< heldManifest (cargoRead discovery) defaultLimits "https://index.crates.io" cargoTestName [row "1.0.0" <> "\n{broken\n" <> row "2.0.0"]
+        Map.keys (infoVersions (manifestInfo manifest)) `shouldBe` ["1.0.0", "2.0.0"]
+        [(invalidKind invalid, invalidKey invalid) | invalid <- infoInvalidEntries (manifestInfo manifest)] `shouldBe` [(InvalidVersionManifest, show (RecordEntry 1))]
     it (caseLabel "core.metadata.projection.cargo.invalid-evidence-control" "rejects a permissive reader that silently loses malformed records") $ do
         let permissive = projectionDriver{projectFull = \_ _ -> pure (Right (PackageInfo cargoTestName Map.empty Map.empty []))}
         projectionFailureLaw permissive MetadataUndecodable "{broken" `shouldThrow` anyException
