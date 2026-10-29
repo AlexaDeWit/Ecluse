@@ -18,6 +18,7 @@ import Network.Wai.Handler.Warp (testWithApplication)
 import Ecluse.BenchLoad.AdvisoryStore (AdvisoryObject, advisoryStoreApplication)
 import Ecluse.BenchLoad.Error (benchFail)
 import Ecluse.BenchLoad.ObjectStore (conditionalObjectRead, objectRevision)
+import Ecluse.BenchLoad.ProxyProcess (copyStatePrivateHost, copyStatePublicHost)
 import Ecluse.Core.Ecosystem (Ecosystem (Cargo))
 import Ecluse.Core.Mirror.State (encodeProjectRecord, extendProjectRecord, stateTarget)
 import Ecluse.Core.Mirror.State.Internal (projectKey, retainVerifiedIdentity)
@@ -68,9 +69,9 @@ withCopyState latency privatePort publicPort bucket advisory use = do
         application = maybe native (`advisoryStoreApplication` native) advisory
     testWithApplication (pure application) use
   where
-    publicBase = "http://localhost:" <> show publicPort
-    privateBase = "http://127.0.0.1:" <> show privatePort
-    target = stateTarget ("https://127.0.0.1:" <> show privatePort)
+    publicBase = "http://" <> copyStatePublicHost <> ":" <> show publicPort
+    privateBase = "http://" <> copyStatePrivateHost <> ":" <> show privatePort
+    target = stateTarget ("https://" <> copyStatePrivateHost <> ":" <> show privatePort)
     fetch client bound url = do
         request <- parseRequest (toString url)
         fetchTestBody client (progressFloor defaultLimits) bound request >>= either (benchFail . show) pure
