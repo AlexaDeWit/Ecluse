@@ -30,7 +30,6 @@ import UnliftIO (evaluate, tryAny)
 
 import Ecluse.Core.Ecosystem (Ecosystem (Cargo, RubyGems))
 import Ecluse.Core.Mirror.State
-import Ecluse.Core.Mirror.State.Codec (saturatingStateCharge)
 import Ecluse.Core.Mirror.State.Internal (StateRevision (..), targetKey)
 import Ecluse.Core.Package (Artifact (..), PackageDetails (..), PackageInfo (..), PackageName, pkgEcosystem)
 import Ecluse.Core.Package.Entry (EntryKey (ArrayEntry, RecordEntry))
@@ -49,6 +48,7 @@ import Ecluse.Core.Server.Cache.Backend (Recency (RefreshRecency), RetentionOper
 import Ecluse.Core.Server.Cache.Backend.Local (LocalPool, newPooledRetention)
 import Ecluse.Core.Server.Cache.Types (CacheKey, Source (Source), StoreBudget, cacheKeyIdentity, fullKey)
 import Ecluse.Core.Server.Cache.VersionWeight.Fields (nameWeight, textWeight)
+import Ecluse.Core.Server.MemoryModel (saturatingCharge)
 import Ecluse.Core.Snapshot (digestBytes, digestFromContext)
 import Ecluse.Core.Version (Version)
 
@@ -96,7 +96,7 @@ validateMirrorProject (MirrorView limits target store cache) ticket name = do
 -- | The revision bytes must be owned. Saturated entries remain uncacheable.
 mirrorRetentionWeight :: CacheKey -> StateRevision -> Int -> Int
 mirrorRetentionWeight key (StateRevision target name bytes) recordWeight =
-    saturatingStateCharge
+    saturatingCharge
         ( toInteger recordWeight
             + 256
             + toInteger (BS.length bytes)
