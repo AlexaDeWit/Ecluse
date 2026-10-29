@@ -49,7 +49,7 @@ import Ecluse.Core.Registry.Metadata (
     VersionRead (..),
  )
 import Ecluse.Core.Registry.Metadata.Fetch.Preparation (canChargeFullReadWorkspace)
-import Ecluse.Core.Registry.Origin (OriginClient (ocClient), OriginFor, Private, Public, anonymousOrigin, chargingFullReadWorkspace, chargingFullReads, chargingSelectedMetadata, controlPublicOrigin, originBaseUrl, originClientOf, perCallerOrigin)
+import Ecluse.Core.Registry.Origin (OriginClient (ocClient), OriginFor, Private, Public, anonymousOrigin, chargingFullReadWorkspace, chargingFullReads, chargingNativeReads, controlPublicOrigin, originBaseUrl, originClientOf, perCallerOrigin)
 import Ecluse.Core.Registry.Request (BaseRequest)
 import Ecluse.Core.Security (LimitError, Limits (progressFloor))
 import Ecluse.Core.Security.Egress (registryUrlText)
@@ -215,11 +215,8 @@ Static lookups can omit the ticket. Native workspace admission requires one.
 -}
 withPrivateMetadataClient :: ServeRuntime -> PackumentDeps -> Maybe MemoryTicket -> BaseRequest -> Maybe ClientCredential -> (MetadataClient -> IO a) -> Handler a
 withPrivateMetadataClient rt deps ticket base token action = do
-    workspace <- liftIO (traverse (newChargeRegion . charge) ticket)
     let selected = privateOrigin rt deps base token
-        origin = case workspace of
-            Nothing -> selected
-            Just pay -> chargingSelectedMetadata pay (chargingFullReads (pay . scaleCharge (cfFullReadPermille (chargeFactors deps))) selected)
+    origin <- liftIO (maybe (pure selected) (\held -> newChargeRegion (charge held) >>= \region -> chargingNativeReads (chargeFactors deps) region selected) ticket)
     withMetadataClient rt deps privateMetadataClient origin action
 
 -- | Reserve each consumer's selected facts. Serving consumers never retain the cached source row.
@@ -227,7 +224,7 @@ withPublicMetadata :: ServeRuntime -> PackumentDeps -> MemoryTicket -> PackageNa
 withPublicMetadata rt deps ticket name version action = do
     let flight = flightOf (versionKey (publicSource deps) name version)
     workspace <- liftIO (newChargeRegion (charge (servingFlight flight ticket)))
-    let origin = chargingSelectedMetadata workspace (chargingFullReads (workspace . scaleCharge (cfFullReadPermille (chargeFactors deps))) (publicOrigin rt deps))
+    origin <- liftIO (chargingNativeReads (chargeFactors deps) workspace (publicOrigin rt deps))
     retained <- liftIO (newChargeRegion (charge ticket))
     readSelected <- withMetadataClient rt deps (preparePublicVersion (srMetadataCache rt) (publicSource deps)) origin $ \prepare ->
         pure (awaitingFlight ticket flight (prepare name version >>= executePrepared))

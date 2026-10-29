@@ -52,7 +52,8 @@ data OriginClient = OriginClient
     , ocChargeFullReadWorkspace :: Int -> IO ()
     -- ^ Reserve the full reader's absolute row workspace separately from retained source bytes.
     , ocChargeFullRead :: Int -> IO ()
-    -- ^ Pays for each decompressed chunk of a full metadata read before the parser sees it.
+    -- ^ Pays each decompressed chunk's own charge, never a running total, before the parser sees it.
+    -- A high-water payer must be wrapped in 'accumulatingCharge'.
     }
 
 -- | Build an origin with caller-supplied limits, transport, and credential posture.
@@ -94,7 +95,9 @@ perCallerOrigin limits client base token = OriginFor (originAt limits client bas
 originClientOf :: OriginFor posture -> OriginClient
 originClientOf (OriginFor client) = client
 
--- | The same origin, paying for what its full metadata reads hand on.
+{- | The same origin, whose full reads hand the payer each chunk's own charge, never a running total.
+A high-water payer must be wrapped in 'accumulatingCharge'.
+-}
 chargingFullReads :: (Int -> IO ()) -> OriginFor posture -> OriginFor posture
 chargingFullReads charge (OriginFor client) = OriginFor client{ocChargeFullRead = charge}
 
