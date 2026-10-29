@@ -107,7 +107,7 @@ discoveryPaying :: IORef (Maybe Int) -> MemoryMeter -> PublishCodec -> PublishCo
 discoveryPaying held meter codec =
     codec
         { pcTargetReadPermille = discoveryPermille
-        , pcPrepareTarget = \_ origin target -> do
+        , pcPrepareTarget = \origin target -> do
             replicateM_ 3 (ocChargeFullRead origin discoveryChunk)
             meterSnapshot meter >>= writeIORef held . Just . snChargedBytes
             pure (Right target)
