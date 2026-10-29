@@ -79,9 +79,9 @@ splitUpload limits bytes = do
 
 section :: Int -> ByteString -> Either ParseError (ByteString, ByteString)
 section cap bytes = do
-    when (BS.length bytes < 4) (bad "Cargo upload has a truncated length prefix")
-    let declared = foldl' (.|.) 0 [toInteger (BS.index bytes offset) `shiftL` (8 * offset) | offset <- [0 .. 3]]
-        available = BS.drop 4 bytes
+    let (prefix, available) = BS.splitAt 4 bytes
+        declared = BS.foldr' (\byte total -> total `shiftL` 8 .|. toInteger byte) 0 prefix
+    when (BS.length prefix < 4) (bad "Cargo upload has a truncated length prefix")
     when (cap <= 0 || declared > toInteger cap) (bad "Cargo upload section exceeds its byte bound")
     when (declared > toInteger (BS.length available)) (bad "Cargo upload has a truncated section")
     pure (BS.splitAt (fromInteger declared) available)
