@@ -2246,7 +2246,6 @@ Missing providers, observations, factors, or calibration remain failures.
 RubyGems floors come from best-effort real observations.
 `bench/load/floors.json` and `bench/load/rubygems-calibration.json` record their source groups and run provenance.
 Keep original eligibility verdicts and every adverse or excluded observation. Do not relabel failed runs as held receipts.
-Use bounded focused measurements for changed paths rather than another broad workflow.
 Existing ecosystems' factors, budgets, and floors do not supply RubyGems values.
 
 ### Native RubyGems info load
