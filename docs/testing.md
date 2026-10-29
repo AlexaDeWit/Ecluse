@@ -999,7 +999,8 @@ The added rows establish baselines. They do not show a production improvement.
 The `allocation` job in `ci.yml` holds the bytes each measured leg allocates to reviewed budgets,
 and the `CI gate` requires it. It runs `task perf-allocation`, the `captures` mode of the
 performance-acceptance harness in `acceptance/`, over the committed captures in `bench/corpus/`:
-nine npm packuments and three PyPI Simple JSON documents. The input never changes between runs, so
+nine npm packuments, three PyPI Simple JSON documents, three Cargo sparse index files, and three
+RubyGems `/info` records. The input never changes between runs, so
 a changed figure comes from a changed build. The budgets cover allocation only. CPU work that
 allocates nothing leaves the figure unchanged, and shows only in the reports' time columns, which
 carry no budget.
@@ -1634,7 +1635,8 @@ All four ecosystems use measurement conditions `unified-v2`:
   npm checks JSON, package identity, native metadata, rewritten artifact URLs, and the private
   overlay for merged listings. PyPI retains its media, project, file, artifact URL, and overlay checks.
   Cargo checks nonempty native records, checksum fields, and local archive discovery.
-  RubyGems independently decodes native dependency replies and checks the requested names, versions, platforms, and dependency fields.
+  RubyGems parses each `/info` reply with an independent reader, runs the Ruby reference decoder,
+  and requires nonempty rows, nonempty versions, and a checksum field on every row.
   Private-copy listings retain their native checks without requiring a synthetic overlay.
   Cold admission bursts and ramps remain unprimed.
 - All shared upstream stubs skip the delay at zero or negative latency. Positive delays stay unchanged.
@@ -2262,6 +2264,9 @@ Concurrent public reads can share an active read. A configured external provider
 The full-store miss/collapse observations describe public fetches and waiting consumers, not private reads or exact per-name request counts.
 Pattern rows measure per-gem metadata and artifacts. They exclude `/versions` and do not represent a complete Bundler installation.
 A separate bounded directory fixture measures discovery with an immutable externally supplied capture.
+The `versions-directory` row reads that capture from the file `BENCH_RUBYGEMS_DIRECTORY_BODY` names.
+It refuses a file whose byte count or SHA-256 differs from the pins in `Ecluse.BenchLoad.RubyGems.Directory`,
+whose scenario description records the capture's source URL and date.
 
 ### RubyGems Compact Index and streaming evidence
 
