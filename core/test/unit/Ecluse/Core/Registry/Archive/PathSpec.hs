@@ -1,7 +1,6 @@
 -- SPDX-FileCopyrightText: 2026 Alexandra de Wit
 --
 -- SPDX-License-Identifier: MIT
-{-# LANGUAGE ImportQualifiedPost #-}
 
 -- | Archive member paths and local references remain inside their admitted root.
 module Ecluse.Core.Registry.Archive.PathSpec (spec) where
