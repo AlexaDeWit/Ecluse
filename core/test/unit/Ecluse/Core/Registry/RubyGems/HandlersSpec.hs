@@ -26,6 +26,7 @@ import Ecluse.Core.Package (HashAlg (SHA512))
 import Ecluse.Core.Package.Integrity (mkMinIntegrity, mkMinTrustedIntegrity)
 import Ecluse.Core.Registry.RubyGems.Adapter (rubyGemsAdapter)
 import Ecluse.Core.Registry.RubyGems.Credential (rubyReadCredential)
+import Ecluse.Core.Registry.RubyGems.Directory (GemDirectory (GemDirectory), directoryWeight)
 import Ecluse.Core.Registry.RubyGems.FirstParty (projectFirstPartyEntry, rubyGemsFirstPartyName)
 import Ecluse.Core.Registry.RubyGems.Project (projectName)
 import Ecluse.Core.Registry.RubyGems.Route (rubyGemsRouter)
@@ -35,11 +36,12 @@ import Ecluse.Core.Security (Limits (..))
 import Ecluse.Core.Security.Egress (RegistryUrl, registryUrlText)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Core.Server.Admission (newServeAdmissionTuned)
-import Ecluse.Core.Server.Admission.Types (ChargeFactors (ChargeFactors))
+import Ecluse.Core.Server.Admission.Meter (MeterSettings (..), meterSnapshot, newMemoryMeter)
+import Ecluse.Core.Server.Admission.Types (ChargeFactors (ChargeFactors), MeterSnapshot (snChargedBytes))
 import Ecluse.Core.Server.Cache (Source (Source), newMetadataCacheWithProvider)
 import Ecluse.Core.Server.Cache.Backend (BackendStorage (ExternalStorage))
 import Ecluse.Core.Server.Cache.Provider (cacheProvider)
-import Ecluse.Core.Server.Context (MountBinding (..), PackumentDeps (..), ReadSourceSelection (MergePrivateAndPublic, PrivateOnly), RequestCtx (RequestCtx), ResponseAction (..), RouteAction (RouteAction), ServeRuntime (srMetadataCache, srMetrics), pdPublicBaseUrl, runHandler)
+import Ecluse.Core.Server.Context (MountBinding (..), PackumentDeps (..), ReadSourceSelection (MergePrivateAndPublic, PrivateOnly), RequestCtx (RequestCtx), ResponseAction (..), RouteAction (RouteAction), ServeRuntime (srMemoryMeter, srMetadataCache, srMetrics), pdPublicBaseUrl, runHandler)
 import Ecluse.Core.Server.Contract (responseToWai)
 import Ecluse.Core.Server.Encoding (MetadataCompression (GzipWhenAccepted))
 import Ecluse.Core.Server.Upstream (MirrorServePlan (NoMirrorWrite))
@@ -129,6 +131,12 @@ spec = do
                 simpleBody replacement `shouldBe` simpleBody original
                 lookup "Content-Range" (simpleHeaders replacement) `shouldBe` Nothing
                 lookup "Repr-Digest" (simpleHeaders replacement) `shouldBe` Just "sha-256=\"xaNf1tjTCVlsE8k7j2wsswDnodbM0L3OP3+Q1vuN02c=\""
+        it "gives back its directory read charges before it writes the merged body" $
+            withDirectorySources $ \runtime binding _ _ -> do
+                (held, response) <- chargedAtResponse runtime binding "/versions"
+                simpleStatus response `shouldBe` status200
+                -- The merge charge over the packed public and private views, which share no name.
+                held `shouldBe` 2 * (directoryWeight (GemDirectory "public-gem 1.0 \n") + BS.length "private-gem 1.0 \n") + 4096
         it "keeps a native400 directory limit failure at the capability boundary" $
             withDirectorySources $ \runtime binding hits privateStatus -> do
                 writeIORef privateStatus status400
@@ -676,6 +684,20 @@ warmPublicDocuments uncached binding hits documents = do
         simpleBody repeated `shouldBe` simpleBody original
     readIORef hits `shouldReturn` []
     pure runtime
+
+-- What the request holds when its response starts, under a meter that charges each byte.
+chargedAtResponse :: ServeRuntime -> MountBinding -> ByteString -> IO (Int, SResponse)
+chargedAtResponse runtime binding path = withSweeper $ \deadlines -> do
+    meter <- newMemoryMeter deadlines MeterSettings{msBudgetBytes = maxBound `div` 2, msStepBytes = 1, msEntryRoom = 1000, msEntryWaitMicros = 0}
+    held <- newIORef 0
+    logEnv <- newTestLogEnv
+    let metered = runtime{srMemoryMeter = meter}
+        observe = snChargedBytes <$> meterSnapshot meter >>= writeIORef held
+    response <- runSession (srequest (SRequest (setPath defaultRequest path) "")) $ \incoming respond ->
+        case rubyGemsRouter (requestMethod incoming) (requestHeaders incoming) (pathInfo incoming) of
+            RouteAction contract (RunPipeline _ run) -> runHandler logEnv mempty (RequestCtx metered binding) (run incoming (\reply -> observe >> respond (responseToWai contract reply)))
+            _ -> fail "expected a pipeline route"
+    (,response) <$> readIORef held
 
 capture :: ServeRuntime -> MountBinding -> Method -> ByteString -> [Header] -> IO SResponse
 capture runtime binding method path headers = do
