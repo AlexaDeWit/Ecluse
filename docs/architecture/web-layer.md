@@ -239,9 +239,9 @@ may not be allowed to install. `server.metadataGzip` is on by default, and
 After admission, `Accept-Encoding` selects gzip, identity, or a `406` when neither is permitted.
 Input-derived validators return `304` before rendering or compression. Otherwise the proxy
 reads or renders identity bytes, then compresses only when gzip was selected.
-RubyGems first builds the bounded Dependencies API batch after every named package passes admission.
-Its validator hashes the ordered Marshal bytes. Validated compact gemspec bytes use the same conditional and coding rules.
-The empty Dependencies API reply is an empty metadata listing, including for coding and validators.
+RubyGems Compact Index `/versions` and `/info` replies and compact specifications instead hash the
+rendered identity bytes, after current authorisation and admission. A matching `304` therefore skips
+compression but still pays the fetch, merge, or serialisation.
 
 - **Only admitted listings.** Artifacts, sidecars, probes, refusals and publish replies are never
   compressed by Écluse. RubyGems compact gemspecs are admitted native metadata.
