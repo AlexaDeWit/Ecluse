@@ -76,7 +76,7 @@ data PublishCodec = forall source metadata. PublishCodec
     , pcProbeRequest :: Text -> Maybe ClientCredential -> PackageName -> Either UrlFormationError Request
     , pcVersionListWalk :: Maybe (Limits -> Cursor -> Step VersionListState)
     -- ^ The protocol maintenance caller uses this cheaper inventory where the adapter supplies one.
-    , pcPrepareTarget :: TracingPort -> OriginClient -> RegistryUrl -> IO (Either MetadataError RegistryUrl)
+    , pcPrepareTarget :: OriginClient -> RegistryUrl -> IO (Either MetadataError RegistryUrl)
     -- ^ Prepare only after the role credential exists. Discovery cannot widen the approved upload root.
     , pcPublishRequest :: Text -> Maybe ClientCredential -> PublishPlan -> MirrorUploadData metadata -> Either PublishFault Request
     , pcPublishOutcome :: Int -> ByteString -> Either PublishFault ()
@@ -142,12 +142,12 @@ fetchVersionList client limits walk request =
   where
     versions streamed = streamValue streamed >>= finishVersionList
 
-publishUpload :: MirrorTransport -> RegistryUrl -> RegistryUrl -> (Int -> IO ()) -> (TracingPort -> OriginClient -> RegistryUrl -> IO (Either MetadataError RegistryUrl)) -> (Text -> Maybe ClientCredential -> PublishPlan -> MirrorUploadData metadata -> Either PublishFault Request) -> (Int -> ByteString -> Either PublishFault ()) -> MirrorUploadData metadata -> PublishPlan -> IO (Either PublishFault ())
+publishUpload :: MirrorTransport -> RegistryUrl -> RegistryUrl -> (Int -> IO ()) -> (OriginClient -> RegistryUrl -> IO (Either MetadataError RegistryUrl)) -> (Text -> Maybe ClientCredential -> PublishPlan -> MirrorUploadData metadata -> Either PublishFault Request) -> (Int -> ByteString -> Either PublishFault ()) -> MirrorUploadData metadata -> PublishPlan -> IO (Either PublishFault ())
 publishUpload transport readTarget target charge prepare request outcome upload plan = do
     credential <- ptMintCredential transport
     pay <- accumulatingCharge charge
     let origin = (originClient (ptLimits transport) (ptClient transport) readTarget credential){ocChargeFullRead = pay}
-    prepared <- prepare (ptTracing transport) origin target
+    prepared <- prepare origin target
     case prepared of
         Left fault -> pure (Left (publishTargetFault fault))
         Right approved ->

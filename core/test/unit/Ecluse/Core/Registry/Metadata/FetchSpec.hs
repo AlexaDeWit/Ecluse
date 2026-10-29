@@ -85,10 +85,10 @@ registered =
         }
     , ReadFixture
         { rdEcosystem = Cargo
-        , rdPrepareRead = PrepareRead $ \tracing origin ->
+        , rdPrepareRead = PrepareRead $ \origin ->
             case adapterFor Cargo of
                 Nothing -> fail "Cargo has no production adapter registration"
-                Just adapter -> prepareRead (metadataRead (adapterMetadata adapter)) tracing origin
+                Just adapter -> prepareRead (metadataRead (adapterMetadata adapter)) origin
         , rdRead = \base -> cargoRead <$> parseCargoDiscovery (ecosystemArtifactAuthorities cargoArtifactHosts) base (discovery base)
         , rdFraming = RecordStream
         , rdCallerBoundPath = Nothing
@@ -98,10 +98,10 @@ registered =
         }
     , ReadFixture
         { rdEcosystem = RubyGems
-        , rdPrepareRead = PrepareRead $ \tracing origin ->
+        , rdPrepareRead = PrepareRead $ \origin ->
             case adapterFor RubyGems of
                 Nothing -> fail "RubyGems has no production adapter registration"
-                Just adapter -> prepareRead (metadataRead (adapterMetadata adapter)) tracing origin
+                Just adapter -> prepareRead (metadataRead (adapterMetadata adapter)) origin
         , rdRead = Right . gemReadWith (const pass) (const pass)
         , rdFraming = CallerBoundRecords
         , rdCallerBoundPath = Just "/info/thing"

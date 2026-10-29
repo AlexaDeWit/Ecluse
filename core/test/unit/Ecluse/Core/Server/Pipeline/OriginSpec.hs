@@ -208,7 +208,7 @@ fullReadSpec = describe "full Cargo read payments" $ do
             snChargedBytes <$> meterSnapshot meter `shouldReturn` 0
 
 observingFullRead :: MemoryMeter -> Int -> IORef Int -> IORef Int -> IORef [Int] -> PrepareRead -> PrepareRead
-observingFullRead meter factor sourcePaid peak balances factory = PrepareRead $ \tracing origin ->
+observingFullRead meter factor sourcePaid peak balances factory = PrepareRead $ \origin ->
     let recordSource amount = modifyIORef' sourcePaid (+ scaleCharge factor amount)
         source amount = ocChargeFullRead origin amount >> recordSource amount
         -- The fetch retains the original origin, so body payments bypass the preparation wrapper.
@@ -228,7 +228,7 @@ observingFullRead meter factor sourcePaid peak balances factory = PrepareRead $ 
             rowHeld <- readIORef peak
             held <- snChargedBytes <$> meterSnapshot meter
             modifyIORef' balances ((held - sourceHeld - rowHeld) :)
-     in fmap observeBody <$> prepareRead factory tracing origin{ocChargeFullRead = source, ocChargeFullReadWorkspace = workspace}
+     in fmap observeBody <$> prepareRead factory origin{ocChargeFullRead = source, ocChargeFullReadWorkspace = workspace}
 
 runCargoFull :: ServeRuntime -> PackumentDeps -> MemoryTicket -> Bool -> IO OriginResult
 runCargoFull runtime deps ticket public = do
@@ -256,7 +256,7 @@ retainedConsumerSpec = describe "successful selected consumers" $ do
         original <- testServeRuntime deadlines metrics
         meter <- newMemoryMeter deadlines MeterSettings{msBudgetBytes = maxBound `div` 2, msStepBytes = 1, msEntryRoom = 0, msEntryWaitMicros = 0}
         let base = inertDepsFor adapter
-            factory = PrepareRead (\_ _ -> modifyIORef' misses (+ 1) $> Left MetadataAbsent)
+            factory = PrepareRead (\_ -> modifyIORef' misses (+ 1) $> Left MetadataAbsent)
             deps = base{pdMetadata = (pdMetadata base){metadataRead = factory}}
             source = Source (registryUrlText (pdPublicBaseUrl deps))
             runtime = original{srMemoryMeter = meter, srMetadataCache = cache}
@@ -283,7 +283,7 @@ retainedConsumerSpec = describe "successful selected consumers" $ do
         cache <- newMetadataCache defaultCacheConfig{cacheMaxEntries = 1}
         original <- testServeRuntime deadlines noopMetricsPort
         let base = inertDepsFor adapter
-            factory = PrepareRead (\_ _ -> pure (Left MetadataAbsent))
+            factory = PrepareRead (\_ -> pure (Left MetadataAbsent))
             deps = base{pdMetadata = (pdMetadata base){metadataRead = factory}}
             source = Source (registryUrlText (pdPublicBaseUrl deps))
             runtime = original{srMetadataCache = cache}

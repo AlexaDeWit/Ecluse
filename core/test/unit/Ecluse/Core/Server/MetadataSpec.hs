@@ -475,7 +475,7 @@ preparationSpec = describe "origin preparation" $ do
     it "includes preparation in the raw read's request deadline" $
         withExchangeClient (newManager defaultManagerSettings) $ \exchanges -> withSweeper $ \deadlines -> do
             progress <- either (fail . show) pure (mkProgressFloor 0.5 0.25 1)
-            let factory = PrepareRead (\_ _ -> threadDelay 20_000_000 $> Left MetadataAbsent)
+            let factory = PrepareRead (\_ -> threadDelay 20_000_000 $> Left MetadataAbsent)
                 origin = perCallerOrigin defaultLimits exchanges (mkBaseRequest stubUrl) Nothing
                 preparedReads = ecosystemMetadataReads factory passthroughTracingPort noopMetricsPort noLog noInvalidLog noFetchLog origin
                 client = privateMetadataClient (withinRequestCap deadlines progress preparedReads)

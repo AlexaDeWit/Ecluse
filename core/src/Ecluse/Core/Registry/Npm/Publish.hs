@@ -103,7 +103,7 @@ npmPublishCodec =
         , pcTargetReadPermille = cfFullReadPermille npmChargeFactors
         , pcProbeRequest = \targetUrl credential -> metadataRequest targetUrl credential Abbreviated
         , pcVersionListWalk = Just (\limits -> npmVersionListWalk limits (collectVersionList limits) emptyVersionList)
-        , pcPrepareTarget = \_ _ target -> pure (Right target)
+        , pcPrepareTarget = \_ target -> pure (Right target)
         , pcPublishRequest = npmPublishRequestFor
         , pcPublishOutcome = \status _ -> classifyPublish status
         }
