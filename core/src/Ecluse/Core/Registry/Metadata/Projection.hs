@@ -10,21 +10,25 @@ module Ecluse.Core.Registry.Metadata.Projection (
     validateNameAgreement,
     projectionResult,
     streamError,
+    finishSelectedVersion,
 ) where
 
 import Data.Aeson (Value, parseJSON)
 import Data.Aeson.Types (parseMaybe)
+import Data.Map.Strict qualified as Map
 
-import Ecluse.Core.Package (PackageName)
+import Ecluse.Core.Package (PackageInfo (infoVersions), PackageName)
 import Ecluse.Core.Registry (ParseError)
-import Ecluse.Core.Registry.JsonStream (isNestingLimit)
-import Ecluse.Core.Registry.Metadata (MetadataError (MetadataBoundExceeded, MetadataNameMismatch, MetadataUndecodable))
+import Ecluse.Core.Registry.CachedDocument (CachedDoc)
+import Ecluse.Core.Registry.JsonStream (StreamResult (..), isNestingLimit)
+import Ecluse.Core.Registry.Metadata (MetadataError (MetadataBoundExceeded, MetadataNameMismatch, MetadataUndecodable), VersionDoc (..), VersionRead (..))
 import Ecluse.Core.Registry.WireSupport (Projection (NameMismatch, Projected), checkNameAgreement)
 import Ecluse.Core.Security (
     LimitError (TooDeeplyNested),
     Limits,
     maxNestingDepth,
  )
+import Ecluse.Core.Version (Version, renderVersion)
 
 -- | An absent, non-string, or rejected name is an undecodable document.
 validateReportedName :: (Text -> Either ParseError PackageName) -> Maybe Value -> Either MetadataError PackageName
@@ -52,3 +56,15 @@ streamError limits err =
     if isNestingLimit err
         then MetadataBoundExceeded (TooDeeplyNested (maxNestingDepth limits))
         else MetadataUndecodable
+
+{- | A selected walk's version: its typed details by raw version and the native document @select@
+keeps for it. No upstream latest tag is reported.
+-}
+finishSelectedVersion :: (a -> PackageInfo) -> (Version -> a -> Maybe CachedDoc) -> Limits -> Version -> StreamResult a -> Either MetadataError VersionRead
+finishSelectedVersion info select limits version streamed = do
+    result <- first (streamError limits) (streamValue streamed)
+    let selected = do
+            details <- Map.lookup (renderVersion version) (infoVersions (info result))
+            raw <- select version result
+            pure VersionDoc{vdDetails = details, vdRaw = Just raw}
+    pure VersionRead{vrVersion = selected, vrBodyBytes = streamBytes streamed, vrUpstreamLatest = Nothing}
