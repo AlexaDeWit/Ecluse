@@ -31,7 +31,7 @@ import Ecluse.Core.Server.Cache.Store (newSingleFlightWithBackend, resolveSingle
 import Ecluse.Core.Server.Cache.Types (StoreBudget (StoreBudget))
 import Ecluse.Core.Server.Cache.VersionWeight.Fields (detailsFieldsWeight)
 import Ecluse.Core.Server.Framing (frameComponents)
-import Ecluse.Core.Server.MemoryModel (bufferedChunkCharge, expandWireBytesInteger)
+import Ecluse.Core.Server.MemoryModel (bufferedChunkCharge, expandWireBytesInteger, saturatingCharge)
 import Ecluse.Core.Version (renderVersion)
 
 -- | Retain compact verified public signals for five minutes. Private store evidence never enters this cache.
@@ -72,12 +72,11 @@ newCargoInstallEvidence deadlines limits = do
 
 withSubjectBudget :: InstallEvidenceContext -> PackageDetails -> (InstallEvidenceContext -> IO (Either ReadFault a)) -> IO (Either ReadFault a)
 withSubjectBudget context details use = do
-    let saturate = fromInteger . min (toInteger (maxBound :: Int))
-        keyCharge = saturate (expandWireBytesInteger (detailsFieldsWeight details))
+    let keyCharge = saturatingCharge (expandWireBytesInteger (detailsFieldsWeight details))
     result <- withInstallEvidenceBudget (ieBudget context) $ \bytes inspection ->
         ( do
             bytes keyCharge
-            let subjectBudget = InstallEvidenceBudget (\action -> Just <$> action (\cost -> bytes (saturate (toInteger keyCharge + toInteger cost))) inspection)
+            let subjectBudget = InstallEvidenceBudget (\action -> Just <$> action (\cost -> bytes (saturatingCharge (toInteger keyCharge + toInteger cost))) inspection)
             use context{ieBudget = subjectBudget}
         )
             `finally` (inspection 0 >> bytes 0)
