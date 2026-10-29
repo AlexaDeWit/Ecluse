@@ -215,14 +215,22 @@ packageCoordinates name = (unScope <$> pkgNamespace name, unscopedName name)
 
 -- | Parse native listing identities and refuse namespaces for formats that do not have them.
 packageNameFrom :: Ecosystem -> Maybe Text -> Text -> Either StoreFault PackageName
-packageNameFrom Cargo = nativePackageName "Cargo" Cargo.projectName
-packageNameFrom RubyGems = nativePackageName "RubyGems" RubyGems.projectName
-packageNameFrom eco = \namespace raw -> Right (mkPackageName eco (mkScope <$> (nonBlank =<< namespace)) raw)
+packageNameFrom eco namespace raw = case nativeGrammar eco of
+    Just parse -> nativePackageName eco parse namespace raw
+    Nothing -> Right (mkPackageName eco (mkScope <$> (nonBlank =<< namespace)) raw)
 
-nativePackageName :: Text -> (Text -> Either ParseError PackageName) -> Maybe Text -> Text -> Either StoreFault PackageName
-nativePackageName label parse namespace raw = do
-    unless (maybe True T.null namespace) (Left (protocolFault (label <> " packages cannot have a namespace")))
-    first (const (protocolFault ("CodeArtifact returned an invalid " <> label <> " package name"))) (parse raw)
+-- The ecosystems whose listings CodeArtifact must return as checked, unnamespaced native names.
+nativeGrammar :: Ecosystem -> Maybe (Text -> Either ParseError PackageName)
+nativeGrammar = \case
+    Cargo -> Just Cargo.projectName
+    RubyGems -> Just RubyGems.projectName
+    Npm -> Nothing
+    PyPI -> Nothing
+
+nativePackageName :: Ecosystem -> (Text -> Either ParseError PackageName) -> Maybe Text -> Text -> Either StoreFault PackageName
+nativePackageName eco parse namespace raw = do
+    unless (maybe True T.null namespace) (Left (protocolFault (show eco <> " packages cannot have a namespace")))
+    first (const (protocolFault ("CodeArtifact returned an invalid " <> show eco <> " package name"))) (parse raw)
 
 -- | List one bucket page. The prefix filters the package component, never its namespace.
 listPackagesRequest :: CodeArtifactStore -> NamePrefix -> Maybe Text -> CA.ListPackages
@@ -326,14 +334,15 @@ descriptionFault detail =
         , faultRetry = RetryFutile
         }
 
--- | Reject malformed Cargo and RubyGems inventory. Other formats retain their absent-name filtering.
+-- | Reject malformed native-grammar inventory. Other formats retain their absent-name filtering.
 packagesOfPage :: Ecosystem -> [CA.PackageSummary] -> Either StoreFault [PackageName]
 packagesOfPage eco = fmap catMaybes . traverse named
   where
-    named summary = case summary ^. CAL.packageSummary_package of
-        Just raw | eco `elem` [Cargo, RubyGems] -> Just <$> packageNameFrom eco (summary ^. CAL.packageSummary_namespace) raw
-        _ | eco `elem` [Cargo, RubyGems] -> Left (protocolFault ("CodeArtifact returned a " <> show eco <> " package without a name"))
-        raw -> traverse (packageNameFrom eco (summary ^. CAL.packageSummary_namespace)) (nonBlank =<< raw)
+    named summary = case (nativeGrammar eco, summary ^. CAL.packageSummary_package) of
+        (Just parse, Just raw) -> Just <$> nativePackageName eco parse (namespaceOf summary) raw
+        (Just _, Nothing) -> Left (protocolFault ("CodeArtifact returned a " <> show eco <> " package without a name"))
+        (Nothing, raw) -> traverse (packageNameFrom eco (namespaceOf summary)) (nonBlank =<< raw)
+    namespaceOf summary = summary ^. CAL.packageSummary_namespace
 
 -- | Published and Unlisted versions remain installable. Other statuses are withdrawn.
 presenceOf :: CA.PackageVersionStatus -> VersionPresence
