@@ -277,14 +277,13 @@ instance FromJSON Floors where
         calibration <- o .: "calibration"
         shapes <- o .: "floors"
         byShape <- Map.fromList <$> traverse parseShape (Map.toList shapes)
-        when (any ((/= Map.keysSet byShape) . Map.keysSet . lcHighestMs) (calNpmLatency calibration : maybeToList (calPypiLatency calibration) <> maybeToList (calCargoLatency calibration) <> maybeToList (calRubyGemsLatency calibration))) $
+        when (any ((/= Map.keysSet byShape) . Map.keysSet . lcHighestMs) (mapMaybe (\(_, entry) -> leCeiling entry calibration) latencyEntries)) $
             fail "the latency ceiling must record a highest latency for each pod shape the floors hold, and for no other"
         unless (all (`elem` map fst (concatMap Map.keys (Map.elems byShape))) (Map.keys (calRetainedConditions calibration))) $
             fail "retained measurement conditions name a scenario without floors"
-        when (any (any (T.isPrefixOf "cargo/" . fst) . Map.keys) (Map.elems byShape) && isNothing (calCargoLatency calibration)) $
-            fail "Cargo floors require an independently measured native latency ceiling"
-        when (any (any (T.isPrefixOf "rubygems/" . fst) . Map.keys) (Map.elems byShape) && isNothing (calRubyGemsLatency calibration)) $
-            fail "RubyGems floors require an independently measured native latency ceiling"
+        for_ [ecosystem | (ecosystem, entry) <- latencyEntries, leNative entry, isNothing (leCeiling entry calibration)] $ \ecosystem ->
+            when (any (any (T.isPrefixOf (ecosystemName ecosystem <> "/") . fst) . Map.keys) (Map.elems byShape)) $
+                fail (show ecosystem <> " floors require an independently measured native latency ceiling")
         pure (Floors calibration byShape)
       where
         parseShape :: (Text, Map Text (Map Text Int)) -> Parser (PodShape, Map FloorKey Int)
@@ -346,6 +345,27 @@ data RunFacts = RunFacts
     }
     deriving stock (Eq, Show)
 
+-- How the floors read one ecosystem's injected latency.
+data LatencyEntry = LatencyEntry
+    { leReportOrder :: Int
+    , leNative :: Bool
+    -- ^ Floors for a native fixture need an independent ceiling, and a recorded ceiling needs an observation.
+    , leCeiling :: Calibration -> Maybe LatencyCeiling
+    , leObserved :: RunFacts -> Maybe Int
+    }
+
+-- Map an ecosystem to its latency fields. A total match, so a new ecosystem must state its fields here.
+latencyEntry :: Ecosystem -> LatencyEntry
+latencyEntry = \case
+    Npm -> LatencyEntry 0 False (Just . calNpmLatency) (Just . rfNpmLatencyMs)
+    PyPI -> LatencyEntry 1 False calPypiLatency (Just . rfPypiLatencyMs)
+    Cargo -> LatencyEntry 2 True calCargoLatency rfCargoLatencyMs
+    RubyGems -> LatencyEntry 3 True calRubyGemsLatency rfRubyGemsLatencyMs
+
+-- Every ecosystem's latency entry, in the order reasons and the report name them.
+latencyEntries :: [(Ecosystem, LatencyEntry)]
+latencyEntries = sortOn (leReportOrder . snd) [(ecosystem, latencyEntry ecosystem) | ecosystem <- universe]
+
 -- | One reason a run is not held to the floors.
 data Unheld
     = -- | It differs from the calibrated operating point in these settings.
@@ -383,12 +403,13 @@ enforce floors facts = case (Map.lookup shape (floorsByShape floors), reasons) o
   where
     shape = rfShape facts
     calibration = floorsCalibration floors
-    ceilings = [(Npm, rfNpmLatencyMs facts, calNpmLatency calibration)] <> [(PyPI, rfPypiLatencyMs facts, latencyBound) | latencyBound <- maybeToList (calPypiLatency calibration)] <> [(Cargo, injected, latencyBound) | injected <- maybeToList (rfCargoLatencyMs facts), latencyBound <- maybeToList (calCargoLatency calibration)] <> [(RubyGems, injected, latencyBound) | injected <- maybeToList (rfRubyGemsLatencyMs facts), latencyBound <- maybeToList (calRubyGemsLatency calibration)]
+    readings = [(ecosystem, leNative entry, leObserved entry facts, leCeiling entry calibration) | (ecosystem, entry) <- latencyEntries]
+    ceilings = [(ecosystem, injected, latencyBound) | (ecosystem, _, Just injected, Just latencyBound) <- readings]
     reasons =
-        [MissingNativeLatency Cargo | isJust (rfCargoLatencyMs facts), isNothing (calCargoLatency calibration)]
-            <> [MissingNativeObservation Cargo | isNothing (rfCargoLatencyMs facts), isJust (calCargoLatency calibration)]
-            <> [MissingNativeLatency RubyGems | isJust (rfRubyGemsLatencyMs facts), isNothing (calRubyGemsLatency calibration)]
-            <> [MissingNativeObservation RubyGems | isNothing (rfRubyGemsLatencyMs facts), isJust (calRubyGemsLatency calibration)]
+        [ reason
+        | (ecosystem, True, injected, latencyBound) <- readings
+        , reason <- [MissingNativeLatency ecosystem | isJust injected, isNothing latencyBound] <> [MissingNativeObservation ecosystem | isNothing injected, isJust latencyBound]
+        ]
             <> [SettingsDiffer settings | Just settings <- [nonEmpty (differingSettings (calOperatingPoint calibration) (rfSettings facts))]]
             <> [OtherRunner (calRunner calibration) (calRunnerKind calibration) (rfRunner facts) | rfRunner facts /= readingOn (calRunnerKind calibration)]
             <> [ConditionsDiffer (calConditions calibration) (rfConditions facts) | calConditions calibration /= rfConditions facts]
@@ -483,7 +504,7 @@ describeEnforcement calibration = \case
             <> " Measurement conditions: "
             <> calConditions calibration
             <> ". "
-            <> T.intercalate " " [ecosystemName ecosystem <> " latency ceiling: " <> show (lcCeilingMs latencyBound) <> " ms." | (ecosystem, latencyBound) <- [(Npm, calNpmLatency calibration)] <> [(PyPI, pypiBound) | pypiBound <- maybeToList (calPypiLatency calibration)] <> [(Cargo, cargoBound) | cargoBound <- maybeToList (calCargoLatency calibration)] <> [(RubyGems, rubyBound) | rubyBound <- maybeToList (calRubyGemsLatency calibration)]]
+            <> T.intercalate " " [ecosystemName ecosystem <> " latency ceiling: " <> show (lcCeilingMs latencyBound) <> " ms." | (ecosystem, entry) <- latencyEntries, Just latencyBound <- [leCeiling entry calibration]]
             <> describeRetainedConditions calibration
     NotHeld reasons ->
         "This run is not held to the success floors in `"

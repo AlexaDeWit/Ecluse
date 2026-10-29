@@ -140,10 +140,10 @@ runPasses environment knobs processors shape profile selected = do
     capabilities <- getNumCapabilities
     -- One source for what each fixture injects, so the latency compared is the latency injected.
     let baselineOf eco = case eco of
+            Npm -> npmBaseline
             PyPI -> pypiBaseline
             Cargo -> cargoBaseline
             RubyGems -> rubyGemsBaseline
-            _ -> npmBaseline
         facts =
             RunFacts
                 { rfSettings = operatingPoint knobs selected (patternOverridesIn environment)
