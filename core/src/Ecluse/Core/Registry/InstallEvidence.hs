@@ -13,7 +13,6 @@ module Ecluse.Core.Registry.InstallEvidence (
 
 import Network.HTTP.Client (Request)
 import UnliftIO.Exception (throwIO)
-import UnliftIO.MVar qualified as MVar
 
 import Ecluse.Core.Deadline (Deadlines)
 import Ecluse.Core.Fault (boundedDetail, tfCause, tfDetail, transportRetryable)
@@ -29,6 +28,7 @@ import Ecluse.Core.Rules.Install (InstallArtifactRead, InstallEvidenceBudget (..
 import Ecluse.Core.Rules.Types (Inability (EvaluationFailed, InstallEvidenceFailed), Transience (WillResolve, WontResolve))
 import Ecluse.Core.Security (BodyLimit (MirrorArtifactBodyLimit), Limits (maxMetadataBytes, maxMirrorArtifactBytes, progressFloor))
 import Ecluse.Core.Security.Egress (RegistryUrl, registryUrlText)
+import Ecluse.Core.Server.Admission.Meter (newChargePair)
 import Ecluse.Core.Server.Admission.Weighted (AdmissionObservers (..), admissionWaitMicros, newWeightedAdmission, withWeightedAdmission)
 
 -- | The caller supplies the approved request, including its role's credential posture.
@@ -70,12 +70,8 @@ newInstallEvidenceBudget deadlines limits = do
     admission <- newWeightedAdmission deadlines capacity 8 admissionWaitMicros
     pure $ InstallEvidenceBudget $ \action -> do
         fmap rightToMaybe . withWeightedAdmission observers admission capacity $ do
-            regions <- MVar.newMVar (0, 0)
-            let pay change = MVar.modifyMVar_ regions $ \previous -> do
-                    let next@(bytes, inspection) = change previous
-                    -- The charge callback cannot return a refusal value. The provider catches this typed bound.
-                    when (toInteger bytes + toInteger inspection > toInteger capacity) (throwIO InstallEvidenceBudgetExceeded)
-                    pure next
-            action (\bytes -> pay (\(_, inspection) -> (max 0 bytes, inspection))) (\inspection -> pay (\(bytes, _) -> (bytes, max 0 inspection)))
+            -- The charge callback cannot return a refusal value. The provider catches this typed bound.
+            (bytes, inspection) <- newChargePair (\total -> when (total > capacity) (throwIO InstallEvidenceBudgetExceeded))
+            action (bytes . max 0) (inspection . max 0)
   where
     observers = AdmissionObservers{onQueued = pass, onShed = pass, onInFlightDelta = const pass}

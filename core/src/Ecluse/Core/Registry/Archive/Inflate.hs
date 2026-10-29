@@ -4,9 +4,8 @@
 {-# LANGUAGE ImportQualifiedPost #-}
 
 -- | A scoped inflater over the existing streaming-commons ABI, with deterministic release on every exit.
-module Ecluse.Core.Registry.Archive.Inflate (InflateFormat (..), withInflatedChunks, inflateBounded, splitArchiveCharge) where
+module Ecluse.Core.Registry.Archive.Inflate (InflateFormat (..), withInflatedChunks, inflateBounded) where
 
-import Control.Concurrent.MVar qualified as MVar
 import Data.ByteString qualified as BS
 import Data.Streaming.Zlib.Lowlevel qualified as Z
 import Foreign.C.Types (CInt)
@@ -113,13 +112,3 @@ step native input output =
         (status, consumed, written) <- advanceStream Z.c_call_inflate_noflush native (BS.take chunkBytes input) destination chunkBytes
         bytes <- BS.packCStringLen (castPtr destination, written)
         pure (status, consumed, bytes)
-
--- | Combine decoder and retained-content reservations into one absolute workspace charge.
-splitArchiveCharge :: (Int -> IO ()) -> IO (Int -> IO (), Int -> IO ())
-splitArchiveCharge pay = do
-    portions <- MVar.newMVar (0, 0)
-    let reserve change = MVar.modifyMVar_ portions $ \previous -> do
-            let next@(decoder, retained) = change previous
-            pay (decoder + retained)
-            pure next
-    pure (\decoder -> reserve (\(_, retained) -> (decoder, retained)), \retained -> reserve (\(decoder, _) -> (decoder, retained)))
