@@ -31,11 +31,12 @@ import UnliftIO.Exception (throwIO)
 import Ecluse.Core.Deadline (Deadlines)
 import Ecluse.Core.Fault (TransportCause (TransportTimeout, TransportUnreachable), TransportFault (tfCause, tfDetail))
 import Ecluse.Core.Registry (BodyOutcome (SuccessBody), FetchFault (FetchTransport))
-import Ecluse.Core.Registry.Exchange (accumulatingCharge, accumulatingChargeFrom, boundedExchange, digestingRead, newSingleAttemptManager, singleAttemptSettings, withSuccessBody, withinServeCap)
+import Ecluse.Core.Registry.Exchange (accumulatingCharge, accumulatingChargeFrom, boundedChargedRead, boundedExchange, boundedIncrementalRead, digestingRead, newSingleAttemptManager, singleAttemptSettings, withSuccessBody, withinServeCap)
 import Ecluse.Core.Registry.Exchange.Types (ExchangeClient (ecDeadlines))
 import Ecluse.Core.Registry.JsonStream (StreamResult (..), readJsonStream, retainedValue)
 import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), LimitError (BodyTooLarge), ProgressFloor, boundedRead, mkProgressFloor)
 import Ecluse.Core.Server.Cache.Store (SingleFlight, newSingleFlightWithBackend, resolveSingleFlight)
+import Ecluse.Core.Server.MemoryModel (bufferedChunkCharge)
 import Ecluse.Core.Snapshot (ContentDigest, digestFromContext)
 import Ecluse.Test.Deadline (withExchangeClient)
 import Ecluse.Test.Poll (awaitUntil)
@@ -81,6 +82,15 @@ chargeSpec = describe "cumulative charging" $ do
         add <- accumulatingCharge (\n -> modifyIORef' paid (<> [n]))
         mapM_ add [0, -3, 4, 0, 2]
         readIORef paid `shouldReturn` [4, 6]
+
+    it "pays buffered chunks as running totals or as increments, by reader" $ do
+        let three = bufferedChunkCharge 3
+            five = bufferedChunkCharge 5
+        for_ [(boundedChargedRead, [three, three + five]), (boundedIncrementalRead, [three, five])] $ \(boundedReader, expected) -> do
+            paid <- newIORef []
+            next <- heldChunks ["abc", "defgh"]
+            boundedReader (\n -> modifyIORef' paid (<> [n])) (MetadataBodyLimit 64) next `shouldReturn` Right (8, "abcdefgh")
+            readIORef paid `shouldReturn` expected
 
 data ChargeRefused = ChargeRefused
     deriving stock (Eq, Show)
