@@ -14,7 +14,7 @@ inventory, deletion, integrity, and recovery. These lists are normative for each
 Driver capability flags cannot shrink them. Independent obligations detect a family omitted
 from registration, while actual Hspec execution proves the registered laws ran.
 Each missing required family must fail by name, and unrelated families continue.
-npm, PyPI, and Cargo run the full composition. The separate read-only foundation API remains partial
+npm, PyPI, Cargo, and RubyGems run the full composition. The separate read-only foundation API remains partial
 and does not satisfy the full ecosystem contract.
 
 ## Metadata and serving
@@ -25,7 +25,7 @@ Original: core/test/unit/Ecluse/Core/Registry/Metadata/FetchSpec.hs.
 Replacement: test/contracts/Ecluse/Test/Contract/Metadata/Fetch.hs.
 Both npm and PyPI run the same body with their original raw documents and builders.
 The original adapter-completeness example and native fixture registration remain in FetchSpec.
-Each prefix below expands under core.metadata.fetch for npm, PyPI and Cargo.
+Each prefix below expands under core.metadata.fetch for npm, PyPI, Cargo and RubyGems.
 
 | Case suffix | Preserved assertions |
 | --- | --- |
@@ -60,7 +60,7 @@ The native Cargo tests keep duplicate-version and EOF scanning controls beside t
 
 Originals: core/test/unit/Ecluse/Core/Registry/Npm/MetadataSpec.hs and PyPI/MetadataSpec.hs.
 Replacement: test/contracts/Ecluse/Test/Contract/Metadata/Projection.hs.
-Each suffix expands under core.metadata.projection for npm, PyPI and Cargo.
+Each suffix expands under core.metadata.projection for npm, PyPI, Cargo and RubyGems.
 
 | Case suffix | Original examples and assertions |
 | --- | --- |
@@ -83,8 +83,8 @@ Independent readers in both ReaderSpec and StreamingSpec trees are unchanged.
 
 Replacement: test/contracts/Ecluse/Test/Contract/Serving.hs.
 Drivers: test/integration/Ecluse/Server/Pipeline/ServingDriver.hs.
-Registrations: existing npm PackumentIntegrationSpec and PyPI AdapterIntegrationSpec.
-Each suffix expands to integration.serving.npm and integration.serving.pypi.
+Registrations: npm PackumentIntegrationSpec, and the PyPI, Cargo, and RubyGems AdapterIntegrationSpec modules.
+Each suffix expands to integration.serving.npm, integration.serving.pypi, integration.serving.cargo, and integration.serving.rubygems.
 
 | Case suffix | Assertions and original home |
 | --- | --- |
@@ -146,10 +146,10 @@ Its independent Aeson readers inspect native wire version and artifact digest fi
 
 ### Full package-store subjects
 
-Verdaccio npm, CodeArtifact npm and CodeArtifact PyPI each run the same ten cases through `fullPackageStoreContract`.
+Verdaccio npm, CodeArtifact npm, CodeArtifact PyPI and CodeArtifact Cargo each run the same ten cases through `fullPackageStoreContract`.
 Each ID below has the prefix `package-store/<subject>/`.
-The subjects are `verdaccio`, `codeartifact` and `codeartifact-pypi`.
-Both CodeArtifact profiles run in the `backend-conformance` CI job and use the `codeartifact` backend identity.
+The subjects are `verdaccio`, `codeartifact`, `codeartifact-pypi` and `codeartifact-cargo`.
+The CodeArtifact profiles run in the `backend-conformance` CI job and use the `codeartifact` backend identity.
 The six family names come from an independent completion definition, so removing a family
 from the provider catalogue cannot make its absence pass.
 
@@ -178,7 +178,7 @@ Credential tests use local HTTP stubs. Telemetry tests use the local Collector a
 
 ### Negative controls and lifecycle
 
-CodeArtifact registration checks reject a missing PyPI profile before fixture acquisition.
+CodeArtifact registration checks reject a missing PyPI or Cargo profile before fixture acquisition.
 The npm and PyPI integrity controls alter successful production reads to change bytes, digests or consumer metadata.
 A PyPI control also removes distribution files.
 Each control requires an assertion failure and proves that the altered read ran.
@@ -223,11 +223,13 @@ These measurement paths retain their native sampling and verdict logic:
 Existing corpus bytes, expected outputs, remaining floor values, and RTS settings stay fixed.
 Provider coverage runs outside measured operations. New PyPI stress rows add samples without changing that boundary.
 
-The `ReadLoadFoundation` scope requires the shared routine read and stress laws for npm, PyPI, and Cargo.
+The `ReadLoadFoundation` scope requires the shared routine read and stress laws for npm, PyPI, Cargo, and RubyGems.
 The 5% private-copy and default restart variants remain available through explicit selection.
 `FullLoad` adds `MirrorWorker` as a separate requirement.
-Active npm, PyPI, and Cargo fixtures and receipts use `FullLoad`, including their native worker rows.
+Active npm, PyPI, Cargo, and RubyGems fixtures and receipts use `FullLoad`, including their native worker rows.
 PyPI also requires its three managed-read comparisons.
+RubyGems replies use no assembled-response retention, so RubyGems omits the assembled-hit, cache-fit and cache-evict laws.
+It adds three per-gem info working sets and a compact specification row.
 The new PyPI ceiling, herd, warm-under-cold and ramp rows use the shared law bodies.
 Their pass floors use three branch observations per pod shape, recorded in `bench/load/floors.json`.
 The existing floors and measured settings stay fixed.
@@ -249,7 +251,7 @@ An unheld or missing status produces diagnostic-only evidence and keeps the nati
 |---|---|
 | npm read, mirror, and first-party publication | Supported. Keep public/private authority, exact package bytes, fresh-client parity, native installation observations, and origin evidence. |
 | PyPI read and advisory decisions | Supported. Keep Simple JSON, wheel and source distribution bytes, selected-read limits, exact remediation semantics, and client isolation. |
-| Shared npm/PyPI proxy | Supported with one mount per ecosystem. Keep the existing mixed-client scenario and mount-local policy, credentials, jobs, and URLs. |
+| Shared multi-ecosystem proxy | Supported with one mount per ecosystem. Keep the npm, pip, and Cargo mixed-client scenario and mount-local policy, credentials, jobs, and URLs. |
 | Memory queue with an in-process worker | Supported with destructive receive. Split roles over the memory queue remain boot refusals. |
 | SQS queue and S3 advisory transport | Supported with native lease, redelivery, and advisory transport checks. S3 advisory storage grants no package-store capability. |
 | PyPI publication and mirroring | Supported. Keep native multipart publication, every supported wheel and source distribution, retained companions, and durable complete-version evidence. |
@@ -259,7 +261,9 @@ An unheld or missing status produces diagnostic-only evidence and keeps the nati
 | Hosted incremental PyPI copying | Supported under [#1639](https://github.com/AlexaDeWit/Ecluse/issues/1639). Contracts require a complete authorised served view or explicit unavailability, retry/restart, and offline completion. |
 | Filesystem or S3 package storage | Planned under [#1239](https://github.com/AlexaDeWit/Ecluse/issues/1239). Future contracts require committed completion visibility, interrupted writes, failed markers, restart, concurrent publication, and direct-read/listing invisibility. |
 | PyPI scope allow and install-time execution denial | Refused because the adapter blocks those rule types. Existing boot and capability tests keep the reasons explicit. |
-| RubyGems | No shipped adapter. Measurement registration rejects it as a supported provider. |
+| RubyGems Compact Index reads, mirroring, and publication | Bundler 2.6.9 and 4.0.23. Keep `/versions` discovery, on-demand `/info` metadata, archive SHA-256 values, complete platform mirrors with original-source durable state, and native publication. See the [protocol reference](https://ecluse-proxy.com/docs/protocol-support/#rubygems). |
+| RubyGems CodeArtifact maintenance | Inventory and physical deletion through deterministic native fixtures. A native yank is not deletion. No live AWS fidelity claim. |
+| RubyGems install-time execution denial, scope allow, and deprecation rules | Refused because the adapter blocks those rule types. Existing boot and capability tests keep the reasons explicit. |
 | Missing external service in smoke | Unavailable evidence, never a passing conformance result. Deterministic mirrors remain gating. |
 | Missing image, client, ownership, or Docker in required E2E | Failed setup. Pending or absent cases cannot satisfy the execution audit. |
 
@@ -284,7 +288,7 @@ cabal run ecluse-e2e-audit -- PLAN REPORT...
 cabal run ecluse-integration-audit -- PLAN REPORT
 ```
 
-Run `task test-e2e` for fresh artifacts, all three fixed subjects, and the full audit.
+Run `task test-e2e` for fresh artifacts, all five fixed subjects, and the full audit.
 The task prints its artifact directory. Set `ECLTEST_ARTIFACT_DIR` to that path for later runs or auditing.
 For staged preparation, choose a fresh directory explicitly:
 
@@ -296,6 +300,7 @@ task test-e2e-load
 task test-e2e-npm
 task test-e2e-pypi
 task test-e2e-cargo
+task test-e2e-rubygems
 task test-e2e-shared-system
 task test-e2e-audit
 ```
@@ -316,7 +321,7 @@ Then run the staged E2E commands above.
 Set `ECLTEST_CORE_UNIT_ARTIFACT_DIR` to `scratchpad/unit/core`.
 Set `ECLTEST_RUNTIME_UNIT_ARTIFACT_DIR` to `scratchpad/unit/runtime`.
 Set `ECLTEST_INTEGRATION_ARTIFACT_DIR` to `scratchpad/integration/$ECLTEST_RUN_ID`.
-Run `task test-e2e-npm-completion`, `task test-e2e-pypi-completion`, or `task test-e2e-cargo-completion` for the subject.
+Run `task test-e2e-npm-completion`, `task test-e2e-pypi-completion`, `task test-e2e-cargo-completion`, or `task test-e2e-rubygems-completion` for the subject.
 The completion audit reads the actual reports from all four tiers.
 It checks required laws and execution identities against their compiled plans.
 
@@ -334,13 +339,14 @@ Its result does not claim live AWS service coverage.
 ## Fixed E2E entrypoints
 
 Read each suite's declaration list to see the contracts and concrete fixtures it runs.
-The Cabal components are `ecluse-e2e-npm`, `ecluse-e2e-pypi`, `ecluse-e2e-cargo`, and `ecluse-e2e-shared-system`.
+The Cabal components are `ecluse-e2e-npm`, `ecluse-e2e-pypi`, `ecluse-e2e-cargo`, `ecluse-e2e-rubygems`, and `ecluse-e2e-shared-system`.
 
 | Subject entrypoint | Composition | Concrete coverage |
 |---|---|---|
 | [Npm.hs](../test/e2e/Ecluse/E2E/Suites/Npm.hs) | `fullEcosystemContract npmDriver` | Serving, installation, advisory, mirroring, publication, Dredger and telemetry laws. |
 | [PyPI.hs](../test/e2e/Ecluse/E2E/Suites/PyPI.hs) | `fullEcosystemContract pypiDriver` | The same required families, with native wheel, sdist, multipart and CodeArtifact fixtures. |
 | [Cargo.hs](../test/e2e/Ecluse/E2E/Suites/Cargo.hs) | `fullEcosystemContract cargoDriver` | The same required families, with real sparse clients, native discovery, records, archives, publication, durable state, and compatible maintenance. |
+| [RubyGems.hs](../test/e2e/Ecluse/E2E/Suites/RubyGems.hs) | `fullEcosystemContract rubyDriver` and its registration contract | The same required families, with Bundler clients, Compact Index discovery, per-gem metadata, platform archives, publication, durable state, and CodeArtifact maintenance. |
 | [SharedSystem.hs](../test/e2e/Ecluse/E2E/Suites/SharedSystem.hs) | Cross-ecosystem and core capability cases | The mixed-client case. |
 
 Each ecosystem driver binds concrete providers for every required family.
@@ -564,7 +570,7 @@ The native modules retain scenario providers. The fixed suite declarations regis
 
 | Case ID | Original assertion |
 |---|---|
-| `mixed/alternating-clients` | serves an npm install, a pip install, and a second npm install in turn |
+| `mixed/alternating-clients` | serves npm, pip and Cargo installs before a second npm install |
 
 ## Integration registration and native traceability
 
@@ -591,7 +597,9 @@ wrapper was removed because it repeated examples without adding hooks or asserti
 | Group | Native module |
 | --- | --- |
 | `integration/aws-composition` | `Ecluse.AwsEndToEndIntegrationSpec` |
+| `integration/cargo` | `Ecluse.Core.Registry.Cargo.AdapterIntegrationSpec` |
 | `integration/pypi` | `Ecluse.Core.Registry.PyPI.AdapterIntegrationSpec` |
+| `integration/rubygems` | `Ecluse.Core.Registry.RubyGems.AdapterIntegrationSpec` |
 | `integration/mirror-view` | `Ecluse.Core.Server.MirrorViewIntegrationSpec` |
 | `integration/egress` | `Ecluse.Core.Security.EgressIntegrationSpec` |
 | `integration/origin` | `Ecluse.Core.Server.Pipeline.OriginIntegrationSpec` |
