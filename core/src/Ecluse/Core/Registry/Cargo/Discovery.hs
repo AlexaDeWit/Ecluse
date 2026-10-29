@@ -32,7 +32,7 @@ import Ecluse.Core.Ecosystem (Ecosystem (Cargo))
 import Ecluse.Core.Package (Hash, HashAlg (SHA256), hashAlg, hashValue, mkHash)
 import Ecluse.Core.Package.Filter.Internal (ArtifactOrigin, artifactOrigin, checkArtifactAddress)
 import Ecluse.Core.Registry (FetchFault (FetchUrlUnformable))
-import Ecluse.Core.Registry.Cargo.Project (projectName)
+import Ecluse.Core.Registry.Cargo.Project (cargoArchiveFilename, projectName)
 import Ecluse.Core.Registry.Cargo.Request (cargoArtifactHosts, cargoConfigRequest, cargoPrefix)
 import Ecluse.Core.Registry.Cargo.Wire (CargoRecordError (..), decodeCargoRecord)
 import Ecluse.Core.Registry.Exchange (boundedIncrementalRead, formThen, withSuccessBodyUsing)
@@ -141,7 +141,7 @@ cargoArtifactCoordinate name version checksum = do
     _ <- maybeToRight "invalid Cargo version" (parseCargo (renderVersion version))
     unless (hashAlg checksum == SHA256) (Left "Cargo requires SHA-256")
     _ <- mkHash SHA256 (hashValue checksum)
-    filename <- maybeToRight "invalid Cargo archive filename" (mkFilename (name <> "-" <> renderVersion version <> ".crate"))
+    filename <- maybeToRight "invalid Cargo archive filename" (mkFilename (cargoArchiveFilename name version))
     pure (CargoArtifactCoordinate name (mkVersion Cargo (renderVersion version)) filename checksum)
 
 -- | Expand only native markers and recheck the address against the captured origin.

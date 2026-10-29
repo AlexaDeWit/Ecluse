@@ -26,7 +26,7 @@ import Ecluse.Core.Ecosystem (Ecosystem (Cargo))
 import Ecluse.Core.Package (PackageName, pkgEcosystem, renderPackageName)
 import Ecluse.Core.Registry.Adapter.Capability (AdapterMetadata (metadataChargeFactors))
 import Ecluse.Core.Registry.Cargo.Discovery (cargoDiscovery, discoveryAuthRequired, renderCargoDiscovery)
-import Ecluse.Core.Registry.Cargo.Project (projectName)
+import Ecluse.Core.Registry.Cargo.Project (cargoArchiveFilename, projectName)
 import Ecluse.Core.Registry.Cargo.Request (cargoIndexPath)
 import Ecluse.Core.Registry.Metadata (MetadataError (MetadataAuthorisationFailure))
 import Ecluse.Core.Registry.Origin (OriginClient (ocChargeFullRead))
@@ -167,7 +167,7 @@ artifactCoordinate name version file = do
     guard (pkgEcosystem name == Cargo)
     _ <- rightToMaybe (projectName (renderPackageName name))
     _ <- versionKeyIn Cargo version
-    guard (file == renderPackageName name <> "-" <> renderVersion version <> ".crate")
+    guard (file == cargoArchiveFilename (renderPackageName name) version)
     mkFilename file
 
 -- | Accept only the exact lower-case native sparse lookup path.
