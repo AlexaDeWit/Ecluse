@@ -1,6 +1,5 @@
 -- SPDX-FileCopyrightText: 2026 Alexandra de Wit
 -- SPDX-License-Identifier: MIT
-{-# LANGUAGE ImportQualifiedPost #-}
 
 -- | Bind native install evidence to the mount's anonymous guarded public artifact reader.
 module Ecluse.Core.Server.InstallEvidence (newPublicInstallEvidenceReads, newTicketInstallEvidenceFlightBudget) where

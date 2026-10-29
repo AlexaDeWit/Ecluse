@@ -1,7 +1,6 @@
 -- SPDX-FileCopyrightText: 2026 Alexandra de Wit
 --
 -- SPDX-License-Identifier: MIT
-{-# LANGUAGE ImportQualifiedPost #-}
 
 -- | Bounded in-memory Core Metadata extraction from verified Python distributions.
 module Ecluse.Core.Registry.PyPI.Archive (archiveMetadata) where

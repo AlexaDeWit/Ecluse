@@ -1,7 +1,6 @@
 -- SPDX-FileCopyrightText: 2026 Alexandra de Wit
 --
 -- SPDX-License-Identifier: MIT
-{-# LANGUAGE ImportQualifiedPost #-}
 
 -- | Scoped XZ and legacy LZMA decoding under the same native dictionary limit.
 module Ecluse.Core.Registry.PyPI.Archive.Lzma (LzmaFormat (..), withLzmaChunks) where

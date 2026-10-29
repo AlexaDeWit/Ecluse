@@ -1,7 +1,6 @@
 -- SPDX-FileCopyrightText: 2026 Alexandra de Wit
 --
 -- SPDX-License-Identifier: MIT
-{-# LANGUAGE ImportQualifiedPost #-}
 
 -- | PyPI mirror uploads bind archive metadata to the same verified distribution bytes.
 module Ecluse.Core.Registry.PyPI.Publish (

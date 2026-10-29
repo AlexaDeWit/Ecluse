@@ -1,6 +1,5 @@
 -- SPDX-FileCopyrightText: 2026 Alexandra de Wit
 -- SPDX-License-Identifier: MIT
-{-# LANGUAGE ImportQualifiedPost #-}
 
 -- | Bounded artifact transport and independent admission for native install evidence.
 module Ecluse.Core.Registry.InstallEvidence (

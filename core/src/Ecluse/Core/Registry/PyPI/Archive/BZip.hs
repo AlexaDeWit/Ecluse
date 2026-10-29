@@ -1,7 +1,6 @@
 -- SPDX-FileCopyrightText: 2026 Alexandra de Wit
 --
 -- SPDX-License-Identifier: MIT
-{-# LANGUAGE ImportQualifiedPost #-}
 
 -- | BZIP2 decoding with one resource scope per compressed member.
 module Ecluse.Core.Registry.PyPI.Archive.BZip (withBzipChunks) where

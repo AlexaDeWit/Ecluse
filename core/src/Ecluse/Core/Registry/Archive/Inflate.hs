@@ -1,7 +1,6 @@
 -- SPDX-FileCopyrightText: 2026 Alexandra de Wit
 --
 -- SPDX-License-Identifier: MIT
-{-# LANGUAGE ImportQualifiedPost #-}
 
 -- | A scoped inflater over the existing streaming-commons ABI, with deterministic release on every exit.
 module Ecluse.Core.Registry.Archive.Inflate (InflateFormat (..), withInflatedChunks, inflateBounded) where
