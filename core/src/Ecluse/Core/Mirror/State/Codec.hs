@@ -27,7 +27,7 @@ import Ecluse.Core.Ecosystem (ecosystemName, parseEcosystem)
 import Ecluse.Core.Mirror.State.Internal
 import Ecluse.Core.Mirror.State.Weight (retainedRecordWeight)
 import Ecluse.Core.Package
-import Ecluse.Core.Package.Entry (EntryKey (..))
+import Ecluse.Core.Package.Entry (EntryKey (..), distinctKeys, validEntryKey)
 import Ecluse.Core.Registry.CachedDocument (estimateValueBytes)
 import Ecluse.Core.Registry.Cargo.Document (cargoDocument, cargoRecords)
 import Ecluse.Core.Registry.Cargo.Manifest (cratesIoIndex)
@@ -385,14 +385,14 @@ parseKey value =
         "source coordinate"
         ( \fields ->
             ( do
-                position <- fields .: "array"
-                when (position < 0) (fail "negative source coordinate")
-                pure (ArrayEntry position)
+                key <- ArrayEntry <$> fields .: "array"
+                unless (validEntryKey key) (fail "negative source coordinate")
+                pure key
             )
                 <|> ( do
-                        position <- fields .: "record"
-                        when (position < 0) (fail "negative source coordinate")
-                        pure (RecordEntry position)
+                        key <- RecordEntry <$> fields .: "record"
+                        unless (validEntryKey key) (fail "negative source coordinate")
+                        pure key
                     )
                 <|> (ObjectEntry <$> fields .: "object")
         )
@@ -451,7 +451,7 @@ parseCompanion = withObject "companion state" $ \value -> do
     pure (name, status)
 
 ensureDistinct :: (Ord a) => [a] -> Parser ()
-ensureDistinct values = unless (Set.size (Set.fromList values) == length values) (fail "duplicate state entry")
+ensureDistinct values = unless (distinctKeys values) (fail "duplicate state entry")
 
 nonempty :: String -> [a] -> Parser (NonEmpty a)
 nonempty message = maybe (fail message) pure . nonEmpty

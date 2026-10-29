@@ -14,7 +14,6 @@ module Ecluse.Core.Registry.ServedDocument (
     -- * Replaying a merge plan
     overlaySurvivors,
     uniqueEntries,
-    validEntryKey,
     overlayObjectSurvivors,
     overlayObjectSources,
 
@@ -43,7 +42,7 @@ import Data.Vector (Vector)
 import Data.Vector qualified as V
 import Data.Vector.Mutable qualified as MV
 
-import Ecluse.Core.Package.Entry (AdmittedEntry (..), EntryKey (..))
+import Ecluse.Core.Package.Entry (AdmittedEntry (..), EntryKey (..), validEntryKey)
 import Ecluse.Core.Package.Merge (MergePlan (mpArtifacts, mpSurvivors), SourceId)
 import Ecluse.Core.Registry.CachedDocument (CachedDoc)
 import Ecluse.Core.Registry.Json.Packed (Packed, withoutHole)
@@ -186,14 +185,6 @@ usableEntry entry = validEntryKey (admittedKey entry) && not (T.null (admittedFi
 -- | Keep only keys that occur exactly once, so ambiguous source coordinates cannot select an entry.
 uniqueEntries :: (Ord key) => [(key, value)] -> Map key value
 uniqueEntries = Map.mapMaybe id . Map.fromListWith (\_ _ -> Nothing) . map (second Just)
-
--- | Array coordinates cannot precede the first source entry.
-validEntryKey :: EntryKey -> Bool
-validEntryKey = \case
-    ArrayEntry position -> position >= 0
-    RecordEntry position -> position >= 0
-    ObjectEntry _ -> True
-    SingletonEntry -> True
 
 -- | Gate the document's claimed name before it enters a rewritten artifact URL.
 safeDocumentName :: (Text -> Maybe a) -> KeyMap Value -> Maybe a
