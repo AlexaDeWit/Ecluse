@@ -918,7 +918,8 @@ These counts reflect shipped request paths checked on 2026-10-18, and the Cargo 
 | Cargo discovery (`config.json`) | 0 public requests | 0 public requests |
 | RubyGems `/versions` directory | 1 public directory unless the local cache holds it | 1 public directory unless the local cache holds it |
 | Artifact or declared PyPI companion download | 1 public document unless the selected-version cache hits, plus 1 artifact or companion request | 0 public requests |
-| RubyGems gem or compact specification download | 1 public document for each gem name the file name can parse as, usually one, plus 1 gem or specification request | The same public documents, and no public gem or specification request |
+| RubyGems gem download | 1 public document for each gem name the file name can parse as, usually one, plus 1 public document unless the selected-version cache hits, plus 1 gem request | 1 public document for each gem name the file name can parse as, and no public gem request |
+| RubyGems compact specification download | 1 public document for each gem name the file name can parse as, usually one, plus 1 specification request | The same public documents, and no public specification request |
 | Mirror copy pass | 1 public document unless npm finds a selected-version cache hit, plus files that need copying or verification and missing companions | No public read when the job confirms completion |
 
 A successful admitted artifact GET can enqueue a separate mirror job. A companion request does not enqueue one. PyPI, Cargo, and RubyGems workers always read their own public document, because they need publication and source fields. PyPI workers copy the whole supported version, including its wheels, source distributions, and declared companions. RubyGems workers copy every platform gem of the version, each with its original compact specification. Completion passes and queue retries add requests.
