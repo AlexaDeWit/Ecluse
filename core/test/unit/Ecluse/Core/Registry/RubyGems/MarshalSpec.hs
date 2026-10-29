@@ -48,3 +48,5 @@ spec = describe "Ruby Marshal data" $ do
         decodeMarshal defaultLimits{maxArtifactCount = 1} nested `shouldSatisfy` isLeft
         decodeMarshal defaultLimits{maxMetadataBytes = 2} nested `shouldSatisfy` isLeft
         decodeMarshal defaultLimits "\x04\x08[\x7f" `shouldSatisfy` isLeft
+        decodeMarshal defaultLimits{maxArtifactCount = 2} "\x04\x08[\x08\x30\x30\x30" `shouldBe` Left (ParseError "Marshal collection count exceeds its bound")
+        decodeMarshal defaultLimits{maxMetadataBytes = 16} "\x04\x08\x22\x01\xc8" `shouldBe` Left (ParseError "Marshal strings exceed their byte bound")

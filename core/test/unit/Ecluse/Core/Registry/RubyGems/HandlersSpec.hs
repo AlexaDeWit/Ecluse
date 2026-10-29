@@ -137,6 +137,12 @@ spec = do
                 simpleStatus response `shouldBe` status200
                 -- The merge charge over the packed public and private views, which share no name.
                 held `shouldBe` 2 * (directoryWeight (GemDirectory "public-gem 1.0 \n") + BS.length "private-gem 1.0 \n") + 4096
+        it "refuses a merged directory one byte over the metadata bound" $
+            withDirectorySources $ \runtime binding _ _ -> do
+                let bounded limit = binding{bindingPackumentDeps = (bindingPackumentDeps binding){pdLimits = (pdLimits (bindingPackumentDeps binding)){maxMetadataBytes = limit}}}
+                -- The header and the packed public and private rows take 37 bytes.
+                simpleStatus <$> capture runtime (bounded 37) "GET" "/versions" [] `shouldReturn` status200
+                simpleStatus <$> capture runtime (bounded 36) "GET" "/versions" [] `shouldReturn` status502
         it "keeps a native400 directory limit failure at the capability boundary" $
             withDirectorySources $ \runtime binding hits privateStatus -> do
                 writeIORef privateStatus status400
@@ -488,6 +494,9 @@ spec = do
                 readIORef hits `shouldReturn` []
                 missing <- capture runtime binding "GET" "/quick/Marshal.4.8/ecluse-fixture-root-99.0.0.gemspec.rz" wildcard
                 simpleStatus missing `shouldBe` status404
+                let capped = binding{bindingPackumentDeps = (bindingPackumentDeps binding){pdLimits = (pdLimits (bindingPackumentDeps binding)){maxMetadataBytes = 16}}}
+                bounded <- capture runtime capped "GET" "/versions" wildcard
+                simpleStatus bounded `shouldBe` status502
 
 metadataPaths :: [ByteString]
 metadataPaths =
