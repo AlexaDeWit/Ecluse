@@ -30,6 +30,7 @@ import Ecluse.Core.Registry.Archive.Inflate (InflateFormat (GzipMembers), splitA
 import Ecluse.Core.Registry.Archive.Tar (TarMember (..), TarScan, scanTar, sourceReader, tarContents, tarMembers)
 import Ecluse.Core.Registry.CachedDocument (estimateValueBytes)
 import Ecluse.Core.Registry.Cargo.Manifest (CargoManifest, CargoPublishMetadata, checkPublicationIndex, checkUploadAgreement, decodeManifest, manifestExecution, manifestTextPaths, publicationMetadata, publishMetadataValue)
+import Ecluse.Core.Registry.Cargo.Project (cargoArchiveStem)
 import Ecluse.Core.Registry.Cargo.Wire (cargoTreeCharge)
 import Ecluse.Core.Security.Limits (Limits (..))
 import Ecluse.Core.Server.MemoryModel (saturatingCharge)
@@ -59,7 +60,7 @@ inspectCargoArchive limits charge name version checksum bytes = do
             if any (\expected -> T.toLower expected /= sha256Hex bytes) checksum
                 then pure (parseRefusal "Cargo compressed archive disagrees with its admitted SHA-256")
                 else do
-                    let root = name <> "-" <> version
+                    let root = cargoArchiveStem name version
                     result <- archivePass limits charge root (Set.singleton "Cargo.toml") bytes
                     case result >>= \(scan, inflated) -> (,inflated) <$> archiveFacts root scan of
                         Left fault -> pure (Left fault)

@@ -8,6 +8,8 @@ module Ecluse.Core.Registry.Cargo.Project (
     cargoNameKey,
     cargoNameChars,
     cargoCollisionKey,
+    cargoArchiveStem,
+    cargoArchiveFilename,
 ) where
 
 import Data.Char (isAsciiLower, isAsciiUpper)
@@ -19,6 +21,7 @@ import Ecluse.Core.Package.Cargo (cargoCollisionText, cargoNameKey)
 import Ecluse.Core.Registry (ParseError)
 import Ecluse.Core.Registry.WireSupport (nameComponentWith, withinNameLimit)
 import Ecluse.Core.Text (isAsciiAlphaNum)
+import Ecluse.Core.Version (Version, renderVersion)
 
 -- | Parse a native name, retaining its published case and separator spelling.
 projectName :: Text -> Either ParseError PackageName
@@ -45,3 +48,11 @@ cargoCollisionKey :: PackageName -> Maybe Text
 cargoCollisionKey name = do
     guard (pkgEcosystem name == Cargo && isNothing (pkgNamespace name))
     pure (cargoCollisionText (renderPackageName name))
+
+-- | The archive root directory: the published name and raw version joined by a hyphen.
+cargoArchiveStem :: Text -> Text -> Text
+cargoArchiveStem name version = name <> "-" <> version
+
+-- | The logical @.crate@ filename for a published name and raw version.
+cargoArchiveFilename :: Text -> Version -> Text
+cargoArchiveFilename name version = cargoArchiveStem name (renderVersion version) <> ".crate"
