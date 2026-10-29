@@ -2,17 +2,68 @@
 --
 -- SPDX-License-Identifier: MIT
 
--- | Conditional object writes support the existing native worker fixtures.
-module Ecluse.BenchLoad.WorkerState (stateAppFor) where
+-- | Target copies, upload gating and conditional object writes shared by the native worker fixtures.
+module Ecluse.BenchLoad.WorkerState (
+    WorkerTarget (..),
+    newWorkerTarget,
+    resetWorkerTarget,
+    countRequest,
+    acceptUpload,
+    targetStateApp,
+    stateAppFor,
+) where
 
 import Data.ByteString.Lazy qualified as LBS
 import Data.List (lookup)
 import Data.Map.Strict qualified as Map
-import Network.HTTP.Types (hContentType, status200, status304, status400, status404, status412)
-import Network.Wai (Application, rawPathInfo, requestHeaders, requestMethod, responseLBS, strictRequestBody)
+import Network.HTTP.Types (hContentType, status200, status304, status400, status404, status412, status503)
+import Network.Wai (Application, Response, rawPathInfo, requestHeaders, requestMethod, responseLBS, strictRequestBody)
 
 import Ecluse.BenchLoad.Fixture (delayUpstream)
 import Ecluse.Test.Package (hexSha256Of)
+
+-- | One run's target copy, durable objects, request counts and injected upload rejection.
+data WorkerTarget = WorkerTarget
+    { wtFiles :: IORef (Map Text ByteString)
+    , wtObjects :: IORef (Map ByteString (ByteString, ByteString))
+    , wtCounts :: IORef (Map Text Int)
+    , wtReject :: IORef Bool
+    }
+
+-- | An empty target that accepts uploads.
+newWorkerTarget :: IO WorkerTarget
+newWorkerTarget = WorkerTarget <$> newIORef mempty <*> newIORef mempty <*> newIORef mempty <*> newIORef False
+
+-- | Clear the copy, durable objects and counts together. The rejection switch keeps its setting.
+resetWorkerTarget :: WorkerTarget -> IO ()
+resetWorkerTarget target = do
+    writeIORef (wtFiles target) mempty
+    writeIORef (wtObjects target) mempty
+    writeIORef (wtCounts target) mempty
+
+-- | Record one request under its label.
+countRequest :: WorkerTarget -> Text -> IO ()
+countRequest target label = atomicModifyIORef' (wtCounts target) (\counts -> (Map.insertWith (+) label 1 counts, ()))
+
+-- | Count the attempt, honour an injected rejection, and store the bytes only once durable inventory exists.
+acceptUpload :: WorkerTarget -> Text -> ByteString -> Response -> IO Response
+acceptUpload target filename bytes accepted = do
+    countRequest target "upload-attempt"
+    rejected <- readIORef (wtReject target)
+    inventory <- readIORef (wtObjects target)
+    if rejected
+        then pure (responseLBS status503 [] "injected upload rejection")
+        else
+            if Map.null inventory
+                then pure (responseLBS status400 [] "upload preceded durable inventory")
+                else do
+                    modifyIORef' (wtFiles target) (Map.insert filename bytes)
+                    countRequest target "upload"
+                    pure accepted
+
+-- | Serve the target's durable objects under the shared conditional object semantics.
+targetStateApp :: Int -> WorkerTarget -> Application
+targetStateApp latency target = stateAppFor (wtObjects target) (wtCounts target) latency
 
 -- | Opaque revisions and conditional writes retain S3's compare-and-swap behaviour.
 stateAppFor :: IORef (Map ByteString (ByteString, ByteString)) -> IORef (Map Text Int) -> Int -> Application
