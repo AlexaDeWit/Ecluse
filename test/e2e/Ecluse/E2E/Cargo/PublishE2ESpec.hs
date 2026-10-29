@@ -88,7 +88,10 @@ yankDriver observed registry =
         , nonUploadRefusal = ["404"]
         , nonUploadDestination = do
             files <- cargoRegistryFiles registry
-            pure [host <> "/" <> name <> "/" <> version <> " " <> hexSha256Of (storedArchive stored) | ((host, name, version), stored) <- Map.toList files]
+            requests <- readTVarIO (registryRequests registry)
+            pure $
+                [host <> "/" <> name <> "/" <> version <> " " <> hexSha256Of (storedArchive stored) | ((host, name, version), stored) <- Map.toList files]
+                    <> ["write received " <> nativeRequestMethod request <> " " <> nativeRequestHost request <> nativeRequestPath request | request <- requests, nativeRequestMethod request `notElem` ["GET", "HEAD"]]
         , nonUploadSettle = pass
         }
   where
