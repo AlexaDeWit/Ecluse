@@ -22,7 +22,6 @@ import UnliftIO.Timeout (timeout)
 
 import Ecluse.Core.Credential (ClientCredential)
 import Ecluse.Core.Package (PackageName, hashValue)
-import Ecluse.Core.Package.Hash (sha256Hex)
 import Ecluse.Core.Registry (FetchFault (FetchUrlUnformable), ParseError (..), PublishBodyFault (PublishMalformed), PublishError (PublishError), PublishFault (..), UrlFormationError (UnparseableUrl), isSuccessStatus)
 import Ecluse.Core.Registry.Adapter.Capability (AdapterPublish (..), MirrorRequirements (..), MirrorStateRequirement (DurableVersionState), PublishExtras (NoPublishExtras), PublishRequestBody (..), UploadEndpointRequirement (ExplicitUploadEndpoint), UploadIdentityRequirement (TokenIdentity), WorkerMetadataRead (NativeChargedWorkerRead))
 import Ecluse.Core.Registry.CachedDocument (cargoCached)
@@ -94,7 +93,7 @@ prepareUpload limits charge inventory row file verified =
     prepare = case sourceName row of
         Left fault -> pure (Left fault)
         Right name -> do
-            inspected <- inspectCargoArchive limits charge name (renderVersion (inventoryVersion inventory)) (hashValue (verifiedTargetHash verified)) (verifiedBytes verified)
+            inspected <- inspectCargoArchive limits charge name (renderVersion (inventoryVersion inventory)) (Just (hashValue (verifiedTargetHash verified))) (verifiedBytes verified)
             case inspected of
                 Left fault -> pure (Left (PublishSourceUnavailable (parseErrorMessage fault)))
                 Right archive -> do
@@ -127,7 +126,7 @@ uploadClaims limits charge registry body =
             Right (upload, metadataCost) -> do
                 let archive = Body.uploadArchive upload
                     withMetadata cost = charge (fromInteger (min (toInteger (maxBound :: Int)) (toInteger metadataCost + toInteger cost)))
-                inspected <- inspectCargoArchive limits withMetadata (Body.uploadName upload) (Body.uploadVersion upload) (sha256Hex archive) archive
+                inspected <- inspectCargoArchive limits withMetadata (Body.uploadName upload) (Body.uploadVersion upload) Nothing archive
                 case inspected of
                     Left fault -> pure (Left (PublishMalformed fault))
                     Right metadata -> do

@@ -123,7 +123,7 @@ inspectSubject context allowance details artifact checksum = do
         ieReadArtifact context limits artifact bytesCharge >>= \case
             Left fault -> pure (Left fault)
             Right bytes -> do
-                inspected <- inspectCargoArchive limits inspectCharge (renderPackageName (pkgName details)) (renderVersion (pkgVersion details)) checksum bytes
+                inspected <- inspectCargoArchive limits inspectCharge (renderPackageName (pkgName details)) (renderVersion (pkgVersion details)) (Just checksum) bytes
                 case inspected of
                     Left fault -> pure (Left (permanent (parseErrorMessage fault)))
                     Right metadata -> case cargoArchiveExecution metadata of

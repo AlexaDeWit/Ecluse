@@ -34,7 +34,7 @@ import Ecluse.Core.Registry.Cargo.Manifest (CargoManifest, CargoPublishMetadata,
 import Ecluse.Core.Registry.Cargo.Wire (cargoTreeCharge)
 import Ecluse.Core.Security.Limits (Limits (..), requestTimeoutSeconds)
 
--- | The private source bytes are the same bytes checked against the admitted SHA-256.
+-- | The inspected source bytes, checked against the admitted SHA-256 when one exists.
 data CargoArchiveMetadata = CargoArchiveMetadata
     { caManifest :: CargoManifest
     , caInventory :: Set Text
@@ -48,13 +48,15 @@ data CargoArchiveMetadata = CargoArchiveMetadata
 instance Show CargoArchiveMetadata where
     showsPrec _ metadata = showString "CargoArchiveMetadata " . shows (caRoot metadata)
 
--- | Charge extra workspace as an absolute total. The caller separately owns the compressed-byte charge.
-inspectCargoArchive :: Limits -> (Int -> IO ()) -> Text -> Text -> Text -> ByteString -> IO (Either ParseError CargoArchiveMetadata)
+{- | Charge extra workspace as an absolute total. The caller owns the compressed-byte charge.
+A first-party upload carries no checksum, so only an admitted SHA-256 is compared.
+-}
+inspectCargoArchive :: Limits -> (Int -> IO ()) -> Text -> Text -> Maybe Text -> ByteString -> IO (Either ParseError CargoArchiveMetadata)
 inspectCargoArchive limits charge name version checksum bytes = deadline $ do
     if maxMirrorArtifactBytes limits <= 0 || BS.length bytes > maxMirrorArtifactBytes limits
         then pure (bad "Cargo compressed archive exceeds its byte bound")
         else
-            if T.toLower checksum /= sha256Hex bytes
+            if any (\expected -> T.toLower expected /= sha256Hex bytes) checksum
                 then pure (bad "Cargo compressed archive disagrees with its admitted SHA-256")
                 else do
                     let root = name <> "-" <> version
