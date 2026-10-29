@@ -218,7 +218,7 @@ spec = do
 
         it "excludes an explicitly supplied local backend without evaluating its weigher" $ do
             operations <- newLocalRetention 60 maxBound maxBound (\_ -> throw (UnexpectedFault MetadataUndecodable))
-            c <- Cache.newMetadataCacheWithProvider (cacheProvider LocalStorage (Just operations) Nothing Nothing)
+            c <- Cache.newMetadataCacheWithProvider (cacheProvider LocalStorage Nothing (Just operations) Nothing Nothing)
             resolveMetadata c publicSource thingName (pure (entry thingName "raw")) `shouldReturn` entry thingName "raw"
             cachedMetadata noopMetricsPort c publicSource thingName `shouldReturn` Nothing
 
@@ -259,7 +259,7 @@ spec = do
             values <- newIORef Map.empty
             let operations = externalOperations (\_ key -> Map.lookup key <$> readIORef values) (\key value -> modifyIORef' values (Map.insert key value))
                 identities = [(publicSource, thingName), (privateSource, thingName), (publicSource, unscopedPyPI "thing"), (publicSource, unscopedNpm "other")]
-            c <- Cache.newMetadataCacheWithProvider (cacheProvider (ExternalStorage 100000) (Just operations) Nothing Nothing)
+            c <- Cache.newMetadataCacheWithProvider (cacheProvider (ExternalStorage 100000) Nothing (Just operations) Nothing Nothing)
             for_ (zip identities [1 ..]) $ \((source, name), marker :: Int) -> do
                 let expected = entry name (show marker)
                 resolveMetadata c source name (pure expected) `shouldReturn` expected
@@ -272,7 +272,7 @@ spec = do
             let operations = externalOperations (\_ _ -> throwIO (UnexpectedFault MetadataUndecodable)) (\_ _ -> throwIO (UnexpectedFault MetadataUndecodable))
                 port = noopMetricsPort{mpCacheRefused = \store -> modifyIORef' failures (store :)}
                 expected = entry thingName "fresh"
-            c <- Cache.newMetadataCacheWithProvider (cacheProvider (ExternalStorage 100000) (Just operations) Nothing Nothing)
+            c <- Cache.newMetadataCacheWithProvider (cacheProvider (ExternalStorage 100000) Nothing (Just operations) Nothing Nothing)
             Cache.resolveMetadata port c publicSource thingName (pure (Right expected)) `shouldReturn` Right expected
             readIORef failures `shouldReturn` [Metric.FullStore, Metric.FullStore]
 

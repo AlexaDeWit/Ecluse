@@ -323,7 +323,7 @@ retainedConsumerSpec = describe "successful selected consumers" $ do
                         writeIORef observedRoots (Just roots)
                         assertCargoRetained roots readOwner
                         roInsert operations record refused key rooted
-                    provider = cacheProvider LocalStorage Nothing (Just operations{roInsert = observe}) Nothing
+                    provider = cacheProvider LocalStorage Nothing Nothing (Just operations{roInsert = observe}) Nothing
                 cache <- newMetadataCacheWithProvider provider
                 let step = 1024 * 1024
                     budget = if holdsToken then 3 * step else maxBound `div` 2
