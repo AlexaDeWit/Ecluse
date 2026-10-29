@@ -9,11 +9,11 @@ module Ecluse.BenchLoad.Cargo.Worker (cargoWorkerScenario) where
 import Data.Map.Strict qualified as Map
 
 import Ecluse.BenchLoad.Cargo.WorkerFixture
-import Ecluse.BenchLoad.WorkerState (WorkerTarget (..))
 import Ecluse.BenchLoad.Error (benchFail)
 import Ecluse.BenchLoad.Fixture (benchNow)
 import Ecluse.BenchLoad.Harness (LoadKnobs (..), Scenario (..), Target, scenario)
 import Ecluse.BenchLoad.Worker (NativeWorker (..), WorkerEnvironment (..), bootNativeWorker)
+import Ecluse.BenchLoad.WorkerState (WorkerTarget (..))
 import Ecluse.Core.Ecosystem (Ecosystem (Cargo))
 import Ecluse.Core.Queue (MirrorJob (..))
 import Ecluse.Core.Registry.Adapter (adapterFor)
