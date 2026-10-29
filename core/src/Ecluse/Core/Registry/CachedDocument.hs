@@ -19,9 +19,13 @@ module Ecluse.Core.Registry.CachedDocument (
     -- * PyPI's packed full reads and their renders
     pypiPacked,
     pypiRendered,
+
+    -- * Cargo's native records, packed full reads and their renders
     cargoCached,
     cargoPacked,
     cargoRendered,
+
+    -- * RubyGems' native rows
     rubyGemsCached,
 ) where
 
