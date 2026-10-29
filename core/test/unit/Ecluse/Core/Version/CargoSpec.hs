@@ -6,10 +6,15 @@
 module Ecluse.Core.Version.CargoSpec (spec) where
 
 import Data.Text qualified as T
+import Hedgehog (Gen)
+import Hedgehog qualified as H
+import Hedgehog.Gen qualified as Gen
 import Test.Hspec
+import Test.Hspec.Hedgehog (hedgehog, modifyMaxSuccess)
 
 import Ecluse.Core.Ecosystem (Ecosystem (Cargo))
 import Ecluse.Core.Version.Cargo (cargoUniquenessKey, isCargoStable, parseCargo, renderCargo)
+import Ecluse.Test.Version qualified as V
 import Ecluse.Test.Version.Oracle (oracleCompare, oracleSort)
 
 -- | Native Cargo SemVer grammar and comparison examples.
@@ -59,3 +64,19 @@ spec = do
         it "classifies a build-only version as stable" $ do
             isCargoStable <$> parseCargo "1.2.3+build.1" `shouldBe` Just True
             isCargoStable <$> parseCargo "1.2.3-rc.1+build.1" `shouldBe` Just False
+    describe "generative precedence differential" $
+        modifyMaxSuccess (const 100) $
+            it "orders every generated pair both sides accept as the pinned oracle does" $
+                hedgehog $ do
+                    raw1 <- H.forAll cargoish
+                    raw2 <- H.forAll cargoish
+                    theirs <- H.evalIO (oracleCompare Cargo raw1 raw2)
+                    let ours = liftA2 compare (parseCargo raw1) (parseCargo raw2)
+                    H.cover 50 "both sides accepted" (isJust ours && isJust theirs)
+                    case (ours, theirs) of
+                        (Just o, Just t) -> o H.=== t
+                        _ -> H.success
+
+-- Native SemVer with prereleases and build metadata, beside the u64 boundary and build-only twins.
+cargoish :: Gen Text
+cargoish = Gen.choice [V.genNpm, Gen.element ["18446744073709551615.0.0", "18446744073709551616.0.0", "1.2.3+build.1", "1.2.3+build.2", "1.2.3-rc.1", "1.2.3"]]
