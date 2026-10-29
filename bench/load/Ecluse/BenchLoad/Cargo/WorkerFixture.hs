@@ -15,7 +15,6 @@ module Ecluse.BenchLoad.Cargo.WorkerFixture (
     fixtureTrigger,
 ) where
 
-import Codec.Compression.GZip qualified as GZip
 import Data.Aeson (Value (Object), object)
 import Data.ByteString.Lazy qualified as LBS
 import Data.Map.Strict qualified as Map
@@ -30,8 +29,7 @@ import Ecluse.Core.Package (PackageName, mkPackageName)
 import Ecluse.Core.Registry.Cargo.Discovery (renderCargoDiscovery)
 import Ecluse.Core.Version (Version, mkVersion)
 import Ecluse.Test.Package (hexSha256Of)
-import Ecluse.Test.Registry.Archive (tarBytes)
-import Ecluse.Test.Registry.Cargo.Fixtures (CargoCrate (..), CargoRelease (..), cargoIndex, cargoShard, cargoUploadMetadata)
+import Ecluse.Test.Registry.Cargo.Fixtures (CargoCrate (..), CargoRelease (..), cargoCrateArchive, cargoIndex, cargoShard, cargoUploadMetadata)
 import Ecluse.Test.Registry.Cargo.Reference (UploadFrame (..), referenceUpload)
 import Ecluse.Test.Wai (selfBaseUrl)
 
@@ -46,13 +44,14 @@ data WorkerFixture = WorkerFixture
 newWorkerFixture :: Int -> IO WorkerFixture
 newWorkerFixture payloadBytes = do
     archive <-
-        LBS.toStrict . GZip.compress
-            <$> tarBytes
-                [ ("example-1.0.0/Cargo.toml", encodeUtf8 manifest)
-                , ("example-1.0.0/README.md", readme)
-                , ("example-1.0.0/src/lib.rs", "pub fn marker() {}\n")
-                , ("example-1.0.0/data", LBS.toStrict (artifactBytes payloadBytes))
-                ]
+        cargoCrateArchive
+            "example"
+            "1.0.0"
+            [ ("Cargo.toml", encodeUtf8 manifest)
+            , ("README.md", readme)
+            , ("src/lib.rs", "pub fn marker() {}\n")
+            , ("data", LBS.toStrict (artifactBytes payloadBytes))
+            ]
     let spec = CargoCrate "example" "1.0.0" "unused" [] (object []) (object []) []
         release = CargoRelease spec archive (hexSha256Of archive) (decodeUtf8 readme)
     WorkerFixture (Map.singleton fixtureTrigger archive) release <$> newWorkerTarget
