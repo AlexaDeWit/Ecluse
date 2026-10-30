@@ -230,11 +230,12 @@ psychNumber signed = integer || float
         _ -> False
     integer = radix "0b" (`elem` ['0', '1']) || radix "0x" isHexDigit || radix "0" (`elem` ['0' .. '7']) || decimal
     float = case T.breakOn "." text of
-        (whole, point) | Just after <- T.stripPrefix "." point ->
-            let (_, scale) = T.span isDigit after
-             in (T.null whole || (T.all isDigit (T.take 1 whole) && T.all (\c -> isDigit c || separated c) whole))
-                    && not (T.null whole && T.null after)
-                    && (T.null scale || validScale scale)
+        (whole, point)
+            | Just after <- T.stripPrefix "." point ->
+                let (_, scale) = T.span isDigit after
+                 in (T.null whole || (T.all isDigit (T.take 1 whole) && T.all (\c -> isDigit c || separated c) whole))
+                        && not (T.null whole && T.null after)
+                        && (T.null scale || validScale scale)
         _ -> False
     validScale scale = case T.unpack scale of
         e : sign : digits@(_ : _) -> e `elem` ['e', 'E'] && sign `elem` ['-', '+'] && all isDigit digits
