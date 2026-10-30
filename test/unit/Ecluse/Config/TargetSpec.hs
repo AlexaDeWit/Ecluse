@@ -44,9 +44,9 @@ import Ecluse.Core.Credential (ClientCredential (ClientCredential), mkSecret)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, RubyGems))
 import Ecluse.Core.Registry.Request (StoreOperation (StoreRead, StoreWrite), attachCredential, nativePresentation, presentedMapping)
 import Ecluse.Core.Registry.RubyGems.Credential (rubyPublishCredential, rubyReadCredential)
-import Ecluse.Test.Support (parseRequestOrFail)
 import Ecluse.Runtime.Credential.CodeArtifact (CodeArtifactConfig (..))
 import Ecluse.Runtime.Maintenance.CodeArtifact.Decide (CodeArtifactStore (..), formatToken)
+import Ecluse.Test.Support (parseRequestOrFail)
 
 spec :: Spec
 spec = do

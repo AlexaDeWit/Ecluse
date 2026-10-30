@@ -56,8 +56,8 @@ import Ecluse.Core.Registry.Npm.Publish qualified as NpmPublish
 import Ecluse.Core.Registry.Npm.Route (npmRouter)
 import Ecluse.Core.Registry.Npm.Route.Internal (npmNotFound)
 import Ecluse.Core.Registry.PyPI.Adapter (pypiAdapter)
-import Ecluse.Core.Registry.ServedDocument (RenderRefused (RenderRefused))
 import Ecluse.Core.Registry.Request (nativePresentation)
+import Ecluse.Core.Registry.ServedDocument (RenderRefused (RenderRefused))
 import Ecluse.Core.Rules (prepare)
 import Ecluse.Core.Rules.Types (
     DenyIfCveParams (DenyIfCveParams),
