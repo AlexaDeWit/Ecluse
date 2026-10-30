@@ -12,7 +12,7 @@ typed projection with the selected version object, which the mirror write republ
 -}
 module Ecluse.Core.Registry.Npm.Metadata (
     -- * What the read driver runs
-    npmRead,
+    npmReadWith,
     prepareNpmRead,
 
     -- * The memory budget
@@ -63,14 +63,11 @@ import Ecluse.Core.Security (AllowedHostPorts, Limits, ecosystemArtifactAuthorit
 import Ecluse.Core.Server.Admission.Types (ChargeFactors (..))
 import Ecluse.Core.Version (Version, renderVersion)
 
--- | What the read driver needs to read a packument, for a caller that charges no full-read workspace.
-npmRead :: EcosystemRead
-npmRead = npmReadWith (const pass)
-
 -- | Bind the selected origin's full-read workspace, which pays the per-entry floor.
 prepareNpmRead :: PrepareRead
 prepareNpmRead = PrepareRead (pure . Right . npmReadWith . ocChargeFullReadWorkspace)
 
+-- | What the read driver needs to read a packument, with the full read's absolute workspace payer.
 npmReadWith :: (Int -> IO ()) -> EcosystemRead
 npmReadWith pay =
     EcosystemRead
