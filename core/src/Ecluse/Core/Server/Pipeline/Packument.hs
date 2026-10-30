@@ -55,6 +55,7 @@ import Ecluse.Core.Package.Merge (
     Provenance (GatedSource, TrustedSource),
     integrityDivergences,
     mergePackuments,
+    withoutTrustedReleases,
  )
 import Ecluse.Core.Registry.Adapter.Capability (AdapterMetadata (metadataChargeFactors, metadataSerialise))
 import Ecluse.Core.Registry.CachedDocument (CachedDoc)
@@ -390,7 +391,9 @@ serveMergedPackument serving evalCtx record privResult pubResult
                 (managed, managedExclusions) = admitTrusted (pdMinTrustedIntegrity deps) managedManifest
                 privateSources = catMaybes [unmanaged, managed]
                 trustedVersions = Map.unions (map (infoVersions . srcInfo) privateSources)
-            public <- liftIO (gatePublic (observeVersionRejection <$> psvRejectionObserver serving) (srTracing rt) (servingMetrics serving) deps name evalCtx trustedVersions (Map.keysSet pending) (originManifest pubResult))
+                -- A public version that a private one claims under another spelling of its release is not offered.
+                publicManifest = (\manifest -> manifest{manifestInfo = withoutTrustedReleases trustedVersions (manifestInfo manifest)}) <$> originManifest pubResult
+            public <- liftIO (gatePublic (observeVersionRejection <$> psvRejectionObserver serving) (srTracing rt) (servingMetrics serving) deps name evalCtx trustedVersions (Map.keysSet pending) publicManifest)
             let sources = privateSources <> maybeToList (paContribution public)
                 required = Map.withoutKeys pending (paBlockedPending public)
                 covered = Map.null required || maybe False (publicMirrorCoverage required . srcInfo) (paContribution public)
