@@ -126,7 +126,7 @@ versionSpec = describe "projectPyPIVersion" $ do
         artifactNames (projectPyPIVersion defaultLimits requestsName (pypiVersion "2.34.2") (indexOf ["requests-2.34.2.tar.gz", "requests-2.34.2-py3-none-any.whl", "requests-2.34.1.tar.gz"]))
             `shouldBe` Right (Just ["requests-2.34.2.tar.gz", "requests-2.34.2-py3-none-any.whl"])
 
-    it "counts unselected and unusable files without adding a selected-artifact ceiling" $ do
+    it "counts unselected and unusable files toward the version ceiling on selected reads" $ do
         let body = encodeStrict (simpleIndex "requests" [Number 7, simpleFile "requests-2.0.tar.gz", simpleFile "requests-1.0.tar.gz", simpleFile "requests-1.0-py3-none-any.whl"])
         projectPyPIVersion defaultLimits{maxVersionCount = 3} requestsName (pypiVersion "1") body
             `shouldBe` Left (MetadataBoundExceeded (TooManyVersions 4 3))
