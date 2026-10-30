@@ -134,7 +134,7 @@ fixture = do
 
 inventoryFor :: GemDocument -> IO MirrorInventory
 inventoryFor document = do
-    info <- expectRight (projectGemRows defaultLimits (gemName document) "https://public.test" (gemRows document))
+    info <- expectRight (projectGemRows (gemName document) "https://public.test" (gemRows document))
     details <- maybe (fail "missing projected native version") pure (Map.lookup "1.0.0" (infoVersions info))
     let doc = VersionDoc details (Just (fst rubyGemsCached document))
     expectRight (checkedMirrorInventory (gemName document) nativeVersion doc (RubyGemsMirrorRead document))

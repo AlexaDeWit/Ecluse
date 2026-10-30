@@ -204,7 +204,7 @@ spec = describe "npmFields" $ do
                     (byteChunks body)
                 )
         projected <- expectRight (streamValue streamed)
-        (info, _) <- expectRight (finishTree defaultLimits name "See source" projected)
+        (info, _) <- expectRight (finishTree name "See source" projected)
         Map.keys (infoVersions info) `shouldBe` ["1.0.0"]
 
     it "retains no sibling release objects on selected reads" $ do
@@ -218,7 +218,7 @@ spec = describe "npmFields" $ do
                     [body]
                 )
         projected <- expectRight (streamValue streamed)
-        (_, compact) <- expectRight (finishTree defaultLimits name "See source" projected)
+        (_, compact) <- expectRight (finishTree name "See source" projected)
         fieldAt "versions" compact `shouldBe` Just (Object mempty)
 
     forM_

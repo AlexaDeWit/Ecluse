@@ -36,7 +36,7 @@ import Ecluse.Core.Registry.RubyGems.Document (GemDependency (..), GemDocument (
 import Ecluse.Core.Registry.RubyGems.Metadata (finishGemFull)
 import Ecluse.Core.Registry.RubyGems.Project (mkCoordinate, mkGemPlatform)
 import Ecluse.Core.Registry.RubyGems.Reader (GemRead (FullRead), gemInfoSteps)
-import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), Limits (maxMetadataBytes), checkArtifactCount, checkVersionCountOf)
+import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), Limits (maxMetadataBytes), checkVersionCountOf)
 import Ecluse.Core.Version (mkVersion)
 import Ecluse.Test.Registry.JsonStream (readStepsChunks)
 import Ecluse.Test.Registry.RubyGems.Reference (RubyInfoRow (..), referenceInfo)
@@ -128,10 +128,9 @@ projectRubyGemsTree limits name bytes = do
     input <- first (const MetadataUndecodable) (Text.decodeUtf8' bytes)
     native <- first (const MetadataUndecodable) (referenceInfo bytes)
     rows <- traverse (projectRow (Map.fromList (zip [0 ..] (T.lines input)))) native
-    first MetadataBoundExceeded (checkArtifactCount limits (length rows))
+    first MetadataBoundExceeded (checkVersionCountOf limits (length rows))
     unless (Set.size (Set.fromList [filename | (_, filename, _) <- rows]) == length rows) (Left MetadataUndecodable)
     let versions = foldl' insert Map.empty rows
-    first MetadataBoundExceeded (checkVersionCountOf limits (Map.size versions))
     pure (PackageInfo name (Map.mapWithKey settle versions) Map.empty [], fst rubyGemsCached (GemDocument name (encodeUtf8 (corpusHeader input)) [row | (_, _, row) <- rows]))
   where
     projectRow physical observed = do

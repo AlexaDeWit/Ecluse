@@ -12,7 +12,7 @@ import Ecluse.Core.Registry.Metadata (MetadataError (MetadataBoundExceeded, Meta
 import Ecluse.Core.Registry.Metadata.Projection (projectionResult)
 import Ecluse.Core.Registry.WireSupport (Projection)
 import Ecluse.Core.Security (Limits)
-import Ecluse.Test.Security.Limits (checkDocumentArtifacts, checkNestingDepth, checkVersionCount)
+import Ecluse.Test.Security.Limits (checkNestingDepth, checkVersionCount)
 
 -- | Check depth before projection and name agreement before counts, retaining the decoded document.
 projectMetadata :: (Value -> Either ParseError (Projection PackageInfo)) -> Limits -> ByteString -> Either MetadataError (PackageInfo, Value)
@@ -21,5 +21,4 @@ projectMetadata project limits body = do
     bounded <- first MetadataBoundExceeded (checkNestingDepth limits value)
     info <- first (const MetadataUndecodable) (project bounded) >>= projectionResult
     versionBounded <- first MetadataBoundExceeded (checkVersionCount limits info)
-    boundedInfo <- first MetadataBoundExceeded (checkDocumentArtifacts limits versionBounded)
-    pure (boundedInfo, bounded)
+    pure (versionBounded, bounded)

@@ -19,7 +19,7 @@ import Ecluse.Core.Registry.Metadata (Manifest (manifestInfo), MetadataError (..
 import Ecluse.Core.Registry.Metadata.Fetch (readManifest)
 import Ecluse.Core.Registry.Metadata.Fetch.Types (ReadTerms (..))
 import Ecluse.Core.Registry.Npm.Metadata (npmRead)
-import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit, MirrorArtifactBodyLimit), LimitError (BodyTooLarge, TooDeeplyNested, TooManyArtifacts, TooManyVersions), Limits (maxArtifactCount, maxMetadataBytes, maxNestingDepth, maxVersionCount), boundedRead, defaultLimits)
+import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit, MirrorArtifactBodyLimit), LimitError (BodyTooLarge, TooDeeplyNested, TooManyVersions), Limits (maxMetadataBytes, maxNestingDepth, maxVersionCount), boundedRead, defaultLimits)
 import Ecluse.Test.Contract.RegistrySmoke (liveMetadata, liveRegistryResponse)
 import Ecluse.Test.Corpus.Npm (benchPackageName, syntheticPackumentBytes)
 import Ecluse.Test.Port (passthroughTracingPort)
@@ -64,7 +64,6 @@ spec = describe "live registry verdicts" $ do
         [ ("body bytes", defaultLimits{maxMetadataBytes = 1}, MetadataFetch (FetchBoundExceeded (BodyTooLarge (MetadataBodyLimit 1))))
         , ("nesting depth", defaultLimits{maxNestingDepth = 1}, MetadataBoundExceeded (TooDeeplyNested 1))
         , ("version count", defaultLimits{maxVersionCount = 0}, MetadataBoundExceeded (TooManyVersions 1 0))
-        , ("artifact count", defaultLimits{maxArtifactCount = 0}, MetadataBoundExceeded (TooManyArtifacts 1 0))
         ]
         $ \(label, limits, expected) ->
             it ("fails the configured " <> label <> " bound") $ do

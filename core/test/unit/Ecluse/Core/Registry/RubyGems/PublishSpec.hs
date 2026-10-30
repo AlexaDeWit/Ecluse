@@ -185,7 +185,7 @@ sourceVersionOf archive = do
     (name, rows) <- loadFixtureInfo "ecluse-fixture-root"
     let advertise row = decodeInfoRow name (grEntryKey row) (encodeUtf8 (T.replace genuine (sha256Hex archive) (decodeUtf8 (grSource row))))
     advertised <- traverse (either (fail . show) pure . advertise) rows
-    info <- expectRight (projectGemRows defaultLimits name "https://public.test" advertised)
+    info <- expectRight (projectGemRows name "https://public.test" advertised)
     details <- maybe (fail "missing native fixture version") pure (Map.lookup "1.0.0" (infoVersions info))
     source <- maybe (fail "missing native fixture document") pure (selectGemVersion (pkgVersion details) (GemDocument name "---\n" advertised))
     pure (VersionDoc details (Just (fst rubyGemsCached source)))
