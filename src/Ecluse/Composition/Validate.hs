@@ -49,7 +49,6 @@ import Ecluse.Composition.Endpoints (
 import Ecluse.Composition.Maintenance.Plan (ClearedBackend, ResolveMaintenanceAdapter, overrideKey, vetPrivateCaches, vetStoreBackends)
 import Ecluse.Composition.Types (BootRole, MirrorRole (MirrorOnly, ServeAndMirror, ServeOnly), pipelineRoleOf)
 import Ecluse.Composition.Vet (Severity (Advise, Ignore, Refuse), Vet, byStoreRole, decided, rule)
-import Ecluse.Config.Target (storePresentation)
 import Ecluse.Config (
     AppConfig (cfgDredger, cfgLimits, cfgMirrorState, cfgMounts, cfgServer),
     Config (configApp, configMounts),
@@ -75,6 +74,7 @@ import Ecluse.Config (
     regMirrorTarget,
     taggedKeyPath,
  )
+import Ecluse.Config.Target (storePresentation)
 import Ecluse.Core.Credential (ClientCredential (ClientCredential), Secret)
 import Ecluse.Core.Ecosystem (Ecosystem)
 import Ecluse.Core.Registry.Adapter (RegistryAdapter, adapterFor, adapterPublish, adapterRuleBlocks)

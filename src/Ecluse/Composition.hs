@@ -77,10 +77,10 @@ import Ecluse.Core.Registry.Adapter (
     adapterPublish,
  )
 import Ecluse.Core.Registry.Adapter.Capability (AdapterArtifact (artifactHosts))
-import Ecluse.Core.Registry.Request (ServicePresentation)
 import Ecluse.Core.Registry.Cargo.FirstParty (cargoFirstPartyName)
 import Ecluse.Core.Registry.Npm.Publish (npmPublishAllowed)
 import Ecluse.Core.Registry.PyPI.FirstParty (pypiFirstPartyName)
+import Ecluse.Core.Registry.Request (ServicePresentation)
 import Ecluse.Core.Registry.RubyGems.FirstParty (rubyGemsFirstPartyName)
 import Ecluse.Core.Rules (RuleDeps, prepare, rdCurrentAdvisoryEtag, rdSourceReporter)
 import Ecluse.Core.Rules.Outage (SourceReporter (noteAdmission))
