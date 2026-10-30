@@ -15,11 +15,11 @@ import Ecluse.Test.Support (expectRight)
 
 spec :: Spec
 spec = describe "Cargo view discovery" $ do
-    it "keeps public and private view prefixes and their authentication declarations"
+    it "keeps the registry prefix, publication API and authentication declaration"
         $ for_
             [ ("https://proxy.test/cargo", Nothing, False, "https://proxy.test/cargo/crates/{crate}/{version}/{crate}-{version}.crate")
             , ("https://proxy.test/cargo/", Nothing, False, "https://proxy.test/cargo/crates/{crate}/{version}/{crate}-{version}.crate")
-            , ("https://proxy.test/cargo/private/", Just "https://proxy.test/cargo/private", True, "https://proxy.test/cargo/private/crates/{crate}/{version}/{crate}-{version}.crate")
+            , ("https://proxy.test/cargo/", Just "https://proxy.test/cargo", True, "https://proxy.test/cargo/crates/{crate}/{version}/{crate}-{version}.crate")
             ]
         $ \(base, api, authenticated, expectedDownload) -> do
             (download, advertisedApi, advertisedAuth, _) <- expectRight (referenceDiscovery (cargoViewDiscovery base api authenticated))
