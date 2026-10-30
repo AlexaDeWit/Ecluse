@@ -33,6 +33,7 @@ observedDriver changeDigest changeBytes =
     ServingDriver
         { withServing = \_ _ _ releases action -> observed releases action
         , withFaultedServing = \_ _ _ releases action -> observed releases action
+        , withPublicFloor = \_ _ _ releases action -> observed releases action
         , servingIdentity = ("thing@" <>)
         , servingDigest = decodeUtf8
         }

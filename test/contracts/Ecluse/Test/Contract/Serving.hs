@@ -26,6 +26,8 @@ import Data.Time (nominalDay)
 import Network.HTTP.Types (Header, Method, methodGet, methodHead)
 import Test.Hspec
 
+import Ecluse.Core.Package (HashAlg (SHA512))
+import Ecluse.Core.Package.Integrity (MinIntegrity, mkMinIntegrity)
 import Ecluse.Core.Rules.Types (Rule (AllowByIdentity, AllowIfOlderThan, DenyByIdentity))
 import Ecluse.Core.Server.Encoding (MetadataCompression (GzipWhenAccepted, IdentityOnly))
 import Ecluse.Test.Contract.Catalogue (caseLabel)
@@ -77,6 +79,8 @@ data ServingDriver = ServingDriver
     { withServing :: forall a. MetadataCompression -> [Rule] -> [ServingRelease] -> [ServingRelease] -> (ServingSession -> IO a) -> IO a
     , withFaultedServing :: forall a. ServingFaults -> [Rule] -> [ServingRelease] -> [ServingRelease] -> (ServingSession -> IO a) -> IO a
     -- ^ 'withServing' under gzip, with either origin replaced by its fault.
+    , withPublicFloor :: forall a. MinIntegrity -> [Rule] -> [ServingRelease] -> [ServingRelease] -> (ServingSession -> IO a) -> IO a
+    -- ^ 'withServing' under gzip, with the public integrity floor raised to this one.
     , servingIdentity :: Text -> Text
     , servingDigest :: ByteString -> Text
     }
@@ -105,10 +109,12 @@ servingContract provider driver = describe "shared serving contract" $ do
             artifact <- requestArtifact session methodGet [] "1.2.3"
             responseStatus artifact `shouldBe` 403
     contractExample "authorised-union" "serves the union of trusted-private and gated-public versions" $
-        run agePolicy [old] [old, other] $ \session -> do
+        -- The private origin alone holds 3.4.5 and its own copy of 1.2.3, so each origin's share is visible.
+        run agePolicy [old{releaseVersion = "3.4.5"}, old{releaseBytes = "private bytes"}] [old, other] $ \session -> do
             response <- requestMetadata session methodGet []
             responseStatus response `shouldBe` 200
-            responseVersions response `shouldBe` ["1.2.3", "2.3.4"]
+            responseVersions response `shouldBe` ["1.2.3", "2.3.4", "3.4.5"]
+            Map.lookup "1.2.3" (responseDigests response) `shouldBe` Just [servingDigest driver "private bytes"]
     contractExample "quarantine-private-authority" "gates public versions while trusting private release age" $
         run agePolicy [young{releaseVersion = "3.4.5"}] [old, young{releaseVersion = "2.3.4"}] $ \session -> do
             response <- requestMetadata session methodGet []
@@ -163,11 +169,20 @@ servingContract provider driver = describe "shared serving contract" $ do
             (responseStatus response, responseVersions response) `shouldBe` (200, ["2.3.4"])
             artifact <- requestArtifact session methodGet [] "2.3.4"
             responseStatus artifact `shouldBe` 200
-    contractExample "public-integrity" "filters a hashless public version from the listing" $
+    contractExample "public-integrity" "filters a hashless public version from the listing" $ do
         run agePolicy [] [old, other{releaseHasIntegrity = False}] $ \session -> do
             response <- requestMetadata session methodGet []
             responseStatus response `shouldBe` 200
             responseVersions response `shouldBe` ["1.2.3"]
+        -- Every fixture digest is SHA-256, so a SHA-512 public floor reaches each native format,
+        -- including those whose parser already refuses a hashless row. The trusted floor is unchanged.
+        sha512Floor <- either (fail . toString) pure (mkMinIntegrity SHA512)
+        withPublicFloor driver sha512Floor agePolicy [old{releaseVersion = "3.4.5"}] [old] $ \session -> do
+            response <- requestMetadata session methodGet []
+            responseStatus response `shouldBe` 200
+            responseVersions response `shouldBe` ["3.4.5"]
+            artifact <- requestArtifact session methodGet [] "1.2.3"
+            responseStatus artifact `shouldBe` 403
     contractExample "trusted-integrity" "applies the default integrity floor to trusted-private versions" $
         run agePolicy [old{releaseHasIntegrity = False}] [] $ \session -> do
             response <- requestMetadata session methodGet []

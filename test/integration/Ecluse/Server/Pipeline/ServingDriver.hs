@@ -35,6 +35,7 @@ import Ecluse.Core.Ecosystem (Ecosystem (Cargo, Npm, PyPI))
 import Ecluse.Core.Mirror.State (StateRead (..), extendProjectRecord, stateTarget)
 import Ecluse.Core.Mirror.State.Internal (StateRevision (..), retainVerifiedIdentity)
 import Ecluse.Core.Package (mkPackageName)
+import Ecluse.Core.Package.Integrity (MinIntegrity)
 import Ecluse.Core.Registry.Adapter.Capability (AdapterMetadata (metadataRead))
 import Ecluse.Core.Registry.Adapter.Types (RegistryAdapter (adapterMetadata))
 import Ecluse.Core.Registry.CachedDocument (cargoCached)
@@ -60,7 +61,7 @@ import Ecluse.Test.Contract.Serving (OriginFault (..), ServingDriver (..), Servi
 import Ecluse.Test.Deadline (untracedClient, withSweeper)
 import Ecluse.Test.Json (fieldAt, textAtPath)
 import Ecluse.Test.Mirror.State (mirrorViewWith)
-import Ecluse.Test.Package (hexSha256Of, sriSha256Of)
+import Ecluse.Test.Package (defaultMinIntegrity, hexSha256Of, sriSha256Of)
 import Ecluse.Test.Port (passthroughTracingPort)
 import Ecluse.Test.Queue (newTestMemoryQueue)
 import Ecluse.Test.Registry.Cargo.Fixtures qualified as Cargo
@@ -97,15 +98,16 @@ data NativeObservation = NativeObservation
 nativeByteDriver :: Ecosystem -> IO RegistryAdapter -> ByteString -> ByteString -> ByteString -> (Text -> ByteString) -> (Text -> [ServingRelease] -> ByteString) -> NativeObservation -> (ByteString -> Text) -> ServingDriver
 nativeByteDriver ecosystem acquireAdapter mount clientMetadataPath upstreamMetadataPath artifactPath document observe digest =
     ServingDriver
-        { withServing = \compression -> serving compression (ServingFaults Nothing Nothing)
-        , withFaultedServing = serving GzipWhenAccepted
+        { withServing = \compression -> serving compression defaultMinIntegrity (ServingFaults Nothing Nothing)
+        , withFaultedServing = serving GzipWhenAccepted defaultMinIntegrity
+        , withPublicFloor = \raised -> serving GzipWhenAccepted raised (ServingFaults Nothing Nothing)
         , servingIdentity = ("thing@" <>)
         , servingDigest = digest
         }
   where
     now = UTCTime (fromGregorian 2026 6 20) 0
-    serving :: MetadataCompression -> ServingFaults -> [Rule] -> [ServingRelease] -> [ServingRelease] -> (ServingSession -> IO a) -> IO a
-    serving compression faults rules privateReleases publicReleases action = do
+    serving :: MetadataCompression -> MinIntegrity -> ServingFaults -> [Rule] -> [ServingRelease] -> [ServingRelease] -> (ServingSession -> IO a) -> IO a
+    serving compression publicFloor faults rules privateReleases publicReleases action = do
         adapter <- acquireAdapter
         testWithApplication (pure (faulted (privateFault faults) (upstream privateReleases))) $ \privatePort ->
             testWithApplication (pure (faulted (publicFault faults) (upstream publicReleases))) $ \publicPort -> withSweeper $ \deadlines -> do
@@ -118,6 +120,7 @@ nativeByteDriver ecosystem acquireAdapter mount clientMetadataPath upstreamMetad
                             { pdMountBaseUrl = "http://ecluse.test" <> decodeUtf8 mount
                             , pdEgressUrl = Right . loopbackRegistryUrl
                             , pdMetadataCompression = compression
+                            , pdMinIntegrity = publicFloor
                             }
                     app = proxyApplication ecosystem env deps
                     raw method path headers = requestAt method (mount <> path) Wai.defaultRequest{Wai.requestHeaders = headers} app
@@ -268,15 +271,16 @@ responseBytes method response
 cargoDriver :: ServingDriver
 cargoDriver =
     ServingDriver
-        { withServing = \compression -> serving compression (ServingFaults Nothing Nothing)
-        , withFaultedServing = serving GzipWhenAccepted
+        { withServing = \compression -> serving compression defaultMinIntegrity (ServingFaults Nothing Nothing)
+        , withFaultedServing = serving GzipWhenAccepted defaultMinIntegrity
+        , withPublicFloor = \raised -> serving GzipWhenAccepted raised (ServingFaults Nothing Nothing)
         , servingIdentity = ("thing@" <>)
         , servingDigest = hexSha256Of
         }
   where
     now = UTCTime (fromGregorian 2026 6 20) 0
-    serving :: MetadataCompression -> ServingFaults -> [Rule] -> [ServingRelease] -> [ServingRelease] -> (ServingSession -> IO a) -> IO a
-    serving compression faults rules privateReleases publicReleases action =
+    serving :: MetadataCompression -> MinIntegrity -> ServingFaults -> [Rule] -> [ServingRelease] -> [ServingRelease] -> (ServingSession -> IO a) -> IO a
+    serving compression publicFloor faults rules privateReleases publicReleases action =
         testWithApplication (pure (faulted (privateFault faults) (cargoUpstream privateReleases))) $ \privatePort ->
             testWithApplication (pure (faulted (publicFault faults) (cargoUpstream publicReleases))) $ \publicPort -> withSweeper $ \deadlines -> do
                 adapter <- requiredAdapter Cargo
@@ -293,6 +297,7 @@ cargoDriver =
                             , pdMirrorState = Just view
                             , pdEgressUrl = Right . loopbackRegistryUrl
                             , pdMetadataCompression = compression
+                            , pdMinIntegrity = publicFloor
                             }
                     app = proxyApplication Cargo env deps
                     request method path headers = cargoObservation method <$> requestAt method ("/cargo" <> path) Wai.defaultRequest{Wai.requestHeaders = headers} app
