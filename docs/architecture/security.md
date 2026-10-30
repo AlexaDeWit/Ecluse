@@ -174,5 +174,7 @@ those headers could authorise one `metadata.gz` while a store that reads gems wi
 or GNU (`L`, `K`) extended header
 ([protocol contract](https://ecluse-proxy.com/docs/protocol-support/#rubygems)). It also refuses a
 member name split by a ustar prefix, so a store reads the same name whether or not it joins the
-prefix. The rule relies on a store that reads the ustar name field as the format defines. Such a
-store registers the name the guard authorised.
+prefix. It refuses a name or prefix field that holds bytes after its first NUL as well. The guard
+ends each field at that NUL, while `Gem::Package` strips only trailing NULs and spaces, so the two
+would read different names. The rule relies on a store that reads the ustar name field as the
+format defines. Such a store registers the name the guard authorised.

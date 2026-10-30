@@ -263,11 +263,15 @@ That covers the mirror worker's minted token and a static `publicationTarget` to
 The backend declaration selects this presentation, not a hostname guess.
 Static publication credentials retain the required edge-token guard.
 
-RubyGems' own archive reader treats PAX and GNU extended tar headers as ordinary members.
-So `POST /api/v1/gems` answers `400` when the outer gem tar carries a PAX (`x`, `g`) or GNU (`L`, `K`) extended header, or a member name split by a ustar prefix, because Écluse and the store could read different gem names.
+`POST /api/v1/gems` answers `400` when the outer gem tar carries any of the following, because Écluse and the store could read different gem names:
+
+- a PAX (`x`, `g`) or GNU (`L`, `K`) extended header, which RubyGems' own archive reader treats as an ordinary member
+- a member name split by a ustar prefix
+- a name or prefix field with bytes after its first NUL, which RubyGems' reader keeps and Écluse ignores
+
 Écluse does not upload a public gem whose outer tar carries one to the mirror target either.
 Clients still download that version through Écluse, but the mirror holds no copy of it.
-Archives that `gem build` writes carry neither.
+Archives that `gem build` writes carry none of them.
 
 Mirroring copies every supported platform artifact of an admitted raw version, with original compact specifications and durable source facts.
 The worker verifies exact archives and native identities without executing Ruby, constructing YAML objects, or extracting files to disk.
