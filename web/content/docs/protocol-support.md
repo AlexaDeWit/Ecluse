@@ -128,31 +128,30 @@ shrinkwrap marker while removing other source-registry bookkeeping.
 
 ## Cargo sparse registries {#cargo}
 
-Cargo uses two views under one mount. [Connect Cargo](@/docs/connect.md#cargo) gives the client configuration.
+Cargo uses one registry under `/cargo/`, which replaces crates.io. [Connect Cargo](@/docs/connect.md#cargo) gives the client configuration.
 
-| View | Source and operations |
-|---|---|
-| `/cargo/` | crates.io source replacement. Reads crates.io and valid completed managed mirrors. Excludes private-only additions and declared first-party names. No publication API. |
-| `/cargo/private/` | Alternate registry. Reads arbitrary caller-authorised private packages and accepts configured first-party publication. No public fallback. |
-
-Both views serve `config.json`, native sparse index paths, and local crate archive routes.
+The registry merges caller-authorised `privateUpstream` crates with admitted crates.io crates, as the npm, PyPI and RubyGems mounts merge their sources.
+A declared first-party name reads `privateUpstream` only. A private `404` for an undeclared name falls back to admitted crates.io crates.
+It serves `config.json`, native sparse index paths, local crate archive routes, and configured publication. Every path under `/cargo/private/` answers `404`.
 Every emitted download location points through Écluse.
-Git index serving is unsupported. Cargo can retain its canonical crates.io registry identity in lockfiles, including the historical GitHub URL.
+Git index serving is unsupported. Cargo records every crate in lockfiles under crates.io's registry identity, the historical GitHub URL, private crates included.
 That identity does not select Git transport when source replacement uses a sparse HTTPS index.
 
-The private discovery response advertises `api` only when publication is configured.
-Its API base is `https://packages.example.com/cargo/private`.
-Cargo appends `/api/v1/crates/new`, producing `PUT /cargo/private/api/v1/crates/new`.
+Écluse answers `config.json` itself after edge authentication. It reads no upstream registry for that response.
+
+| Field | Value |
+|---|---|
+| `dl` | `https://packages.example.com/cargo/crates/{crate}/{version}/{crate}-{version}.crate` |
+| `api` | `https://packages.example.com/cargo`, present only when publication is configured |
+| `auth-required` | `true` when the mount has a `privateUpstream` or `server.authToken`, otherwise `false` |
+
+Cargo appends `/api/v1/crates/new` to `api`, producing `PUT /cargo/api/v1/crates/new`.
 Do not append another `/api` to the configured client registry.
 The proxy supports publication, not registry management operations such as yank or unyank.
 
-Discovery runs against the selected origin after the operation obtains its caller or service credential.
-Boot performs no registry discovery. Private discovery stays local to the request.
-Local `auth-required` combines the edge requirement and the selected trusted origin's declaration.
-Without a trusted origin, public discovery answers locally.
-It never contacts crates.io merely to construct that local response.
+Écluse discovers an upstream registry only after the operation obtains its caller or service credential.
+Boot performs no registry discovery, and private discovery stays local to the request.
 The [private access policy](@/docs/configuration.md#first-party-namespaces) gives Cargo's `401` challenge and `403` refusal.
-Discovery failure stays explicit. A new client can fail to bootstrap while its configured trusted registry is unavailable.
 
 The index reader retains admitted native records, their order, raw versions, checksums, and additive fields.
 It preserves dependencies, renames, features, targets, source identities, schema, Rust-version constraints, yank, and publication time.
@@ -164,6 +163,7 @@ Transport and resource failures fail the whole read.
 Published spelling, lowercase lookup identity, and case-insensitive hyphen/underscore ownership matching have separate uses.
 Hyphen and underscore aliases do not merge distinct index lookup paths.
 Cargo versions use native SemVer identity and ordering. Build metadata does not create a second publishable version identity.
+A private version and a public version that differ only in build metadata are one version, and the private row wins.
 
 The age rule uses native `pubtime`. Missing or invalid time stays unknown.
 OSV `crates.io` advisories use the existing freshness, malicious-package, and exact-fix rules.
@@ -172,8 +172,9 @@ Build scripts and procedural macros remain allowed. Cargo blocks active `DenyIns
 Cargo mirrors retain the original admitted index row, source identity, and checksum-verified archive using durable version state.
 Native-library `links` declarations must agree. Cargo defines omitted index `links` as null.
 Target publication can reset time or yank and omit fields, so an archive alone cannot prove faithful source reads.
+Completed copies are read through `privateUpstream`, as in the other ecosystems.
+A target row without a durable record is trusted private content, served with the target's publication time and yank state.
 Missing, corrupt, or unrecorded state cannot supply a managed original-source copy during a public outage.
-Ordinary compatible private reads remain available through the alternate view.
 Retained fields reflect first admission. Écluse does not continuously synchronise later yanks or mutate the target's yank state.
 
 Native publication checks length framing, archive root, manifest identity, and version before discovery or writes.
@@ -183,8 +184,8 @@ Upload dependencies must not carry the `artifact`, `bindep_target`, `lib`, or `p
 Écluse refuses such an upload with `400`, as mirroring refuses index rows that carry them.
 Target comparison parses native cfg expressions under the configured nesting limit, including final commas in `all` and `any` lists.
 Registry comparison uses native logical identities, preserving source kinds and sparse registry paths.
-A null upload dependency registry identifies the selected private view. An absent manifest registry identifies crates.io.
-Every dependency, development and build dependencies included, must come from crates.io or from Écluse's `/cargo/` or `/cargo/private/` index under `server.publicUrl`.
+A null upload dependency registry identifies this `/cargo/` registry. An absent manifest registry identifies crates.io.
+Every dependency, development and build dependencies included, must come from crates.io or from Écluse's `/cargo/` index under `server.publicUrl`.
 Écluse refuses a dependency from any other registry with `400` and names it.
 Publish that dependency through Écluse first, then depend on Écluse's copy.
 Écluse does not check crates that reach the private upstream by other means.

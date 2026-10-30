@@ -44,44 +44,54 @@ Do not configure a public `extra-index-url` as a fallback. It gives the client a
 
 ## Cargo clients {#cargo}
 
-Use Cargo 1.74+ and sparse HTTPS. Replace crates.io with the public view in `.cargo/config.toml`:
-
-```toml
-[source.crates-io]
-replace-with = "ecluse"
-
-[source.ecluse]
-registry = "sparse+https://packages.example.com/cargo/"
-```
-
-If the replacement requires authentication, also name that index for Cargo's credential provider:
+Use Cargo 1.74+ and sparse HTTPS. Écluse serves one registry at `/cargo/` that replaces crates.io, so
+private crates and crates.io crates come from the same place. Name it in `.cargo/config.toml` and
+replace crates.io with it:
 
 ```toml
 [registries.ecluse]
 index = "sparse+https://packages.example.com/cargo/"
 credential-provider = "cargo:token"
+
+[source.crates-io]
+replace-with = "ecluse"
 ```
 
-For private dependencies and publication, configure the alternate registry separately:
+Developers and pipelines that publish also make it the default registry, so a plain `cargo publish`
+goes to Écluse:
 
 ```toml
-[registries.ecluse-private]
-index = "sparse+https://packages.example.com/cargo/private/"
-credential-provider = "cargo:token"
+[registry]
+default = "ecluse"
 ```
 
-Set `registry = "ecluse-private"` on private dependencies.
-Publish declared first-party crates with `cargo publish --registry ecluse-private`.
-Keep the trailing slash on sparse index URLs.
-Configure a credential provider for each named authenticated registry, including a replacement source when it requires authentication.
-Use your approved provider or Cargo's token store. Keep tokens out of committed files.
-Cargo sends the token directly in `Authorization`, without a Bearer prefix.
+Every first-party crate restricts publication to Écluse in its `Cargo.toml`:
 
-The public view contains only crates.io packages and completed managed mirrors.
-It cannot supply private-only packages or declared first-party names.
-The private view never falls back to crates.io.
-Cargo can keep the historical crates.io GitHub registry URL in its lockfile while fetching through sparse source replacement.
-Verify actual archive requests with fresh client state. A lockfile identity alone does not establish the network path.
+```toml
+[package]
+publish = ["ecluse"]
+```
+
+Without it, `cargo publish --registry crates-io`, which Cargo's own error message offers as a fix, packages
+the crate through Écluse and uploads it to crates.io.
+
+Declare private crates as plain dependencies, such as `acme-core = "1"`, never with
+`registry = "ecluse"`. A dependency that names the registry is a second identity for the same crate,
+which Cargo builds separately. Declare every private crate name or prefix as first-party
+([first-party names](@/docs/private-packages.md#names)), so a crates.io crate of the same name never
+merges into it.
+
+Écluse's discovery document sets `auth-required` whenever the mount has a `privateUpstream` or
+`server.authToken`. Cargo then needs a token from the credential provider for every request. Keep the
+trailing slash on sparse index URLs, and keep tokens in your approved provider or Cargo's token store,
+out of committed files. Cargo sends the token directly in `Authorization`, without a Bearer prefix.
+When the private registry allows anonymous reads, give consumers a placeholder token, which Écluse
+forwards and the registry ignores.
+
+`Cargo.lock` records every crate, private crates included, under the crates.io source with the
+checksum Écluse served. Builds resolve those entries through Écluse only. Verify actual archive
+requests with fresh client state, because a lockfile identity alone does not establish the network
+path.
 
 ## RubyGems clients {#rubygems}
 

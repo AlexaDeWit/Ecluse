@@ -40,9 +40,8 @@ In CodeArtifact, the private read repository uses the other two repositories as 
 
 Écluse treats private reads as trusted. A public connection there would bypass admission.
 
-Cargo uses separate client views for crates.io replacement and private alternate-registry access.
-Its public view reads completed managed copies from the mirror target, excluding private-only and declared first-party packages.
-The [Cargo protocol contract](@/docs/protocol-support.md#cargo) explains that source boundary.
+Cargo clients use one registry at `/cargo/` that replaces crates.io. It reads completed managed copies through the private read repository, like the other ecosystems.
+The [Cargo protocol contract](@/docs/protocol-support.md#cargo) explains its source rules.
 
 [Configure the mirror](@/docs/mirror-setup.md) when you are ready to add these stores.
 
