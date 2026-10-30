@@ -36,7 +36,7 @@ import Ecluse.Core.Server.MirrorView (mirrorVersionView, mirrorViewDocuments, pu
 import Ecluse.Core.Server.Path (Filename, unFilename)
 import Ecluse.Core.Server.Pipeline.Origin (OriginMiss (..), withPrivateMetadataClient, withPublicMetadata)
 import Ecluse.Core.Server.Pipeline.Shared
-import Ecluse.Core.Server.Pipeline.Tarball.Private (privateMetadataMiss)
+import Ecluse.Core.Server.Pipeline.Tarball.Private (privateMetadataMiss, privateReadUnresolved)
 import Ecluse.Core.Server.Pipeline.Tarball.Refusal (artifactError, firstPartyMissRefusal, upstreamUnavailable, versionAbsent)
 import Ecluse.Core.Server.Pipeline.Tarball.Relay (ArtifactServe (..), acceptPrivateArtifact, privateArtifactResponder, relayPublicResult, relayUnjudged, relayUpstreamResult, withMethod, withValidators)
 import Ecluse.Core.Server.Pipeline.Tarball.Types (ArtifactRequest (..), TarballReplies (..), relayResponder)
@@ -84,6 +84,7 @@ privateSelection ctx token ticket = case pdPrivateBase deps of
         result <- tryAny (withPrivateMetadataClient (arRuntime ctx) deps (Just ticket) base token (\client -> fetchVersionMetadata client (arPackage ctx) (arVersion ctx)))
         case result of
             Right (Left err) | isNothing (privateMetadataMiss err) -> pure Refused
+            _ | privateReadUnresolved result -> pure (Missing MissUnresolved)
             _ -> case pdMirrorState deps of
                 Just mirror
                     | not (pdFirstParty deps (arPackage ctx)) ->
@@ -171,6 +172,7 @@ servePrivate ctx = \case
 fallback :: ArtifactRequest response -> OriginMiss -> Handler ResponseReceived
 fallback ctx miss
     | pdFirstParty (arDeps ctx) (arPackage ctx) = answerError ctx (firstPartyMissRefusal miss)
+    | MissUnresolved <- miss = answerError ctx upstreamUnavailable
     | otherwise = admittedRead ctx (publicSelection ctx) (servePublic ctx)
 
 servePublic :: ArtifactRequest response -> Selection -> Handler ResponseReceived

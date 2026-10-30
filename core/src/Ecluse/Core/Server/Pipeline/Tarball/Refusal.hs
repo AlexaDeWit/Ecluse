@@ -76,7 +76,7 @@ crossHostRefused :: TarballReplies response -> response
 crossHostRefused replies =
     tarballError replies status403 [] (mkRefusal Nothing "the upstream artifact host is not permitted by the tarball-host policy")
 
--- | A transient public-upstream outage (to @503@).
+-- | A transient upstream outage, public or private (to @503@).
 upstreamUnavailable :: ServeDecision
 upstreamUnavailable =
     versionUnresolved VersionMetadataUnavailable "the upstream registry was unavailable"
