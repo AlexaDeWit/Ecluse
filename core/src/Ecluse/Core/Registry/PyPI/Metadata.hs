@@ -70,7 +70,7 @@ readPyPIIndex limits name mode bound table = readJsonWalk bound (pypiIndexWalk l
 
 -- | The production Simple-index walk over a caller's intern table.
 pypiIndexWalk :: Limits -> PackageName -> PyPIRead -> InternTable -> Cursor -> Step PyPIProjection
-pypiIndexWalk limits name mode table = pypiWalk (maxNestingDepth limits) mode (collectField limits mode) keepsFile table (emptyProjection name)
+pypiIndexWalk limits name mode table = pypiWalk (maxNestingDepth limits) mode (collectField limits) keepsFile table (emptyProjection name)
 
 -- | The packed read returns its final table beside the typed projection and supported files.
 type PyPIFullRead = Walked PyPIProjection
@@ -84,7 +84,7 @@ readPyPIFull limits name bound table readChunk = do
 -- | Full reads use the supplied table and writer without materialising file trees.
 pypiPackedWalk :: Writer st -> FileWriter st -> Limits -> PackageName -> InternTable -> Cursor -> ST st (Steps (ST st) PyPIFullRead)
 pypiPackedWalk writer build limits name table =
-    pypiFullWalk build (maxNestingDepth limits) (pureStep (collectField limits FullRead)) keepsFile (packedFileStep writer limits) table (emptyProjection name)
+    pypiFullWalk build (maxNestingDepth limits) (pureStep (collectField limits)) keepsFile (packedFileStep writer limits) table (emptyProjection name)
 {-# INLINE pypiPackedWalk #-}
 
 -- | Finish packed full reads without rebuilding file trees for their typed facts.
