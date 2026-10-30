@@ -9,7 +9,7 @@ import Data.Aeson (Value (Object), decode, encode, object, (.=))
 import Data.Aeson.Key qualified as Key
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.ByteString.Lazy qualified as LBS
-import Data.List (lookup)
+import Data.List (isInfixOf, lookup)
 import Data.Text qualified as T
 import Data.Time (UTCTime (UTCTime), fromGregorian)
 import Network.HTTP.Client (defaultManagerSettings, newManager)
@@ -212,6 +212,14 @@ environmentSpec = describe "proxyEnvironment" $ do
         case loadConfig environment Nothing of
             Left errors -> expectationFailure (toString (unlines (map renderConfigError errors)))
             Right config -> void (expectPlanFor (BootMirrorPipeline ServeAndMirror) environment Nothing config noCeiling)
+    it "boots every ecosystem's ordinary proxy on the same upstream hosts, without durable state or a mirror target" $
+        for_ [Npm, PyPI, Cargo, RubyGems] $ \ecosystem -> do
+            let environment = proxyEnvironment (proxySettings ecosystem 60) Unlimited 3 "/tmp/proxy" (8080, 8081, 8082) 9001 (Just 9002) []
+                upstreamKey leg = "ECLUSE_MOUNTS__" <> toString (T.toUpper (ecosystemName ecosystem)) <> "__" <> leg <> "__REGISTRY__URL"
+            lookup (upstreamKey "PUBLIC_UPSTREAM") environment `shouldBe` Just "https://localhost:9001"
+            lookup (upstreamKey "PRIVATE_UPSTREAM") environment `shouldBe` Just "https://localhost:9002"
+            lookup "ECLUSE_MIRROR_STATE__URL" environment `shouldBe` Nothing
+            filter (("__MIRROR_TARGET__" `isInfixOf`) . fst) environment `shouldBe` []
     it "overrides only the public hostname with or without durable state" $
         for_ [Nothing, Just 9003] $ \statePort -> do
             let pinned = (proxySettings PyPI 3600){psPublicHost = Just "127.0.0.2", psMirrorStatePort = statePort}
