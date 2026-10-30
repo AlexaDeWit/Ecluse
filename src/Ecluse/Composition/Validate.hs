@@ -14,7 +14,7 @@ module Ecluse.Composition.Validate (
 
     -- * What it clears
     VettedMount (vmEcosystem, vmAdapter, vmMount, vmConfig),
-    VettedPublication (vpubTarget, vpubFirstParty, vpubStaticCredential, vpubMaxRequestBytes),
+    VettedPublication (vpubTarget, vpubFirstParty, vpubStaticCredential, vpubStaticPresentation, vpubMaxRequestBytes),
 ) where
 
 import Data.Map.Strict qualified as Map
@@ -49,6 +49,7 @@ import Ecluse.Composition.Endpoints (
 import Ecluse.Composition.Maintenance.Plan (ClearedBackend, ResolveMaintenanceAdapter, overrideKey, vetPrivateCaches, vetStoreBackends)
 import Ecluse.Composition.Types (BootRole, MirrorRole (MirrorOnly, ServeAndMirror, ServeOnly), pipelineRoleOf)
 import Ecluse.Composition.Vet (Severity (Advise, Ignore, Refuse), Vet, byStoreRole, decided, rule)
+import Ecluse.Config.Target (storePresentation)
 import Ecluse.Config (
     AppConfig (cfgDredger, cfgLimits, cfgMirrorState, cfgMounts, cfgServer),
     Config (configApp, configMounts),
@@ -85,6 +86,7 @@ import Ecluse.Core.Registry.Adapter.Capability (
     companionsAgree,
     durableMirrorDocuments,
  )
+import Ecluse.Core.Registry.Request (ServicePresentation, nativePresentation)
 import Ecluse.Core.Registry.Sweep.Types (minimumChunkPause)
 import Ecluse.Core.Rules.Types (
     AllowIfRemediatesCveParams (aircOnUnavailable),
@@ -130,6 +132,8 @@ data VettedPublication = VettedPublication
     { vpubTarget :: PublicationTarget
     , vpubFirstParty :: FirstParty
     , vpubStaticCredential :: Maybe ClientCredential
+    , vpubStaticPresentation :: ServicePresentation
+    -- ^ How the publication target's store asks for the static credential.
     , vpubMaxRequestBytes :: Maybe Int
     }
 
@@ -193,7 +197,7 @@ vetBootWith resolveAdapter config =
             , vpSettings = app
             }
 
-    cleared target (firstParty, credential, requestBytes) = VettedPublication target firstParty credential requestBytes
+    cleared target (firstParty, credential, presentation, requestBytes) = VettedPublication target firstParty credential presentation requestBytes
 
 -- Every role dials upstreams, so every role refuses a floor the window and byte count cannot make.
 vetProgressFloor :: AppConfig -> Vet ProgressFloor
@@ -339,7 +343,7 @@ firstPartyWithoutPrivateUpstream (eco, mcfg) =
 
 {- The two couplings a declared publication target carries: the first-party namespaces the
 guard enforces, and the inbound edge a static publish credential needs. -}
-vetPublishPolicy :: AppConfig -> Vet (Map Ecosystem (FirstParty, Maybe ClientCredential, Maybe Int))
+vetPublishPolicy :: AppConfig -> Vet (Map Ecosystem (FirstParty, Maybe ClientCredential, ServicePresentation, Maybe Int))
 vetPublishPolicy app =
     Map.fromList . catMaybes <$> traverse (vetPublication (srvAuthToken (cfgServer app))) publishingMounts
   where
@@ -349,13 +353,13 @@ vetPublishPolicy app =
         , isJust (mntPublicationTarget mcfg)
         ]
 
-vetPublication :: Maybe Secret -> (Ecosystem, MountConfig) -> Vet (Maybe (Ecosystem, (FirstParty, Maybe ClientCredential, Maybe Int)))
+vetPublication :: Maybe Secret -> (Ecosystem, MountConfig) -> Vet (Maybe (Ecosystem, (FirstParty, Maybe ClientCredential, ServicePresentation, Maybe Int)))
 vetPublication inboundToken subject@(eco, mcfg) =
     cleared
         <$ rule (const (Refuse FirstPartyMissing)) firstPartyMissing subject
         <* rule (const (Refuse (uncurry PublishStaticCredentialNeedsEdge))) (staticWithoutEdge inboundToken) subject
   where
-    cleared = mntFirstParty mcfg <&> \firstParty -> (eco, (firstParty, publicationCredential mcfg, mntMaxRequestBytes mcfg))
+    cleared = mntFirstParty mcfg <&> \firstParty -> (eco, (firstParty, publicationCredential mcfg, publicationPresentation eco mcfg, mntMaxRequestBytes mcfg))
 
 publicationCredential :: MountConfig -> Maybe ClientCredential
 publicationCredential mount = do
@@ -363,6 +367,10 @@ publicationCredential mount = do
     token <- peToken endpoint
     let username = if tgtTag (peTarget endpoint) == TagCodeArtifact then Just "aws" else peUsername endpoint
     pure (ClientCredential username token)
+
+-- The publication target's store decides how a static credential travels, as it does for the mirror worker's token.
+publicationPresentation :: Ecosystem -> MountConfig -> ServicePresentation
+publicationPresentation eco mcfg = maybe nativePresentation (\endpoint -> storePresentation (tgtTag (peTarget endpoint)) eco) (mntPublicationTarget mcfg)
 
 publicationToken :: MountConfig -> Maybe Secret
 publicationToken mcfg = peToken =<< mntPublicationTarget mcfg

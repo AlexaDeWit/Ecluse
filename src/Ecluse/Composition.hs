@@ -44,7 +44,7 @@ import Ecluse.Composition.MirrorRole (MirrorMintPlan (MintMirrorWrite, SkipMirro
 import Ecluse.Composition.Validate (
     ValidatedPlan (vpMounts, vpPublications, vpSettings),
     VettedMount (vmAdapter, vmConfig, vmEcosystem, vmMount),
-    VettedPublication (vpubFirstParty, vpubMaxRequestBytes, vpubStaticCredential, vpubTarget),
+    VettedPublication (vpubFirstParty, vpubMaxRequestBytes, vpubStaticCredential, vpubStaticPresentation, vpubTarget),
  )
 import Ecluse.Config (
     AppConfig (..),
@@ -77,7 +77,7 @@ import Ecluse.Core.Registry.Adapter (
     adapterPublish,
  )
 import Ecluse.Core.Registry.Adapter.Capability (AdapterArtifact (artifactHosts))
-import Ecluse.Core.Registry.Request (ServicePresentation, nativePresentation)
+import Ecluse.Core.Registry.Request (ServicePresentation)
 import Ecluse.Core.Registry.Cargo.FirstParty (cargoFirstPartyName)
 import Ecluse.Core.Registry.Npm.Publish (npmPublishAllowed)
 import Ecluse.Core.Registry.PyPI.FirstParty (pypiFirstPartyName)
@@ -276,7 +276,7 @@ publishDepsFor adapter app limits publishBudget helpMessage publication = do
             , pubTargetUrl = publicationTargetUrl (vpubTarget publication)
             , pubAllowed = firstPartyName (vpubFirstParty publication)
             , pubStaticCredential = vpubStaticCredential publication
-            , pubStaticPresentation = nativePresentation
+            , pubStaticPresentation = vpubStaticPresentation publication
             , pubInboundToken = srvAuthToken (cfgServer app)
             , pubMaxRequestBytes = fromMaybe (pbMaxRequestBytes budget) (vpubMaxRequestBytes publication)
             , pubLimits = limits{maxPublishRequestBytes = fromMaybe (pbMaxRequestBytes budget) (vpubMaxRequestBytes publication)}
