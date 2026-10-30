@@ -255,7 +255,7 @@ publishReplies :: PublishReplies PassthroughResponse
 publishReplies =
     PublishReplies
         { publishAllowedMethods = "PUT"
-        , publishDisabledReply = \headers _ -> plainTextRefusal status405 headers "publishing is not enabled on this mount"
+        , publishDisabledReply = \headers _ -> plainTextRefusal status405 headers "publishing is not enabled on this view"
         , publishRelayed = \status headers body -> passthroughResponse status (if status == status401 then challenge <> headers else headers) (PassthroughBytes body)
         , publishError = \status headers -> plainTextRefusal status (if status == status401 then challenge <> headers else headers)
         }
