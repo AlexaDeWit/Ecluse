@@ -16,6 +16,9 @@ Use these sources for the implemented contract:
 | Extension process and interface ownership | [Adding an ecosystem](adding-an-ecosystem.md) and the Cargo modules' Haddock |
 
 The [approved design](https://github.com/AlexaDeWit/Ecluse/issues/1883#issuecomment-6400735787)
-records the client baseline, trust boundary, complete serving contract, and delivery requirements.
+records the client baseline, trust boundary, and delivery requirements.
+[#1895](https://github.com/AlexaDeWit/Ecluse/issues/1895) and [#1892](https://github.com/AlexaDeWit/Ecluse/issues/1892)
+later replaced its two-view serving and execution-denial decisions.
+[Cargo protocol](../web/content/docs/protocol-support.md#cargo) holds the current serving contract.
 The runtime adapter requires measured native charge factors.
 Ordinary arm64 CI must supply those observations. A missing factor remains an explicit failure.

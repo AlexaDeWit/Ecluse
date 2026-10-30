@@ -98,7 +98,7 @@ data Rule
       AllowScope Scope
     | -- | Delay new versions, so a malicious publish is found and removed before a build installs it.
       AllowIfOlderThan NominalDiffTime
-    | -- | Deny npm install scripts, RubyGems native builds, and PyPI sdist builds. Abstain without that signal.
+    | -- | Deny npm versions that declare install scripts. Other adapters refuse this rule at boot.
       DenyInstallTimeExecution
     | -- | Deny a version whose installable dependency a client would fetch from outside the registry, such as an npm git or URL spec.
       DenyExternalDependencies

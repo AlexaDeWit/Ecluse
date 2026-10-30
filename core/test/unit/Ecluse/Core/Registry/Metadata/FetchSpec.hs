@@ -35,6 +35,7 @@ import Ecluse.Test.Registry.Npm (packumentValue, versionSpec, versionValue)
 import Ecluse.Test.Registry.Npm.Metadata (npmRead)
 import Ecluse.Test.Registry.PyPI (filesNamed, simpleIndex)
 import Ecluse.Test.Registry.PyPI.Metadata (pypiRead)
+import Ecluse.Test.Server.Mount (requiredAdapter)
 import Ecluse.Test.Support (expectRight)
 import Test.Hspec
 import Prelude hiding (universe)
@@ -93,10 +94,9 @@ registered =
         }
     , ReadFixture
         { rdEcosystem = Cargo
-        , rdPrepareRead = PrepareRead $ \origin ->
-            case adapterFor Cargo of
-                Nothing -> fail "Cargo has no production adapter registration"
-                Just adapter -> prepareRead (metadataRead (adapterMetadata adapter)) origin
+        , rdPrepareRead = PrepareRead $ \origin -> do
+            adapter <- requiredAdapter Cargo
+            prepareRead (metadataRead (adapterMetadata adapter)) origin
         , rdRead = \base -> cargoRead <$> parseCargoDiscovery (ecosystemArtifactAuthorities cargoArtifactHosts) base (discovery base)
         , rdFraming = RecordStream
         , rdCallerBoundPath = Nothing
@@ -106,10 +106,9 @@ registered =
         }
     , ReadFixture
         { rdEcosystem = RubyGems
-        , rdPrepareRead = PrepareRead $ \origin ->
-            case adapterFor RubyGems of
-                Nothing -> fail "RubyGems has no production adapter registration"
-                Just adapter -> prepareRead (metadataRead (adapterMetadata adapter)) origin
+        , rdPrepareRead = PrepareRead $ \origin -> do
+            adapter <- requiredAdapter RubyGems
+            prepareRead (metadataRead (adapterMetadata adapter)) origin
         , rdRead = Right . gemReadWith (const pass) (const pass)
         , rdFraming = CallerBoundRecords
         , rdCallerBoundPath = Just "/info/thing"

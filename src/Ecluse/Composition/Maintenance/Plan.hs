@@ -36,7 +36,7 @@ import Ecluse.Config (
     regMirrorTarget,
     sbControl,
     sbTag,
-    storeTagName,
+    taggedKeyPath,
  )
 import Ecluse.Config.Resolve (mountKeyRef)
 import Ecluse.Config.Target (resolvePrivateBackend)
@@ -146,13 +146,13 @@ vetPrivateCaches resolveAdapter configured mounts = withRole $ \case
             when (refusesWithoutConsent role && preConsent endpoint == DeletionWithheld) $
                 Left (PrivateCacheUnavailable (descriptor <> " is not set"))
             when (role == MirrorPruner && isNothing (preToken endpoint)) $
-                Left (PrivateCacheUnavailable (mountKeyRef eco "privateUpstream.verdaccio.token" <> " is not set"))
+                Left (PrivateCacheUnavailable (mountKeyRef eco (taggedKeyPath "privateUpstream" TagVerdaccio "token") <> " is not set"))
             store <- protocolStoreFor adapter TagVerdaccio (preToken endpoint) (preConsent endpoint) descriptor
             pure (fmap (`BackendVerdaccio` preConsent endpoint) (preToken endpoint), clearedBackend (tgtUrl target) Nothing adapter (ClearedProtocol store))
       where
         target = preTarget endpoint
         adapter = resolveAdapter eco
-        descriptor = mountKeyRef eco "privateUpstream.verdaccio.permitDeletion"
+        descriptor = mountKeyRef eco (taggedKeyPath "privateUpstream" TagVerdaccio "permitDeletion")
 
 -- A resolved entry that failed, named by the ecosystem that declared it.
 unmaintainedOf :: (Ecosystem, Either reason a) -> Maybe (Ecosystem, reason)
@@ -220,7 +220,7 @@ absentAdapterDetail = "this build serves the mount's ecosystem no metadata read"
 consentDescriptor :: Ecosystem -> StoreTag -> Text
 consentDescriptor eco tag =
     "set "
-        <> mountKeyRef eco ("mirrorTarget." <> storeTagName tag <> ".permitDeletion")
+        <> mountKeyRef eco (taggedKeyPath "mirrorTarget" tag "permitDeletion")
         <> " to true: the Dredger deletes nothing from a store that does not carry it"
 
 -- | Match capacity declarations without case or trailing-slash differences.

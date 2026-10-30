@@ -23,7 +23,6 @@ import Ecluse.Core.Ecosystem (Ecosystem (Cargo))
 import Ecluse.Core.Mirror.State (ProjectMirrorRecord, StateRead (..), StateTarget, stateTarget)
 import Ecluse.Core.Mirror.State.Internal (StateRevision (..))
 import Ecluse.Core.Package (PackageName, mkPackageName)
-import Ecluse.Core.Registry.Adapter (RegistryAdapter, adapterFor)
 import Ecluse.Core.Registry.Cargo.Mirror (cargoMirrorDocuments)
 import Ecluse.Core.Rules (prepare)
 import Ecluse.Core.Rules.Types (Rule (AllowIfOlderThan))
@@ -44,7 +43,7 @@ import Ecluse.Test.Queue (newTestMemoryQueue)
 import Ecluse.Test.Registry.Cargo.Fixtures qualified as Fixture
 import Ecluse.Test.Registry.Cargo.Reference qualified as Reference
 import Ecluse.Test.Rules (atDefaultPrecedence, inertRuleDeps)
-import Ecluse.Test.Server.Mount (serveDepsFor, withPrivateBaseUrl)
+import Ecluse.Test.Server.Mount (requiredAdapter, serveDepsFor, withPrivateBaseUrl)
 import Ecluse.Test.Stub (Captured (..), allCaptured, headerValue, stubLocalhostUrl, withRoutedStub)
 import Ecluse.Test.Support (expectRight)
 
@@ -313,7 +312,7 @@ type Reply = Captured -> (Status, ResponseHeaders, LByteString)
 withCargoProxy :: Reply -> Reply -> (CargoProxy -> IO a) -> IO a
 withCargoProxy privateReply publicReply action =
     withRoutedStub privateReply $ \private -> withRoutedStub publicReply $ \public -> withSweeper $ \deadlines -> do
-        adapter <- requiredAdapter
+        adapter <- requiredAdapter Cargo
         manager <- newManager defaultManagerSettings
         queue <- newTestMemoryQueue
         env <- newTestEnvWithQueue deadlines queue manager
@@ -335,9 +334,6 @@ publicOnly proxy = proxyWith proxy (withPrivateBaseUrl Nothing)
 -- Durable mirror state is keyed by the private upstream that aggregates the mirror target.
 proxyTarget :: CargoProxy -> StateTarget
 proxyTarget proxy = stateTarget (privateBase proxy <> "/index")
-
-requiredAdapter :: IO RegistryAdapter
-requiredAdapter = maybe (fail "Cargo has no production adapter registration") pure (adapterFor Cargo)
 
 indexPath, archivePath :: ByteString
 indexPath = "/cargo/th/in/thing"
