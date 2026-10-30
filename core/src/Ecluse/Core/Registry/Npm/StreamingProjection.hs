@@ -53,7 +53,7 @@ import Ecluse.Core.Registry.Npm.VersionWriter (VersionValue, VersionWriter, disc
 import Ecluse.Core.Registry.Npm.Wire (Dist (distTarball), VersionManifest (vmDist), distFields)
 import Ecluse.Core.Registry.ServedDocument (artifactUrlPacked)
 import Ecluse.Core.Registry.WireSupport (parsePublishTime)
-import Ecluse.Core.Security (LimitError, Limits, checkArtifactCount, checkVersionCountOf)
+import Ecluse.Core.Security (LimitError, Limits, checkVersionCountOf)
 import Ecluse.Core.Strict (strictElements)
 import Ecluse.Core.Version (Version, mkVersion)
 
@@ -154,14 +154,12 @@ invalidRelease key whole reason = Left $! mkInvalidEntry InvalidVersionManifest 
 -- The parts a finished read serves beside its releases: the reported name and the bookkeeping times.
 data NpmParts = NpmParts Value (Map Text Value)
 
-finishParts :: Limits -> PackageName -> NpmProjection -> Either MetadataError (PackageInfo, NpmParts)
-finishParts limits requested acc = do
+finishParts :: PackageName -> NpmProjection -> Either MetadataError (PackageInfo, NpmParts)
+finishParts requested acc = do
     when (projectedInvalidContainer acc) (Left MetadataUndecodable)
     _ <- validateNameAgreement projectName requested (projectedName acc)
-    first MetadataBoundExceeded (checkArtifactCount limits artifacts)
     pure (package, NpmParts (fromMaybe Null (projectedName acc)) (projectedBookkeeping acc))
   where
-    artifacts = Map.foldl' (\seen details -> seen + length (pkgArtifacts details)) 0 (infoVersions package)
     versions = Map.mapMaybe rightToMaybe (projectedVersions acc)
     times = Map.mapMaybe rightToMaybe (projectedTimes acc)
     tags = Map.mapMaybe rightToMaybe (projectedTags acc)
@@ -201,8 +199,8 @@ treeStep limits name (TreeRead acc served) field = case field of
     _ -> (`TreeRead` served) <$> collectField limits acc field
 
 -- | Bind the reported name, and serve each kept release with the source author pointer.
-finishTree :: Limits -> PackageName -> Text -> TreeRead -> Either MetadataError (PackageInfo, Value)
-finishTree limits requested authorPointer (TreeRead acc served) = second document <$> finishParts limits requested acc
+finishTree :: PackageName -> Text -> TreeRead -> Either MetadataError (PackageInfo, Value)
+finishTree requested authorPointer (TreeRead acc served) = second document <$> finishParts requested acc
   where
     document (NpmParts name time) =
         Object
@@ -262,8 +260,8 @@ typedMembers :: Pick
 typedMembers = Only [(field, if field == "dist" then Only [(member, Whole) | member <- distFields] else Whole) | field <- versionListFields <> map installableFieldName Universe.universe]
 
 -- | Bind the reported name, and serve each kept release packed over the read's sealed table.
-finishPacked :: Limits -> PackageName -> Text -> DocTable -> PackedRead -> Either MetadataError (PackageInfo, PackedPackument)
-finishPacked limits requested authorPointer table (PackedRead acc served) = second document <$> finishParts limits requested acc
+finishPacked :: PackageName -> Text -> DocTable -> PackedRead -> Either MetadataError (PackageInfo, PackedPackument)
+finishPacked requested authorPointer table (PackedRead acc served) = second document <$> finishParts requested acc
   where
     document (NpmParts name time) =
         PackedPackument

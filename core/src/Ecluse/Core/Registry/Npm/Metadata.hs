@@ -109,7 +109,7 @@ finishNpmFull limits name base streamed =
 projectNpmPacked :: Limits -> PackageName -> Text -> StreamResult NpmFullRead -> Either MetadataError (PackageInfo, PackedPackument)
 projectNpmPacked limits name base streamed = do
     Walked table acc <- first (streamError limits) (streamValue streamed)
-    finishPacked limits name (authorPointer base name) (docTable (tableTexts table)) acc
+    finishPacked name (authorPointer base name) (docTable (tableTexts table)) acc
 
 finishNpmVersion :: Limits -> PackageName -> Text -> Version -> StreamResult (Walked TreeRead) -> Either MetadataError VersionRead
 finishNpmVersion limits name base version streamed = do
@@ -121,7 +121,7 @@ finishNpmVersion limits name base version streamed = do
 projectNpmStream :: Limits -> PackageName -> Text -> StreamResult (Walked TreeRead) -> Either MetadataError (PackageInfo, Value)
 projectNpmStream limits name base streamed = do
     Walked _ acc <- first (streamError limits) (streamValue streamed)
-    finishTree limits name (authorPointer base name) acc
+    finishTree name (authorPointer base name) acc
 
 -- | Pair one release with its compact source object and the same document's latest tag.
 selectNpmRead :: Version -> Int -> (PackageInfo, Value) -> VersionRead
