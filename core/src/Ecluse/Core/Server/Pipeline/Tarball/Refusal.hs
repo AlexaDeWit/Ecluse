@@ -14,16 +14,17 @@ module Ecluse.Core.Server.Pipeline.Tarball.Refusal (
     upstreamUnavailable,
     upstreamCooling,
     versionAbsent,
-    firstPartyMissRefusal,
+    privateMissRefusal,
 ) where
 
 import Network.HTTP.Types (ResponseHeaders, status403, status500)
 
+import Ecluse.Core.Package (PackageName)
 import Ecluse.Core.Registry.Metadata (
     VersionEvaluation (VersionMetadataUnavailable, VersionMissing),
     versionTransience,
  )
-import Ecluse.Core.Server.Context (PackumentDeps, pdHelp)
+import Ecluse.Core.Server.Context (PackumentDeps (pdFirstParty, pdHelp))
 import Ecluse.Core.Server.Pipeline.Origin (OriginMiss (MissAbsent, MissUnresolved))
 import Ecluse.Core.Server.Pipeline.Shared
 import Ecluse.Core.Server.Pipeline.Tarball.Types (TarballReplies (tarballError))
@@ -85,6 +86,15 @@ upstreamUnavailable =
 versionAbsent :: ServeDecision
 versionAbsent =
     versionUnresolved VersionMissing "the requested version was not found upstream"
+
+{- | The refusal a private miss renders, or 'Nothing' when the public leg may answer. Only a settled
+absence of a name outside first-party reaches that leg, so no public namesake replaces a private package.
+-}
+privateMissRefusal :: PackumentDeps -> PackageName -> OriginMiss -> Maybe ServeDecision
+privateMissRefusal deps name miss
+    | pdFirstParty deps name = Just (firstPartyMissRefusal miss)
+    | MissUnresolved <- miss = Just upstreamUnavailable
+    | otherwise = Nothing
 
 -- | The refusal a first-party private miss renders: a settled absence @404@, an outage @503@.
 firstPartyMissRefusal :: OriginMiss -> ServeDecision
