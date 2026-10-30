@@ -167,7 +167,7 @@ cargoInstallRefusal = RuleBlockedOnMount Cargo DenyInstallTimeExecutionType "Car
 
 -- | The dependency-source refusal: the adapter reads no dependency source.
 cargoDependencyRefusal :: BootError
-cargoDependencyRefusal = RuleBlockedOnMount Cargo DenyExternalDependenciesType "The Cargo adapter does not read where a crate's dependencies install from."
+cargoDependencyRefusal = RuleBlockedOnMount Cargo DenyExternalDependenciesType "The Cargo adapter does not project where a public crate's dependencies install from into rule evidence."
 
 -- | Activate a Ruby mount whose explicit installation rule the adapter cannot support.
 withRubyInstallBlock :: [(String, String)] -> [(String, String)]
