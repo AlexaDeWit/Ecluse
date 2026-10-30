@@ -17,6 +17,7 @@ module Ecluse.Composition.Support (
     publicGateEnv,
     cargoGateEnv,
     cargoMirrorEnv,
+    rubyGemsMirrorEnv,
     cargoCodeArtifactEnv,
     cargoScopeRefusal,
     cargoInstallRefusal,
@@ -372,6 +373,16 @@ cargoMirrorEnv =
            , ("ECLUSE_MOUNTS__CARGO__MIRROR_TARGET__REGISTRY__URL", "https://target.example.test/")
            , ("ECLUSE_MOUNTS__CARGO__MIRROR_TARGET__REGISTRY__UPLOAD_URL", "https://target.example.test/api/")
            , ("ECLUSE_MOUNTS__CARGO__MIRROR_TARGET__REGISTRY__TOKEN", "fixture-token")
+           ]
+
+-- | A native mirror with durable source state, native companions and token-only uploads at its read root.
+rubyGemsMirrorEnv :: [(String, String)]
+rubyGemsMirrorEnv =
+    overrideEnv "ECLUSE_MOUNTS__NPM__ENABLED" "false" (("ECLUSE_MOUNTS__RUBYGEMS__ENABLED", "true") : publicGateEnv)
+        <> [ ("ECLUSE_MIRROR_STATE__URL", "s3://mirror-state/records")
+           , ("ECLUSE_MOUNTS__RUBYGEMS__PRIVATE_UPSTREAM__REGISTRY__URL", "https://private.example.test/")
+           , ("ECLUSE_MOUNTS__RUBYGEMS__MIRROR_TARGET__REGISTRY__URL", "https://target.example.test/")
+           , ("ECLUSE_MOUNTS__RUBYGEMS__MIRROR_TARGET__REGISTRY__TOKEN", "fixture-token")
            ]
 
 -- | Separate native CodeArtifact stores with inventory and physical deletion capabilities.

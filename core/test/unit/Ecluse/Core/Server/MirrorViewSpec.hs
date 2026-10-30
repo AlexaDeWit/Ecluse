@@ -11,27 +11,35 @@ import Data.Aeson.KeyMap qualified as KeyMap
 import Data.ByteString qualified as BS
 import Data.ByteString.Internal qualified as BSI
 import Data.ByteString.Lazy qualified as LBS
+import Control.Monad (foldM)
 import Data.Map.Strict qualified as Map
+import Data.Traversable (for)
 import Test.Hspec
 
 import Ecluse.Core.Deadline (newDeadlines)
+import Ecluse.Core.Ecosystem (Ecosystem (Cargo))
 import Ecluse.Core.Mirror.State
 import Ecluse.Core.Mirror.State.Codec (chargedDecodeProjectRecord)
-import Ecluse.Core.Mirror.State.Internal (StateRevision (StateRevision))
+import Ecluse.Core.Mirror.State.Internal (StateRevision (StateRevision), VerifiedCompanionBytes (VerifiedCompanionBytes), retainVerifiedIdentity)
 import Ecluse.Core.Package
 import Ecluse.Core.Package.Entry (EntryKey (ArrayEntry, RecordEntry))
-import Ecluse.Core.Registry.CachedDocument (CachedDoc, cargoCached, pypiPacked, pypiSimpleCached)
+import Ecluse.Core.Registry.CachedDocument (CachedDoc, cargoCached, pypiPacked, pypiSimpleCached, rubyGemsCached)
 import Ecluse.Core.Registry.Cargo.Document (cargoDocument, cargoRecords)
 import Ecluse.Core.Registry.Metadata (Manifest (..), VersionDoc (..))
 import Ecluse.Core.Registry.MirrorUpload
 import Ecluse.Core.Registry.PyPI.Document (simpleFiles)
+import Ecluse.Core.Registry.RubyGems.Document (GemDocument (..), GemRow (..), selectGemVersion)
+import Ecluse.Core.Registry.RubyGems.Project (coordinateVersion, projectName)
+import Ecluse.Core.Registry.RubyGems.Projection (projectGemRows)
+import Ecluse.Core.Registry.RubyGems.Wire (decodeInfoRow)
 import Ecluse.Core.Security (defaultLimits)
 import Ecluse.Core.Server.Admission.Meter (MemoryTicket, MeterSettings (..), newMemoryMeter, withMemoryEntry)
 import Ecluse.Core.Server.MirrorView
 import Ecluse.Core.Version (renderVersion)
 import Ecluse.Test.Mirror.State
+import Ecluse.Test.Package (hexSha256Of)
 import Ecluse.Test.Port (noopMetricsPort)
-import Ecluse.Test.Registry.Cargo.Fixtures (cargoIndexRecord)
+import Ecluse.Test.Registry.Cargo.Fixtures (CargoRelease (releaseArchive), cargoIndexRecord, minimalCargoRelease)
 import Ecluse.Test.Registry.Cargo.Publish (cargoPublicationFixture, cargoSourceVersion)
 import Ecluse.Test.Snapshot (digestOf)
 import Ecluse.Test.Support (expectRight)
@@ -124,6 +132,26 @@ spec = do
             (initialManifest >>= snd pypiPacked . manifestRaw) `shouldSatisfy` isJust
             fmap manifestDigest initialManifest `shouldNotBe` fmap manifestDigest updatedManifest
 
+    describe "managed mirror document order" $ do
+        it "orders restored Cargo versions by original index position" $ do
+            let name = mkPackageName Cargo Nothing "thing"
+                release = minimalCargoRelease "thing"
+            record <- cargoMirrorRecord target name (releaseArchive (release "1.9.0")) [(0, cargoIndexRecord (release "1.9.0")), (1, cargoIndexRecord (release "1.10.0"))]
+            (_, managed, incomplete) <- expectRight (mirrorProjectViews (StateRevision target name "ordered") record (Just (retainedManifest record (fst cargoCached (cargoDocument [])))))
+            incomplete `shouldSatisfy` Map.null
+            let rows = concat [cargoRecords document | value <- maybeToList managed, document <- maybeToList (snd cargoCached (manifestRaw value))]
+            map fst rows `shouldBe` [RecordEntry 0, RecordEntry 1]
+            map (field "vers" . snd) rows `shouldBe` [Just (String "1.9.0"), Just (String "1.10.0")]
+
+        it "orders restored RubyGems versions by version text" $ do
+            (record, rows) <- rubyGemsRecord
+            (_, managed, incomplete) <- expectRight (mirrorProjectViews (StateRevision target (recordPackage record) "ordered") record (Just (retainedManifest record (fst rubyGemsCached (GemDocument (recordPackage record) "---\n" [])))))
+            incomplete `shouldSatisfy` Map.null
+            let restored = [row | value <- maybeToList managed, document <- maybeToList (snd rubyGemsCached (manifestRaw value)), row <- gemRows document]
+            map (renderVersion . coordinateVersion . grCoordinate) restored `shouldBe` ["10.0.0", "9.0.0"]
+            map grEntryKey restored `shouldBe` [RecordEntry 0, RecordEntry 1]
+            map grSource restored `shouldBe` map grSource (reverse rows)
+
     describe "per-request project validation" $ do
         it "performs one state exchange on every read and accepts only the requested 304 revision" $ do
             record <- sampleRecord
@@ -212,6 +240,35 @@ withTicket action = do
     meter <- newDeadlines >>= \deadlines -> newMemoryMeter deadlines (MeterSettings maxBound 1024 1 1000)
     admitted <- withMemoryEntry noopMetricsPort meter action
     either (const (fail "test memory admission unexpectedly refused")) pure admitted
+
+-- The target holds exactly the retained files, so every recorded version is complete.
+retainedManifest :: ProjectMirrorRecord -> CachedDoc -> Manifest
+retainedManifest record listing = Manifest (PackageInfo (recordPackage record) (fmap retained (recordVersions record)) Map.empty []) listing 0 (digestOf "target")
+  where
+    retained version = let fragment :| _ = versionFragments version in fragmentDetails fragment
+
+-- Two complete versions whose original rows put 9.0.0 before 10.0.0.
+rubyGemsRecord :: IO (ProjectMirrorRecord, [GemRow])
+rubyGemsRecord = do
+    name <- expectRight (projectName "ordered")
+    rows <- for (zip [0 ..] ["9.0.0", "10.0.0"]) $ \(position, version) ->
+        expectRight (decodeInfoRow name (RecordEntry position) (encodeUtf8 (version <> " |checksum:" <> hexSha256Of (gemArchive version) <> ",ruby:>= 3.2,rubygems:>= 3.4,created_at:2020-01-0" <> show (position + 1 :: Int) <> "T00:00:00Z")))
+    let source = GemDocument name "---\n" rows
+    projected <- expectRight (projectGemRows defaultLimits name "https://public.test" rows)
+    record <- foldM (retainGemVersion source) Nothing (Map.elems (infoVersions projected))
+    maybe (fail "no RubyGems versions retained") (\complete -> pure (complete, rows)) record
+  where
+    gemArchive version = encodeUtf8 ("gem archive " <> version)
+    retainGemVersion source previous details = do
+        selected <- maybe (fail "missing RubyGems version rows") pure (selectGemVersion (pkgVersion details) source)
+        inventory <- expectRight (checkedMirrorInventory (pkgName details) (pkgVersion details) (VersionDoc details (Just (fst rubyGemsCached selected))) (RubyGemsMirrorRead selected))
+        expected <- expectRight (extendProjectRecord defaultLimits target inventory previous)
+        Just <$> foldM (completeGemFile inventory) expected (inventoryFiles inventory)
+    completeGemFile inventory record file = do
+        verified <- expectRight (verifyMirrorBytes file (gemArchive (renderVersion (inventoryVersion inventory))))
+        withIdentity <- expectRight (retainVerifiedIdentity (inventoryVersion inventory) verified record)
+        checked@(VerifiedCompanionBytes _ reference _) <- expectRight (verifySourceCompanionBytes defaultLimits (inventoryReadData inventory) file "compact")
+        expectRight (retainCompanionReference (inventoryVersion inventory) checked reference withIdentity)
 
 cargoInventory :: IO (VersionDoc, MirrorInventory)
 cargoInventory = do

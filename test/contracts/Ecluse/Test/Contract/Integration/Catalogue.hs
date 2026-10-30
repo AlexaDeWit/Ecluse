@@ -48,7 +48,7 @@ integrationCatalogue =
             , Profile "integration/rubygems" ["rubygems"] ["wai"] ["metadata-read", "artifact-read", "serving"]
             , Profile "integration/cargo" ["cargo"] ["wai"] ["metadata-read", "artifact-read", "serving"]
             , Profile "integration/pypi" ["pypi"] ["wai"] ["metadata-read", "artifact-read", "serving"]
-            , Profile "integration/mirror-view" ["pypi"] ["wai"] ["metadata-read", "artifact-read", "serving"]
+            , Profile "integration/mirror-view" ["pypi", "cargo", "rubygems"] ["wai"] ["metadata-read", "artifact-read", "serving"]
             , Profile "integration/egress" [] ["wai"] ["egress"]
             , Profile "integration/origin" ["npm"] ["wai"] ["origin"]
             , Profile "integration/npm-metadata" ["npm"] ["wai"] ["metadata-read", "serving"]

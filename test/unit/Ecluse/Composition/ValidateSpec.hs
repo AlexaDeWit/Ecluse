@@ -6,6 +6,7 @@
 module Ecluse.Composition.ValidateSpec (spec) where
 
 import Data.Map.Strict qualified as Map
+import Data.Text qualified as T
 import Test.Hspec
 
 import Ecluse.Composition.BootError (
@@ -33,6 +34,7 @@ import Ecluse.Composition.BootError (
         UploadUrlRequired
     ),
     StoreMaintenanceReason (NoControlPlane, NoProtocolMaintenance, PrivateCacheUnavailable),
+    renderBootError,
  )
 import Ecluse.Composition.Endpoints (publicationTargetUrl)
 import Ecluse.Composition.Support (
@@ -53,6 +55,7 @@ import Ecluse.Composition.Support (
     publicGateEnv,
     pypiMirrorEnv,
     rubyDeprecationRefusal,
+    rubyGemsMirrorEnv,
     rubyInstallRefusal,
     rubyScopeRefusal,
     staticEnvVars,
@@ -85,6 +88,9 @@ import Ecluse.Core.Credential (ClientCredential (credSecret), unSecret)
 import Ecluse.Core.Ecosystem (Ecosystem (Cargo, Npm, PyPI, RubyGems))
 import Ecluse.Core.Package (mkScope)
 import Ecluse.Core.Registry.Adapter (RegistryAdapter (adapterPublish), adapterFor)
+import Ecluse.Core.Registry.Adapter.Capability (AdapterPublish (publishCodec))
+import Ecluse.Core.Registry.Publish (MirrorCompanion, PublishCodec (pcMirrorCompanion))
+import Ecluse.Core.Registry.RubyGems.Mirror (rubyMirrorCompanion)
 import Ecluse.Core.Registry.Sweep.Types (minimumChunkPause)
 import Ecluse.Core.Rules.Types (PrecededRule (prRule), RuleType (AllowScopeType, DenyInstallTimeExecutionType), ruleName)
 import Ecluse.Core.Security (mkProgressFloor, serveCapSeconds)
@@ -566,6 +572,16 @@ refusalSpec = describe "vetBoot -- the refusals its groups earn" $ do
             it "clears the target with the real PyPI publisher" $
                 refusalsFor MirrorWriter env `shouldReturn` []
 
+    describe "mirror companion preparation" $ do
+        it "refuses a mirror target whose adapter requires native companions it does not prepare" $
+            companionOutcome RubyGems Nothing rubyGemsMirrorEnv
+                >>= (`shouldSatisfy` refusesCompanions "ECLUSE_MOUNTS__RUBYGEMS__MIRROR_TARGET")
+        it "refuses a mirror target whose adapter prepares native companions its declaration does not require" $
+            companionOutcome PyPI (Just rubyMirrorCompanion) pypiMirrorEnv
+                >>= (`shouldSatisfy` refusesCompanions "ECLUSE_MOUNTS__PYPI__MIRROR_TARGET")
+        it "clears a RubyGems mirror target whose adapter prepares its native companions" $
+            refusalsFor MirrorWriter rubyGemsMirrorEnv `shouldReturn` []
+
     it "refuses a publication target that leaves the anti-shadowing guard nothing to enforce" $
         refusalsFor MirrorWriter (withoutFirstParty publishingEnv)
             `shouldReturn` [FirstPartyMissing Npm]
@@ -675,6 +691,21 @@ isStoreRefusal = \case
 
 vetted :: RegistryRole -> Config -> Either [BootError] ValidatedPlan
 vetted role config = snd (runVet role (vetBoot config))
+
+-- Rendered boot refusals with one adapter's mirror codec preparing the given native companion.
+companionOutcome :: Ecosystem -> Maybe MirrorCompanion -> [(String, String)] -> IO (Either [Text] ())
+companionOutcome changed companion envVars = do
+    config <- expectConfig envVars Nothing
+    let resolve eco
+            | eco == changed = fmap preparing (adapterFor eco)
+            | otherwise = adapterFor eco
+        preparing adapter = adapter{adapterPublish = fmap (\publish -> publish{publishCodec = (publishCodec publish){pcMirrorCompanion = companion}}) (adapterPublish adapter)}
+    pure (first (map renderBootError) (void (snd (runVet MirrorWriter (vetBootWith resolve config)))))
+
+refusesCompanions :: Text -> Either [Text] () -> Bool
+refusesCompanions key = \case
+    Left [line] -> key `T.isInfixOf` line && "native metadata companions" `T.isInfixOf` line
+    _ -> False
 
 -- The shipped resolver with one ecosystem's adapter absent, as a build without it would resolve.
 withoutAdapter :: Ecosystem -> Ecosystem -> Maybe RegistryAdapter

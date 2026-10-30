@@ -20,30 +20,24 @@ import Test.Hspec
 
 import Ecluse.Core.Credential (mkSecret)
 import Ecluse.Core.Ecosystem (Ecosystem (Cargo))
-import Ecluse.Core.Mirror.State (ProjectMirrorRecord, StateRead (..), StateTarget, extendProjectRecord, stateTarget)
-import Ecluse.Core.Mirror.State.Internal (StateRevision (..), retainVerifiedIdentity)
-import Ecluse.Core.Package (Artifact (..), Availability (Available), CodeExecSignal (CodeExecUnknown), DependencySources (RegistryDependencies), HashAlg (SHA256), PackageDetails (..), PackageName, mkHash, mkPackageName)
-import Ecluse.Core.Package.Entry (EntryKey (RecordEntry))
+import Ecluse.Core.Mirror.State (ProjectMirrorRecord, StateRead (..), StateTarget, stateTarget)
+import Ecluse.Core.Mirror.State.Internal (StateRevision (..))
+import Ecluse.Core.Package (PackageName, mkPackageName)
 import Ecluse.Core.Registry.Adapter (RegistryAdapter, adapterFor)
-import Ecluse.Core.Registry.Cargo.Document (cargoDocument)
-import Ecluse.Core.Registry.MirrorUpload (MirrorReadData (CargoMirrorRead), inventoryFiles, verifyMirrorBytes)
-import Ecluse.Core.Registry.MirrorUpload.Internal (restoreMirrorInventory)
 import Ecluse.Core.Rules (prepare)
 import Ecluse.Core.Rules.Types (Rule (AllowIfOlderThan))
-import Ecluse.Core.Security (defaultLimits)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Core.Server.Admission.Meter (MemoryMeter, meterSnapshot, steerMeter, takeLargestCharge)
 import Ecluse.Core.Server.Admission.Types (BrakeLevel (Calm), MeterSnapshot (snChargedBytes))
 import Ecluse.Core.Server.Context (PackumentDeps (..))
 import Ecluse.Core.Server.Upstream (MirrorServePlan (NoMirrorWrite))
-import Ecluse.Core.Version (mkVersion)
 import Ecluse.Runtime.Env (Env (envMemoryMeter))
 import Ecluse.Server.Pipeline.ServingDriver (cargoServingDriver)
 import Ecluse.Server.Pipeline.TestSupport (getPath, getPathWith, newTestEnvWithQueue, proxyApplication, requestAt)
 import Ecluse.Test.Contract.Catalogue (caseLabel)
 import Ecluse.Test.Contract.Serving (servingContract)
 import Ecluse.Test.Deadline (withSweeper)
-import Ecluse.Test.Mirror.State (mirrorViewWith)
+import Ecluse.Test.Mirror.State (cargoMirrorRecord, mirrorViewWith)
 import Ecluse.Test.Package (hexSha256Of)
 import Ecluse.Test.Queue (newTestMemoryQueue)
 import Ecluse.Test.Registry.Cargo.Fixtures qualified as Fixture
@@ -411,16 +405,7 @@ packageName :: PackageName
 packageName = mkPackageName Cargo Nothing "thing"
 
 nativeState :: StateTarget -> Text -> IO ProjectMirrorRecord
-nativeState target version = do
-    checksum <- expectRight (mkHash SHA256 (hexSha256Of archiveBytes))
-    let artifact = Artifact (RecordEntry 0) ("thing-" <> version <> ".crate") ("https://static.crates.io/crates/thing/thing-" <> version <> ".crate") [checksum] Nothing Nothing
-        details = PackageDetails packageName (mkVersion Cargo version) (Just (UTCTime (fromGregorian 2020 1 1) 0)) CodeExecUnknown RegistryDependencies Available (artifact :| [])
-        source = CargoMirrorRead (cargoDocument [(RecordEntry 0, Object (nativeRecord version))])
-    inventory <- expectRight (restoreMirrorInventory details source)
-    expected <- expectRight (extendProjectRecord defaultLimits target inventory Nothing)
-    let file :| _ = inventoryFiles inventory
-    verified <- expectRight (verifyMirrorBytes file archiveBytes)
-    expectRight (retainVerifiedIdentity (mkVersion Cargo version) verified expected)
+nativeState target version = cargoMirrorRecord target packageName archiveBytes [(0, Object (nativeRecord version))]
 
 discoveryBytes :: Text -> Bool -> ByteString
 discoveryBytes dl authenticated = toStrict (encode (object ["dl" .= dl, "auth-required" .= authenticated]))
