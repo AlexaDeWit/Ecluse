@@ -115,6 +115,7 @@ import Ecluse.Core.Server.Pipeline.Origin (
     fetchPublicOriginObserved,
     originManifest,
     originMiss,
+    readFailureRefusal,
  )
 import Ecluse.Core.Server.Pipeline.Packument.Representation
 import Ecluse.Core.Server.Pipeline.Shared
@@ -669,7 +670,7 @@ privateDecision = \case
     OriginResolved _ -> []
     -- A private 404 with no public survivor keeps the outage refusal, so it still invites a retry.
     OriginNotFound -> [neededUpstreamUnavailable Nothing]
-    OriginUnresolved failure -> [privateReadDecision failure]
+    OriginUnresolved failure -> [readFailureRefusal neededUpstreamUnavailableMessage failure]
     OriginCooling retry -> [upstreamCooling retry]
     OriginNameMismatch -> [upstreamInvalidDecision]
     -- An unconfigured private leg (a serve-only pure gate) is not an outage:
@@ -688,13 +689,10 @@ publicDecision = \case
     OriginAbsent -> []
 
 neededUpstreamUnavailable :: Maybe RetryAfter -> ServeDecision
-neededUpstreamUnavailable retry = rejectUnavailable (WillResolve retry) "a needed upstream was unavailable"
+neededUpstreamUnavailable retry = rejectUnavailable (WillResolve retry) neededUpstreamUnavailableMessage
 
--- An unavailable private registry refuses with its own delay. An invalid reply is a bad gateway.
-privateReadDecision :: ReadFailure -> ServeDecision
-privateReadDecision = \case
-    ReadUnavailable retry -> neededUpstreamUnavailable retry
-    ReadInvalid -> privateReplyInvalid
+neededUpstreamUnavailableMessage :: Text
+neededUpstreamUnavailableMessage = "a needed upstream was unavailable"
 
 upstreamInvalidDecision :: ServeDecision
 upstreamInvalidDecision = Reject (Rejection UpstreamInvalid "an upstream returned a packument for a different package")

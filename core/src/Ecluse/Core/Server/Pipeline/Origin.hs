@@ -19,6 +19,7 @@ module Ecluse.Core.Server.Pipeline.Origin (
     statusReadFailure,
     fetchReadFailure,
     metadataReadFailure,
+    readFailureRefusal,
 
     -- * Fetching the two origins
     fetchPrivateOriginObserved,
@@ -78,6 +79,13 @@ import Ecluse.Core.Server.Context (
 import Ecluse.Core.Server.Metadata (MetadataReads, ecosystemMetadataReads, preparePublicVersion, privateMetadataClient, publicMetadataClient, withinRequestCap)
 import Ecluse.Core.Server.Pipeline.Diagnostics (logInvalidEntries, logMetadataFailure)
 import Ecluse.Core.Server.Pipeline.Shared (flightOf)
+import Ecluse.Core.Server.Response (
+    RejectReason (UpstreamInvalid),
+    Rejection (Rejection),
+    ServeDecision (Reject),
+    Transience (WillResolve),
+    rejectUnavailable,
+ )
 import Ecluse.Core.Version (Version)
 
 -- | A request-wide observed read limit, distinct from a transport failure.
@@ -141,6 +149,12 @@ metadataReadFailure = \case
     MetadataBoundExceeded _ -> Just ReadInvalid
     MetadataUndecodable -> Just ReadInvalid
     MetadataNameMismatch _ -> Just ReadInvalid
+
+-- | The refusal a failed private read renders: @503@ under these words with its delay, or @502@ for an invalid reply.
+readFailureRefusal :: Text -> ReadFailure -> ServeDecision
+readFailureRefusal unavailable = \case
+    ReadUnavailable retry -> rejectUnavailable (WillResolve retry) unavailable
+    ReadInvalid -> Reject (Rejection UpstreamInvalid "the private upstream returned an invalid or unusable reply")
 
 -- | Classify a failed exchange. An unformable URL sent no request, and keeps the unavailable refusal.
 fetchReadFailure :: FetchFault -> ReadFailure

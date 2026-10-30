@@ -26,7 +26,7 @@ import Ecluse.Core.Registry.Metadata (
     versionTransience,
  )
 import Ecluse.Core.Server.Context (PackumentDeps (pdFirstParty, pdHelp))
-import Ecluse.Core.Server.Pipeline.Origin (OriginMiss (MissAbsent, MissUnresolved), ReadFailure (ReadInvalid, ReadUnavailable))
+import Ecluse.Core.Server.Pipeline.Origin (OriginMiss (MissAbsent, MissUnresolved), ReadFailure (ReadInvalid, ReadUnavailable), readFailureRefusal)
 import Ecluse.Core.Server.Pipeline.Shared
 import Ecluse.Core.Server.Pipeline.Tarball.Types (TarballReplies (tarballError))
 import Ecluse.Core.Server.Response (
@@ -104,9 +104,7 @@ privateMissRefusal deps name miss
 
 -- | A failed private read: an unavailable registry @503@ with its delay, an invalid reply @502@.
 privateReadRefusal :: ReadFailure -> ServeDecision
-privateReadRefusal = \case
-    ReadUnavailable retry -> rejectUnavailable (WillResolve retry) upstreamUnavailableMessage
-    ReadInvalid -> privateReplyInvalid
+privateReadRefusal = readFailureRefusal upstreamUnavailableMessage
 
 -- The refusal a first-party private miss renders: a settled absence @404@, else its cause's status.
 firstPartyMissRefusal :: OriginMiss -> ServeDecision
