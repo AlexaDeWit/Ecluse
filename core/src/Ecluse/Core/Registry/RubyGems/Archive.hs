@@ -30,7 +30,7 @@ import Ecluse.Core.Package (PackageName)
 import Ecluse.Core.Package.Hash (HashAlg (SHA512), computeDigest, hexDigestText, sha256Hex)
 import Ecluse.Core.Registry (ParseError (..), parseRefusal)
 import Ecluse.Core.Registry.Archive.Inflate (InflateFormat (GzipMembers), inflateBounded, withInflatedChunks)
-import Ecluse.Core.Registry.Archive.Tar (TarMember (..), TarScan, scanTar, sourceReader, tarContents, tarMembers)
+import Ecluse.Core.Registry.Archive.Tar (TarMember (..), TarScan, scanTar, sourceReader, tarContents, tarMembers, tarRawNames)
 import Ecluse.Core.Registry.RubyGems.Archive.Metadata
 import Ecluse.Core.Registry.RubyGems.Archive.Yaml
 import Ecluse.Core.Registry.RubyGems.CompactSpec (GemSpecification (..), specificationCoordinate)
@@ -69,8 +69,11 @@ inspectGemArchive limits charge bytes
 envelopeMembers :: Limits -> (Int -> IO ()) -> ByteString -> IO (Either ParseError (ByteString, ByteString, ByteString))
 envelopeMembers limits charge bytes = (>>= envelope) <$> scanTar limits{maxMetadataBytes = maxMirrorArtifactBytes limits} charge (\parts -> Right (parts `elem` [["metadata.gz"], ["data.tar.gz"], ["checksums.yaml.gz"]])) (\consume -> consume (yield bytes))
 
+-- RubyGems' own reader yields extended headers as ordinary members, so a target could name members differently.
+-- Refusing them and any ustar prefix leaves each raw name field as the whole member name.
 envelope :: TarScan -> Either ParseError (ByteString, ByteString, ByteString)
 envelope scan = do
+    unless (tarRawNames scan) (parseRefusal "gem envelope carries an extended or prefixed tar header")
     let members = tarMembers scan
         mandatory = ["metadata.gz", "data.tar.gz", "checksums.yaml.gz"]
         allowed = mandatory <> map (<> ".sig") mandatory
