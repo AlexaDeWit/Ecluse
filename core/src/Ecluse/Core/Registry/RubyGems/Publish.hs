@@ -48,7 +48,8 @@ rubyPublish factors =
         , publishRequestExtras = rubyPublishExtras
         , publishUploadClaims = uploadClaims
         , publishCodec = rubyPublishCodec factors
-        , publishMirrorRequirements = MirrorRequirements (NativeChargedWorkerRead prepareGemRead) DurableVersionState ReadRootUpload
+        , publishMirrorRequirements = MirrorRequirements (NativeChargedWorkerRead prepareGemRead) DurableVersionState
+        , publishUploadEndpoint = ReadRootUpload
         , publishIdentity = TokenIdentity
         }
 

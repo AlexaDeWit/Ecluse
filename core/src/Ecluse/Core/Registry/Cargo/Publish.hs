@@ -57,7 +57,8 @@ cargoPublish factors =
         , publishRelay = \origin name body -> relayPublishRequest origin (relayRequest origin name body)
         , publishUploadClaims = uploadClaims
         , publishCodec = cargoPublishCodec factors
-        , publishMirrorRequirements = MirrorRequirements (NativeChargedWorkerRead prepareCargoRead) DurableVersionState ExplicitUploadEndpoint
+        , publishMirrorRequirements = MirrorRequirements (NativeChargedWorkerRead prepareCargoRead) DurableVersionState
+        , publishUploadEndpoint = ExplicitUploadEndpoint
         , publishIdentity = TokenIdentity
         }
 
