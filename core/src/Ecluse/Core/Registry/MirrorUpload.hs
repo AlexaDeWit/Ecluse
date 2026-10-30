@@ -6,6 +6,7 @@
 module Ecluse.Core.Registry.MirrorUpload (
     MirrorReadData (..),
     mirrorReadDocument,
+    readDataCompanions,
     MirrorInventory,
     ExpectedMirrorFile,
     VerifiedArtifactBytes,

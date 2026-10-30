@@ -28,6 +28,7 @@ import Ecluse.Composition.BootError (
         FirstPartyMissing,
         FirstPartyWithoutPrivateUpstream,
         MinProgressBytesNotPositive,
+        MirrorCompanionMismatch,
         MirrorStateRequired,
         MirrorTargetWithoutPublish,
         MissingAdapter,
@@ -81,6 +82,7 @@ import Ecluse.Core.Registry.Adapter.Capability (
     MirrorRequirements (mirrorStateRequirement),
     UploadEndpointRequirement (ExplicitUploadEndpoint),
     UploadIdentityRequirement (NamedIdentity),
+    companionsAgree,
     durableMirrorDocuments,
  )
 import Ecluse.Core.Registry.Sweep.Types (minimumChunkPause)
@@ -306,6 +308,7 @@ vetMount resolveAdapter (eco, (mount, mcfg)) =
     vetted
         <$ rule (const (Refuse MissingAdapter)) unservedEcosystem eco
         <* rule (const (Refuse MirrorTargetWithoutPublish)) (declaredWithoutPublish mirrors) eco
+        <* rule (const (Refuse MirrorCompanionMismatch)) (mismatchedCompanions mirrors) eco
         <* rule (const (Refuse PublicationTargetWithoutPublish)) (declaredWithoutPublish publishes) eco
         <* rule (const (Refuse FirstPartyWithoutPrivateUpstream)) firstPartyWithoutPrivateUpstream (eco, mcfg)
   where
@@ -322,6 +325,12 @@ vetMount resolveAdapter (eco, (mount, mcfg)) =
         guard declared
         adapter <- resolveAdapter e
         guard (isNothing (adapterPublish adapter))
+        pure e
+
+    mismatchedCompanions declared e = do
+        guard declared
+        publish <- resolveAdapter e >>= adapterPublish
+        guard (not (companionsAgree publish))
         pure e
 
 firstPartyWithoutPrivateUpstream :: (Ecosystem, MountConfig) -> Maybe Ecosystem

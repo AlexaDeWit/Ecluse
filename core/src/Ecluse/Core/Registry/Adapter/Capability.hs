@@ -21,6 +21,7 @@ module Ecluse.Core.Registry.Adapter.Capability (
     WorkerMetadataRead (..),
     MirrorStateRequirement (..),
     durableMirrorDocuments,
+    companionsAgree,
     UploadEndpointRequirement (..),
     UploadIdentityRequirement (..),
 
@@ -38,10 +39,11 @@ import Network.HTTP.Client (Request)
 import Network.HTTP.Types.Header (RequestHeaders)
 
 import Ecluse.Core.Credential (ClientCredential, Secret)
-import Ecluse.Core.Mirror.Documents (MirrorDocuments)
+import Ecluse.Core.Mirror.Documents (MirrorDocuments (mdCompanions))
 import Ecluse.Core.Package (PackageName)
 import Ecluse.Core.Package.Merge (MergePlan, SourceId)
 import Ecluse.Core.Registry (
+    CompanionRequirement (NativeCompanions),
     FetchFault,
     PublishBodyFault,
     PublishRelayResponse,
@@ -54,7 +56,7 @@ import Ecluse.Core.Registry.Maintenance (StoreRefusal)
 import Ecluse.Core.Registry.Maintenance.NameSpace (NameAlphabet)
 import Ecluse.Core.Registry.Metadata.Fetch.Preparation (PrepareRead)
 import Ecluse.Core.Registry.Origin (OriginClient)
-import Ecluse.Core.Registry.Publish (PublishCodec)
+import Ecluse.Core.Registry.Publish (PublishCodec (pcMirrorCompanion))
 import Ecluse.Core.Registry.Request (CredentialMapping)
 import Ecluse.Core.Registry.ServedDocument (RenderRefused)
 import Ecluse.Core.Security (Limits)
@@ -168,6 +170,12 @@ data AdapterPublish = AdapterPublish
     , publishIdentity :: UploadIdentityRequirement
     -- ^ Static credential requirements for mirror and client uploads.
     }
+
+-- | Whether the mirror codec prepares native companions exactly where the durable declaration requires them.
+companionsAgree :: AdapterPublish -> Bool
+companionsAgree publish = isJust (pcMirrorCompanion (publishCodec publish)) == (required == Just NativeCompanions)
+  where
+    required = mdCompanions <$> durableMirrorDocuments (mirrorStateRequirement (publishMirrorRequirements publish))
 
 -- | Store maintenance verbs for "Ecluse.Core.Registry.Maintenance.Protocol". A missing verb makes the Dredger refuse.
 data AdapterMaintenance = AdapterMaintenance
