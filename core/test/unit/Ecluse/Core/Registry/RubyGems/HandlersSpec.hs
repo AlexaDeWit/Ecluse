@@ -701,7 +701,7 @@ chargedAtResponse runtime binding path = withSweeper $ \deadlines -> do
     held <- newIORef 0
     logEnv <- newTestLogEnv
     let metered = runtime{srMemoryMeter = meter}
-        observe = snChargedBytes <$> meterSnapshot meter >>= writeIORef held
+        observe = meterSnapshot meter >>= writeIORef held . snChargedBytes
     response <- runSession (srequest (SRequest (setPath defaultRequest path) "")) $ \incoming respond ->
         case rubyGemsRouter (requestMethod incoming) (requestHeaders incoming) (pathInfo incoming) of
             RouteAction contract (RunPipeline _ run) -> runHandler logEnv mempty (RequestCtx metered binding) (run incoming (\reply -> observe >> respond (responseToWai contract reply)))
