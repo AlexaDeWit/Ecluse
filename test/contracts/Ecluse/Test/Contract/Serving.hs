@@ -6,7 +6,6 @@
 -- | Admission, origin authority, HTTP representation and content-coding laws over native request drivers.
 module Ecluse.Test.Contract.Serving (
     ServingDriver (..),
-    ServingLayout (..),
     ServingSession (..),
     ServingRelease (..),
     ServingResponse (..),
@@ -21,7 +20,6 @@ import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as LBS
 import Data.List (lookup)
 import Data.Map.Strict qualified as Map
-import Data.Text qualified as T
 import Data.Time (nominalDay)
 import Network.HTTP.Types (Header, Method, methodGet, methodHead)
 import Test.Hspec
@@ -49,28 +47,15 @@ data ServingResponse = ServingResponse
     }
     deriving stock (Eq, Show)
 
--- | Native registries either combine source identities or expose separate registry views.
-data ServingLayout
-    = -- | Authorised private and admitted public releases share one registry identity.
-      CombinedRegistry
-    | -- | Public replacement and private alternate retain distinct registry identities.
-      SeparateRegistries
-    deriving stock (Eq, Show)
-
--- | Each request reads one actual HTTP view. Separate registries never fabricate a combined response.
+-- | Requests to the one registry that serves authorised private and admitted public releases together.
 data ServingSession = ServingSession
     { requestMetadata :: Method -> [Header] -> IO ServingResponse
     , requestArtifact :: Method -> [Header] -> Text -> IO ServingResponse
-    , requestPrivateMetadata :: Method -> [Header] -> IO ServingResponse
-    , requestPrivateArtifact :: Method -> [Header] -> Text -> IO ServingResponse
-    , publicSourceIdentity :: Text
-    , privateSourceIdentity :: Text
     }
 
 -- | Native fixture encoding, resource ownership, requests and digest spelling, under a mount's metadata coding.
 data ServingDriver = ServingDriver
     { withServing :: forall a. MetadataCompression -> [Rule] -> [ServingRelease] -> [ServingRelease] -> (ServingSession -> IO a) -> IO a
-    , servingLayout :: ServingLayout
     , servingIdentity :: Text -> Text
     , servingDigest :: ByteString -> Text
     }
@@ -100,47 +85,20 @@ servingContract provider driver = describe "shared serving contract" $ do
             response <- requestMetadata session methodGet []
             responseStatus response `shouldBe` 200
             responseVersions response `shouldBe` ["1.2.3", "2.3.4"]
-            when (servingLayout driver == SeparateRegistries) $ do
-                distinctSources session
-                private <- requestPrivateMetadata session methodGet []
-                responseStatus private `shouldBe` 200
-                responseVersions private `shouldBe` ["1.2.3"]
     contractExample "quarantine-private-authority" "gates public versions while trusting private release age" $
         run agePolicy [young{releaseVersion = "3.4.5"}] [old, young{releaseVersion = "2.3.4"}] $ \session -> do
             response <- requestMetadata session methodGet []
             responseStatus response `shouldBe` 200
-            case servingLayout driver of
-                CombinedRegistry -> responseVersions response `shouldBe` ["1.2.3", "3.4.5"]
-                SeparateRegistries -> do
-                    distinctSources session
-                    responseVersions response `shouldBe` ["1.2.3"]
-                    private <- requestPrivateMetadata session methodGet []
-                    responseStatus private `shouldBe` 200
-                    responseVersions private `shouldBe` ["3.4.5"]
+            responseVersions response `shouldBe` ["1.2.3", "3.4.5"]
     contractExample "private-divergence" "serves private integrity and bytes when public content diverges" $
         run agePolicy [old{releaseBytes = "private bytes"}] [old{releaseBytes = "public bytes"}] $ \session -> do
             response <- requestMetadata session methodGet []
             responseStatus response `shouldBe` 200
             responseVersions response `shouldBe` ["1.2.3"]
-            case servingLayout driver of
-                CombinedRegistry -> do
-                    Map.lookup "1.2.3" (responseDigests response) `shouldBe` Just [servingDigest driver "private bytes"]
-                    artifact <- requestArtifact session methodGet [] "1.2.3"
-                    responseStatus artifact `shouldBe` 200
-                    responseBody artifact `shouldBe` "private bytes"
-                SeparateRegistries -> do
-                    distinctSources session
-                    Map.lookup "1.2.3" (responseDigests response) `shouldBe` Just [servingDigest driver "public bytes"]
-                    public <- requestArtifact session methodGet [] "1.2.3"
-                    responseStatus public `shouldBe` 200
-                    responseBody public `shouldBe` "public bytes"
-                    private <- requestPrivateMetadata session methodGet []
-                    responseStatus private `shouldBe` 200
-                    responseVersions private `shouldBe` ["1.2.3"]
-                    Map.lookup "1.2.3" (responseDigests private) `shouldBe` Just [servingDigest driver "private bytes"]
-                    artifact <- requestPrivateArtifact session methodGet [] "1.2.3"
-                    responseStatus artifact `shouldBe` 200
-                    responseBody artifact `shouldBe` "private bytes"
+            Map.lookup "1.2.3" (responseDigests response) `shouldBe` Just [servingDigest driver "private bytes"]
+            artifact <- requestArtifact session methodGet [] "1.2.3"
+            responseStatus artifact `shouldBe` 200
+            responseBody artifact `shouldBe` "private bytes"
     contractExample "public-integrity" "filters a hashless public version from the listing" $
         run agePolicy [] [old, other{releaseHasIntegrity = False}] $ \session -> do
             response <- requestMetadata session methodGet []
@@ -148,9 +106,7 @@ servingContract provider driver = describe "shared serving contract" $ do
             responseVersions response `shouldBe` ["1.2.3"]
     contractExample "trusted-integrity" "applies the default integrity floor to trusted-private versions" $
         run agePolicy [old{releaseHasIntegrity = False}] [] $ \session -> do
-            response <- case servingLayout driver of
-                CombinedRegistry -> requestMetadata session methodGet []
-                SeparateRegistries -> requestPrivateMetadata session methodGet []
+            response <- requestMetadata session methodGet []
             responseStatus response `shouldBe` 403
     contractExample "artifact-integrity" "serves the exact artifact bytes and advertised integrity" $
         artifactIntegrityCase driver
@@ -232,10 +188,6 @@ servingContract provider driver = describe "shared serving contract" $ do
                 undated offered `shouldBe` undated plain
                 lookup "Content-Encoding" (responseHeaders offered) `shouldBe` Nothing
   where
-    distinctSources session = do
-        publicSourceIdentity session `shouldNotBe` privateSourceIdentity session
-        publicSourceIdentity session `shouldSatisfy` not . T.null
-        privateSourceIdentity session `shouldSatisfy` not . T.null
     contractExample identifier description = it (caseLabel ("integration.serving." <> provider <> "." <> identifier) description)
     run = withServing driver GzipWhenAccepted
     gzipOffer = [("Accept-Encoding", "gzip")]

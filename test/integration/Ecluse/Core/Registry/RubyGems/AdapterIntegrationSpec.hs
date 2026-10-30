@@ -15,17 +15,12 @@ import Ecluse.Core.Ecosystem (Ecosystem (RubyGems))
 import Ecluse.Core.Registry.Adapter (RegistryAdapter, adapterFor)
 import Ecluse.Server.Pipeline.ServingDriver (NativeObservation (..), nativeByteDriver, responseBytes, responseEvidence)
 import Ecluse.Server.Pipeline.TestSupport (publishedDaysAgo)
-import Ecluse.Test.Contract.Catalogue (caseLabel)
 import Ecluse.Test.Contract.Serving
 import Ecluse.Test.Package (hexSha256Of)
 import Ecluse.Test.Registry.RubyGems.Reference (RubyInfoRow (..), referenceInfo)
 
 spec :: Spec
-spec = do
-    let driver = rubyServingDriver
-    it (caseLabel "integration/rubygems/source-layout" "retains the authorised public/private aggregate view") $
-        servingLayout driver `shouldBe` CombinedRegistry
-    servingContract "rubygems" driver
+spec = servingContract "rubygems" rubyServingDriver
 
 requiredAdapter :: IO RegistryAdapter
 requiredAdapter = maybe (fail "RubyGems has no production adapter registration") pure (adapterFor RubyGems)

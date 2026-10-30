@@ -54,7 +54,7 @@ import Ecluse.Core.Server.MirrorView (MirrorView)
 import Ecluse.Core.Server.Upstream (MirrorServePlan (NoMirrorWrite))
 import Ecluse.Core.Version (mkVersion)
 import Ecluse.Server.Pipeline.TestSupport (newTestEnvWithQueue, packument, proxyApplication, publishedDaysAgo, requestAt)
-import Ecluse.Test.Contract.Serving (ServingDriver (..), ServingLayout (..), ServingRelease (..), ServingResponse (..), ServingSession (..))
+import Ecluse.Test.Contract.Serving (ServingDriver (..), ServingRelease (..), ServingResponse (..), ServingSession (..))
 import Ecluse.Test.Deadline (untracedClient, withSweeper)
 import Ecluse.Test.Json (fieldAt, textAtPath)
 import Ecluse.Test.Mirror.State (mirrorViewWith)
@@ -121,12 +121,7 @@ nativeByteDriver ecosystem acquireAdapter mount clientMetadataPath upstreamMetad
                         ServingSession
                             { requestMetadata = metadata
                             , requestArtifact = artifactRequest
-                            , requestPrivateMetadata = metadata
-                            , requestPrivateArtifact = artifactRequest
-                            , publicSourceIdentity = decodeUtf8 mount
-                            , privateSourceIdentity = decodeUtf8 mount
                             }
-        , servingLayout = CombinedRegistry
         , servingIdentity = ("thing@" <>)
         , servingDigest = digest
         }
@@ -284,12 +279,7 @@ cargoDriver =
                         ServingSession
                             { requestMetadata = metadata
                             , requestArtifact = artifact
-                            , requestPrivateMetadata = metadata
-                            , requestPrivateArtifact = artifact
-                            , publicSourceIdentity = "sparse+http://ecluse.test/cargo/"
-                            , privateSourceIdentity = "sparse+http://ecluse.test/cargo/"
                             }
-        , servingLayout = CombinedRegistry
         , servingIdentity = ("thing@" <>)
         , servingDigest = hexSha256Of
         }
