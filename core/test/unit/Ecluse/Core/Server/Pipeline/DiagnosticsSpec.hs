@@ -59,6 +59,11 @@ upstreamWarningSpec = describe "logMetadataFailure on a bad upstream" $ do
         logged `shouldSatisfy` T.isInfixOf "\"origin\":\"upstream.test:443\""
         logged `shouldSatisfy` T.isInfixOf "different package"
 
+    it "says the mismatched document was refused, because a private mismatch refuses the whole request" $ do
+        logged <- runJsonLog (logMetadataFailure (unscopedNpm "thing") "http://upstream.test" (MetadataNameMismatch "other"))
+        logged `shouldSatisfy` T.isInfixOf "refused an upstream metadata document"
+        logged `shouldNotSatisfy` T.isInfixOf "dropped"
+
     it "logs a WARNING naming the misconfigured origin and the URL fault, distinct from an outage" $ do
         logged <- runJsonLog (logMetadataFailure (unscopedNpm "is-odd") "http://upstream.test" (unformable EmptyBaseUrl))
         logged `shouldSatisfy` T.isInfixOf "\"sev\":\"Warning\""
