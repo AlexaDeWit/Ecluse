@@ -148,6 +148,7 @@ twoStoreEnvVars :: [(String, String)]
 twoStoreEnvVars =
     [ ("ECLUSE_MOUNTS__PYPI__PRIVATE_UPSTREAM__REGISTRY__URL", "https://pypi-private.example.test")
     , ("ECLUSE_MOUNTS__PYPI__MIRROR_TARGET__VERDACCIO__URL", "https://pypi-mirror.example.test")
+    , ("ECLUSE_MOUNTS__PYPI__MIRROR_TARGET__VERDACCIO__UPLOAD_URL", "https://pypi-mirror.example.test/legacy/")
     , ("ECLUSE_MOUNTS__PYPI__MIRROR_TARGET__VERDACCIO__TOKEN", "pypi-write-token")
     ]
         <> staticEnvVars

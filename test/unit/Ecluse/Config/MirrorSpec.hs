@@ -138,14 +138,16 @@ codeArtifactEnv upload =
 publicationPrefix :: String -> String
 publicationPrefix tag = "ECLUSE_MOUNTS__PYPI__PUBLICATION_TARGET__" <> tag <> "__"
 
+-- A PyPI publication target that reads and uploads at the one address.
 publicationEnv :: String -> String -> [(String, String)]
 publicationEnv tag url =
     pubUrlEnv
         <> [ ("ECLUSE_MOUNTS__PYPI__ENABLED", "true")
            , (publicationPrefix tag <> "URL", url)
+           , (publicationPrefix tag <> "UPLOAD_URL", url)
            ]
 
--- The new form: url is the repository's read root, and uploadUrl is where publication posts.
+-- url is the repository's read root, and uploadUrl is where publication posts.
 codeArtifactPublicationUploadEnv :: String -> [(String, String)]
 codeArtifactPublicationUploadEnv upload =
     overrideEnv (publicationPrefix "CODE_ARTIFACT" <> "UPLOAD_URL") upload $
