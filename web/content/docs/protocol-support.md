@@ -163,7 +163,7 @@ Transport and resource failures fail the whole read.
 Published spelling, lowercase lookup identity, and case-insensitive hyphen/underscore ownership matching have separate uses.
 Hyphen and underscore aliases do not merge distinct index lookup paths.
 Cargo versions use native SemVer identity and ordering. Build metadata does not create a second publishable version identity.
-A private version and a public version that differ only in build metadata are one version, and the private row wins.
+In the merged index, a private version and a public version that differ only in build metadata are one version, and the private row wins.
 
 The age rule uses native `pubtime`. Missing or invalid time stays unknown.
 OSV `crates.io` advisories use the existing freshness, malicious-package, and exact-fix rules.

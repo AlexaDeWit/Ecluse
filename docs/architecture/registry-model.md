@@ -202,9 +202,9 @@ track which input a survivor came from, so assembly can select its retained sour
   versions first (see [Applying verdicts](rules-engine.md#applying-verdicts-to-a-packument)). The
   result is `trusted(private) ∪ filtered(public)`.
 - **Collision: private wins, divergence is a signal.** On a shared version key the private copy
-  wins. An ecosystem whose versions differ only in build metadata name one release (Cargo) first drops
-  a public version that a private version claims under another spelling, so the private row wins
-  that release too. The public copy may contradict it on a shared artifact's shared integrity algorithm: same
+  wins. Where versions that differ only in build metadata name one release (Cargo), the merged index
+  first drops a public version that a private version claims under another spelling, so the private
+  row wins that release too. The public copy may contradict it on a shared artifact's shared integrity algorithm: same
   file, same algorithm, disagreeing digests. The merge logs a WARNING with both digests
   and increments the bounded-cardinality `ecluse.registry.merge.divergence` counter.
   Validated public entries remain evidence for this comparison even when a public rule denies
@@ -426,7 +426,7 @@ ASCII lowercase supplies index lookup identity. A separate key folds hyphen and 
 Keeping these keys separate prevents one alias lookup from poisoning another path's negative cache result.
 Cargo does not inherit PyPI period folding or separator collapsing.
 Raw SemVer spelling remains available, while native uniqueness excludes build metadata.
-The merge applies the same uniqueness across sources: versions that differ only in build metadata are one release, and the trusted row wins.
+The index merge applies the same uniqueness across sources: rows that differ only in build metadata are one release, and the trusted row wins.
 
 The bounded reader frames one native row at a time and keeps its physical `RecordEntry` coordinate.
 Full and selected reads scan through EOF, so later duplicate identities can quarantine earlier records.
