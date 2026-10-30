@@ -155,7 +155,8 @@ The client and the mirror worker still verify those bytes, so the leg gives up t
 refuse-weak-integrity stance, not tamper-evidence. The packument route's listing-side trusted
 floor ([Integrity floors](security.md#integrity-floors)) stays in force. A private upstream that serves
 tarballs off-convention (a separate files host, or a presigned CDN URL the `/-/` path cannot
-rebuild) becomes a private miss.
+rebuild) is a private miss only when its `/-/` path answers `404`. A redirect from that path to
+such a host refuses the read, as above.
 
 The **public leg** honours the `dist.tarball` the gated version declares and fetches exactly that
 URL, not a reconstructed `/-/` path. The proxy can then front a registry that serves bytes from a
