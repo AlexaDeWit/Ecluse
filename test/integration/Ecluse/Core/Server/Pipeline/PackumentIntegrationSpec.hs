@@ -76,7 +76,7 @@ mergeSpec = describe "multi-upstream merge (not fallback)" $ do
             servedIntegrity "1.0.0" resp `shouldBe` Just (sriFor "1.0.0")
 
     it (caseLabel "integration/npm-metadata/native-003" "filters an empty-digest public version out of the served listing (a content-empty digest is no digest)") $ do
-        privateUp <- failingUpstream
+        privateUp <- absentUpstream
         publicUp <-
             servingUpstream
                 ( encodePackument
@@ -92,7 +92,7 @@ mergeSpec = describe "multi-upstream merge (not fallback)" $ do
             servedVersions resp `shouldBe` ["1.0.0"]
 
     it (caseLabel "integration/npm-metadata/native-004" "rejects a public version whose only digest is below the floor (SHA-1 shasum)") $ do
-        privateUp <- failingUpstream
+        privateUp <- absentUpstream
         publicUp <-
             servingUpstream
                 ( encodePackument
@@ -108,7 +108,7 @@ mergeSpec = describe "multi-upstream merge (not fallback)" $ do
             servedVersions resp `shouldBe` ["1.0.0"]
 
     it (caseLabel "integration/npm-metadata/native-005" "admits a public version carrying a SHA-256 integrity digest (meets the floor)") $ do
-        privateUp <- failingUpstream
+        privateUp <- absentUpstream
         publicUp <-
             servingUpstream
                 ( encodePackument
@@ -230,7 +230,7 @@ mergeSpec = describe "multi-upstream merge (not fallback)" $ do
             servedLatest resp `shouldBe` Just "2.0.0"
 
     it (caseLabel "integration/npm-metadata/native-012" "repoints dist-tags.latest to a survivor when the public latest is denied (public-only)") $ do
-        privateUp <- failingUpstream
+        privateUp <- absentUpstream
         publicUp <-
             servingUpstream
                 ( encodePackument
@@ -249,7 +249,7 @@ mergeSpec = describe "multi-upstream merge (not fallback)" $ do
 cacheSpec :: Spec
 cacheSpec = describe "metadata fetch and assembled-response coherence" $ do
     it (caseLabel "integration/npm-metadata/native-013" "fetches changed full metadata within the TTL and replaces the assembled representation") $ do
-        privateUp <- failingUpstream
+        privateUp <- absentUpstream
         let v1 =
                 encodePackument
                     (packument [("1.0.0", plainVersion "1.0.0")] "1.0.0" [("1.0.0", publishedDaysAgo 30)])
@@ -279,7 +279,7 @@ cacheSpec = describe "metadata fetch and assembled-response coherence" $ do
             seenAuth publicUp `shouldReturn` [Nothing, Nothing]
 
     it (caseLabel "integration/npm-metadata/native-014" "keeps each fetched policy decision and its served fields coherent") $ do
-        privateUp <- failingUpstream
+        privateUp <- absentUpstream
         publicUp <-
             servingUpstream
                 ( encodePackument
@@ -560,7 +560,7 @@ retainedFieldsSpec = describe "supported served metadata fields" $ do
             servedTarball "1.0.0" resp `shouldBe` Just "https://proxy.test/thing/-/thing-1.0.0.tgz"
 
     it (caseLabel "integration/npm-metadata/native-034" "rewrites a gated public version's dist.tarball under the mount base (rewritten once at assembly)") $ do
-        privateUp <- failingUpstream
+        privateUp <- absentUpstream
         publicUp <- servingUpstream (encodePackument (admittingPublic "1.0.0"))
         withProxy privateUp publicUp Nothing $ \app -> do
             resp <- getThing Nothing app

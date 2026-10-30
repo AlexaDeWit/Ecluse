@@ -167,7 +167,7 @@ boundsSpec = describe "response bounds through the request path (security.md inv
         let body = case admittingPublic "1.0.0" of
                 Object fields -> Object (KeyMap.insert "_unknown" nestedValue fields)
                 other -> other
-        privateUp <- failingUpstream
+        privateUp <- absentUpstream
         publicUp <- servingUpstream (encodePackument body)
         queue <- newTestMemoryQueue
         withProxyEnvQueueDeps queue privateUp publicUp Nothing (withLimits tightLimits) $ \app _env _port -> do
@@ -284,7 +284,7 @@ perimeterSpec = describe "the typed request perimeter (an escaped pre-commit fau
     it (caseLabel "integration/pipeline-faults/native-019" "answers a bottoming assembly with the route's declared neutral 500, never a torn session") $ do
         -- The assembly hook bottoms when the render forces it, an invariant break escaping the
         -- handler pre-commit. The perimeter answers a neutral 500 and the session survives.
-        privateUp <- failingUpstream
+        privateUp <- absentUpstream
         publicUp <- servingUpstream (encodePackument (admittingPublic "1.0.0"))
         queue <- newTestMemoryQueue
         withProxyEnvQueueDeps queue privateUp publicUp Nothing withBottomingAssemble $ \app _env _port -> do
