@@ -5,6 +5,7 @@
 -- | The YAML event reader refuses object hooks, ambiguity and reference amplification.
 module Ecluse.Core.Registry.RubyGems.Archive.YamlSpec (spec) where
 
+import Data.Aeson (Value (String), eitherDecodeStrict', toJSON)
 import Data.Map.Strict qualified as Map
 import Test.Hspec
 
@@ -24,6 +25,8 @@ spec = describe "inert bounded gem YAML" $ do
         value <- decode defaultLimits bytes >>= expectRight
         fields <- expectRight (yamlMapping value)
         Map.lookup "first" fields `shouldBe` Map.lookup "second" fields
+        decoded <- readFileBS "test/fixtures/rubygems/aliases.json" >>= expectRight . eitherDecodeStrict'
+        plainValue value `shouldBe` decoded
     it "refuses cycles, forward aliases, duplicate keys, merge keys and unknown tags" $
         for_ ["--- &a [*a]", "--- [*missing]", "--- {name: one, name: two}", "--- {a: &a {}, b: {<<: *a}}", "--- !ruby/object:Kernel {}", "--- one\n--- two", "--- [unterminated"] $ \bytes -> do
             result <- decode defaultLimits bytes
@@ -36,3 +39,10 @@ spec = describe "inert bounded gem YAML" $ do
 
 decode :: Limits -> ByteString -> IO (Either ParseError YamlValue)
 decode limits = decodeYaml limits (const (pure ()))
+
+-- The JSON form of an untagged document of strings, as Ruby's reference wrote aliases.json.
+plainValue :: YamlValue -> Value
+plainValue = \case
+    YamlScalar _ _ text -> String text
+    YamlSequence _ values -> toJSON (map plainValue values)
+    YamlMapping _ fields -> toJSON (Map.map plainValue fields)
