@@ -40,7 +40,7 @@ import Ecluse.Core.Registry.Cargo.Credential (cargoCredential)
 import Ecluse.Core.Registry.Cargo.Document (cargoRecords)
 import Ecluse.Core.Registry.Cargo.Route (cargoRouter)
 import Ecluse.Core.Registry.Exchange (chargedRead)
-import Ecluse.Core.Registry.Metadata (Manifest (..), MetadataError (MetadataAbsent), VersionDoc (..), VersionRead (..))
+import Ecluse.Core.Registry.Metadata (Manifest (..), MetadataClient (fetchVersionMetadata), MetadataError (MetadataAbsent), VersionDoc (..), VersionRead (..))
 import Ecluse.Core.Registry.Metadata.Fetch (readVersion)
 import Ecluse.Core.Registry.Metadata.Fetch.Preparation (PrepareRead (PrepareRead), prepareRead)
 import Ecluse.Core.Registry.Metadata.Fetch.Types (EcosystemRead (..), ReadTerms (ReadTerms))
@@ -58,7 +58,7 @@ import Ecluse.Core.Server.Cache (CacheConfig (cacheMaxEntries), MetadataCache, S
 import Ecluse.Core.Server.Cache.Backend (BackendStorage (LocalStorage), RetentionOperations (roInsert))
 import Ecluse.Core.Server.Cache.Provider (cacheProvider)
 import Ecluse.Core.Server.Cache.VersionWeight (weighVersion)
-import Ecluse.Core.Server.Context (MountBinding (..), PackumentDeps (..), RequestCtx (RequestCtx), ServeRuntime (srMemoryMeter, srMetadataCache), pdPublicBaseUrl, runHandler)
+import Ecluse.Core.Server.Context (MountBinding (..), PackumentDeps (..), RequestCtx (RequestCtx), ServeRuntime (srMemoryMeter, srMetadataCache), pdPrivateBase, pdPublicBaseUrl, runHandler)
 import Ecluse.Core.Server.Pipeline.Origin (
     ObservedReadBoundExceeded (ObservedReadBoundExceeded),
     OriginMiss (MissAbsent, MissUnresolved),
@@ -75,6 +75,7 @@ import Ecluse.Core.Server.Pipeline.Origin (
     fetchPublicOriginObserved,
     originManifest,
     originMiss,
+    withPrivateMetadataClient,
     withPublicMetadata,
  )
 import Ecluse.Core.Server.Upstream (MirrorServePlan (NoMirrorWrite))
@@ -82,7 +83,7 @@ import Ecluse.Core.Telemetry.Metrics qualified as Metric
 import Ecluse.Core.Telemetry.Record (MetricsPort (mpCacheRequest, mpVersionCacheRequest, mpVersionCacheResidentBytes))
 import Ecluse.Test.Deadline (withSweeper)
 import Ecluse.Test.Log (newTestLogEnv)
-import Ecluse.Test.Package (leftpadName, sampleManifest, thingName)
+import Ecluse.Test.Package (leftpadName, npmVersion, sampleManifest, thingName)
 import Ecluse.Test.Port (noopMetricsPort, passthroughTracingPort)
 import Ecluse.Test.Registry.Cargo.Metadata (cargoFeatureRecord, cargoRead, cargoTestDiscovery, cargoTestName, cargoTestRecord, cargoTestVersion)
 import Ecluse.Test.Registry.Metadata.Fetch (heldBody)
@@ -97,6 +98,7 @@ spec :: Spec
 spec = describe "originMiss -- the outcomes that leave nothing to serve" $ do
     observedReadSpec
     retainedConsumerSpec
+    selectedChargeSpec
     fullReadSpec
     it "reports no miss for a document, an access refusal, or an identity refusal" $
         map
@@ -366,6 +368,38 @@ retainedConsumerSpec = describe "successful selected consumers" $ do
                 assertObservedReleased observedRoots
                 readIORef sourceReads `shouldReturn` 1
                 snChargedBytes <$> meterSnapshot meter `shouldReturn` 0
+
+selectedChargeSpec :: Spec
+selectedChargeSpec = describe "selected metadata read payments" $
+    for_ [False, True] $ \public ->
+        it ((if public then "public" else "private") <> " holds the scaled sum of its full-read chunks, not only the largest") $ withSweeper $ \deadlines -> do
+            original <- testServeRuntime deadlines noopMetricsPort
+            meter <- newMemoryMeter deadlines MeterSettings{msBudgetBytes = maxBound `div` 2, msStepBytes = 1, msEntryRoom = 0, msEntryWaitMicros = 0}
+            held <- newIORef Nothing
+            let chunk = 64 * 1024
+                factory = PrepareRead $ \origin -> do
+                    replicateM_ 3 (ocChargeFullRead origin chunk)
+                    meterSnapshot meter >>= writeIORef held . Just . snChargedBytes
+                    pure (Left MetadataAbsent)
+                metadata = pdMetadata inertPackumentDeps
+                deps = inertPackumentDeps{pdMetadata = metadata{metadataRead = factory}}
+                runtime = original{srMemoryMeter = meter}
+            completed <- withMemoryEntry noopMetricsPort meter (runSelectedRead public runtime deps)
+            completed `shouldBe` Right (Left MetadataAbsent)
+            readIORef held >>= (`shouldSatisfy` maybe False (>= scaleCharge (cfFullReadPermille (metadataChargeFactors metadata)) (3 * chunk)))
+            snChargedBytes <$> meterSnapshot meter `shouldReturn` 0
+
+-- Read one npm version through the public or the private selected-metadata binding.
+runSelectedRead :: Bool -> ServeRuntime -> PackumentDeps -> MemoryTicket -> IO (Either MetadataError VersionRead)
+runSelectedRead public runtime deps ticket = do
+    logEnv <- newTestLogEnv
+    base <- maybe (fail "the inert mount has no private base") pure (pdPrivateBase deps)
+    let binding = MountBinding ("npm" :| []) npmRouter npmCredential deps Nothing
+        version = npmVersion "1.0.0"
+    runHandler logEnv mempty (RequestCtx runtime binding) $
+        if public
+            then withPublicMetadata runtime deps ticket leftpadName version liftIO
+            else withPrivateMetadataClient runtime deps (Just ticket) base Nothing (\client -> fetchVersionMetadata client leftpadName version)
 
 retainedCargoFixture :: IO (ByteString, VersionRead, VersionRead)
 retainedCargoFixture = do
