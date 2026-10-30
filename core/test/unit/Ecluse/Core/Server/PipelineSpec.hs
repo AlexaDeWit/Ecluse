@@ -1164,6 +1164,18 @@ pypiPrivateArtifactSpec = describe "PyPI first-party private artifacts" $ do
                         statusCode (simpleStatus response) `shouldBe` 502
                     readIORef publicHits `shouldReturn` 0
 
+    for_ [(status302, 502, Nothing), (status503, 503, Just "120")] $ \(companionStatus, expectedStatus, expectedRetry) ->
+        it ("answers " <> show expectedStatus <> " after a private index hit and companion HTTP " <> show (statusCode companionStatus) <> ", without a public read") $ withSweeper $ \deadlines -> do
+            rt <- testServeRuntime deadlines noopMetricsPort
+            publicHits <- newIORef (0 :: Int)
+            testWithApplication (pure (countingUpstream publicHits (pypiPublicAppWith True status200))) $ \publicPort ->
+                testWithApplication (pure (pypiPrivateCompanionApp companionStatus)) $ \privatePort ->
+                    for_ [methodGet, methodHead] $ \method -> do
+                        response <- fetchPypiPath rt (pypiPrivateDeps privatePort publicPort){pdFirstParty = const False} method "requests-1.0.0.tar.gz.metadata" []
+                        statusCode (simpleStatus response) `shouldBe` expectedStatus
+                        lookup hRetryAfter (simpleHeaders response) `shouldBe` expectedRetry
+            readIORef publicHits `shouldReturn` 0
+
 -- A merged listing whose public origin admits leftpad and whose private origin gives one fixed answer.
 mergedListingAfter :: Response -> Int -> Maybe ByteString -> Decision -> Expectation
 mergedListingAfter privateResponse expectedStatus expectedRetry expectedDecision = withSweeper $ \deadlines -> do
@@ -1218,6 +1230,14 @@ pypiPrivateApp privateStatus req respond
     | otherwise = respond (responseLBS privateStatus [] "private refusal")
   where
     index = simpleIndex "requests" [withFileKeys [("url", String (selfBaseUrl req <> "/files/requests-1.0.0.tar.gz"))] (simpleFile "requests-1.0.0.tar.gz")]
+
+-- A private index whose one file declares a companion that answers with the given status.
+pypiPrivateCompanionApp :: Status -> Application
+pypiPrivateCompanionApp companionStatus req respond
+    | rawPathInfo req == "/simple/requests/" = respond (responseLBS status200 [(hContentType, "application/vnd.pypi.simple.v1+json")] (encode index))
+    | otherwise = respond (responseLBS companionStatus [(hRetryAfter, "120")] "private refusal")
+  where
+    index = simpleIndex "requests" [withFileKeys [("url", String (selfBaseUrl req <> "/files/requests-1.0.0.tar.gz")), ("core-metadata", Bool True)] (simpleFile "requests-1.0.0.tar.gz")]
 
 -- A private index whose document names another project.
 misnamedPypiApp :: Application
