@@ -66,9 +66,9 @@ data BootError
       MirrorTargetWithoutPublish Ecosystem
     | -- | A PyPI mirror role cannot retain or validate its expected inventory without durable state.
       MirrorStateRequired Ecosystem
-    | -- | An active native writer lacks the credential username its protocol requires. Carries the key path.
+    | -- | An active native writer lacks its endpoint or credential convention. Carries the key path.
       UploadConfigurationRequired Ecosystem Text
-    | -- | An active writer on a protocol with a separate upload endpoint has no @uploadUrl@. Carries the key path.
+    | -- | A client-upload relay on a protocol with a separate upload endpoint has no publication @uploadUrl@. Carries the key path.
       UploadUrlRequired Ecosystem Text
     | -- | A publication target has no adapter that can write its ecosystem's protocol.
       PublicationTargetWithoutPublish Ecosystem

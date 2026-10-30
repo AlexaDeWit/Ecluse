@@ -148,14 +148,15 @@ vetMirrorCapabilities role app = decided $ case missing of
                 <> maybe [] (publicationNeeds eco publish) (mntPublicationTarget mount)
     mirrorNeeds eco publish endpoint =
         [MirrorStateRequired eco | mirrorStateRequirement (publishMirrorRequirements publish) == DurableVersionState, isJust pipeline, isNothing (cfgMirrorState app)]
-            <> [uploadUrlRequired eco "mirrorTarget" (meTarget endpoint) | separateUpload publish, mirrorWrites, isNothing (meUploadUrl endpoint)]
-            <> [usernameRequired eco "mirrorTarget" (meTarget endpoint) | publishIdentity publish == NamedIdentity, mirrorWrites, tgtTag (meTarget endpoint) /= TagCodeArtifact, isNothing (meUsername endpoint)]
+            <> [required eco "mirrorTarget" (meTarget endpoint) "uploadUrl" | separateUpload publish, mirrorWrites, isNothing (meUploadUrl endpoint)]
+            <> [required eco "mirrorTarget" (meTarget endpoint) "username" | publishIdentity publish == NamedIdentity, mirrorWrites, tgtTag (meTarget endpoint) /= TagCodeArtifact, isNothing (meUsername endpoint)]
+    -- The publication refusal says what url and uploadUrl each name, for a url that still holds the upload endpoint.
     publicationNeeds eco publish endpoint =
-        [uploadUrlRequired eco "publicationTarget" (peTarget endpoint) | separateUpload publish, clientWrites, isNothing (peUploadUrl endpoint)]
-            <> [usernameRequired eco "publicationTarget" (peTarget endpoint) | publishIdentity publish == NamedIdentity, clientWrites, isJust (peToken endpoint), tgtTag (peTarget endpoint) /= TagCodeArtifact, isNothing (peUsername endpoint)]
+        [UploadUrlRequired eco (keyPath "publicationTarget" (peTarget endpoint) "uploadUrl") | separateUpload publish, clientWrites, isNothing (peUploadUrl endpoint)]
+            <> [required eco "publicationTarget" (peTarget endpoint) "username" | publishIdentity publish == NamedIdentity, clientWrites, isJust (peToken endpoint), tgtTag (peTarget endpoint) /= TagCodeArtifact, isNothing (peUsername endpoint)]
     separateUpload publish = publishUploadEndpoint publish == ExplicitUploadEndpoint
-    uploadUrlRequired eco endpoint target = UploadUrlRequired eco (taggedKeyPath endpoint (tgtTag target) "uploadUrl")
-    usernameRequired eco endpoint target = UploadConfigurationRequired eco (taggedKeyPath endpoint (tgtTag target) "username")
+    required eco endpoint target key = UploadConfigurationRequired eco (keyPath endpoint target key)
+    keyPath endpoint target = taggedKeyPath endpoint (tgtTag target)
 
 -- | Accumulate every pure refusal and advisory for one role before constructing its plan.
 vetBoot :: Config -> Vet ValidatedPlan
