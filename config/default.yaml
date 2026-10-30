@@ -81,10 +81,6 @@ limits:
   # bounds the versions the Dredger gathers for one package across store listing pages,
   # and the versions one mirror-state record holds.
   maxVersionCount: 1000000
-  # Deprecated compatibility key, with no effect:
-  # maxArtifactCount: 1000000
-  # Écluse still reads it as a positive integer. Remove it and ECLUSE_LIMITS__MAX_ARTIFACT_COUNT:
-  # the next release removes the key, and a document or environment that sets it then refuses to load.
   # Nesting in retained metadata fields and Cargo records. Skipped npm/PyPI fields do not use this limit.
   maxNestingDepth: 64
   # Refuse to download an advisory database larger than this many bytes (512 MiB). The

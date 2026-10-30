@@ -365,13 +365,6 @@ private version and raises an alarm. Digest disagreement alone never removes a p
 its tags, blocks a private artifact request, or authorises deletion. Independent integrity checks
 still apply.
 
-`limits.maxArtifactCount` is a deprecated key with no effect. A positive integer, an absent value,
-and null all load, and any other value refuses startup, so remove the key and
-`ECLUSE_LIMITS__MAX_ARTIFACT_COUNT`. The next release removes the key, and a document or
-environment that still sets it then refuses to load. Fixed ceilings in Écluse now bound the
-archive, compression, Marshal, YAML, multipart and mirror-state work the key used to bound, and
-`limits.maxVersionCount` counts every PyPI file and RubyGems `/info` row.
-
 ## Rule policy
 
 The policy is a named map of rules over the deny-by-default gate described in
