@@ -105,9 +105,13 @@ detect spec = case scheme spec of
         | otherwise -> Nothing
     Nothing
         | gitHubShorthand spec -> Just GitSource
-        -- A user@host address is an scp-like or ssh git URL. No registry or local spec holds an @ here.
-        | T.any (== '@') (T.takeWhile (/= '#') spec) -> Just GitSource
+        | userAtHost (T.takeWhile (/= '#') spec) -> Just GitSource
         | otherwise -> Nothing
+
+-- An scp-like or ssh git address: a user with no slash, then an @. packages/@acme/widget is a local path.
+userAtHost :: Text -> Bool
+userAtHost text = case T.break (== '@') text of
+    (user, rest) -> not (T.null user || T.null rest || T.any (== '/') user)
 
 gitSchemes :: [Text]
 gitSchemes = ["git", "ssh", "github", "gitlab", "bitbucket", "gist", "sourcehut"]
