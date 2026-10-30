@@ -39,7 +39,7 @@ import Lens.Micro ((?~), (^.))
 
 import Ecluse.Core.Ecosystem (Ecosystem (Cargo, Npm, PyPI, RubyGems))
 import Ecluse.Core.Fault (TransportFault)
-import Ecluse.Core.Package (PackageName, mkPackageName, mkScope)
+import Ecluse.Core.Package (PackageName, WireNameRefusal (..), mkPackageName, mkScope, unnamespacedWireName)
 import Ecluse.Core.Queue (
     DeadLetterTerminus (TerminusAbsent, TerminusAttached),
     DeliveryBudget (DeliveryBudget),
@@ -297,6 +297,7 @@ mirrorJobPackage eco namespace rawName = case eco of
     PyPI -> Right (mkPackageName eco (mkScope <$> namespace) rawName)
   where
     npmWireName = maybe rawName (\ns -> "@" <> ns <> "/" <> rawName) namespace
-    unnamespaced label parse = do
-        unless (maybe True (== "") namespace) (Left (label <> " packages cannot have a namespace"))
-        first parseErrorMessage (parse rawName)
+    unnamespaced label parse = first (refusal label) (unnamespacedWireName parse namespace rawName)
+    refusal label = \case
+        WireNamespaced -> label <> " packages cannot have a namespace"
+        WireNameUnusable fault -> parseErrorMessage fault
