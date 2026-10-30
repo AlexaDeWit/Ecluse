@@ -9,8 +9,9 @@ import Data.Aeson (encode)
 import Data.List (lookup)
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
+import Data.Traversable (for)
 import Network.HTTP.Client (Request (path, requestHeaders), defaultManagerSettings, newManager)
-import Network.HTTP.Types.Header (hAuthorization)
+import Network.HTTP.Types.Header (Header, hAuthorization)
 import Test.Hspec
 import UnliftIO.Exception (throwIO)
 
@@ -19,16 +20,16 @@ import Ecluse.Composition.Credential (noCredentialProviders)
 import Ecluse.Composition.Maintenance (BudgetPorts (BudgetPorts, bpGateFor, bpNominalPace, bpOverrides), StorePorts (..), buildStoreMaintenance, buildStoreObservation, buildUpstreamProbe, planStoreMaintenance, readUpstreamSafety, resolvedBudget, storeScope, upstreamFindings)
 import Ecluse.Composition.Maintenance.Plan (ClearedBackend (cbFetchManifest, cbUrl), vetStoreBackends)
 import Ecluse.Composition.Maintenance.Support (clearedBackendsFor, mountsFor, noAdapter, privateCaches, refusalsOf, unaddressablePrivateUpstream, verdaccioEnv, vetted, withoutPrivateAuthority)
-import Ecluse.Composition.Support (NoCredentials (NoCredentials), cargoCodeArtifactEnv, clearedUrl, codeArtifactEnvVars, expectConfig, overrideEnv, staticEnvVars, twoStoreEnv, withObservablePrivate)
+import Ecluse.Composition.Support (NoCredentials (NoCredentials), cargoCodeArtifactEnv, clearedUrl, codeArtifactDomain, codeArtifactEnvVars, expectConfig, overrideEnv, rubyGemsMirrorEnv, staticEnvVars, twoStoreEnv, withObservablePrivate)
 import Ecluse.Composition.Types (RegistryRole (MirrorPreviewer, MirrorPruner))
 import Ecluse.Composition.Vet (runVet)
 import Ecluse.Config (AppConfig (cfgMounts), Config (configApp, configMounts), MountConfig (mntPrivateUpstream), PrivateEndpoint, QuotaOverride (QuotaOverride, qoQuotas, qoScope, qoWeights))
 import Ecluse.Core.BuildIdentity (parseOperatorContact, renderUserAgent, userAgent)
 import Ecluse.Core.Credential (AuthToken (AuthToken), CredentialProvider (CredentialProvider), mkSecret)
 import Ecluse.Core.Deadline (Deadlines)
-import Ecluse.Core.Ecosystem (Ecosystem (Cargo, Npm, PyPI))
+import Ecluse.Core.Ecosystem (Ecosystem (Cargo, Npm, PyPI, RubyGems))
 import Ecluse.Core.Fault (TransportCause (TransportProtocol), transportFault)
-import Ecluse.Core.Package (PackageInfo (infoName, infoVersions), PackageName)
+import Ecluse.Core.Package (PackageInfo (infoName, infoVersions), PackageName, mkPackageName)
 import Ecluse.Core.Registry (FetchFault (FetchTransport))
 import Ecluse.Core.Registry.Adapter (RegistryAdapter (adapterMetadata), adapterFor)
 import Ecluse.Core.Registry.Adapter.Capability (AdapterMetadata (metadataRead))
@@ -47,11 +48,11 @@ import Ecluse.Test.Corpus.Cargo (cargoCaptureDiscoveryBytes)
 import Ecluse.Test.Deadline (withExchangeClient, withSweeper)
 import Ecluse.Test.Env (withAmbientAws)
 import Ecluse.Test.Maintenance (FakeStore (fakeMaintenance), defaultFakeStoreConfig, newFakeStore, testDeleteGuard)
-import Ecluse.Test.Package (npmVersion, unsafeRegistryUrl, unscopedNpm)
+import Ecluse.Test.Package (npmVersion, unsafeRegistryUrl, unscopedNpm, unscopedPyPI)
 import Ecluse.Test.Port (passthroughTracingPort)
 import Ecluse.Test.Registry.Cargo.Metadata (cargoTestName, cargoTestRecord)
 import Ecluse.Test.Server.Mount (requiredAdapter)
-import Ecluse.Test.Stub (Captured (capMethod, capPath), allCaptured, headerValue, stubBaseUrl, withRoutedStub)
+import Ecluse.Test.Stub (Captured (capHeaders, capMethod, capPath), allCaptured, headerValue, stubBaseUrl, withRoutedStub)
 import Ecluse.Test.Support (expectRight)
 import Network.HTTP.Types.Status (status200, status201, status404)
 
@@ -164,6 +165,19 @@ metadataCredentialSpec = describe "maintenance metadata credentials" $ do
                             map (headerValue "Authorization") requests `shouldBe` [Just "token-1", Just "token-1", Just "token-2", Just "token-2"]
                             readIORef counter `shouldReturn` 2
                     allCaptured public `shouldReturn` []
+    for_ metadataBuilders $ \(registryRole, role, build) ->
+        it ("sends each CodeArtifact store read with its exact headers during " <> role) $
+            withAmbientAws $ do
+                observed <- for storeReadCases $ \(eco, env, name) -> do
+                    config <- expectConfig env Nothing
+                    targets <- clearedMetadataTargets registryRole eco config
+                    fmap (eco,) . for targets $ \cleared -> withRoutedStub (const (status404, [], "absent")) $ \storeStub -> withSweeper $ \deadlines -> do
+                        let endpoint = loopbackRegistryUrl (stubBaseUrl storeStub <> registryPath (clearedUrl cleared))
+                            provider = CredentialProvider (pure (AuthToken (mkSecret "token-1") Nothing))
+                        readManifest <- build (anonymousPorts deadlines){spCredential = Just provider} defaultLimits cleared{cbUrl = endpoint}
+                        void (readManifest name)
+                        map (filter ((/= "Host") . fst) . capHeaders) <$> allCaptured storeStub
+                observed `shouldBe` expectedStoreReads
     it "keeps an anonymous private observation unauthenticated" $ do
         config <- expectConfig (withObservablePrivate (withoutPrivateAuthority codeArtifactEnvVars)) Nothing
         caches <- either (fail . show) pure (privateCaches adapterFor MirrorPreviewer config)
@@ -175,6 +189,31 @@ metadataCredentialSpec = describe "maintenance metadata credentials" $ do
     expectedHeaders _ = [Just "Bearer token-1", Just "Bearer token-2"]
     expectedPath PyPI url = encodeUtf8 (joinUrlPath (registryPath url) "simple/leftpad/")
     expectedPath _ url = encodeUtf8 (joinUrlPath (registryPath url) "leftpad")
+
+-- Each ecosystem's store read on a CodeArtifact mirror and cache.
+storeReadCases :: [(Ecosystem, [(String, String)], PackageName)]
+storeReadCases =
+    [ (Npm, twoStoreEnv, aPackage)
+    , (PyPI, twoStoreEnv, unscopedPyPI "leftpad")
+    , (RubyGems, rubyGemsCodeArtifactEnv, mkPackageName RubyGems Nothing "leftpad")
+    ]
+
+-- The mirror's and then the cache's requests, each request's headers without its loopback Host.
+expectedStoreReads :: [(Ecosystem, [[[Header]]])]
+expectedStoreReads =
+    [ (Npm, mirrorAndCache "Bearer token-1" "application/json")
+    , (PyPI, mirrorAndCache "Basic YXdzOnRva2VuLTE=" "application/vnd.pypi.simple.v1+json")
+    , (RubyGems, mirrorAndCache "Basic YXdzOnRva2VuLTE=" "text/plain")
+    ]
+  where
+    mirrorAndCache authorization accept = replicate 2 [[("User-Agent", userAgent), ("Authorization", authorization), ("Accept", accept), ("Accept-Encoding", "gzip")]]
+
+-- A RubyGems mount that mirrors to and caches from CodeArtifact.
+rubyGemsCodeArtifactEnv :: [(String, String)]
+rubyGemsCodeArtifactEnv =
+    overrideEnv "ECLUSE_MOUNTS__RUBYGEMS__PRIVATE_UPSTREAM__CODE_ARTIFACT__URL" (codeArtifactDomain <> "/ruby/internal/") $
+        overrideEnv "ECLUSE_MOUNTS__RUBYGEMS__MIRROR_TARGET__CODE_ARTIFACT__URL" (codeArtifactDomain <> "/ruby/mirror/") $
+            filter (not . (`elem` ["ECLUSE_MOUNTS__RUBYGEMS__PRIVATE_UPSTREAM__REGISTRY__URL", "ECLUSE_MOUNTS__RUBYGEMS__MIRROR_TARGET__REGISTRY__URL", "ECLUSE_MOUNTS__RUBYGEMS__MIRROR_TARGET__REGISTRY__TOKEN"]) . fst) rubyGemsMirrorEnv
 
 metadataBuilders :: [(RegistryRole, String, StorePorts -> Limits -> ClearedBackend -> IO StoreManifestRead)]
 metadataBuilders =
