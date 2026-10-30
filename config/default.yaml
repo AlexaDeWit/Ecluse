@@ -576,7 +576,7 @@ mounts:
     # firstParty: "acme-tools,acme-*"
     # cargo blocks these rule types at boot, even through shared rules:
     # DenyInstallTimeExecution: Cargo's sparse index does not declare build scripts or procedural macros. This rule is unsupported for the ecosystem.
-    # DenyExternalDependencies: The Cargo adapter does not read where a crate's dependencies install from.
+    # DenyExternalDependencies: The Cargo adapter does not project where a public crate's dependencies install from into rule evidence.
     # DenyIfDeprecated: Cargo's sparse index supplies no deprecation flag.
     # AllowScope: Cargo package names have no scope.
     # Move supported types from shared rules into mounts.npm.rules, or disable its configured
