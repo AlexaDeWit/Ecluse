@@ -275,11 +275,14 @@ Once admitted, a listing pays for its full reads chunk by chunk and for its resp
 builds it. A completed read keeps less than it held while parsing, so its charge steps down to what
 it keeps. Once the body exists, nothing reaches the reads' documents, so their charges go back
 before the body is sent. A request that joins another's public fetch or render pays nothing for it,
-and an assembled hit or a conditional `304` pays for its reads alone. A gzip response also pays for
-its compression, hit or miss. A public artifact decision reads one selected release, so its entry
-step is its whole charge. A started request that runs out of budget
-pauses at its next charge, keeping its CPU slot. A pause during an upstream read ends at the
-serve-path cap, and a pause before a render at the request timeout. Both gates stay held through
+and an assembled hit or a conditional `304` pays for its reads alone. A RubyGems `/info` or
+`/versions` `304` also pays for its serialisation or merge, because its validator hashes the rendered
+bytes. A gzip response also pays for its compression, hit or miss. An npm, PyPI or Cargo public
+artifact decision reads one selected release, so its entry step is its whole charge. A RubyGems gem
+or compact specification request first resolves its coordinate from each candidate gem name's full
+`/info` document, and pays those full-read and response charges. A started request that runs out
+of budget pauses at its next charge, keeping its CPU slot. A pause during an upstream read ends at
+the serve-path cap, and a pause before a render at the request timeout. Both gates stay held through
 metadata evaluation and while the listing response is built. A listing then gives up its CPU slot
 and keeps its memory charge while Écluse writes the body, so a slow client holds memory but no CPU
 slot. Public artifact requests release both after the metadata decision, before streaming the
