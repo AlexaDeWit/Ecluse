@@ -55,6 +55,7 @@ import Ecluse.Core.Registry.Metadata (VersionDoc (vdRaw))
 import Ecluse.Core.Registry.Metadata.Fetch.Preparation (staticRead)
 import Ecluse.Core.Registry.MirrorUpload
 import Ecluse.Core.Registry.MirrorUpload.Internal (checkedMirrorUploadData)
+import Ecluse.Core.Registry.Npm.DependencySource (externalDependencyOf, renderExternalDependency)
 import Ecluse.Core.Registry.Npm.Metadata (npmChargeFactors, npmRead)
 import Ecluse.Core.Registry.Npm.Project qualified as Project
 import Ecluse.Core.Registry.Npm.Request (MetadataForm (Abbreviated), jsonPutRequest, metadataRequest, packageUrl)
@@ -208,12 +209,17 @@ attachmentObject tarball =
     encodedTarball :: Text
     encodedTarball = decodeUtf8 (convertToBase Base64 tarball :: ByteString)
 
--- | The declared names of a new-release document, which never reads the attachment data beyond the JSON parse.
+{- | The declared names of a new-release document, which never reads the attachment data beyond the JSON parse.
+A dependency a consumer's install would fetch from outside this proxy refuses the release.
+-}
 uploadClaims :: ByteString -> Either PublishBodyFault [Text]
 uploadClaims body = case parseOnly (jsonNoDup' <* skipWhile isJsonSpace <* endOfInput) body of
     Right document@(Object fields)
         | not (isNewRelease fields) -> Left (PublishUnsupported npmNewReleaseOnly)
         | not (keyMatchesVersion fields) -> Left (PublishMalformed (ParseError "the publish body's version document must be an object whose version field equals its key"))
+        | Just (_, Object release) <- singleVersion fields
+        , Just dependency <- externalDependencyOf release ->
+            Left (PublishMalformed (ParseError ("the publish body's " <> renderExternalDependency dependency <> ", which a client would fetch from outside this proxy: depend on a version this proxy serves")))
         | otherwise -> Right (declaredNames document)
     _ -> Left (PublishMalformed (ParseError "the publish body is not a JSON object without repeated keys"))
 
