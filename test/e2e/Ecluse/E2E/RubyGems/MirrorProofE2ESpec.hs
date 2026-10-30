@@ -201,7 +201,7 @@ faultCase fault plane = withPlatform plane $ \registry releases config -> do
     withStubFault plane (RubyGemsBackend (rubyRegistryPort registry) True) $
         withObservedNativeProxy config{ecArgs = ["proxy", "--no-worker"]} plane $ \observed -> do
             let expected = case fault of
-                    PrivateAuthorisation -> 401
+                    PrivateAuthorisation -> 403
                     _ -> 503
                 path = case fault of
                     MissingArchive -> rubyArchiveRoute release

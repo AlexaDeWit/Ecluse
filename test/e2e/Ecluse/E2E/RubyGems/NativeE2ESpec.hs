@@ -195,6 +195,11 @@ rubyNativeContract = DeclaredGroup (fixtureMetadata rubyNativeFixture) $ \record
                         after <- nativeTraffic observed
                         interval <- nativeTrafficSince before after
                         filter (T.isSuffixOf ".gem" . nativeRequestPath) (nativeUpstreamRequests interval) `shouldBe` []
+                        -- A private 401 answers a local 403, and Bundler's fallback reads stay refused.
+                        let clients = nativeClientRequests interval
+                        clients `shouldSatisfy` any (\request -> nativeRequestPath request == "/rubygems/versions" && nativeRequestStatus request == 403)
+                        map nativeRequestStatus clients `shouldSatisfy` notElem 401
+                        map nativeRequestStatus (filter (T.isPrefixOf "/rubygems/api/v1/dependencies" . nativeRequestPath) clients) `shouldSatisfy` all (== 404)
                         observedCredentials <- readTVarIO (rubyRegistryCredentials registry)
                         let public = [credential | (host, _, credential) <- observedCredentials, host == "rubygems-upstream"]
                             private = [credential | (host, _, credential) <- observedCredentials, host == "rubygems-private"]
