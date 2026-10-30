@@ -13,6 +13,7 @@ module Ecluse.Core.Registry.RubyGems.Archive (
     gemArchiveInventory,
     gemArchiveSha256,
     checkGemArchive,
+    checkRawEnvelope,
 ) where
 
 import Conduit
@@ -44,6 +45,7 @@ data GemArchive = GemArchive
     , gemArchiveMetadata :: GemMetadata
     , gemArchiveInventory :: Set Text
     , gemArchiveSha256 :: Text
+    , gemArchiveRawNames :: !Bool
     }
     deriving stock (Eq)
 
@@ -55,7 +57,7 @@ inspectGemArchive :: Limits -> (Int -> IO ()) -> ByteString -> IO (Either ParseE
 inspectGemArchive limits charge bytes
     | BS.length bytes > maxMirrorArtifactBytes limits = pure (parseRefusal "gem archive exceeds its byte bound")
     | otherwise = runExceptT $ do
-        (metadataGzip, dataGzip, checksumsGzip) <- ExceptT (envelopeMembers limits charge bytes)
+        (!rawNames, (metadataGzip, dataGzip, checksumsGzip)) <- ExceptT (envelopeMembers limits charge bytes)
         let pay extra = charge (BS.length bytes + BS.length metadataGzip + BS.length dataGzip + BS.length checksumsGzip + extra)
         (raw, sums) <- ExceptT (inflateMembers limits pay metadataGzip checksumsGzip)
         let nativePay extra = pay (128 * (BS.length raw + BS.length sums) + extra)
@@ -63,17 +65,14 @@ inspectGemArchive limits charge bytes
         inventory <- ExceptT (dataInventory limits nativePay (BS.length raw + BS.length sums) dataGzip)
         unless (inventory == Set.fromList (metadataFiles metadata)) (throwError (ParseError "gem data inventory disagrees with metadata files"))
         digest <- evaluate (sha256Hex bytes)
-        evaluate (GemArchive bytes metadata inventory digest)
+        evaluate (GemArchive bytes metadata inventory digest rawNames)
 
--- The outer tar's metadata, data and checksum members, each still compressed.
-envelopeMembers :: Limits -> (Int -> IO ()) -> ByteString -> IO (Either ParseError (ByteString, ByteString, ByteString))
-envelopeMembers limits charge bytes = (>>= envelope) <$> scanTar limits{maxMetadataBytes = maxMirrorArtifactBytes limits} charge (\parts -> Right (parts `elem` [["metadata.gz"], ["data.tar.gz"], ["checksums.yaml.gz"]])) (\consume -> consume (yield bytes))
+-- Whether every outer member kept its raw name, then the metadata, data and checksum members, each still compressed.
+envelopeMembers :: Limits -> (Int -> IO ()) -> ByteString -> IO (Either ParseError (Bool, (ByteString, ByteString, ByteString)))
+envelopeMembers limits charge bytes = (>>= \scan -> (tarRawNames scan,) <$> envelope scan) <$> scanTar limits{maxMetadataBytes = maxMirrorArtifactBytes limits} charge (\parts -> Right (parts `elem` [["metadata.gz"], ["data.tar.gz"], ["checksums.yaml.gz"]])) (\consume -> consume (yield bytes))
 
--- RubyGems' own reader yields extended headers as ordinary members, so a target could name members differently.
--- Refusing them and any ustar prefix leaves each raw name field as the whole member name.
 envelope :: TarScan -> Either ParseError (ByteString, ByteString, ByteString)
 envelope scan = do
-    unless (tarRawNames scan) (parseRefusal "gem envelope carries an extended or prefixed tar header")
     let members = tarMembers scan
         mandatory = ["metadata.gz", "data.tar.gz", "checksums.yaml.gz"]
         allowed = mandatory <> map (<> ".sig") mandatory
@@ -138,4 +137,12 @@ checkGemArchive coordinate checksum archive = do
     actual <- specificationCoordinate (gemArchiveSpecification archive)
     unless (actual == coordinate) (parseRefusal "gem archive identity disagrees with its admitted coordinate")
     unless (T.toLower checksum == gemArchiveSha256 archive) (parseRefusal "gem archive disagrees with its admitted SHA-256")
+    pure archive
+
+{- | Refuse an outer tar that names any member through an extended header or a ustar prefix.
+RubyGems' reader yields extended headers as ordinary members, so a Ruby store could register another gem.
+-}
+checkRawEnvelope :: GemArchive -> Either ParseError GemArchive
+checkRawEnvelope archive = do
+    unless (gemArchiveRawNames archive) (parseRefusal "gem envelope carries an extended or prefixed tar header")
     pure archive

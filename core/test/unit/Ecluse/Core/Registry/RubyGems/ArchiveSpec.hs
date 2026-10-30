@@ -145,21 +145,22 @@ spec = describe "native gem validation" $ do
         void <$> inspect defaultLimits{maxArtifactCount = memberCount - 1} changed `shouldReturn` Left (ParseError "archive entry count exceeds its bound")
     it "accepts the gem build envelope and refuses a PAX or GNU extended header in front of it" $ do
         bytes <- readFileBS fixture
-        void <$> inspect defaultLimits bytes `shouldReturn` Right ()
+        void <$> published bytes `shouldReturn` Right ()
         entries <- tarEntries (BSL.fromStrict bytes)
-        void <$> inspect defaultLimits (written entries) `shouldReturn` Right ()
+        void <$> published (written entries) `shouldReturn` Right ()
         gnu <- case entries of
             entry : _ -> pure [Tar.longLinkEntry (Tar.entryPath entry), Tar.longSymLinkEntry "unused"]
             [] -> fail "native fixture has no envelope entries"
         posix <- sequence [pax 'x' (paxRecord "mtime=0\n"), pax 'g' (paxRecord "comment=opaque\n")]
         for_ (posix <> gnu) $ \header ->
-            void <$> inspect defaultLimits (written (header : entries)) `shouldReturn` Left extendedRefusal
+            void <$> published (written (header : entries)) `shouldReturn` Left extendedRefusal
     it "refuses an outer member named through a ustar prefix" $ do
         bytes <- readFileBS fixture
         metadataGzip <- nativeMembers bytes >>= fixtureMember "metadata.gz"
         entries <- tarEntries (BSL.fromStrict bytes)
         prefixed <- regular (replicate 120 'a' <> "/metadata.gz") metadataGzip
-        void <$> inspect defaultLimits (written (entries <> [prefixed])) `shouldReturn` Left extendedRefusal
+        -- No envelope member name holds the slash that joins a prefix, so inspection itself refuses the member.
+        void <$> inspect defaultLimits (written (entries <> [prefixed])) `shouldReturn` Left (ParseError "unsupported gem envelope member")
     it "refuses a PAX rename that would show RubyGems another metadata.gz" $ do
         root <- readFileBS fixture >>= nativeMembers
         leafMetadata <- readFileBS "test/fixtures/rubygems/gems/ecluse-fixture-leaf-1.0.0.gem" >>= nativeMembers >>= fixtureMember "metadata.gz"
@@ -181,7 +182,7 @@ spec = describe "native gem validation" $ do
         runRubyReference "archive" crafted >>= \case
             Object native -> KeyMap.lookup "name" native `shouldBe` Just (String "ecluse-fixture-leaf")
             _ -> fail "native archive reference is not an object"
-        void <$> inspect defaultLimits crafted `shouldReturn` Left extendedRefusal
+        void <$> published crafted `shouldReturn` Left extendedRefusal
     it "binds the checked archive to an exact admitted coordinate and digest" $ do
         bytes <- readFileBS fixture
         archive <- inspect defaultLimits bytes >>= expectRight
@@ -196,7 +197,7 @@ spec = describe "native gem validation" $ do
 fixture :: FilePath
 fixture = "test/fixtures/rubygems/gems/ecluse-fixture-root-1.0.0.gem"
 
--- RubyGems' reader yields extended headers as ordinary members, so the envelope refuses them and any name prefix.
+-- RubyGems' reader yields extended headers as ordinary members, so publication refuses them and any name prefix.
 extendedRefusal :: ParseError
 extendedRefusal = ParseError "gem envelope carries an extended or prefixed tar header"
 
@@ -208,6 +209,10 @@ fixtureMember name members = maybe (fail ("native fixture has no " <> toString n
 
 inspect :: Limits -> ByteString -> IO (Either ParseError GemArchive)
 inspect limits = inspectGemArchive limits (const (pure ()))
+
+-- Inspection followed by the envelope check that first-party publication adds.
+published :: ByteString -> IO (Either ParseError GemArchive)
+published bytes = (>>= checkRawEnvelope) <$> inspect defaultLimits bytes
 
 nativeMembers :: ByteString -> IO [(Text, ByteString)]
 nativeMembers bytes = tarEntries (BSL.fromStrict bytes) >>= traverse member

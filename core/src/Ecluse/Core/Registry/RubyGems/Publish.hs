@@ -87,7 +87,7 @@ rubyPublishCodecWith writeCredential factors =
 uploadClaims :: Limits -> (Int -> IO ()) -> Text -> PublishRequestBody -> IO (Either PublishBodyFault [Text])
 uploadClaims limits charge _ body = do
     inspected <- inspectGemArchive limits charge (publishBodyBytes body)
-    case inspected of
+    case inspected >>= checkRawEnvelope of
         Left fault -> pure (Left (PublishMalformed fault))
         Right archive -> do
             name <- evaluate (gemArchiveName archive)
