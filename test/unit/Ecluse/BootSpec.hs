@@ -26,7 +26,7 @@ import Ecluse.Composition.BootError (
     BootError (AwsEndpointMalformed, FirstPartyWithoutPrivateUpstream, MirrorRoleWithoutMirroring, PrivateUpstreamOnPublicUpstream, RuleBlockedOnMount, SplitRoleNeedsDurableQueue),
     renderBootError,
  )
-import Ecluse.Composition.Support (captureBoot, cargoDeprecationRefusal, cargoGateEnv, cargoScopeRefusal, collapsedMirrorRefusal, collapsingMirrorTarget, expectAppConfig, malformedAwsEndpoint, noMaintenanceBackend, overrideEnv, privateInventoryRefusal, privateUpstreamUrl, publicGateEnv, reportLines, withRubyInstallBlock, withoutMirrorTargetToken, withoutMirrorTargetUrl, withoutQueueUrl)
+import Ecluse.Composition.Support (captureBoot, cargoDeprecationRefusal, cargoGateEnv, cargoInstallRefusal, cargoScopeRefusal, collapsedMirrorRefusal, collapsingMirrorTarget, expectAppConfig, malformedAwsEndpoint, noMaintenanceBackend, overrideEnv, privateInventoryRefusal, privateUpstreamUrl, publicGateEnv, reportLines, withRubyInstallBlock, withoutMirrorTargetToken, withoutMirrorTargetUrl, withoutQueueUrl)
 import Ecluse.Composition.Types (BootRole (BootWithoutPipeline))
 import Ecluse.Config (AppConfig (cfgServer), Config (configApp), ServerSettings (srvAuthToken), loadConfig)
 import Ecluse.Core.Credential (Secret, mkSecret, unSecret)
@@ -110,6 +110,7 @@ spec = sequential $ do
         for_
             [ ("AllowScope", ",\"scope\":\"acme\"", cargoScopeRefusal)
             , ("DenyIfDeprecated", "", cargoDeprecationRefusal)
+            , ("DenyInstallTimeExecution", "", cargoInstallRefusal)
             ]
             $ \(name, parameters, refusal) ->
                 it ("refuses Cargo " <> name <> " at boot and check-config") $ do

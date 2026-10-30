@@ -38,6 +38,7 @@ import Ecluse.Composition.Support (
     cargoCodeArtifactEnv,
     cargoDeprecationRefusal,
     cargoGateEnv,
+    cargoInstallRefusal,
     cargoMirrorEnv,
     cargoScopeRefusal,
     clearedUrl,
@@ -227,12 +228,12 @@ cargoRuleBlocksSpec = describe "resolved Cargo rule blocks" $
             plan <- expectVetted role cargoGateEnv
             map vmEcosystem (vpMounts plan) `shouldBe` [Cargo]
             map (ruleName . prRule) (concatMap (mountPolicy . vmMount) (vpMounts plan)) `shouldBe` ["AllowIfOlderThan"]
-        for_ [(scopeRule, cargoScopeRefusal), (deprecatedRule, cargoDeprecationRefusal)] $ \(rules, refusal) ->
+        for_ [(scopeRule, cargoScopeRefusal), (deprecatedRule, cargoDeprecationRefusal), (installRule, cargoInstallRefusal)] $ \(rules, refusal) ->
             it ("refuses the shared " <> show refusal) $
                 refusalsFor role (overrideEnv "ECLUSE_RULES" rules cargoGateEnv) `shouldReturn` [refusal]
         it "refuses aliased Cargo blocks below a higher allow with an admission-only deny" $ do
-            errors <- refusalsFor role (overrideEnv "ECLUSE_MOUNTS__CARGO__RULES" "{\"alias-scope\":{\"type\":\"AllowScope\",\"scope\":\"acme\",\"precedence\":1},\"alias-deprecated\":{\"type\":\"DenyIfDeprecated\",\"precedence\":1,\"appliesTo\":[\"admission\"]},\"pin\":{\"type\":\"AllowByIdentity\",\"identity\":\"fixture@1.0.0\",\"precedence\":999}}" cargoGateEnv)
-            errors `shouldMatchList` [cargoScopeRefusal, cargoDeprecationRefusal]
+            errors <- refusalsFor role (overrideEnv "ECLUSE_MOUNTS__CARGO__RULES" "{\"alias-scope\":{\"type\":\"AllowScope\",\"scope\":\"acme\",\"precedence\":1},\"alias-deprecated\":{\"type\":\"DenyIfDeprecated\",\"precedence\":1,\"appliesTo\":[\"admission\"]},\"alias-install\":{\"type\":\"DenyInstallTimeExecution\",\"precedence\":1,\"appliesTo\":[\"admission\"]},\"pin\":{\"type\":\"AllowByIdentity\",\"identity\":\"fixture@1.0.0\",\"precedence\":999}}" cargoGateEnv)
+            errors `shouldMatchList` [cargoScopeRefusal, cargoDeprecationRefusal, cargoInstallRefusal]
         it "accumulates duplicate Cargo blocks and an independent advisory refusal" $ do
             let shared = "{\"scope-a\":{\"type\":\"AllowScope\",\"scope\":\"acme\"},\"scope-b\":{\"type\":\"AllowScope\",\"scope\":\"acme\"},\"deprecated\":{\"type\":\"DenyIfDeprecated\"}}"
                 cve = "{\"cve\":{\"type\":\"DenyIfCve\",\"minCvss\":8}}"
@@ -241,6 +242,9 @@ cargoRuleBlocksSpec = describe "resolved Cargo rule blocks" $
         it "reports independent Ruby and Cargo scope blocks" $ do
             errors <- refusalsFor role (overrideEnv "ECLUSE_MOUNTS__RUBYGEMS__ENABLED" "true" (overrideEnv "ECLUSE_RULES" scopeRule cargoGateEnv))
             errors `shouldMatchList` [rubyScopeRefusal, cargoScopeRefusal]
+        it "reports independent Ruby and Cargo installation blocks" $ do
+            errors <- refusalsFor role (overrideEnv "ECLUSE_MOUNTS__RUBYGEMS__ENABLED" "true" (overrideEnv "ECLUSE_RULES" installRule cargoGateEnv))
+            errors `shouldMatchList` [rubyInstallRefusal, cargoInstallRefusal]
         it "removes both blocked types through matching Cargo rule keys" $ do
             let env = overrideEnv "ECLUSE_MOUNTS__CARGO__RULES" "{\"scope\":{\"enabled\":false},\"deprecated\":{\"enabled\":false}}" (overrideEnv "ECLUSE_RULES" bothRules cargoGateEnv)
             plan <- expectVetted role env
@@ -257,6 +261,7 @@ cargoRuleBlocksSpec = describe "resolved Cargo rule blocks" $
   where
     scopeRule = "{\"scope\":{\"type\":\"AllowScope\",\"scope\":\"acme\"}}"
     deprecatedRule = "{\"deprecated\":{\"type\":\"DenyIfDeprecated\"}}"
+    installRule = "{\"install\":{\"type\":\"DenyInstallTimeExecution\"}}"
     bothRules = "{\"scope\":{\"type\":\"AllowScope\",\"scope\":\"acme\"},\"deprecated\":{\"type\":\"DenyIfDeprecated\"}}"
 
 cargoMaintenanceCapabilitiesSpec :: Spec

@@ -19,6 +19,7 @@ module Ecluse.Composition.Support (
     cargoMirrorEnv,
     cargoCodeArtifactEnv,
     cargoScopeRefusal,
+    cargoInstallRefusal,
     withRubyInstallBlock,
     rubyInstallRefusal,
     rubyScopeRefusal,
@@ -153,6 +154,10 @@ cargoScopeRefusal = RuleBlockedOnMount Cargo AllowScopeType "Cargo package names
 -- | The native deprecation refusal shared by boot and pure validation observations.
 cargoDeprecationRefusal :: BootError
 cargoDeprecationRefusal = RuleBlockedOnMount Cargo DenyIfDeprecatedType "Cargo's sparse index supplies no deprecation flag."
+
+-- | The native installation-execution refusal shared by boot and pure validation observations.
+cargoInstallRefusal :: BootError
+cargoInstallRefusal = RuleBlockedOnMount Cargo DenyInstallTimeExecutionType "Cargo's sparse index does not declare build scripts or procedural macros. This rule is unsupported for the ecosystem."
 
 -- | Activate a Ruby mount whose explicit installation rule the adapter cannot support.
 withRubyInstallBlock :: [(String, String)] -> [(String, String)]

@@ -1611,6 +1611,9 @@ spec = do
                         `shouldBe` [ "scope is not the allow-listed @myorg"
                                    , "published only 1 day ago, minimum age is 7 days"
                                    ]
+        it "abstains on an undetermined install signal and lets a lower age allow admit" $
+            decide [at 300 DenyInstallTimeExecution, at 100 (AllowIfOlderThan 0)] (pkg Nothing 30){evInstallCode = Known CodeExecUnknown}
+                >>= \d -> admittedBy d `shouldBe` Just "AllowIfOlderThan"
 
     describe "verdict exceptions" $ do
         let versions = [(pkg Nothing 30){evVersion = v} | v <- map (mkVersion Npm) ["1.0.0", "2.0.0", "3.0.0"]]
