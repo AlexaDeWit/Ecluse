@@ -357,7 +357,6 @@ library ecluse-core
     Ecluse.Core.Registry.RubyGems.Wire
     Ecluse.Core.Registry.Cargo.Metadata
     Ecluse.Core.Registry.Cargo.Serving
-    Ecluse.Core.Registry.Cargo.Execution
     Ecluse.Core.Registry.InstallEvidence
     Ecluse.Core.Registry.Cargo.Adapter
     Ecluse.Core.Registry.Cargo.Route
