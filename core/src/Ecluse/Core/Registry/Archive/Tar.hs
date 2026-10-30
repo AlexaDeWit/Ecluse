@@ -3,8 +3,9 @@
 -- SPDX-License-Identifier: MIT
 {-# LANGUAGE RankNTypes #-}
 
--- | Complete PAX-aware tar traversal with bounded inventory and selected payload retention.
--- The scan also records whether every member took its name from its raw ustar name field.
+{- | Complete PAX-aware tar traversal with bounded inventory and selected payload retention.
+The scan also records whether every member took its name from its raw ustar name field.
+-}
 module Ecluse.Core.Registry.Archive.Tar (
     TarDecode,
     TarMember (..),
@@ -77,8 +78,9 @@ tarMembers = tsMembers
 tarContents :: TarScan -> Map Text ByteString
 tarContents = tsCaptured
 
--- | Whether every member was named by its raw ustar name field alone.
--- False after any PAX or GNU extended header, or a member whose name carries a ustar prefix.
+{- | Whether every member was named by its raw ustar name field alone.
+False after any PAX or GNU extended header, or a member whose name carries a ustar prefix.
+-}
 tarRawNames :: TarScan -> Bool
 tarRawNames = tsRawNames
 
