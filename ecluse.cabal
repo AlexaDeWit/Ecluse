@@ -1313,6 +1313,7 @@ test-suite ecluse-core-unit
     Ecluse.Core.Registry.Metadata.ProjectionSpec
     Ecluse.Core.RegistrySpec
     Ecluse.Core.Registry.Npm.CredentialSpec
+    Ecluse.Core.Registry.Npm.DependencySourceSpec
     Ecluse.Core.Registry.Npm.DocumentSpec
     Ecluse.Core.Registry.Npm.FilterSpec
     Ecluse.Core.Registry.Npm.MaintenanceSpec
