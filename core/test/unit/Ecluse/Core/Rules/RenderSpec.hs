@@ -63,7 +63,6 @@ reasonPins =
     , (FetchesOutside "dependency 'left-pad' in dependencies names a git source", "installs a dependency from outside the registry: dependency 'left-pad' in dependencies names a git source")
     , (FetchesOutside "", "installs a dependency from outside the registry: ")
     , (DependenciesThroughRegistry, "every installable dependency resolves through the registry")
-    , (DependencySourcesUndetermined, "dependency sources not yet determined")
     , (IdentityRevoked "thing@1.0.0", "identity thing@1.0.0 is revoked by operator")
     , (IdentityNotRevoked "thing@1.0.0", "identity is not the revoked thing@1.0.0")
     , (IdentityAllowListed "@myorg/thing", "identity @myorg/thing is allow-listed by operator")
@@ -146,7 +145,6 @@ data ReasonTag
     | InstallCodeUndeterminedTag
     | FetchesOutsideTag
     | DependenciesThroughRegistryTag
-    | DependencySourcesUndeterminedTag
     | IdentityRevokedTag
     | IdentityNotRevokedTag
     | IdentityAllowListedTag
@@ -180,7 +178,6 @@ reasonTag = \case
     InstallCodeUndetermined -> InstallCodeUndeterminedTag
     FetchesOutside{} -> FetchesOutsideTag
     DependenciesThroughRegistry -> DependenciesThroughRegistryTag
-    DependencySourcesUndetermined -> DependencySourcesUndeterminedTag
     IdentityRevoked{} -> IdentityRevokedTag
     IdentityNotRevoked{} -> IdentityNotRevokedTag
     IdentityAllowListed{} -> IdentityAllowListedTag
@@ -373,7 +370,6 @@ oracleReason = \case
     InstallCodeUndetermined -> "install-time code execution not yet determined"
     FetchesOutside which -> "installs a dependency from outside the registry: " <> which
     DependenciesThroughRegistry -> "every installable dependency resolves through the registry"
-    DependencySourcesUndetermined -> "dependency sources not yet determined"
     IdentityRevoked ident -> "identity " <> ident <> " is revoked by operator"
     IdentityNotRevoked ident -> "identity is not the revoked " <> ident
     IdentityAllowListed ident -> "identity " <> ident <> " is allow-listed by operator"
@@ -476,7 +472,6 @@ genReason =
         , pure InstallCodeUndetermined
         , FetchesOutside <$> genFact
         , pure DependenciesThroughRegistry
-        , pure DependencySourcesUndetermined
         , IdentityRevoked <$> genFact
         , IdentityNotRevoked <$> genFact
         , IdentityAllowListed <$> genFact
