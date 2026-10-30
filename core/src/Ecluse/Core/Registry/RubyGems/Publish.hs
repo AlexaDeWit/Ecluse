@@ -74,7 +74,7 @@ rubyPublishCodecWith writeCredential factors =
                 checkedMirrorUploadData inventory file verified checked
         , pcMirrorCompanion = Just rubyMirrorCompanion
         , pcNativeComplete = \_ _ _ -> False
-        , pcTargetRead = PrepareRead $ \origin -> fmap (\native -> native{erRequest = \base credential name -> attachCredential rubyReadCredential credential <$> gemInfoRequestUnder base Nothing name}) <$> prepareRead prepareGemRead origin
+        , pcTargetRead = PrepareRead (fmap (fmap (\native -> native{erRequest = \base credential name -> attachCredential rubyReadCredential credential <$> gemInfoRequestUnder base Nothing name})) . prepareRead prepareGemRead)
         , pcTargetReadPermille = cfFullReadPermille factors
         , pcProbeRequest = \target credential name -> metadataGet rubyReadCredential credential "text/plain" <$> (gemInfoUrl target name >>= parseRequestEither)
         , pcVersionListWalk = Nothing
