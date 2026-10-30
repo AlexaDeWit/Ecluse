@@ -12,6 +12,7 @@ module Ecluse.Test.Registry.Npm (
     versionValue,
     packumentValue,
     densePackument,
+    minimalPackument,
     listingValue,
     publishedDaysAgo,
     documentName,
@@ -237,6 +238,12 @@ densePackument :: Int -> ByteString
 densePackument entries = "{\"name\":\"thing\",\"time\":{" <> members (\at -> "\"v" <> at <> "\":\"2020-01-01T00:00:00.000Z\"") <> "},\"dist-tags\":{" <> members (\at -> "\"t" <> at <> "\":\"1.0." <> at <> "\"") <> "}}"
   where
     members render = BS.intercalate "," [render (show at) | at <- [1 .. entries]]
+
+-- | A packument named @thing@ with as many versions as asked, each with only its tarball: the smallest valid release body.
+minimalPackument :: Int -> ByteString
+minimalPackument count = "{\"name\":\"thing\",\"versions\":{" <> BS.intercalate "," [release (show at) | at <- [1 .. count]] <> "}}"
+  where
+    release at = "\"0.0." <> at <> "\":{\"dist\":{\"tarball\":\"https://registry.npmjs.org/thing/-/thing-0.0." <> at <> ".tgz\"}}"
 
 {- | An npm @\/-\/all@ listing body: one empty entry per package name. The registry's own
 @_updated@ bookkeeping key is a site-specific extra, so a case that exercises it adds it.
