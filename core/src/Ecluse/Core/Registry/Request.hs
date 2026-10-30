@@ -148,7 +148,7 @@ data AuthMechanism
       AuthBasic
     | -- | The secret alone, with no scheme.
       AuthRawKey
-    deriving stock (Bounded, Enum, Eq, Show)
+    deriving stock (Eq, Show)
 
 -- | The @Authorization@ value a credential renders to under a mechanism.
 renderAuthMechanism :: AuthMechanism -> ClientCredential -> ByteString
@@ -161,7 +161,7 @@ renderAuthMechanism mechanism credential = case mechanism of
 
 -- | The half of a store's protocol a service credential is presented to.
 data StoreOperation = StoreRead | StoreWrite
-    deriving stock (Bounded, Enum, Eq, Show)
+    deriving stock (Eq, Show)
 
 {- | How a store asks for a service credential on reads and on writes. An operation it declares
 nothing for keeps the ecosystem's own credential mapping.
