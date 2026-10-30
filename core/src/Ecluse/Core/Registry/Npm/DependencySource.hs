@@ -3,9 +3,9 @@
 -- SPDX-License-Identifier: MIT
 
 {- | npm dependency specs a client fetches from outside the registry: git sources and remote URLs.
-Aliases and local specs stay exempt on npm-package-arg's terms. Detection follows hosted-git-info,
-widened to what another client or URL parsing could fetch, so it refuses beyond npm only a spec
-npm cannot install either.
+Aliases and local specs stay exempt on npm-package-arg's terms, by its POSIX path grammar, the
+narrower of its two. Detection follows hosted-git-info, widened to what another client or URL
+parsing could fetch, so it refuses beyond npm only a spec npm cannot install either.
 -}
 module Ecluse.Core.Registry.Npm.DependencySource (
     -- * One spec
@@ -77,14 +77,14 @@ externalSource spec
     | aliasOrLocal spec = Nothing
     | otherwise = detect (urlInput spec)
 
--- npm-package-arg tests these on the spec as written, before any URL parsing trims it.
+-- npm-package-arg's POSIX grammar, on the spec as written. Windows also reads a leading backslash
+-- as a path, but elsewhere hosted-git-info resolves \x@github.com:acme/left-pad to GitHub.
 aliasOrLocal :: Text -> Bool
 aliasOrLocal spec = hasPrefixFolded "npm:" spec || hasPrefixFolded "file:" spec || pathLike
   where
     pathLike = case T.unpack (T.take 2 spec) of
         '.' : _ -> True
         '/' : _ -> True
-        '\\' : _ -> True
         ['~', '/'] -> True
         [letter, ':'] -> isAsciiLetter letter
         _ -> False
