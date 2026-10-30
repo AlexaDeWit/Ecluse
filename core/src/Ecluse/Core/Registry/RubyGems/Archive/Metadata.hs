@@ -21,7 +21,7 @@ import Ecluse.Core.Registry.RubyGems.CompactSpec (GemSpecification (..))
 import Ecluse.Core.Registry.RubyGems.Document
 import Ecluse.Core.Registry.RubyGems.Project
 import Ecluse.Core.Version (Version, mkVersion, renderVersion)
-import Ecluse.Core.Version.Gem (gemRequirementOperators, parseGem)
+import Ecluse.Core.Version.Gem (isGemRequirementOperator, parseGem)
 
 -- | The complete metadata tree remains available beside checked publication fields.
 data GemMetadata = GemMetadata
@@ -90,7 +90,7 @@ nativeRequirement value = do
         yamlSequence raw >>= \case
             [operator, version] -> do
                 op <- yamlText operator
-                unless (op `elem` gemRequirementOperators) (parseRefusal "invalid gem metadata requirement operator")
+                unless (isGemRequirementOperator op) (parseRefusal "invalid gem metadata requirement operator")
                 text <- renderVersion <$> nativeVersion version
                 pure (op <> " " <> text)
             _ -> parseRefusal "invalid gem metadata requirement clause"
