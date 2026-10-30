@@ -58,12 +58,12 @@ uploadCoordinateSpec = describe "configured Cargo read and upload coordinates" $
     it "checks an upload coordinate loaded through the generic registry configuration" $
         refusalsFor
             MirrorWriter
-            (overrideEnv "ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET__REGISTRY__UPLOAD_URL" "https://pypi-private.example.test" (withPyPI publishingEnv))
-            `shouldReturn` [PublicationTargetOnMountEndpoint Npm PyPI "privateUpstream" "https://pypi-private.example.test"]
+            (overrideEnv "ECLUSE_MOUNTS__PYPI__PUBLICATION_TARGET__REGISTRY__UPLOAD_URL" "https://private.example.test" (pypiPublishingTo "https://pypi-publish.example.test" publishingEnv))
+            `shouldReturn` [PublicationTargetOnMountEndpoint PyPI Npm "privateUpstream" "https://private.example.test"]
 
     it "refuses loaded publication and mirror APIs on their own mount's public-upstream host" $ do
-        refusalsFor MirrorWriter (overrideEnv "ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET__REGISTRY__UPLOAD_URL" "https://public.example.test/api" publishingEnv)
-            `shouldReturn` [PublicationTargetOnPublicUpstream Npm Npm "https://public.example.test/api"]
+        refusalsFor MirrorWriter (overrideEnv "ECLUSE_MOUNTS__PYPI__PUBLICATION_TARGET__REGISTRY__UPLOAD_URL" "https://pypi-public.example.test/api" (pypiPublishingTo "https://pypi-publish.example.test" publishingEnv))
+            `shouldReturn` [PublicationTargetOnPublicUpstream PyPI PyPI "https://pypi-public.example.test/api"]
         refusalsFor MirrorWriter (overrideEnv "ECLUSE_MOUNTS__PYPI__MIRROR_TARGET__REGISTRY__UPLOAD_URL" "https://pypi.org/legacy/" pypiMirrorEnv)
             `shouldReturn` [MirrorTargetOnPublicUpstream PyPI PyPI "https://pypi.org/legacy/"]
 

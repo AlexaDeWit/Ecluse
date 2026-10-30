@@ -85,15 +85,15 @@ spec = describe "native mirror declarations" $ do
                 (overrideEnv (codeArtifactPrefix <> "URL") (codeArtifactHost <> "/pypi/cache/legacy/") (codeArtifactEnv (codeArtifactHost <> "/pypi/cache/legacy/")))
                 Nothing
                 `shouldBe` Left [CodeArtifactRepositoryMissing PyPI "mirrorTarget.codeArtifact.url" "pypi"]
-        it "refuses the PyPI upload suffix on an npm mount" $
+        it "refuses the PyPI upload suffix on a Cargo mount" $
             loadConfig
                 ( pubUrlEnv
-                    <> [ ("ECLUSE_MOUNTS__NPM__MIRROR_TARGET__CODE_ARTIFACT__URL", codeArtifactHost <> "/npm/cache/")
-                       , ("ECLUSE_MOUNTS__NPM__MIRROR_TARGET__CODE_ARTIFACT__UPLOAD_URL", codeArtifactHost <> "/npm/cache/legacy/")
+                    <> [ ("ECLUSE_MOUNTS__CARGO__MIRROR_TARGET__CODE_ARTIFACT__URL", codeArtifactHost <> "/cargo/cache/")
+                       , ("ECLUSE_MOUNTS__CARGO__MIRROR_TARGET__CODE_ARTIFACT__UPLOAD_URL", codeArtifactHost <> "/cargo/cache/legacy/")
                        ]
                 )
                 Nothing
-                `shouldBe` Left [ParseError "mirrorTarget.codeArtifact.uploadUrl must address /npm/{repository}/"]
+                `shouldBe` Left [ParseError "mirrorTarget.codeArtifact.uploadUrl must address /cargo/{repository}/"]
     it "refuses malformed state URLs through the existing object-store parser" $
         loadConfig (overrideEnv stateKey "https://target.example.test/state" pypiMirrorEnv) Nothing `shouldSatisfy` isLeft
     it "does not require state or upload settings for a serve-only mount" $

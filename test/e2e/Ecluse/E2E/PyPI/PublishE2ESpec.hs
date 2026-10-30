@@ -138,7 +138,8 @@ publicationConfig =
         { ecExtraEnv =
             [ ("ECLUSE_MOUNTS__PYPI__PRIVATE_UPSTREAM__REGISTRY__URL", stubUrl PyPIMirror)
             , ("ECLUSE_MOUNTS__PYPI__FIRST_PARTY", "e2e-published," <> retainedProject)
-            , ("ECLUSE_MOUNTS__PYPI__PUBLICATION_TARGET__REGISTRY__URL", stubUrl PyPIMirror <> "legacy/")
+            , ("ECLUSE_MOUNTS__PYPI__PUBLICATION_TARGET__REGISTRY__URL", stubUrl PyPIMirror)
+            , ("ECLUSE_MOUNTS__PYPI__PUBLICATION_TARGET__REGISTRY__UPLOAD_URL", stubUrl PyPIMirror <> "legacy/")
             , ("ECLUSE_MOUNTS__PYPI__PUBLICATION_TARGET__REGISTRY__TOKEN", "fixture-password")
             , ("ECLUSE_MOUNTS__PYPI__PUBLICATION_TARGET__REGISTRY__USERNAME", "fixture-user")
             , ("ECLUSE_SERVER__AUTH_TOKEN", "client-password")

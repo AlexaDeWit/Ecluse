@@ -180,7 +180,8 @@ publicationCapabilitiesSpec = describe "PyPI publication credentials by boot rol
         , ("ECLUSE_MOUNTS__PYPI__ENABLED", "true")
         , ("ECLUSE_MOUNTS__PYPI__FIRST_PARTY", "acme-*")
         , ("ECLUSE_MOUNTS__PYPI__PRIVATE_UPSTREAM__REGISTRY__URL", "https://private.example.test/pypi/")
-        , (publicationKey <> "URL", "https://publish.example.test/legacy/")
+        , (publicationKey <> "URL", "https://publish.example.test/")
+        , (publicationKey <> "UPLOAD_URL", "https://publish.example.test/legacy/")
         ]
             <> publicGateEnv
     tokenEnv = overrideEnv (publicationKey <> "TOKEN") "publish-write-token" publicationEnv
