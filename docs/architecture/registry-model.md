@@ -148,8 +148,8 @@ client's credential and disables redirect-following, so the leg never follows a 
 ([Security posture](security.md#trust-assumptions--credential-posture)).
 A `2xx` streams and a conditional `304` passes through. An explicit private `401` or `403`
 refuses the read, because public bytes can differ from a private patch under the same identity.
-A private `404` is a private miss. Any other unsuccessful status, an unfollowed redirect included,
-and a transport failure refuse the read with `503` for every name. The leg applies **no
+A private `404` is a private miss. Any other failure refuses the read for every name, with the
+status [its cause sets](#private-availability). The leg applies **no
 serve-time integrity floor**: it fast-tracks a lockfile-pinned version from a trusted registry.
 The client and the mirror worker still verify those bytes, so the leg gives up the proactive
 refuse-weak-integrity stance, not tamper-evidence. The packument route's listing-side trusted
@@ -243,14 +243,20 @@ track which input a survivor came from, so assembly can select its retained sour
 - **Private access authority.** An explicit private `401` or `403` refuses the request even when
   public metadata succeeds. The refusal precedes merge and conditional response selection.
   See the [operator policy](../../web/content/docs/configuration.md#first-party-namespaces).
-- **Private availability.** A failed private read refuses the request with `503` for every name: a
-  transport error, a timeout, an unexpected status, a backoff, or a document that does not decode
-  or exceeds its bound. A private `404` still lets the gated public set serve. Otherwise a private
-  package whose name is not declared first-party would be replaced by its public namesake once that
-  version passed the rules, and builds would switch packages silently. First-party declarations
-  cannot close that gap, because most registries give no reliable mechanism to establish a complete
-  first-party naming system, and a missed name fails silently. The mount's availability therefore
-  follows the private upstream's.
+- <a id="private-availability"></a>**Private availability.** A failed private read refuses the
+  request for every name, on listings, metadata and artifacts alike. A private `404` still lets the
+  gated public set serve. Otherwise a private package whose name is not declared first-party would
+  be replaced by its public namesake once that version passed the rules, and builds would switch
+  packages silently. First-party declarations cannot close that gap, because most registries give no
+  reliable mechanism to establish a complete first-party naming system, and a missed name fails
+  silently. The mount's availability therefore follows the private upstream's. The cause sets the
+  status, and no public outcome changes it:
+  - `503` when the private registry is unavailable: a transport error, a timeout, a `5xx` or a
+    `429`. The refusal forwards the private registry's `Retry-After`, so a client that honours it
+    waits as that registry asked.
+  - `502` when its reply is invalid or unusable: an unfollowed redirect, another unexpected status,
+    a document for another name, or a document that does not decode or exceeds its bound. The
+    private registry answered, so retrying the same request is unlikely to help.
 - **Public availability.** If the public upstream fails while the private one succeeds, the merge
   serves the private-only union with a degraded signal (readiness stays
   [lenient about public reachability](web-layer.md#meta-routes-ping-health-and-search)). Only when
@@ -267,13 +273,14 @@ The proxy knows the requested name from the route, so an upstream's self-reporte
 is a cross-check, never the served authority. The served `name` is always a value an upstream
 genuinely reported, and validation guarantees it equals the route name. An origin whose
 `name` agrees merges normally. The proxy treats an origin whose `name` disagrees as untrusted for
-this request: it drops the origin and logs the drop. An absent or undecodable name instead makes the
-packument undecodable: a public one degrades, and a private one refuses the request. A single
-misreporting upstream drops out while any other valid origin still serves `200`. The request is `502 Bad Gateway` (`PackumentBadGateway`, see
-[Error model](web-layer.md#error-model)) only when no origin yields a valid packument *because the
-responding origins mismatched*. That is distinct from a genuine absence. This forecloses
-cache-poisoning: a misreporting upstream cannot shadow a real package or win the union with a
-divergent `name`.
+this request and logs it. A public origin drops out, and the private set still serves `200`. A
+private origin refuses the request with `502 Bad Gateway`, as any invalid private reply does
+([Private availability](#private-availability)), so a public namesake never stands in for it. An
+absent or undecodable name makes the packument undecodable, with the same split. The request is
+`502` (`PackumentBadGateway`, see [Error model](web-layer.md#error-model)) when no origin yields a
+valid packument *because the responding origins mismatched*. That is distinct from a genuine
+absence. This forecloses cache-poisoning: a misreporting upstream cannot shadow a real package or
+win the union with a divergent `name`.
 
 ### Decision surface vs served surface
 

@@ -414,8 +414,8 @@ private `401` or `403` stops metadata and artifact reads with a local `403`, inc
 conditional requests. Cargo keeps its native refusal statuses. In every ecosystem, public content
 cannot replace the private copy after that refusal. A genuine private `404` still permits public
 fallback for a name outside your first-party namespaces, and first-party names stay private-only.
-Any other private read failure refuses the request with `503`, so the mount's availability follows
-the private registry's ([a failing private registry](@/docs/private-reads.md#private-outage)).
+Any other private read failure refuses the request with `503` or `502`, so the mount's availability
+follows the private registry's ([a failing private registry](@/docs/private-reads.md#private-outage)).
 A backend that masks a refusal as `404` does not prove authentication succeeded. The
 [private access policy](@/docs/configuration.md#first-party-namespaces) gives each
 ecosystem's statuses.

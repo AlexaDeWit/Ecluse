@@ -334,13 +334,18 @@ into a generic 403 or 500 response. For a concrete artifact request the decision
 | Policy denial (incl. deny-by-default) | `403` + denial body |
 | Undecidable, transient | `503` + `Retry-After` |
 | Undecidable, permanent | `500` |
+| Upstream reply invalid | `502` |
 | upstream miss | `404` (forwarded) |
 
 The rule: return `503` only when the condition should resolve, such as a transient upstream or
 advisory condition. Otherwise return `500`, because retrying a permanent inability to decide cannot
 help.
 
-A packument request has no single status. Écluse
+A failed private read is decided before any merge. Its cause alone sets the status, `503` for an
+unavailable private registry and `502` for an invalid reply, on listings and artifacts alike
+([Private availability](registry-model.md#private-availability)).
+
+A packument request otherwise has no single status. Écluse
 [merges the document across upstreams](registry-model.md#packument-merge-across-upstreams) and
 filters it by provenance (see [Applying verdicts](rules-engine.md#applying-verdicts-to-a-packument)).
 The proxy chooses a status only when nothing survives the merge, and the most recoverable cause

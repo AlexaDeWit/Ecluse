@@ -222,6 +222,7 @@ The ceiling is fixed in Écluse and independent of `limits.maxVersionCount` and 
 A ceiling breach logs under the `version-count` bound with a cap of `2000000`.
 Private discovery uses current caller credentials and remains outside public shared retention.
 Private directory failure remains a failure rather than a public-only or stale conditional response.
+It answers as [a failing private registry](@/docs/private-reads.md#private-outage) does, except that a private `404` on the directory answers `502`.
 A malformed private directory row fails the private read.
 When the public directory times out, fails, cools down or cannot be decoded, the reply serves the caller-authorised private rows alone.
 With no private rows, the request fails: `403` when the public source refuses access, otherwise `502` or `503`.
