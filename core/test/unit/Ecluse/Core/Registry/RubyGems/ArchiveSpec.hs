@@ -198,7 +198,7 @@ spec = describe "native gem validation" $ do
 fixture :: FilePath
 fixture = "test/fixtures/rubygems/gems/ecluse-fixture-root-1.0.0.gem"
 
--- RubyGems' reader yields extended headers as ordinary members, so publication refuses them and any name prefix.
+-- RubyGems' reader yields extended headers as ordinary members, so publication and mirroring refuse them and any name prefix.
 extendedRefusal :: ParseError
 extendedRefusal = ParseError "gem envelope carries an extended or prefixed tar header"
 
@@ -211,7 +211,7 @@ fixtureMember name members = maybe (fail ("native fixture has no " <> toString n
 inspect :: Limits -> ByteString -> IO (Either ParseError GemArchive)
 inspect limits = inspectGemArchive limits (const (pure ()))
 
--- Inspection followed by the envelope check that first-party publication adds.
+-- Inspection followed by the envelope check that publication and mirroring add.
 published :: ByteString -> IO (Either ParseError GemArchive)
 published bytes = (>>= checkRawEnvelope) <$> inspect defaultLimits bytes
 

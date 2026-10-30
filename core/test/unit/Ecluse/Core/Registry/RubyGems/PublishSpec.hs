@@ -17,7 +17,7 @@ import Test.Hspec
 import Ecluse.Core.Credential (ClientCredential (ClientCredential), bareCredential, mkSecret)
 import Ecluse.Core.Package (PackageDetails (..), PackageInfo (..))
 import Ecluse.Core.Package.Hash (sha256Hex)
-import Ecluse.Core.Registry (ParseError (..), PublishBodyFault (PublishMalformed))
+import Ecluse.Core.Registry (ParseError (..), PublishBodyFault (PublishMalformed), PublishFault (PublishSourceUnavailable))
 import Ecluse.Core.Registry.Adapter.Capability
 import Ecluse.Core.Registry.CachedDocument (rubyGemsCached)
 import Ecluse.Core.Registry.Metadata (VersionDoc (..))
@@ -40,7 +40,7 @@ import Ecluse.Test.Port (passthroughTracingPort)
 import Ecluse.Test.Registry.Archive (pax, paxRecord, tarEntries)
 import Ecluse.Test.Registry.Publish (anonymousPublishAt, publishOnlyFile)
 import Ecluse.Test.Registry.RubyGems.Fixtures (loadFixtureInfo)
-import Ecluse.Test.Stub (Captured (..), allCaptured, headerValue, stubBaseUrl, withRoutedStub)
+import Ecluse.Test.Stub (Captured (..), Stub, allCaptured, headerValue, stubBaseUrl, withRoutedStub)
 import Ecluse.Test.Support (expectRight)
 
 spec :: Spec
@@ -94,16 +94,14 @@ spec = describe "RubyGems publication" $ do
         claims entries `shouldReturn` Right ["ecluse-fixture-native"]
         claims (global : entries) `shouldReturn` Left (PublishMalformed (ParseError "gem envelope carries an extended or prefixed tar header"))
 
-    it "mirrors a public gem whose outer tar carries an extended header" $
+    it "does not mirror a public gem whose outer tar carries an extended header" $
         withRoutedStub (const (status200, [], "written")) $ \target -> do
             entries <- readFileBS rootArchive >>= tarEntries . LBS.fromStrict
             global <- pax 'g' (paxRecord "comment=opaque\n")
-            let archive = LBS.toStrict (Tar.write (global : entries))
-            doc <- sourceVersionOf archive
-            withSweeper $ \deadlines -> do
-                writer <- anonymousPublishAt deadlines (rubyPublishCodec factors nativePresentation) (loopbackRegistryUrl (stubBaseUrl target <> "/private"))
-                publishOnlyFile writer doc (PublishPlan (pkgVersion (vdDetails doc))) archive `shouldReturn` Right ()
-            map capBody <$> allCaptured target `shouldReturn` [archive]
+            let plain = LBS.toStrict (Tar.write entries)
+            mirrorTo target plain `shouldReturn` Right ()
+            mirrorTo target (LBS.toStrict (Tar.write (global : entries))) `shouldReturn` Left (PublishSourceUnavailable "gem envelope carries an extended or prefixed tar header")
+            map capBody <$> allCaptured target `shouldReturn` [plain]
 
     it "publishes only the admitted digest and preserves verified bytes without an OTP" $ do
         archive <- readFileBS rootArchive
@@ -172,6 +170,14 @@ rootArchive = "test/fixtures/rubygems/gems/ecluse-fixture-root-1.0.0.gem"
 
 sourceVersion :: IO VersionDoc
 sourceVersion = readFileBS rootArchive >>= sourceVersionOf
+
+-- | Mirror the root fixture's 1.0.0 version to the stub as the given archive, which its source row advertises.
+mirrorTo :: Stub -> ByteString -> IO (Either PublishFault ())
+mirrorTo target archive = do
+    doc <- sourceVersionOf archive
+    withSweeper $ \deadlines -> do
+        writer <- anonymousPublishAt deadlines (rubyPublishCodec factors nativePresentation) (loopbackRegistryUrl (stubBaseUrl target <> "/private"))
+        publishOnlyFile writer doc (PublishPlan (pkgVersion (vdDetails doc))) archive
 
 -- | The root fixture's 1.0.0 version, its source row advertising the given archive's SHA-256.
 sourceVersionOf :: ByteString -> IO VersionDoc
