@@ -109,6 +109,6 @@ gemInfoSteps pay limits name base mode = recordSteps reserve consume complete in
                 bad = Set.union (scanBad scan) duplicateVersions
                 rows = reverse (filter ((`Set.notMember` bad) . renderVersion . coordinateVersion . grCoordinate) (scanRows scan))
                 conflicts = [mkInvalidEntry InvalidVersionManifest raw Null "conflicting or malformed RubyGems version artifacts" | raw <- Set.toList bad]
-             in case projectGemRows limits name base rows of
+             in case projectGemRows name base rows of
                     Left _ -> Failed "RubyGems info projection failed"
                     Right info -> Finished (GemReadResult info{infoInvalidEntries = strictElements (reverse (scanInvalid scan) <> conflicts)} (GemDocument name (BS.intercalate "\n" (reverse (scanHeader scan)) <> "\n") rows))
