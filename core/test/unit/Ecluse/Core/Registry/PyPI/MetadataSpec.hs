@@ -20,13 +20,19 @@ import Ecluse.Core.Package (
  )
 import Ecluse.Core.Package.Admission (ArtifactAdmission (AdmissionAdmit, AdmissionDenied))
 import Ecluse.Core.Package.Entry (EntryKey (ArrayEntry))
+import Ecluse.Core.Registry.Adapter.Capability (AdapterMetadata (metadataRead))
+import Ecluse.Core.Registry.Adapter.Types (RegistryAdapter (adapterMetadata))
 import Ecluse.Core.Registry.Metadata (
     MetadataError (MetadataBoundExceeded, MetadataUndecodable),
  )
 import Ecluse.Core.Registry.Metadata.EntryFloor (entryFloorBytes)
+import Ecluse.Core.Registry.Publish (PublishCodec (pcTargetRead))
+import Ecluse.Core.Registry.PyPI.Adapter (pypiAdapter)
 import Ecluse.Core.Registry.PyPI.Document (simpleEnvelope)
-import Ecluse.Core.Registry.PyPI.Metadata (preparePyPIRead, projectPyPIStream, pypiChargeFactors)
+import Ecluse.Core.Registry.PyPI.Metadata (projectPyPIStream, pypiChargeFactors)
+import Ecluse.Core.Registry.PyPI.Publish (pypiPublishCodec)
 import Ecluse.Core.Registry.PyPI.Streaming (PyPIRead (..))
+import Ecluse.Core.Registry.Request (nativePresentation)
 import Ecluse.Core.Rules (prepare)
 import Ecluse.Core.Rules.Types (EvalContext (EvalContext), Rule (AllowByIdentity, AllowIfOlderThan), completeEvidence)
 import Ecluse.Core.Security (
@@ -67,21 +73,31 @@ spec = do
     entryFloorSpec
 
 -- Files whose names project no release, and dropped version entries, pay the entry floor their bytes leave uncovered.
+-- Each read goes through the wiring that serve and publication use.
 entryFloorSpec :: Spec
 entryFloorSpec = describe "the full-read entry floor" $ do
     it "charges the workspace for files that name no release and dropped versions beyond their per-byte charge" $ do
-        let files = 150
-            drops = 400
-            file at = "{\"filename\":\"x" <> at <> "\",\"url\":\"https://files.pythonhosted.org/x" <> at <> "\"}"
-            body = "{\"meta\":{\"api-version\":\"1.1\"},\"name\":\"requests\",\"files\":[" <> BS.intercalate "," [file (show at) | at <- [1 .. files :: Int]] <> "],\"versions\":[" <> BS.intercalate "," (replicate drops "7") <> "]}"
-        (result, peak) <- heldWorkspacePeak preparePyPIRead "https://pypi.org/simple" requestsName [body]
+        (result, peak) <- heldWorkspacePeak adapterRead pypiBase requestsName [denseBody]
         void result `shouldSatisfy` isRight
-        peak `shouldBe` entryFloorBytes * (files + drops) - scaleCharge (cfFullReadPermille pypiChargeFactors) (BS.length body)
+        peak `shouldBe` denseShortfall
 
     it "charges no workspace for files whose source bytes cover the floor" $ do
-        (result, peak) <- heldWorkspacePeak preparePyPIRead "https://pypi.org/simple" requestsName [indexOf ["requests-2.34.2.tar.gz", "requests-2.34.1.tar.gz"]]
+        (result, peak) <- heldWorkspacePeak adapterRead pypiBase requestsName [indexOf ["requests-2.34.2.tar.gz", "requests-2.34.1.tar.gz"]]
         void result `shouldSatisfy` isRight
         peak `shouldBe` 0
+
+    it "charges a publication target's full read the same floor" $ do
+        (result, peak) <- heldWorkspacePeak (pcTargetRead (pypiPublishCodec nativePresentation)) pypiBase requestsName [denseBody]
+        void result `shouldSatisfy` isRight
+        peak `shouldBe` denseShortfall
+  where
+    adapterRead = metadataRead (adapterMetadata pypiAdapter)
+    pypiBase = "https://pypi.org/simple"
+    files = 150
+    drops = 400
+    file at = "{\"filename\":\"x" <> at <> "\",\"url\":\"https://files.pythonhosted.org/x" <> at <> "\"}"
+    denseBody = "{\"meta\":{\"api-version\":\"1.1\"},\"name\":\"requests\",\"files\":[" <> BS.intercalate "," [file (show at) | at <- [1 .. files :: Int]] <> "],\"versions\":[" <> BS.intercalate "," (replicate drops "7") <> "]}"
+    denseShortfall = entryFloorBytes * (files + drops) - scaleCharge (cfFullReadPermille pypiChargeFactors) (BS.length denseBody)
 
 indexSpec :: Spec
 indexSpec = describe "projectPyPIIndex" $ do
