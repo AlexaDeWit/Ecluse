@@ -192,7 +192,7 @@ renderedRefusal = Just . fromStrict . encodeUtf8 . renderRefusal
 
 -- | Native archives share streamed responses and local refusal status codes.
 artifactContract :: ResponseContract PassthroughResponse
-artifactContract = passthroughContract "Relays the selected archive. Authentication, admission, integrity and availability failures return a local refusal."
+artifactContract = passthroughContract "Relays the selected archive. Authentication, admission, integrity and availability failures return a local refusal. A private upstream reply that was invalid or unusable answers a local `502`."
 
 -- | Render public archive diagnostics while access refusals and missing archives keep quiet bodies.
 artifactReplies :: TarballReplies PassthroughResponse
