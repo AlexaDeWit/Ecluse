@@ -415,6 +415,12 @@ error, not a silent skip:
   rejects a path that is not the repository endpoint for the mount's own ecosystem
   (`/npm/{repository}/` for an npm mount) and an ecosystem CodeArtifact carries no package format
   for. Each refusal names the key path it was written at.
+- On `mirrorTarget` and `publicationTarget`, `url` is where Écluse reads and `uploadUrl` is where
+  it writes. Where the protocol derives its write address from `url` (npm, RubyGems), the load
+  refuses `uploadUrl`, because the key could only send uploads to another address. Where the
+  protocol uploads to a separate endpoint (PyPI, Cargo), a role that writes through the target
+  refuses to boot without `uploadUrl`, so a `url` that still names the upload endpoint never
+  becomes a read root unnoticed.
 - A static publish credential requires a verifiable edge. A `token` under a `publicationTarget`
   tag without `ECLUSE_SERVER__AUTH_TOKEN` is refused as
   `PublishStaticCredentialNeedsEdge`. That pairing would let any unauthenticated client publish

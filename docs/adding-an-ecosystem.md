@@ -144,8 +144,9 @@ The shared worker owns orchestration over the complete version.
 [MirrorUpload](../core/src/Ecluse/Core/Registry/MirrorUpload.hs) carries checked membership and verified file facts, paired with required native metadata.
 Do not add a dormant codec or publish helper without an active caller.
 
-Declare `AdapterPublish.publishMirrorRequirements` and `publishIdentity` in [Adapter.Capability](../core/src/Ecluse/Core/Registry/Adapter/Capability.hs).
-`MirrorRequirements` selects cached or charged worker reads, native or durable version state, and read-root or explicit upload endpoints.
+Declare `AdapterPublish.publishMirrorRequirements`, `publishUploadEndpoint` and `publishIdentity` in [Adapter.Capability](../core/src/Ecluse/Core/Registry/Adapter/Capability.hs).
+`MirrorRequirements` selects cached or charged worker reads and native or durable version state.
+`UploadEndpointRequirement` declares whether both write targets upload at the read root or at a separate `uploadUrl`.
 `UploadIdentityRequirement` declares token-only or named identity for static credentials.
 Composition uses these declarations for worker wiring and boot checks, without switching on ecosystem names.
 Use `relayPublishRequest` in [Publish](../core/src/Ecluse/Core/Registry/Publish/Internal.hs) to retain native replies under metadata and progress limits.
