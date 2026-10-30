@@ -45,6 +45,7 @@ import Ecluse.Core.Package (InvalidEntry, InvalidEntryKind (..), PackageDetails 
 import Ecluse.Core.Registry.Json.Packed (DocTable, Packed)
 import Ecluse.Core.Registry.Json.Writer (Pick (..), decodePicked, decodeWhole, replacedMember)
 import Ecluse.Core.Registry.Metadata (MetadataError (..))
+import Ecluse.Core.Registry.Metadata.EntryFloor (RetainedEntries (RetainedEntries))
 import Ecluse.Core.Registry.Metadata.Projection (validateNameAgreement)
 import Ecluse.Core.Registry.Npm.DependencySource (installableFieldName)
 import Ecluse.Core.Registry.Npm.Document (PackedPackument (..), tarballHole, tarballUrl)
@@ -257,8 +258,8 @@ packedStep writer limits name (PackedRead acc served) field next = case field of
         other -> other
 
 -- | The releases, timestamps and tags the packed read holds.
-retainedEntries :: PackedRead -> Int
-retainedEntries (PackedRead acc _) = Map.size (projectedVersions acc) + Map.size (projectedTimes acc) + Map.size (projectedTags acc)
+retainedEntries :: PackedRead -> RetainedEntries
+retainedEntries (PackedRead acc _) = RetainedEntries (Map.size (projectedVersions acc)) (Map.size (projectedTimes acc) + Map.size (projectedTags acc))
 
 -- Keep the diagnostic field selection to preserve decoder refusal priority. Dependency maps never refuse.
 typedMembers :: Pick

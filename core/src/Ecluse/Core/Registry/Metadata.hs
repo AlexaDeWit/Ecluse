@@ -33,6 +33,7 @@ import Ecluse.Core.Fault (RetryAfter)
 import Ecluse.Core.Package (PackageDetails, PackageInfo, PackageName)
 import Ecluse.Core.Registry (BodyOutcome (SuccessBody, UnreadStatus), FetchFault (FetchBoundExceeded, FetchCooldown), isAuthorisationFailure)
 import Ecluse.Core.Registry.CachedDocument (CachedDoc)
+import Ecluse.Core.Registry.Metadata.EntryFloor (RetainedEntries)
 import Ecluse.Core.Rules.Types (Transience (WillResolve, WontResolve))
 import Ecluse.Core.Security (LimitError (..))
 import Ecluse.Core.Snapshot (ContentDigest, digestBytes)
@@ -46,8 +47,8 @@ data Manifest = Manifest
     -- ^ The supported source fields ('CachedDoc') used to assemble the served body.
     , manifestBodyBytes :: Int
     -- ^ Decompressed byte count from the source read, before projection.
-    , manifestRetainedEntries :: Int
-    -- ^ The entries the source read retained, which the per-entry floor charges. Zero where no floor applies.
+    , manifestRetainedEntries :: RetainedEntries
+    -- ^ The entries the source read retained, which the per-entry floors charge. None where no floor applies.
     , manifestDigest :: ContentDigest
     -- ^ Digest of the wire bytes behind 'manifestInfo' and 'manifestRaw'.
     }

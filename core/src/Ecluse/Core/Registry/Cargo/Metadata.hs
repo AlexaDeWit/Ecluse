@@ -60,7 +60,7 @@ cargoReadWith fullPay selectedPay discovery =
             , erUniqueFields = []
             , erWalkFull = \limits name _ -> readCargoIndexCharged fullPay discovery limits name FullRead
             , erFinishFull = \limits _ _ -> finishCargoFull limits
-            , erRetainedEntries = const 0
+            , erRetainedEntries = const mempty
             , erWalkSelected = \limits name version -> readCargoIndexCharged selectedPay discovery limits name (SelectedRead version)
             , erFinishSelected = \limits _ _ -> finishSelectedVersion cargoIndexInfo (\version result -> selectCargoVersionDoc version (cargoIndexDocument result)) limits
             }

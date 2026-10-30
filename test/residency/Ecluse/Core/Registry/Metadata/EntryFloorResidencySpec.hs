@@ -21,7 +21,7 @@ import Ecluse.Core.Package (mkPackageName)
 import Ecluse.Core.Registry.Adapter (RegistryAdapter (adapterMetadata))
 import Ecluse.Core.Registry.Adapter.Capability (AdapterMetadata (metadataChargeFactors, metadataRead))
 import Ecluse.Core.Registry.Metadata (Manifest (manifestRetainedEntries))
-import Ecluse.Core.Registry.Metadata.EntryFloor (entryFloorCharge)
+import Ecluse.Core.Registry.Metadata.EntryFloor (RetainedEntries (..), entryFloorCharge)
 import Ecluse.Core.Server.Admission.Budget (scaleCharge)
 import Ecluse.Core.Server.Admission.Types (ChargeFactors (cfFullReadPermille, cfKeptPermille))
 import Ecluse.Core.Server.MemoryModel.Calibration (EntryFigures (..), denseFigures, heldLimit, minimalBodyFigures, readPeakLimit)
@@ -52,18 +52,19 @@ spec = describe "dense listing live bytes" $
             adapter <- requiredAdapter (denseEcosystem dense)
             (result, _) <- heldWorkspacePeak (metadataRead (adapterMetadata adapter)) (registryOf (denseEcosystem dense)) (mkPackageName (denseEcosystem dense) Nothing "thing") [bytes]
             retained <- manifestRetainedEntries <$> expectRight result
+            let total = retainedReleases retained + retainedOthers retained
             measured <- measurePathInChild (Mode.ListingFor (toString (ecosystemName (denseEcosystem dense))) "thing") path
             peaks <- singlePeaks <$> expectRight measured
             let readRise = rise listingReadPeak peaks
                 heldRise = rise listingEntryLive peaks
                 factors = metadataChargeFactors (adapterMetadata adapter)
-            report dense size retained readRise heldRise
-            retained `shouldSatisfy` (>= entries)
+            report dense size total readRise heldRise
+            total `shouldSatisfy` (>= entries)
             readRise `shouldSatisfy` (<= toInteger (max (scaleCharge (cfFullReadPermille factors) size) (entryFloorCharge retained)))
             heldRise `shouldSatisfy` (<= toInteger (max (scaleCharge (cfKeptPermille factors) size) (entryFloorCharge retained)))
             figures <- maybe (fail "no dense listing figures") pure (Map.lookup (label dense) (denseFigures <> minimalBodyFigures))
-            (1000 * readRise) `shouldSatisfy` (<= readPeakLimit (entryReadPeak figures) * toInteger retained + 1000 * tolerance)
-            (1000 * heldRise) `shouldSatisfy` (<= heldLimit (entryHeld figures) * toInteger retained + 1000 * tolerance)
+            (1000 * readRise) `shouldSatisfy` (<= readPeakLimit (entryReadPeak figures) * toInteger total + 1000 * tolerance)
+            (1000 * heldRise) `shouldSatisfy` (<= heldLimit (entryHeld figures) * toInteger total + 1000 * tolerance)
 
 -- Enough entries that the read's fixed costs add under a byte to each.
 entries :: Int

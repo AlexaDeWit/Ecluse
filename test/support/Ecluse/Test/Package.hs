@@ -277,6 +277,6 @@ sampleManifest name versions =
                 }
         , manifestRaw = fst npmCached (Object mempty)
         , manifestBodyBytes = 0
-        , manifestRetainedEntries = 0
+        , manifestRetainedEntries = mempty
         , manifestDigest = digestOf ""
         }

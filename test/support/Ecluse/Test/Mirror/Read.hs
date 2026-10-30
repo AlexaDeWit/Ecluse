@@ -182,7 +182,7 @@ newSession target limits privateBytes load = do
     meter <- testMemoryMeter
     streamed <- expectRight (projectPyPIPackedChunks readLimits mirrorPackage [privateBytes])
     (info, packed) <- expectRight (projectPyPIPacked readLimits mirrorPackage streamed)
-    let private = Manifest info (fst pypiPacked packed) (BS.length privateBytes) 0 (digestFromContext (hashUpdate hashInit privateBytes))
+    let private = Manifest info (fst pypiPacked packed) (BS.length privateBytes) mempty (digestFromContext (hashUpdate hashInit privateBytes))
         store = MirrorState (fetch changed exchanges) (\_ _ _ _ -> pure (Left StateRetryExhausted)) (\_ _ -> pure (Left StateMissingCompanion)) (\_ _ -> pure (Left StateMissingCompanion))
     pure (ReadSession (newMirrorView limits target store retention pypiStateFormat pypiMirrorDocuments) meter private changed exchanges)
   where

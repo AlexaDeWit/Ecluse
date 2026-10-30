@@ -781,7 +781,7 @@ yankedPyPIManifest :: Text -> IO Manifest
 yankedPyPIManifest rawVersion = do
     let body = toStrict (encode (simpleIndex "requests" [withFileKeys [("yanked", Bool True)] (simpleFile ("requests-" <> rawVersion <> "-py3-none-any.whl"))]))
     (info, document) <- expectRight (projectPyPIIndex defaultLimits requestsName body)
-    pure (Manifest info (fst pypiSimpleCached document) (BS.length body) 0 (digestOf body))
+    pure (Manifest info (fst pypiSimpleCached document) (BS.length body) mempty (digestOf body))
 
 -- A rule at its default precedence, limited to admission as @appliesTo: [admission]@ resolves it.
 limitedToAdmission :: Rule -> PrecededRule

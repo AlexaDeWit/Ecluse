@@ -9,6 +9,8 @@ keeps the floor once it completes.
 -}
 module Ecluse.Core.Registry.Metadata.EntryFloor (
     entryFloorBytes,
+    releaseFloorBytes,
+    RetainedEntries (..),
     entryFloorCharge,
     countingEntries,
     readFlooredWalk,
@@ -23,25 +25,48 @@ import Ecluse.Core.Registry.Json.Walk (readJsonWalkST)
 import Ecluse.Core.Registry.JsonStream (Steps, StreamResult, maxChunkBytes)
 import Ecluse.Core.Security (BodyLimit, LimitError)
 import Ecluse.Core.Server.Admission.Budget (scaleCharge)
-import Ecluse.Core.Server.MemoryModel (saturatingCharge)
 
--- | The bytes each retained entry costs at least. A residency case measures dense listings to set it: see @docs/testing.md@.
+-- | The bytes each retained entry other than a version or file costs at least. A residency case measures dense listings to set it: see @docs/testing.md@.
 entryFloorBytes :: Int
 entryFloorBytes = 704
 
--- | The floor for a number of retained entries, saturating at the largest charge.
-entryFloorCharge :: Int -> Int
-entryFloorCharge retained = saturatingCharge (toInteger entryFloorBytes * toInteger retained)
+-- | The bytes each retained npm version or PyPI file costs at least, which the residency tier measures on minimal valid bodies.
+releaseFloorBytes :: Int
+releaseFloorBytes = 1152
 
--- | Continue a step after publishing the entries its accepted state retains.
-countingEntries :: PrimVar st Int -> (s -> Int) -> (Either LimitError s -> ST st r) -> Either LimitError s -> ST st r
-countingEntries counter entries next taken = do
-    traverse_ (writePrimVar counter . entries) taken
+-- | The entries a full read retains, by the floor each pays.
+data RetainedEntries = RetainedEntries
+    { retainedReleases :: Int
+    -- ^ npm versions and PyPI files, dropped ones included, which pay 'releaseFloorBytes'.
+    , retainedOthers :: Int
+    -- ^ Every other retained entry, which pays 'entryFloorBytes'.
+    }
+    deriving stock (Eq, Show)
+
+instance Semigroup RetainedEntries where
+    RetainedEntries releases others <> RetainedEntries releases' others' = RetainedEntries (releases + releases') (others + others')
+
+instance Monoid RetainedEntries where
+    mempty = RetainedEntries 0 0
+
+-- | The floors the retained entries owe, saturating at the largest charge. Each step of a walk computes it, so it stays in 'Int'.
+entryFloorCharge :: RetainedEntries -> Int
+entryFloorCharge (RetainedEntries releases others)
+    | releases > bound || others > bound = maxBound
+    | otherwise = releaseFloorBytes * releases + entryFloorBytes * others
+  where
+    -- Up to this count each product stays within half the largest 'Int'.
+    bound = maxBound `div` (2 * releaseFloorBytes)
+
+-- | Continue a step after publishing the floors its accepted state's retained entries owe.
+countingEntries :: PrimVar st Int -> (s -> RetainedEntries) -> (Either LimitError s -> ST st r) -> Either LimitError s -> ST st r
+countingEntries owed entries next taken = do
+    traverse_ (writePrimVar owed . entryFloorCharge . entries) taken
     next taken
 {-# INLINE countingEntries #-}
 
-{- | Walk a body, raising @pay@'s absolute workspace before each piece to the floor for the entries
-the walk has published, less the per-byte charge at @permille@ the pieces read so far already paid.
+{- | Walk a body, raising @pay@'s absolute workspace before each piece to the floors the walk has
+published, less the per-byte charge at @permille@ the pieces read so far already paid.
 -}
 readFlooredWalk ::
     (Int -> IO ()) ->
@@ -51,13 +76,13 @@ readFlooredWalk ::
     IO ByteString ->
     IO (Either LimitError (StreamResult s))
 readFlooredWalk pay permille bound walk readChunk = do
-    entries <- newPrimVar 0
+    owed <- newPrimVar 0
     seen <- newPrimVar 0
     held <- newIORef BS.empty
     let piece = do
-            retained <- readPrimVar entries
+            floors <- readPrimVar owed
             bytes <- readPrimVar seen
-            let shortfall = entryFloorCharge retained - scaleCharge permille bytes
+            let shortfall = floors - scaleCharge permille bytes
             when (shortfall > 0) (pay shortfall)
             pending <- readIORef held
             chunk <- if BS.null pending then readChunk else pure pending
@@ -65,6 +90,6 @@ readFlooredWalk pay permille bound walk readChunk = do
             writeIORef held rest
             writePrimVar seen (bytes + BS.length next)
             pure next
-    readJsonWalkST stToIO bound (walk entries) piece
+    readJsonWalkST stToIO bound (walk owed) piece
 -- Specialise in the reading module, which turns full laziness off. Compiled here, npm and PyPI full reads allocated 30% to 60% more.
 {-# INLINE readFlooredWalk #-}
