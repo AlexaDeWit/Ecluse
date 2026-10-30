@@ -326,7 +326,7 @@ npmPackumentReplies = metadataReplies summarisedRejections (NpmError . renderRef
 npmTarballContract :: ResponseContract PassthroughResponse
 npmTarballContract =
     passthroughContract
-        "An upstream-controlled artifact response is relayed transparently. Local authentication, policy, availability, and internal failures use npm's JSON error body under their corresponding status."
+        "An upstream-controlled artifact response is relayed transparently. Local authentication, policy, availability, and internal failures use npm's JSON error body under their corresponding status. A private upstream reply that was invalid or unusable answers a local `502`."
 
 npmTarballReplies :: TarballReplies PassthroughResponse
 npmTarballReplies =
