@@ -48,14 +48,12 @@ import Ecluse.Core.Registry.PyPI.Adapter (pypiAdapter)
 import Ecluse.Core.Rules (prepare)
 import Ecluse.Core.Security (defaultLimits)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
-import Ecluse.Core.Server.Context (PackumentDeps (..), ReadSourceSelection (ManagedMirrorAndPublic, PrivateOnly))
+import Ecluse.Core.Server.Context (PackumentDeps (..))
 import Ecluse.Core.Server.Encoding (CodingChoice (ServeCoding), ContentCoding (GzipCoding), MetadataCompression (GzipWhenAccepted), chooseCoding, gzipEncodingHeader)
 import Ecluse.Core.Server.MirrorView (MirrorView)
 import Ecluse.Core.Server.Upstream (MirrorServePlan (NoMirrorWrite))
 import Ecluse.Core.Version (mkVersion)
-import Ecluse.Runtime.Server (application, mkServerConfig)
 import Ecluse.Server.Pipeline.TestSupport (newTestEnvWithQueue, packument, proxyApplication, publishedDaysAgo, requestAt)
-import Ecluse.Service (mountBindingFor)
 import Ecluse.Test.Contract.Serving (ServingDriver (..), ServingLayout (..), ServingRelease (..), ServingResponse (..), ServingSession (..))
 import Ecluse.Test.Deadline (untracedClient, withSweeper)
 import Ecluse.Test.Json (fieldAt, textAtPath)
@@ -271,27 +269,27 @@ cargoDriver =
                         publicUrl = loopbackRegistryUrl (localhost publicPort)
                         origin = originClient defaultLimits (untracedClient manager deadlines) publicUrl Nothing
                     view <- cargoManagedView adapter origin (localhost privatePort) privateReleases publicReleases
-                    let publicDeps =
+                    let deps =
                             (serveDepsFor adapter (Just privateUrl) publicUrl NoMirrorWrite prepared (pure now))
-                                { pdReadSourceSelection = ManagedMirrorAndPublic
-                                , pdMountBaseUrl = "http://ecluse.test/cargo"
+                                { pdMountBaseUrl = "http://ecluse.test/cargo"
                                 , pdMirrorState = Just view
                                 , pdEgressUrl = Right . loopbackRegistryUrl
                                 , pdMetadataCompression = compression
                                 }
-                        privateDeps = publicDeps{pdReadSourceSelection = PrivateOnly, pdMountBaseUrl = "http://ecluse.test/cargo/private", pdMirrorState = Nothing}
-                        app = application (mkServerConfig (maybeToList (mountBindingFor Cargo publicDeps (Just privateDeps) Nothing))) env
-                        request base method path headers = cargoObservation method <$> requestAt method (base <> path) Wai.defaultRequest{Wai.requestHeaders = headers} app
+                        app = proxyApplication Cargo env deps
+                        request method path headers = cargoObservation method <$> requestAt method ("/cargo" <> path) Wai.defaultRequest{Wai.requestHeaders = headers} app
+                        metadata method headers = request method "/th/in/thing" headers
+                        artifact method headers version = request method (cargoArtifact version) headers
                     action
                         ServingSession
-                            { requestMetadata = \method headers -> request "/cargo" method "/th/in/thing" headers
-                            , requestArtifact = \method headers version -> request "/cargo" method (cargoArtifact version) headers
-                            , requestPrivateMetadata = \method headers -> request "/cargo/private" method "/th/in/thing" headers
-                            , requestPrivateArtifact = \method headers version -> request "/cargo/private" method (cargoArtifact version) headers
+                            { requestMetadata = metadata
+                            , requestArtifact = artifact
+                            , requestPrivateMetadata = metadata
+                            , requestPrivateArtifact = artifact
                             , publicSourceIdentity = "sparse+http://ecluse.test/cargo/"
-                            , privateSourceIdentity = "sparse+http://ecluse.test/cargo/private/"
+                            , privateSourceIdentity = "sparse+http://ecluse.test/cargo/"
                             }
-        , servingLayout = SeparateRegistries
+        , servingLayout = CombinedRegistry
         , servingIdentity = ("thing@" <>)
         , servingDigest = hexSha256Of
         }
