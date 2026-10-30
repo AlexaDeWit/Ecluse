@@ -34,7 +34,8 @@ These are additions to mounts with a configured `privateUpstream`. A first-party
 
 Cargo declarations fold ASCII case and equate hyphen with underscore while preserving separator runs.
 A prefix must end in `-*` or `_*`. `acme-*` covers `acme-tools` and `acme_tools`, but excludes `acmeco`.
-Cargo first-party packages use `/cargo/private/`. The public replacement view excludes them.
+Cargo's `/cargo/` registry merges `privateUpstream` with crates.io, so declare every private crate name or prefix.
+A declared crate reads `privateUpstream` only, and its crates.io namesake never reaches clients.
 
 RubyGems declarations preserve case, dots, hyphens, and underscores.
 A prefix ends in `.*`, `-*`, or `_*`.
@@ -47,7 +48,7 @@ Set `publicationTarget` to your first-party repository. For npm, clients publish
 
 For PyPI, set `url` to the target's registry root and `uploadUrl` to its native upload endpoint.
 
-Cargo clients publish with `cargo publish --registry ecluse-private` after [configuring the alternate registry](@/docs/connect.md#cargo).
+Cargo clients publish with a plain `cargo publish` to `/cargo/` after [setting Écluse as the default registry](@/docs/connect.md#cargo), and each first-party crate sets `publish = ["ecluse"]`.
 Set `url` to the target's sparse read root and `uploadUrl` to its exact approved API base.
 The discovery API base must match `uploadUrl`, including its path.
 

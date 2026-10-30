@@ -545,14 +545,16 @@ mounts:
       registry:
         url: https://index.crates.io/
     # enabled: true
-    # /cargo/ replaces crates.io using the public source and completed managed mirrors.
-    # It excludes private-only versions and declared first-party names. It has no publish API.
-    # /cargo/private/ reads privateUpstream with each caller's credential, without public fallback.
-    # A configured publicationTarget enables first-party publication through that private view.
+    # /cargo/ replaces crates.io. It merges privateUpstream, read with each caller's credential,
+    # with admitted crates.io crates. Declared first-party names read privateUpstream only, so
+    # declare every private crate name or prefix. privateUpstream must include the mirror repository.
+    # /cargo/config.json is answered locally. It requires authentication whenever privateUpstream
+    # or server.authToken is set. A configured publicationTarget enables first-party publication
+    # at PUT /cargo/api/v1/crates/new.
     # For mirrorTarget and publicationTarget, url is the sparse index root. uploadUrl is
     # the exact approved API base advertised by that index's config.json, without /api/v1/crates/new.
     # Cargo mirroring requires mirrorState.url. Preserve its original source records across restarts.
-    # Discovery runs after caller or service authentication, never at boot. Private discovery is not cached.
+    # Upstream discovery runs after caller or service authentication, never at boot, and is not cached.
     # Ownership folds ASCII case and hyphen/underscore aliases, preserving separator runs.
     # Names use at most 64 ASCII letters, digits, hyphens, or underscores, starting with a letter.
     # Exact names and prefixes use native Cargo grammar. acme-* covers acme-tools and

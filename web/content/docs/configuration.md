@@ -283,6 +283,10 @@ your scopes that the private upstream does not have answers `404`, and Écluse d
 the public registry for it. That refusal is the point: a public package published under a scope you
 own is a dependency-confusion attack.
 
+Cargo's `/cargo/` registry merges `privateUpstream` with admitted crates.io crates in the same way.
+A private crate whose name is not declared, and which also exists on crates.io, receives the admitted
+crates.io versions beside its private ones. Declare every private crate name or prefix.
+
 The private upstream is that name's one authority, so why it did not answer decides what your
 client sees. A `404` from it settles the question, and Écluse answers `404`. An upstream Écluse
 cannot reach, one that faults, and one whose body does not decode all leave the question open
@@ -300,7 +304,6 @@ This protects a private patch from substitution when the caller's private creden
 PyPI keeps its local refusal format: an empty body, or the configured operator help message.
 
 Cargo is the only exception. It preserves a native `401` challenge for credential-provider retry and treats a real `403` as refusal.
-The private alternate never substitutes a public copy, including after a private `404`.
 
 Bundler treats a `403` on Compact Index metadata as an unavailable index. It then tries the
 Dependencies API and the full index, which Écluse answers with `404`, so the install fails with
@@ -308,7 +311,7 @@ Bundler's `Could not fetch specs` error rather than a credential prompt. A gem d
 the `403`.
 
 For sparse index and archive requests, Cargo's public policy and evaluation refusals include Écluse's reason plus configured `server.helpMessage`.
-Private refusals, access refusals on either view, and missing or excluded package replies keep only configured operator help.
+Private refusals, access refusals, and missing or excluded package replies keep only configured operator help.
 Without configured help, those replies have no body.
 
 Check the caller's private credential and access when this refusal appears. Ordinary private

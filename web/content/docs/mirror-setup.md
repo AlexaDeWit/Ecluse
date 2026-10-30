@@ -17,9 +17,7 @@ Set `mirrorTarget` to the repository receiving public copies. Set `privateUpstre
 
 Configure that read endpoint to include the mirror repository. Écluse does not create this relationship in your registry.
 
-Cargo's public replacement reads completed copies directly from `mirrorTarget`.
-Its `/cargo/private/` alternate view reads `privateUpstream` separately and never falls back to public.
-Keep private-only packages out of crates.io source replacement.
+Cargo reads completed copies through `privateUpstream` like the other ecosystems, so its read endpoint must include the mirror repository too.
 
 **Example: npm with CodeArtifact**
 

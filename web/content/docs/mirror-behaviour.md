@@ -47,7 +47,7 @@ Cargo completion pairs the retained admitted index row and source identity with 
 The target's native metadata cannot replace those retained facts.
 The [Cargo protocol reference](@/docs/protocol-support.md#cargo) explains why, and what a public outage needs from the retained state.
 
-The crates.io replacement excludes unrecorded target versions from listings and direct archives.
-Current target authorisation and discovery supply archive addresses. Retained source records grant no new credential or host authority.
+A target version that reaches `/cargo/` through `privateUpstream` without a durable record is served as trusted private content, as on PyPI and RubyGems. It carries the target's publication time and yank state.
+Current private-upstream authorisation and discovery supply archive addresses. Retained source records grant no new credential or host authority.
 
-A new client and an already configured client can behave differently during an outage, because a new client must complete [Cargo discovery](@/docs/protocol-support.md#cargo) first.
+Cargo's discovery document is answered locally, so a new client reaches the index during an outage like an already configured one.

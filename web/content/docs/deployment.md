@@ -400,9 +400,7 @@ and
 
 ### What a client configures
 
-Écluse serves one endpoint per mount, and installs and publishes both go to it. Cargo is the
-exception: its mount serves a crates.io replacement view and a private alternate view, and
-publication goes to the private view ([Connect Cargo](@/docs/connect.md#cargo)). With the recommended
+Écluse serves one endpoint per mount, and installs and publishes both go to it. With the recommended
 open edge, the client supplies a credential the private registry accepts, keyed to the proxy's URL
 in whatever per-registry auth configuration that client keeps. Écluse forwards it to the private
 upstream, which authorises the caller. So what someone reaches through the proxy is what your
@@ -413,8 +411,7 @@ Public success does not prove the private credential worked. For npm, PyPI and R
 private `401` or `403` stops metadata and artifact reads with a local `403`, including HEAD and
 conditional requests. Cargo keeps its native refusal statuses. In every ecosystem, public content
 cannot replace the private copy after that refusal. A genuine private `404` still permits public
-fallback for a name outside your first-party namespaces where the view allows it, and first-party
-names stay private-only. A backend that masks a refusal as `404` does not prove authentication
+fallback for a name outside your first-party namespaces, and first-party names stay private-only. A backend that masks a refusal as `404` does not prove authentication
 succeeded. The [private access policy](@/docs/configuration.md#first-party-namespaces) gives each
 ecosystem's statuses.
 
@@ -426,9 +423,7 @@ Two rules hold whatever ecosystem the client speaks:
 - **Bind no name to a registry outside Écluse.** A client pointed at Écluse needs no per-scope or
   per-package override that points elsewhere, because its Écluse endpoints already cover every
   name. An override takes its names around the gate, and in some clients it decides where a publish
-  goes as well ([Keeping publishes on the proxy](#keeping-publishes-on-the-proxy)). Cargo's
-  private dependencies name the `/cargo/private/` alternate registry, which is still Écluse
-  ([Cargo views](@/docs/protocol-support.md#cargo)).
+  goes as well ([Keeping publishes on the proxy](#keeping-publishes-on-the-proxy)).
 
 For an npm-protocol client those two rules are a default registry line and a URL-keyed token line.
 The recipes here assume the open edge that the
@@ -467,8 +462,7 @@ Either one routes traffic around the proxy, which is what the two rules above ex
 
 ### Keeping publishes on the proxy
 
-Écluse accepts a publish on the same mount endpoint it serves installs from, or on Cargo's private
-alternate view. With the recommended open edge, it relays the publish to the publication target
+Écluse accepts a publish on the same mount endpoint it serves installs from. With the recommended open edge, it relays the publish to the publication target
 under the publisher's own credential. Two failures can take a publish off that path, and they are
 not alike.
 
@@ -481,7 +475,8 @@ destination from some other part of its configuration sends it straight to that 
 proxy sees nothing to refuse. Name-to-registry bindings are the usual cause, because in some
 clients such a binding outranks the per-package publish setting as well as the install route. Keep
 bindings to registries outside Écluse off a client pointed at Écluse, and let its Écluse endpoints
-carry both directions.
+carry both directions. Cargo's own hint after a refused publish, `--registry crates-io`, is one such
+route. [Connect Cargo](@/docs/connect.md#cargo) closes it with `publish = ["ecluse"]`.
 
 ## Metadata compression
 

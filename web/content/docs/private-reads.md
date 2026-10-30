@@ -17,9 +17,7 @@ reference = "/docs/how-it-works/#a-request-step-by-step"
 
 A conventional private npm artifact hit bypasses that metadata path and relies on the client's integrity verification.
 
-Cargo's private alternate reads arbitrary caller-authorised private packages, without public fallback.
-Its crates.io replacement admits only public source content and valid completed managed mirrors.
-An unmanaged private copy cannot enter that replacement view.
+Cargo reads private crates through `privateUpstream` like every other ecosystem. A crate there without a mirror record is trusted private content.
 
 Changing a public admission rule does not immediately block an existing private copy. See [Admission, revocation, and retained copies](@/docs/revocation.md).
 
@@ -32,8 +30,7 @@ The caller's credential authorises private reads and, by default, publication. T
 A worker token does not give the caller private access. An explicit private authentication refusal stops the request rather than falling back to a public source.
 
 Cargo keeps its native refusal statuses, which the [private access policy](@/docs/configuration.md#first-party-namespaces) lists.
-Cargo's private discovery follows edge authentication and the current caller's authority. It stays uncached across callers.
-The [Cargo protocol reference](@/docs/protocol-support.md#cargo) describes discovery failure during a trusted-registry outage.
+Cargo's discovery document is answered locally after edge authentication, so it never carries a private registry's answer.
 
 When `server.authToken` is set, the shared edge token also travels to the private registry. That mode cannot preserve a different registry identity for each caller.
 

@@ -62,8 +62,8 @@ and explains what you lose when two share one.
 For npm, a client requests a version listing and then a tarball. PyPI clients request project indexes
 and distribution files. Cargo clients read sparse discovery, native index records, and crate archives.
 RubyGems clients read a Compact Index directory, per-gem metadata, and gem archives.
-Cargo separates crates.io source replacement from private alternate-registry access.
-The [Cargo protocol contract](@/docs/protocol-support.md#cargo) defines those views and their source rules.
+Cargo's `/cargo/` registry replaces crates.io and merges private and public crates like the other ecosystems.
+The [Cargo protocol contract](@/docs/protocol-support.md#cargo) defines its discovery and source rules.
 
 {{ diagram(name="metadata-admission", alt="The proxy combines caller-authorised private metadata with admitted anonymous public metadata. First-party names stay private, and response reuse follows fresh private authorisation.", caption="Version discovery and admission. Advisory polling runs independently of each request.") }}
 
