@@ -12,6 +12,7 @@ import Test.Hspec
 import Ecluse.Core.Ecosystem (Ecosystem (Cargo, Npm, PyPI, RubyGems))
 import Ecluse.Core.Registry.Adapter (RegistryAdapter (adapterMetadata))
 import Ecluse.Core.Registry.Adapter.Capability (AdapterMetadata (metadataChargeFactors))
+import Ecluse.Core.Registry.Metadata.EntryFloor (entryFloorBytes)
 import Ecluse.Core.Server.Admission.Types (ChargeFactors (..))
 import Ecluse.Core.Server.MemoryModel.Calibration
 import Ecluse.Core.Server.MemoryModel.Probe (Residency (..), requireResidency)
@@ -31,6 +32,9 @@ spec = do
         it "adds 4% to a read peak and rounds the next rational upward to a permille" $ do
             readPeakLimit (1 % 2) `shouldBe` 520
             readPeakLimit (500001 % 1000000) `shouldBe` 521
+        it "adds a quarter to the largest dense figure and rounds up to 64 bytes" $ do
+            entryFloor (Map.singleton "kind" (EntryFigures 512 0)) `shouldBe` 640
+            entryFloor (Map.singleton "kind" (EntryFigures 0 (512001 % 1000))) `shouldBe` 704
         it "covers the all-shape maximum when it exceeds the margin" $ do
             fullReadCharge npmCalibration{realisticReadMaximum = 4 % 5, allReadMaximum = 11 % 10} `shouldBe` 1100
             fullReadCharge npmCalibration{realisticReadMaximum = 4 % 5, allReadMaximum = 1100001 % 1000000} `shouldBe` 1200
@@ -71,6 +75,13 @@ spec = do
             keptCharge pypiFigures `shouldBe` 3300
             keptCharge cargoFigures `shouldBe` 1500
             keptCharge rubyGemsFigures `shouldBe` 17300
+        it "pins the entry floor" $ do
+            entryFloor denseFigures `shouldBe` 704
+            toInteger entryFloorBytes `shouldBe` entryFloor denseFigures
+        it "keeps each dense figure's regression limit below the entry floor" $
+            for_ denseFigures $ \figures -> do
+                readPeakLimit (entryReadPeak figures) `shouldSatisfy` (< 1000 * entryFloor denseFigures)
+                heldLimit (entryHeld figures) `shouldSatisfy` (< 1000 * entryFloor denseFigures)
         for_ [Npm, PyPI, Cargo, RubyGems] $ \ecosystem ->
             it (show ecosystem <> " keeps its adapter's kept charge") $ do
                 record <- requireResidency ecosystem

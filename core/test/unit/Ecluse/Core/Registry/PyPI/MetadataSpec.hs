@@ -23,9 +23,10 @@ import Ecluse.Core.Package.Entry (EntryKey (ArrayEntry))
 import Ecluse.Core.Registry.Adapter.Capability (AdapterMetadata (metadataRead))
 import Ecluse.Core.Registry.Adapter.Types (RegistryAdapter (adapterMetadata))
 import Ecluse.Core.Registry.Metadata (
+    Manifest (manifestRetainedEntries),
     MetadataError (MetadataBoundExceeded, MetadataUndecodable),
  )
-import Ecluse.Core.Registry.Metadata.EntryFloor (entryFloorBytes)
+import Ecluse.Core.Registry.Metadata.EntryFloor (entryFloorBytes, entryFloorCharge)
 import Ecluse.Core.Registry.Publish (PublishCodec (pcTargetRead))
 import Ecluse.Core.Registry.PyPI.Adapter (pypiAdapter)
 import Ecluse.Core.Registry.PyPI.Document (simpleEnvelope)
@@ -41,12 +42,13 @@ import Ecluse.Core.Security (
     defaultLimits,
  )
 import Ecluse.Core.Server.Admission.Budget (scaleCharge)
-import Ecluse.Core.Server.Admission.Types (ChargeFactors (cfFullReadPermille))
+import Ecluse.Core.Server.Admission.Types (ChargeFactors (cfFullReadPermille, cfKeptPermille))
 import Ecluse.Test.Contract.Metadata.Projection (MetadataFraming (SingleDocument), ProjectionDriver (..), metadataProjectionContract)
+import Ecluse.Test.Corpus (CorpusPackage (cpPackage, cpPath), pypiCorpusPackages)
 import Ecluse.Test.Json (encodeStrict)
 import Ecluse.Test.Package (defaultMinIntegrity, pypiVersion, requestsName, unsafeFilename)
 import Ecluse.Test.Package.Admission (admitArtifactWithEvidence)
-import Ecluse.Test.Registry.Metadata.Fetch (heldWorkspacePayments, heldWorkspacePeak)
+import Ecluse.Test.Registry.Metadata.Fetch (captureChunks, heldWorkspacePayments, heldWorkspacePeak)
 import Ecluse.Test.Registry.PyPI (denseIndex, filesNamed, simpleFile, simpleIndex, simpleIndexWith, withFileKeys)
 import Ecluse.Test.Registry.PyPI.Metadata (projectPyPIChunks, projectPyPIIndex, projectPyPIVersion, simpleValue)
 import Ecluse.Test.Rules (admittedBy, atDefaultPrecedence, evalRules, inertRuleDeps)
@@ -111,6 +113,13 @@ entryFloorSpec = describe "the full-read entry floor" $ do
         (result, payments) <- heldWorkspacePayments adapterRead pypiBase requestsName pieces
         void result `shouldSatisfy` isRight
         payments `shouldBe` [shortfall 200 (take 1 pieces), shortfall 600 (take 2 pieces), shortfall 650 pieces]
+
+    forM_ pypiCorpusPackages $ \package ->
+        it ("keeps only the per-byte kept charge once it reads the capture " <> cpPath package) $ do
+            bytes <- readFileBS (cpPath package)
+            (result, _) <- heldWorkspacePeak adapterRead pypiBase (cpPackage package) (captureChunks bytes)
+            manifest <- expectRight result
+            entryFloorCharge (manifestRetainedEntries manifest) `shouldSatisfy` (<= scaleCharge (cfKeptPermille pypiChargeFactors) (BS.length bytes))
   where
     adapterRead = metadataRead (adapterMetadata pypiAdapter)
     pypiBase = "https://pypi.org/simple"

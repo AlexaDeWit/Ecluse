@@ -18,8 +18,8 @@ import Ecluse.Test.Registry.JsonStream (heldChunks)
 
 spec :: Spec
 spec = describe "the full-read entry floor" $ do
-    it "charges each retained entry at least 256 bytes" $
-        entryFloorBytes `shouldBe` 256
+    it "charges each retained entry at least 704 bytes" $
+        entryFloorBytes `shouldBe` 704
 
     it "pays nothing while the per-byte charge covers every entry" $ do
         (result, payments) <- floored 1000 ["{" <> BS.replicate 1000 120 <> ",}"]
@@ -29,7 +29,7 @@ spec = describe "the full-read entry floor" $ do
     it "raises the workspace after each piece to the floor less the per-byte charge so far" $ do
         (result, payments) <- floored 1000 ["{,,,,", ",,,}"]
         result `shouldBe` Right (StreamResult (Right 7) 9)
-        payments `shouldBe` [4 * 256 - 5, 7 * 256 - 9]
+        payments `shouldBe` [4 * 704 - 5, 7 * 704 - 9]
 
     it "publishes an accepted state's entries and leaves a refused one unpublished" $ do
         counts <- stToIO $ do
