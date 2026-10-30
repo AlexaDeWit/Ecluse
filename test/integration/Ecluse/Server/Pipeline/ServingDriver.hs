@@ -278,7 +278,7 @@ cargoDriver =
                                 }
                         app = proxyApplication Cargo env deps
                         request method path headers = cargoObservation method <$> requestAt method ("/cargo" <> path) Wai.defaultRequest{Wai.requestHeaders = headers} app
-                        metadata method headers = request method "/th/in/thing" headers
+                        metadata method = request method "/th/in/thing"
                         artifact method headers version = request method (cargoArtifact version) headers
                     action
                         ServingSession
