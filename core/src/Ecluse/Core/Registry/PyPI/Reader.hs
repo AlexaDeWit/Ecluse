@@ -10,9 +10,11 @@ module Ecluse.Core.Registry.PyPI.Reader (
 ) where
 
 import Control.Monad.ST (ST)
-import Data.Aeson (Value (Null, String))
+import Data.Aeson (Value (Array, Null, Object, String))
 import Data.Aeson.Key qualified as Key
+import Data.Aeson.KeyMap qualified as KeyMap
 import Data.JsonStream.Lexer (Cursor, Element (..))
+import Data.Vector qualified as V
 
 import Ecluse.Core.Registry.Json.Intern (InternTable, nameBytes, nameText)
 import Ecluse.Core.Registry.Json.Shape (Members, Mode (..), Shape (..), Trees (..), knownMembers, listedMember, namedMembers, prepareMembers, readShape)
@@ -64,16 +66,39 @@ walkIndex depth mode step finishRead readIndexFile table0 initial = start
     emit = Walk.emit step
     topField walked@(Walked table acc) name after continue = case nameBytes name of
         "name" -> envelope "name" (Scalar (depth - 1))
-        "meta" -> envelope "meta" (ObjectWith (depth - 1) metaFields (Scalar (depth - 1)))
+        "meta" -> withElement after $ \element afterKey -> case element of
+            ObjectBegin | depth > 1 -> eachMember (metaMember table) (\(Fields held members) -> keep "meta" held (Object members)) (Fields acc mempty) afterKey
+            _ -> envelopeValue "meta" (ObjectWith (depth - 1) metaFields (Scalar (depth - 1))) element afterKey
         "project-status" | full -> envelope "project-status" (ObjectWith (depth - 1) statusFields (Scalar (depth - 1)))
-        "alternate-locations" | full -> envelope "alternate-locations" (ArrayWith (depth - 1) (Scalar (depth - 2)) (Scalar (depth - 1)))
+        "alternate-locations" | full -> withElement after $ \element afterKey -> case element of
+            ArrayBegin | depth > 1 -> envelopeItems "alternate-locations" (depth - 2) table acc afterKey (keep "alternate-locations")
+            _ -> envelopeValue "alternate-locations" (ArrayWith (depth - 1) (Scalar (depth - 2)) (Scalar (depth - 1))) element afterKey
         "files" -> shaped FilesShape files walked after continue
         "versions" | full -> shaped VersionsShape (eachItem version) walked after continue
         _ -> withElement after $ \element afterKey -> skipFrom element afterKey (continue walked)
       where
-        envelope key shape = withElement after $ \element afterKey ->
-            readShape Trees shape Keep table element afterKey $ \value _ afterValue ->
-                emit acc (EnvelopeField key value) (\acc' -> continue (Walked table acc') afterValue)
+        envelope key shape = withElement after (envelopeValue key shape)
+        envelopeValue key shape element afterKey =
+            readShape Trees shape Keep table element afterKey $ \value _ -> keep key acc value
+        keep key held value afterValue = emit held (EnvelopeField key value) (\acc' -> continue (Walked table acc') afterValue)
+
+    -- Meta keeps its listed members, the first of each name, as an object read keeps them.
+    metaMember table (Fields acc members) name after next = withElement after $ \element afterKey -> case listedMember metaFields name of
+        Just (key, shape)
+            | KeyMap.member key members -> readShape Trees shape Keep table element afterKey (\_ _ -> next (Fields acc members))
+            | key == "tracks"
+            , ArrayBegin <- element
+            , depth > 2 -> envelopeItems "meta" (depth - 3) table acc afterKey $ \counted value ->
+                next (Fields counted (KeyMap.insert key value members))
+            | otherwise -> readShape Trees shape Keep table element afterKey (\value _ -> next (Fields acc (KeyMap.insert key value members)))
+        Nothing -> skipFrom element afterKey (next (Fields acc members))
+
+    -- Each item reaches the step as it is read, so the entry floor counts it before its array closes.
+    envelopeItems key budget table acc0 tokens done = eachItem item (\(Items acc values) -> done acc (Array (V.fromList (reverse values)))) (Items acc0 []) tokens
+      where
+        item (Items acc values) _ element rest next =
+            readShape Trees (Scalar budget) Keep table element rest $ \value _ afterValue ->
+                emit acc (EnvelopeItem key) (\counted -> next (Items counted (value : values)) afterValue)
 
     -- The first array claims the key and its end yields an ignored field. Null claims it empty.
     shaped claim items (Walked table acc) after continue = withElement after $ \element rest -> case element of
@@ -128,6 +153,12 @@ data Selection = Selection
 
 -- Keep the filename memo scoped to the current files array.
 data Selecting a = Selecting !InternTable !FilenameMemo a
+
+-- The consumer's state beside an envelope object's members so far.
+data Fields s = Fields s (KeyMap.KeyMap Value)
+
+-- The consumer's state beside an envelope array's items so far, newest first.
+data Items s = Items s [Value]
 
 -- After a rejecting filename, only the lexer checks the remaining members.
 selectedFile :: (Walk r) => Selection -> FilenameMemo -> InternTable -> Element -> Cursor -> (Maybe Value -> FilenameMemo -> InternTable -> Cursor -> r) -> r
