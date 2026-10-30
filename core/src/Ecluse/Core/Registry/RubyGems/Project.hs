@@ -105,8 +105,9 @@ mkCoordinate name version platform = do
     file <- maybeToRight (ParseError "invalid RubyGems artifact filename") (mkFilename filename)
     pure (GemCoordinate checkedName checkedVersion platform file)
 
--- | Return the native filename without its @.gem@ extension for quick specifications.
--- 'mkCoordinate' always appends the extension, so the fallback never applies.
+{- | Return the native filename without its @.gem@ extension for quick specifications.
+'mkCoordinate' always appends the extension, so the fallback never applies.
+-}
 coordinateStem :: GemCoordinate -> Text
 coordinateStem coordinate = let raw = unFilename (coordinateFilename coordinate) in fromMaybe raw (gemFileStem raw)
 
