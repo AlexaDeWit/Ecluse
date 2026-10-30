@@ -27,6 +27,7 @@ module Ecluse.Core.Registry.Npm.StreamingProjection (
     keepsPackedRelease,
     packedStep,
     retainedEntries,
+    keptEntries,
     finishPacked,
 ) where
 
@@ -172,13 +173,13 @@ finishParts requested acc = do
             { infoName = requested
             , infoVersions = Map.mapWithKey stamp versions
             , infoDistTags = tags
-            , infoInvalidEntries =
-                strictElements
-                    ( drops (projectedVersions acc)
-                        <> drops (projectedTags acc)
-                        <> drops (Map.restrictKeys (projectedTimes acc) (Map.keysSet versions))
-                    )
+            , infoInvalidEntries = strictElements (drops (projectedVersions acc) <> drops (projectedTags acc) <> keptTimeDrops acc)
             }
+
+-- The timestamps a finished read reports as dropped: those under a valid release's key. A valid one folds
+-- into its release, and one under any other key goes.
+keptTimeDrops :: NpmProjection -> [InvalidEntry]
+keptTimeDrops acc = lefts (Map.elems (Map.restrictKeys (projectedTimes acc) (Map.keysSet (Map.filter isRight (projectedVersions acc)))))
 
 -- | A read that keeps each release as aeson's tree: the typed facts, and the served releases.
 data TreeRead = TreeRead NpmProjection (Map Text Value)
@@ -257,9 +258,13 @@ packedStep writer limits name (PackedRead acc served) field next = case field of
         Object fields -> Object (maybe (KeyMap.delete "author") (KeyMap.insert "author") original fields)
         other -> other
 
--- | The releases, timestamps and tags the packed read holds.
+-- | The releases, timestamps and tags the packed read holds while it reads.
 retainedEntries :: PackedRead -> RetainedEntries
 retainedEntries (PackedRead acc _) = RetainedEntries (Map.size (projectedVersions acc)) (Map.size (projectedTimes acc) + Map.size (projectedTags acc))
+
+-- | The entries the finished read keeps: its releases, its tags, the bookkeeping times it serves, and its reported timestamp drops.
+keptEntries :: PackedRead -> RetainedEntries
+keptEntries (PackedRead acc _) = RetainedEntries (Map.size (projectedVersions acc)) (Map.size (projectedTags acc) + Map.size (projectedBookkeeping acc) + length (keptTimeDrops acc))
 
 -- Keep the diagnostic field selection to preserve decoder refusal priority. Dependency maps never refuse.
 typedMembers :: Pick
