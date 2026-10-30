@@ -38,6 +38,7 @@ import Ecluse.Core.Registry.Npm.Route.Internal (
 import Ecluse.Core.Registry.PyPI.Credential (pypiCredential)
 import Ecluse.Core.Registry.PyPI.Mirror (pypiMirrorDocuments)
 import Ecluse.Core.Registry.PyPI.Route (pypiRouter)
+import Ecluse.Core.Registry.PyPI.Route.Internal (artifactCoordinate)
 import Ecluse.Core.Registry.Request (CredentialMapping, credentialMapping)
 import Ecluse.Core.Registry.Sweep (sweepCycle)
 import Ecluse.Core.Registry.Sweep.Outcome (CycleOutcome (outcomeTally), SweepTally (tallyDeleted, tallyExamined))
@@ -69,6 +70,7 @@ import Ecluse.Core.Server.Contract (responseToWai)
 import Ecluse.Core.Server.Pipeline (headPackument, headTarball, servePackument, serveTarball)
 import Ecluse.Core.Server.Pipeline.Publish ()
 import Ecluse.Core.Server.Pipeline.Shared (hRetryAfter)
+import Ecluse.Core.Server.Pipeline.Sidecar (sidecarAction)
 import Ecluse.Core.Server.Upstream (MirrorServePlan (MirrorOnAdmit, NoMirrorWrite))
 import Ecluse.Core.Telemetry.Metrics (Decision (Admit, Deny, Unavailable), SweepResult (SweepDeleted), SweepTarget (SweepPrivate))
 import Ecluse.Core.Telemetry.Metrics qualified as Metric
@@ -1176,6 +1178,18 @@ pypiPrivateArtifactSpec = describe "PyPI first-party private artifacts" $ do
                         lookup hRetryAfter (simpleHeaders response) `shouldBe` expectedRetry
             readIORef publicHits `shouldReturn` 0
 
+    for_ [(status302, 502, "returned an invalid or unusable reply"), (status503, 503, "was unavailable")] $ \(companionStatus, expectedStatus, expectedWords) ->
+        it ("keeps the first-party wording after a private index hit and companion HTTP " <> show (statusCode companionStatus) <> ", without a public read") $ withSweeper $ \deadlines -> do
+            rt <- testServeRuntime deadlines noopMetricsPort
+            publicHits <- newIORef (0 :: Int)
+            testWithApplication (pure (countingUpstream publicHits (pypiPublicAppWith True status200))) $ \publicPort ->
+                testWithApplication (pure (pypiPrivateCompanionApp companionStatus)) $ \privatePort -> do
+                    response <- captureWordedCompanion rt (pypiPrivateDeps privatePort publicPort)
+                    statusCode (responseStatus response) `shouldBe` expectedStatus
+                    body <- responseBytes response
+                    LBS.toStrict body `shouldSatisfy` BS.isInfixOf ("the private upstream for this first-party artifact " <> expectedWords)
+            readIORef publicHits `shouldReturn` 0
+
 -- A merged listing whose public origin admits leftpad and whose private origin gives one fixed answer.
 mergedListingAfter :: Response -> Int -> Maybe ByteString -> Decision -> Expectation
 mergedListingAfter privateResponse expectedStatus expectedRetry expectedDecision = withSweeper $ \deadlines -> do
@@ -1218,10 +1232,18 @@ pypiPrivateDeps privatePort publicPort =
 capturePypiArtifact :: ServeRuntime -> PackumentDeps -> Method -> IO Response
 capturePypiArtifact rt deps method =
     case pypiRouter method [] ["simple", "requests", "requests-1.0.0.tar.gz"] of
-        RouteAction contract (RunPipeline _ action) -> captureServe contract rt binding (action defaultRequest)
+        RouteAction contract (RunPipeline _ action) -> captureServe contract rt (pypiBinding deps) (action defaultRequest)
         _ -> throwIO MissingFixtureResponse
-  where
-    binding = (mountUnder pypiCredential deps){bindingPrefix = "pypi" :| [], bindingRouter = pypiRouter}
+
+-- The companion of the requests sdist under npm's error body, because a PyPI refusal carries no words to read.
+captureWordedCompanion :: ServeRuntime -> PackumentDeps -> IO Response
+captureWordedCompanion rt deps =
+    case uncurry (sidecarAction npmTarballReplies methodGet requestsName) <$> artifactCoordinate requestsName "requests-1.0.0.tar.gz" of
+        Just (RunPipeline _ action) -> captureServe npmTarballContract rt (pypiBinding deps) (action defaultRequest)
+        _ -> throwIO MissingFixtureResponse
+
+pypiBinding :: PackumentDeps -> MountBinding
+pypiBinding deps = (mountUnder pypiCredential deps){bindingPrefix = "pypi" :| [], bindingRouter = pypiRouter}
 
 pypiPrivateApp :: Status -> Application
 pypiPrivateApp privateStatus req respond
@@ -1362,10 +1384,8 @@ fetchPypiPath rt deps method file headers =
         RouteAction contract (RunPipeline _ action) -> do
             logEnv <- newTestLogEnv
             runSession (WaiTest.request defaultRequest{requestMethod = method, requestHeaders = headers}) $ \req respond ->
-                runHandler logEnv mempty (RequestCtx rt binding) (action req (respond . responseToWai contract))
+                runHandler logEnv mempty (RequestCtx rt (pypiBinding deps)) (action req (respond . responseToWai contract))
         _ -> throwIO MissingFixtureResponse
-  where
-    binding = (mountUnder pypiCredential deps){bindingPrefix = "pypi" :| [], bindingRouter = pypiRouter}
 
 -- An upstream that answers the artifact with a partial reply, as a range-serving store may.
 partialUpstream :: Application
