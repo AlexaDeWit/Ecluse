@@ -284,18 +284,20 @@ missing.
 This is a privilege over names, not authentication. It says which names are yours, never who may
 use them, so the private upstream stays the authority on every caller.
 
-For npm and PyPI, a private `401` or `403` stops the read with a local `403`.
+For npm, PyPI and RubyGems, a private `401` or `403` stops the read with a local `403`.
 This applies to metadata and artifacts, including HEAD and conditional requests. Public content cannot replace the private
 copy, even if it has the same name and version or passes public admission and integrity checks.
 This protects a private patch from substitution when the caller's private credential fails.
 Écluse forwards no upstream error body or headers. npm receives a fixed explanation.
 PyPI keeps its local refusal format: an empty body, or the configured operator help message.
 
-Cargo preserves a native `401` challenge for credential-provider retry and treats a real `403` as refusal.
+Cargo is the only exception. It preserves a native `401` challenge for credential-provider retry and treats a real `403` as refusal.
 The private alternate never substitutes a public copy, including after a private `404`.
 
-RubyGems keeps a private `401` or `403` status on metadata and archive reads, and never substitutes
-a public copy after either.
+Bundler treats a `403` on Compact Index metadata as an unavailable index. It then tries the
+Dependencies API and the full index, which Écluse answers with `404`, so the install fails with
+Bundler's `Could not fetch specs` error rather than a credential prompt. A gem download fails with
+the `403`.
 
 For sparse index and archive requests, Cargo's public policy and evaluation refusals include Écluse's reason plus configured `server.helpMessage`.
 Private refusals, access refusals on either view, and missing or excluded package replies keep only configured operator help.

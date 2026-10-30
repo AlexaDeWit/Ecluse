@@ -409,9 +409,9 @@ upstream, which authorises the caller. So what someone reaches through the proxy
 registry already grants them. Public installs without credentials still work unless a private
 upstream explicitly refuses access. The private set is what the credential unlocks.
 
-Public success does not prove the private credential worked. For npm and PyPI, an explicit private
-`401` or `403` stops metadata and artifact reads with a local `403`, including HEAD and conditional
-requests. Cargo and RubyGems keep their native refusal statuses. In every ecosystem, public content
+Public success does not prove the private credential worked. For npm, PyPI and RubyGems, an explicit
+private `401` or `403` stops metadata and artifact reads with a local `403`, including HEAD and
+conditional requests. Cargo keeps its native refusal statuses. In every ecosystem, public content
 cannot replace the private copy after that refusal. A genuine private `404` still permits public
 fallback for a name outside your first-party namespaces where the view allows it, and first-party
 names stay private-only. A backend that masks a refusal as `404` does not prove authentication
