@@ -33,7 +33,11 @@ data PublicationAuthority = PublicationAuthority
 
 -- | A Dredger role over the fixture's mirror and cache repositories, with every other mount off.
 codeArtifactSweepRoleEnv :: Ecosystem -> [(Text, Text)]
-codeArtifactSweepRoleEnv ecosystem =
+codeArtifactSweepRoleEnv ecosystem = roleEnv ecosystem (codeArtifactRepositoryUrl ecosystem "mirror")
+
+-- Every role's mounts, with the mirror target uploading to the given address where the protocol takes one.
+roleEnv :: Ecosystem -> Text -> [(Text, Text)]
+roleEnv ecosystem mirrorUpload =
     [ ("ECLUSE_SERVER__PORT", "4873")
     , ("ECLUSE_SERVER__PUBLIC_URL", "http://127.0.0.1:4873")
     ]
@@ -44,16 +48,17 @@ codeArtifactSweepRoleEnv ecosystem =
            , ("ECLUSE_OBSERVABILITY__LOG_FORMAT", "json")
            , ("SSL_CERT_FILE", "/certs/bundle.pem")
            ]
+        <> [(mountKey ecosystem "MIRROR_TARGET__CODE_ARTIFACT__UPLOAD_URL", mirrorUpload) | separateUpload ecosystem]
         <> ministackAwsEnv
 
 -- | Serving and worker roles keep mirror state remotely across restarts and publish to the mirror.
 codeArtifactProxyRoleEnv :: Ecosystem -> PublicationAuthority -> [(Text, Text)]
 codeArtifactProxyRoleEnv ecosystem authority =
-    filter ((/= "ECLUSE_SERVER__PUBLIC_URL") . fst) (codeArtifactSweepRoleEnv ecosystem)
+    filter ((/= "ECLUSE_SERVER__PUBLIC_URL") . fst) (roleEnv ecosystem upload)
         <> [ ("ECLUSE_MIRROR_STATE__URL", "s3://" <> advisoryBucket <> "/" <> ecosystemName ecosystem <> "-dredger")
            , (publication "URL", mirror)
            ]
-        <> [(key, upload) | separateUpload, key <- [mountKey ecosystem "MIRROR_TARGET__CODE_ARTIFACT__UPLOAD_URL", publication "UPLOAD_URL"]]
+        <> [(publication "UPLOAD_URL", upload) | separateUpload ecosystem]
         <> [(publication key, value) | (key, value) <- paCredential authority]
         <> [ (mountKey ecosystem "FIRST_PARTY", paFirstParty authority)
            , ("ECLUSE_SERVER__AUTH_TOKEN", paServiceToken authority)
@@ -62,9 +67,11 @@ codeArtifactProxyRoleEnv ecosystem authority =
   where
     mirror = codeArtifactRepositoryUrl ecosystem "mirror"
     upload = mirror <> paUploadPath authority
-    -- A protocol that derives its upload address from url refuses an uploadUrl at load.
-    separateUpload = uploadEndpointFor ecosystem == Just ExplicitUploadEndpoint
     publication key = mountKey ecosystem ("PUBLICATION_TARGET__CODE_ARTIFACT__" <> key)
+
+-- The load requires uploadUrl where the protocol uploads separately and refuses it elsewhere.
+separateUpload :: Ecosystem -> Bool
+separateUpload ecosystem = uploadEndpointFor ecosystem == Just ExplicitUploadEndpoint
 
 mountKey :: Ecosystem -> Text -> Text
 mountKey ecosystem key = "ECLUSE_MOUNTS__" <> T.toUpper (ecosystemName ecosystem) <> "__" <> key

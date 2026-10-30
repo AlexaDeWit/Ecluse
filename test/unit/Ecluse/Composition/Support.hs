@@ -253,7 +253,8 @@ twoStoreEnv :: [(String, String)]
 twoStoreEnv =
     overrideEnv "ECLUSE_MOUNTS__PYPI__ENABLED" "true" $
         overrideEnv "ECLUSE_MOUNTS__PYPI__PRIVATE_UPSTREAM__CODE_ARTIFACT__URL" codeArtifactPypiCacheUrl $
-            overrideEnv "ECLUSE_MOUNTS__PYPI__MIRROR_TARGET__CODE_ARTIFACT__URL" codeArtifactPypiMirrorUrl codeArtifactEnvVars
+            overrideEnv "ECLUSE_MOUNTS__PYPI__MIRROR_TARGET__CODE_ARTIFACT__URL" codeArtifactPypiMirrorUrl $
+                overrideEnv "ECLUSE_MOUNTS__PYPI__MIRROR_TARGET__CODE_ARTIFACT__UPLOAD_URL" codeArtifactPypiMirrorUrl codeArtifactEnvVars
 
 -- | The repository 'twoStoreEnv' mirrors PyPI to.
 codeArtifactPypiMirrorUrl :: (IsString s, Semigroup s) => s
@@ -413,4 +414,5 @@ cargoCodeArtifactEnv =
     cargoGateEnv
         <> [ ("ECLUSE_MOUNTS__CARGO__PRIVATE_UPSTREAM__CODE_ARTIFACT__URL", codeArtifactDomain <> "/cargo/internal/")
            , ("ECLUSE_MOUNTS__CARGO__MIRROR_TARGET__CODE_ARTIFACT__URL", codeArtifactDomain <> "/cargo/mirror/")
+           , ("ECLUSE_MOUNTS__CARGO__MIRROR_TARGET__CODE_ARTIFACT__UPLOAD_URL", codeArtifactDomain <> "/cargo/mirror/")
            ]

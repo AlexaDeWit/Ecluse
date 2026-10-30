@@ -147,7 +147,7 @@ admissionSpec = describe "the tags and keys each endpoint admits" $ do
                 [decl "publicationTarget" "verdaccio" [url verdaccioUrl, permitDeletion]]
                 "unexpected publicationTarget.verdaccio key(s): \"permitDeletion\""
 
-    -- url is where Écluse reads and uploadUrl where it writes, so only a protocol that writes elsewhere takes one.
+    -- url is where Écluse reads and uploadUrl where it writes. A protocol that writes elsewhere requires one, and the others refuse it.
     describe "uploadUrl" $ do
         for_ [("npm", "npm"), ("rubygems", "ruby")] $ \(eco, format) ->
             it ("refuses uploadUrl under every tag of both " <> toString eco <> " write targets") $
@@ -160,6 +160,12 @@ admissionSpec = describe "the tags and keys each endpoint admits" $ do
             it ("admits uploadUrl under every tag of both " <> toString eco <> " write targets") $
                 for_ (writeTargets format) $ \target ->
                     void (expectConfig pubUrlEnv (Just (mountDocFor eco (withUploadUrl target))))
+
+        for_ [("pypi", "pypi"), ("cargo", "cargo")] $ \(eco, format) ->
+            it ("requires uploadUrl under every tag of both " <> toString eco <> " write targets") $
+                for_ (writeTargets format) $ \(key, tag, target, keys) ->
+                    loadFor eco (mirrored [decl key tag (url target : keys)])
+                        `shouldSatisfy` refusalMentions (key <> "." <> tag <> ".uploadUrl is required")
 
         it "names the refused key in both spellings and the remedy" $
             renderedRefusals (loadFor "rubygems" [decl "publicationTarget" "registry" [url publishUrl, field "uploadUrl" publishUrl]])
