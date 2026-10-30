@@ -166,6 +166,7 @@ above every allow by default.
 | `AllowByIdentity` | Allow | No | Pins a package or a `package@version` by exact name |
 | `DenyByIdentity` | Deny | No | Revokes a package or version |
 | `DenyInstallTimeExecution` | Deny | npm only | `deny-scripts` denies npm install scripts at admission, leaving stored copies in place |
+| `DenyExternalDependencies` | Deny | npm only | `deny-external-dependencies` denies, at admission, a public npm version whose installable dependency names a git source or a remote tarball URL, which a client would fetch past Écluse. Stored copies stay |
 | `DenyIfCve` | Deny | No | Denies versions with a known vulnerability above a severity you choose |
 | `DenyIfEpss` | Deny | No | Denies versions with a known vulnerability whose exploitation probability (EPSS) is at or above a threshold you choose |
 
@@ -173,8 +174,9 @@ An advisory source (`advisories.url`) activates `remediation-fast-track`, togeth
 `deny-known-malicious` MAL deny. Without a source, only the quarantine supplies the shared allow.
 With one, the fast lane refuses a version it reaches while the advisory database is missing,
 unreadable, or too old, so an outage also holds back old versions until the database recovers. The
-npm mount also denies install scripts by default.
-Disable `deny-scripts` under `mounts.npm.rules`, or add an `AllowByIdentity` pin with precedence above 300.
+npm mount also denies, by default, install scripts and dependencies fetched from outside the registry.
+Disable `deny-scripts` or `deny-external-dependencies` under `mounts.npm.rules`, or add an
+`AllowByIdentity` pin with precedence above 300.
 The off rules opt in by name, and
 [Rule policy](@/docs/configuration.md#rule-policy) has their knobs.
 

@@ -15,7 +15,7 @@ reference = "/docs/operations/"
 
 | What you see | Check first |
 | --- | --- |
-| No matching version | The minimum age, npm install scripts, explicit denies, and file eligibility. Filtered versions do not appear in listings. |
+| No matching version | The minimum age, npm install scripts, npm dependencies on a git source or a remote URL, explicit denies, and file eligibility. Filtered versions do not appear in listings. |
 | 403 from an artifact request | The deciding policy rule or integrity refusal in the response and logs. Also check private credentials. |
 | 503 | Whether Écluse can obtain required evidence or upstream data. Check advisory state and managed mirror completion. |
 | A first-party package is missing | The private repository and declared names. First-party requests never fall back to public. |

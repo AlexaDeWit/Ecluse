@@ -41,6 +41,8 @@ A PyPI `publicationTarget` now names its registry root in `url` and its upload e
 
 An npm or RubyGems `mirrorTarget` or `publicationTarget` that sets `uploadUrl` now refuses at load, because those protocols derive the upload address from `url`. Remove the key, and check that `url` names the registry you write to.
 
+The npm mount ships a second admission-only default, `deny-external-dependencies`. A public npm version whose `dependencies`, `optionalDependencies` or `peerDependencies` name a git source or a remote tarball URL stops resolving, and npm publication refuses such a release with `400`. Copies your stores already hold keep serving. Pin a package you still need with an `AllowByIdentity` rule at precedence above 300, or disable the default under `mounts.npm.rules` ([Rule policy](@/docs/configuration.md#rule-policy)).
+
 A rollback must account for queued messages and advisory data, as well as the container image.
 
 ## Operational references {#details}

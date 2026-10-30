@@ -369,9 +369,10 @@ advisory evidence is unavailable (see
 neither shared advisory rule is active. The age rule supplies the shared allow, and npm's
 install-script deny still applies.
 
-The npm mount adds `deny-scripts` (`DenyInstallTimeExecution`) at admission only. It does not
-activate a mount. The operator can disable it under `mounts.npm.rules`, widen its phases, or add
-an `AllowByIdentity` pin with explicit precedence above 300. PyPI has no shipped mount rules.
+The npm mount adds `deny-scripts` (`DenyInstallTimeExecution`) and `deny-external-dependencies`
+(`DenyExternalDependencies`) at admission only. They do not activate a mount. The operator can
+disable either under `mounts.npm.rules`, widen its phases, or add an `AllowByIdentity` pin with
+explicit precedence above 300. The shared layer cannot disable either, because it defines neither. PyPI has no shipped mount rules.
 Every remaining built-in rule is off and opts in by name. The scored advisory denies (`DenyIfCve`
 and `DenyIfEpss`) in particular can deny historical versions an existing build depends on, if an
 operator enables them before the mirror is warm. Read their

@@ -385,7 +385,7 @@ target never receives the edge token. Every holder of the edge token can then se
 relay forwards, within the configured first-party scopes and what the static token permits, so
 this is not the preferred deployment. The relay forwards an npm document with exactly one
 version filed under its own `version` field, a non-empty `_attachments` object, every tag on that
-version, and no repeated key. It forwards a PyPI upload with one `:action=file_upload` part and a
+version, no repeated key, and no installable dependency on a git source or a remote tarball URL. It forwards a PyPI upload with one `:action=file_upload` part and a
 `content` file name that names the declared project and version. The
 boot refuses a static publication token without `ECLUSE_SERVER__AUTH_TOKEN`
 (`PublishStaticCredentialNeedsEdge`), because an open edge would let any client publish under it.

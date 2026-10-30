@@ -491,6 +491,7 @@ The native modules retain scenario providers. The fixed suite declarations regis
 | Case ID | Original assertion |
 |---|---|
 | `npm/install/default-denial` | uses the shipped default to block install scripts and never mirrors the package |
+| `npm/install/external-dependency-denial` | uses the shipped default to deny a version whose dependency names a git source, and never mirrors it |
 | `npm/install/lifecycle-script-control` | runs no package lifecycle script during a harness install (defence in depth) |
 | `npm/install/deprecation-relay` | relays a deprecated version's notice to the client, before and after the worker mirrors the version |
 | `npm/install/deprecation-negative-control` | rejects the deprecation warning assertion for a version without the member |
