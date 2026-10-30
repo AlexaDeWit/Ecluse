@@ -6,9 +6,7 @@
 module Ecluse.Core.Version.CargoSpec (spec) where
 
 import Data.Text qualified as T
-import Hedgehog (Gen)
 import Hedgehog qualified as H
-import Hedgehog.Gen qualified as Gen
 import Test.Hspec
 import Test.Hspec.Hedgehog (hedgehog, modifyMaxSuccess)
 
@@ -68,15 +66,11 @@ spec = do
         modifyMaxSuccess (const 100) $
             it "orders every generated pair both sides accept as the pinned oracle does" $
                 hedgehog $ do
-                    raw1 <- H.forAll cargoish
-                    raw2 <- H.forAll cargoish
+                    raw1 <- H.forAll V.genCargo
+                    raw2 <- H.forAll V.genCargo
                     theirs <- H.evalIO (oracleCompare Cargo raw1 raw2)
                     let ours = liftA2 compare (parseCargo raw1) (parseCargo raw2)
                     H.cover 50 "both sides accepted" (isJust ours && isJust theirs)
                     case (ours, theirs) of
                         (Just o, Just t) -> o H.=== t
                         _ -> H.success
-
--- Native SemVer with prereleases and build metadata, beside the u64 boundary and build-only twins.
-cargoish :: Gen Text
-cargoish = Gen.choice [V.genNpm, Gen.element ["18446744073709551615.0.0", "18446744073709551616.0.0", "1.2.3+build.1", "1.2.3+build.2", "1.2.3-rc.1", "1.2.3"]]
