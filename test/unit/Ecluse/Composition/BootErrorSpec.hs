@@ -133,6 +133,8 @@ renderBootErrorSpec = describe "renderBootError" $
             `shouldNotSatisfy` infixed "AWS_ENDPOINT_URL_SQS"
         renderBootError (CodeArtifactMintFailed ("ECLUSE_MOUNTS__NPM__MIRROR_TARGET" :| []) "AccessDenied") `shouldSatisfy` infixed "transient"
         renderBootError (FirstPartyMissing Npm) `shouldSatisfy` infixed "ECLUSE_MOUNTS__NPM__FIRST_PARTY"
+        renderBootError (MirrorCompanionMismatch RubyGems) `shouldSatisfy` infixed "ECLUSE_MOUNTS__RUBYGEMS__MIRROR_TARGET"
+        renderBootError (MirrorCompanionMismatch RubyGems) `shouldSatisfy` infixed "native metadata companions"
         -- The refusal says what each key means, so an operator whose url holds the upload endpoint sees the fix.
         renderBootError (UploadUrlRequired PyPI "publicationTarget.registry.uploadUrl")
             `shouldSatisfy` infixed "mounts.pypi.publicationTarget.registry.uploadUrl (ECLUSE_MOUNTS__PYPI__PUBLICATION_TARGET__REGISTRY__UPLOAD_URL) is required"

@@ -9,10 +9,16 @@ import Data.Map.Strict qualified as Map
 import Test.Hspec
 
 import Ecluse.Core.Ecosystem (Ecosystem (Cargo, Npm, PyPI, RubyGems))
-import Ecluse.Core.Registry.Adapter (adapterEcosystem, adapterFor, adapterMetadata, adapterRuleBlocks, uploadEndpointFor)
+import Ecluse.Core.Mirror.Documents (MirrorDocuments (mdCompanions))
+import Ecluse.Core.Registry (CompanionRequirement (DeclaredCompanions, NativeCompanions))
+import Ecluse.Core.Registry.Adapter (adapterEcosystem, adapterFor, adapterMetadata, adapterPublish, adapterRuleBlocks, uploadEndpointFor)
 import Ecluse.Core.Registry.Adapter.Capability (
     AdapterMetadata (metadataChargeFactors),
+    AdapterPublish (publishMirrorRequirements),
+    MirrorRequirements (mirrorStateRequirement),
     UploadEndpointRequirement (ExplicitUploadEndpoint, ReadRootUpload),
+    companionsAgree,
+    durableMirrorDocuments,
  )
 import Ecluse.Core.Registry.Cargo.Metadata (cargoChargeFactors)
 import Ecluse.Core.Registry.RubyGems.Metadata (rubyGemsChargeFactors)
@@ -58,6 +64,14 @@ spec = describe "adapterFor (the ecosystem adapter registry)" $ do
     it "resolves RubyGems with its initial measured native charge factors" $ do
         (adapterEcosystem <$> adapterFor RubyGems) `shouldBe` Just RubyGems
         (metadataChargeFactors . adapterMetadata <$> adapterFor RubyGems) `shouldBe` Just rubyGemsChargeFactors
+
+    it "prepares native companions exactly where each registered adapter's durable declaration requires them" $
+        map (fmap companionsAgree . (adapterFor >=> adapterPublish)) [Npm, PyPI, Cargo, RubyGems]
+            `shouldBe` [Just True, Just True, Just True, Just True]
+
+    it "requires native companions only for RubyGems' durable mirror" $
+        map (adapterFor >=> adapterPublish >=> fmap mdCompanions . durableMirrorDocuments . mirrorStateRequirement . publishMirrorRequirements) [Npm, PyPI, Cargo, RubyGems]
+            `shouldBe` [Nothing, Just DeclaredCompanions, Just DeclaredCompanions, Just NativeCompanions]
 
     it "declares separate read and write endpoints for exactly PyPI and Cargo" $
         map uploadEndpointFor [Npm, PyPI, RubyGems, Cargo]
