@@ -26,7 +26,7 @@ import Ecluse.Core.Rules (PreparedRule)
 import Ecluse.Core.Security (defaultLimits)
 import Ecluse.Core.Security.Egress (RegistryUrl, mkRegistryUrl)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
-import Ecluse.Core.Server.Context (PackumentDeps (..), ReadSourceSelection (MergePrivateAndPublic), pdMirror, pdPrivateBaseUrl, pdPublicBaseUrl)
+import Ecluse.Core.Server.Context (PackumentDeps (..), pdMirror, pdPrivateBaseUrl, pdPublicBaseUrl)
 import Ecluse.Core.Server.Encoding (MetadataCompression (GzipWhenAccepted))
 import Ecluse.Core.Server.Upstream (MirrorServePlan (MirrorOnAdmit), mountUpstreams)
 import Ecluse.Test.Package (defaultMinIntegrity, defaultMinTrustedIntegrity)
@@ -37,7 +37,6 @@ serveDepsFor adapter privateBaseUrl publicBaseUrl mirror rules clock =
     PackumentDeps
         { pdUpstreams = mountUpstreams (artifactHosts (adapterArtifact adapter)) privateBaseUrl publicBaseUrl mirror
         , pdFirstParty = const False
-        , pdReadSourceSelection = MergePrivateAndPublic
         , pdMountBaseUrl = "https://proxy.test"
         , pdRules = rules
         , pdAdditionalBlockedRanges = []

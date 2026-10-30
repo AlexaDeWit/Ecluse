@@ -13,7 +13,6 @@ module Ecluse.Core.Server.Context (
 
     -- * Packument-serve dependencies
     PackumentDeps (..),
-    ReadSourceSelection (..),
     pdPrivateBaseUrl,
     pdPublicBaseUrl,
     pdPrivateBase,
@@ -107,19 +106,10 @@ data ServeRuntime = ServeRuntime
     -- ^ The tracing port the serve path opens its hand-added domain spans through.
     }
 
--- | Which origins may contribute to one served view.
-data ReadSourceSelection
-    = MergePrivateAndPublic
-    | ManagedMirrorAndPublic
-    | PrivateOnly
-    deriving stock (Eq, Show)
-
 -- | Mount inputs shared by packument and tarball handlers, resolved at boot.
 data PackumentDeps = PackumentDeps
     { pdUpstreams :: MountUpstreams
     -- ^ Upstreams bound to their derived host gate, so their authorities cannot diverge.
-    , pdReadSourceSelection :: ReadSourceSelection
-    -- ^ Restrict origin reads and managed mirror contributions for this view.
     , pdMirrorState :: Maybe MirrorView
     -- ^ Source-only state, validated after each caller authorises the private read.
     , pdFirstParty :: PackageName -> Bool

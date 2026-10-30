@@ -106,16 +106,14 @@ readPrivateDirectory request deps privateRead = case pdPrivateBase deps of
 
 -- Only the flight leader fetches, records the fetch and logs. Followers and retained snapshots do neither.
 readPublicDirectory :: MemoryTicket -> PackumentDeps -> ChargePart -> Handler (Either MetadataError GemDirectory)
-readPublicDirectory ticket deps publicRead
-    | pdReadSourceSelection deps == PrivateOnly = pure (Right (GemDirectory ""))
-    | otherwise = do
-        runtime <- asks ctxRuntime
-        let source = DirectorySource DropMalformedRows (srPublicClient runtime) (Controlled (srPublicControl runtime) Listing) (pdPublicBase deps) Nothing
-        withRunInIO $ \runInIO ->
-            awaitingFlight ticket flight $
-                resolveDirectory (srMetrics runtime) (srMetadataCache runtime) key $
-                    recordedFetch (srMetrics runtime) Metric.Public $
-                        fetchDirectory runInIO (srTracing runtime) (chargePart (servingPart flight publicRead)) limits source
+readPublicDirectory ticket deps publicRead = do
+    runtime <- asks ctxRuntime
+    let source = DirectorySource DropMalformedRows (srPublicClient runtime) (Controlled (srPublicControl runtime) Listing) (pdPublicBase deps) Nothing
+    withRunInIO $ \runInIO ->
+        awaitingFlight ticket flight $
+            resolveDirectory (srMetrics runtime) (srMetadataCache runtime) key $
+                recordedFetch (srMetrics runtime) Metric.Public $
+                    fetchDirectory runInIO (srTracing runtime) (chargePart (servingPart flight publicRead)) limits source
   where
     limits = pdLimits deps
     key = directoryKey (publicSource deps) (maxMetadataBytes limits)
