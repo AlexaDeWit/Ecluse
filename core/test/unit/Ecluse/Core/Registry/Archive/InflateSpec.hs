@@ -84,10 +84,10 @@ inflateBoundedSpec :: Spec
 inflateBoundedSpec = describe "inflateBounded" $ do
     it "collects the payload, paying for the decoder and then for each kept chunk" $ do
         paid <- newIORef []
-        let body = BS.replicate 1000 97
-        result <- inflateBounded ZlibStream "payload exceeds its inflated byte bound" 1000 (\n -> modifyIORef' paid (<> [n])) (BSL.toStrict (Zlib.compress (BSL.fromStrict body)))
+        let body = BS.replicate 70000 97
+        result <- inflateBounded ZlibStream "payload exceeds its inflated byte bound" 70000 (\n -> modifyIORef' paid (<> [n])) (BSL.toStrict (Zlib.compress (BSL.fromStrict body)))
         result `shouldBe` Right body
-        readIORef paid `shouldReturn` [32768 + 7168 + 32768, 73728 + 3 * 1000]
+        readIORef paid `shouldReturn` [32768 + 7168 + 32768, 73728 + 3 * 32768, 73728 + 3 * 65536, 73728 + 3 * 70000]
     it "refuses a payload past its inflated bound with the caller's reason" $
         inflateBounded (GzipMembers 1) "payload exceeds its inflated byte bound" 2 (const pass) (BSL.toStrict (GZip.compress "one"))
             `shouldReturn` Left (ParseError "payload exceeds its inflated byte bound")
