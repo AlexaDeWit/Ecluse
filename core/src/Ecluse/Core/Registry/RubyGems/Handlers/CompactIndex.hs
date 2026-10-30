@@ -43,6 +43,7 @@ import Ecluse.Core.Server.Pipeline.Origin (publicSource)
 import Ecluse.Core.Server.Pipeline.Shared (flightOf, forwardedCredential, withListingAdmission)
 import Ecluse.Core.Server.Response (mkRefusal)
 import Ecluse.Core.Telemetry.Metrics qualified as Metric
+import Ecluse.Core.Telemetry.Span (TracingPort (spanDirectoryDecode, spanDirectoryFetch))
 import Ecluse.Core.Telemetry.Upstream (PublicReadKind (Listing))
 
 -- | Share admission and a whole-request deadline across discovery and response assembly.
@@ -93,7 +94,7 @@ readPrivateDirectory request deps privateRead = case pdPrivateBase deps of
         runtime <- asks ctxRuntime
         mount <- asks ctxMount
         let source = DirectorySource (srPrivateClient runtime) Uncontrolled base (forwardedCredential mount request)
-        withRunInIO $ \runInIO -> fmap Just <$> fetchDirectory runInIO (chargePart privateRead) (pdLimits deps) source
+        withRunInIO $ \runInIO -> fmap Just <$> fetchDirectory runInIO (srTracing runtime) (chargePart privateRead) (pdLimits deps) source
 
 -- Only the flight leader fetches, records the fetch and logs dropped rows. Followers and retained snapshots do neither.
 readPublicDirectory :: MemoryTicket -> PackumentDeps -> ChargePart -> Handler (Either MetadataError GemDirectory)
@@ -106,7 +107,7 @@ readPublicDirectory ticket deps publicRead
             awaitingFlight ticket flight $
                 resolveDirectory (srMetrics runtime) (srMetadataCache runtime) key $
                     recordedFetch (srMetrics runtime) Metric.Public $
-                        fetchDirectory runInIO (chargePart (servingPart flight publicRead)) limits source
+                        fetchDirectory runInIO (srTracing runtime) (chargePart (servingPart flight publicRead)) limits source
   where
     limits = pdLimits deps
     key = directoryKey (publicSource deps) (maxMetadataBytes limits)
@@ -159,20 +160,23 @@ serveInfo name request respond =
 -- One directory source: its transport, read control, base and the caller's credential, if any.
 data DirectorySource = DirectorySource ExchangeClient ReadControl BaseRequest (Maybe ClientCredential)
 
--- Read one directory and log the rows it dropped under the source's authority.
-fetchDirectory :: (Handler () -> IO ()) -> (Int -> IO ()) -> Limits -> DirectorySource -> IO (Either MetadataError GemDirectory)
-fetchDirectory runInIO pay limits (DirectorySource client control base credential) = do
+-- Read one directory inside the metadata fetch and decode spans, and log the rows it dropped under the source's authority.
+fetchDirectory :: (Handler () -> IO ()) -> TracingPort -> (Int -> IO ()) -> Limits -> DirectorySource -> IO (Either MetadataError GemDirectory)
+fetchDirectory runInIO tracing pay limits (DirectorySource client control base credential) = do
     workspace <- newChargeRegion pay
     result <-
         metadataResponse
-            <$> formThen
-                FetchUrlUnformable
-                ( \upstream -> runExchangeUsing control client (progressFloor limits) upstream $ \response ->
-                    if statusCode (responseStatus response) == 200
-                        then fmap (SuccessBody 200) <$> readStepsWithEnd id finishRecordSteps (MetadataBodyLimit (maxMetadataBytes limits)) (directorySteps workspace) (brRead (responseBody response))
-                        else pure (Right (UnreadStatus (statusCode (responseStatus response))))
+            <$> spanDirectoryFetch
+                tracing
+                ( formThen
+                    FetchUrlUnformable
+                    ( \upstream -> runExchangeUsing control client (progressFloor limits) upstream $ \response ->
+                        if statusCode (responseStatus response) == 200
+                            then fmap (SuccessBody 200) <$> spanDirectoryDecode tracing (readStepsWithEnd id finishRecordSteps (MetadataBodyLimit (maxMetadataBytes limits)) (directorySteps workspace) (brRead (responseBody response)))
+                            else pure (Right (UnreadStatus (statusCode (responseStatus response))))
+                    )
+                    (sealRequest <$> gemDirectoryRequestUnder base credential)
                 )
-                (sealRequest <$> gemDirectoryRequestUnder base credential)
     let parsed = result >>= first (const MetadataUndecodable) . streamValue
     for_ parsed $ \directory -> unless (null (readDropped directory)) (runInIO (logDirectoryInvalidEntries (registryUrlText (baseRequestUrl base)) (readDropped directory)))
     pure (readDirectory <$> parsed)
