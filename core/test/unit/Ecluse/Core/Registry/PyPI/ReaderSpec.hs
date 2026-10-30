@@ -25,7 +25,7 @@ import Ecluse.Core.Registry.PyPI.Document (packedSimpleDocument)
 import Ecluse.Core.Registry.PyPI.Metadata (projectPyPIPacked, projectPyPIStream)
 import Ecluse.Core.Registry.PyPI.Project (fcVersionKey, fileCoordinate)
 import Ecluse.Core.Registry.PyPI.Reader (fileUniqueFields, pypiWalk)
-import Ecluse.Core.Registry.PyPI.Streaming (PyPIField (EnvelopeField, FileField), PyPIRead (..))
+import Ecluse.Core.Registry.PyPI.Streaming (PyPIField (EnvelopeField, EnvelopeItem, FileField), PyPIRead (..))
 import Ecluse.Core.Registry.PyPI.StreamingProjection (PyPIProjection, collectField, emptyProjection, keepsFile)
 import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), LimitError (BodyTooLarge, TooManyVersions), Limits (..), defaultLimits)
 import Ecluse.Core.Version (canonicalPep440, renderVersion)
@@ -246,11 +246,13 @@ reference reading@(Reading depth mode _ _) bound = emitted . parseJsonChunks bou
 start :: (PyPIProjection, [PyPIField])
 start = (emptyProjection thing, [])
 
+-- The reference takes an envelope array whole, so the walk's events for its items stay out of the comparison.
 collect :: Reading -> (PyPIProjection, [PyPIField]) -> PyPIField -> Either LimitError (PyPIProjection, [PyPIField])
 collect (Reading _ _ cap _) (projection, events) field = do
     projected <- collectField defaultLimits projection field
-    case cap of
-        Just most | length events >= most -> Left (TooManyVersions (length events) most)
+    case (field, cap) of
+        (EnvelopeItem _, _) -> Right (projected, events)
+        (_, Just most) | length events >= most -> Left (TooManyVersions (length events) most)
         _ -> Right (projected, field : events)
 
 emitted :: Either LimitError (StreamResult (PyPIProjection, [PyPIField])) -> Outcome
