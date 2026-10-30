@@ -91,7 +91,7 @@ metadataFailureSpec = describe "logMetadataFailure" $ do
         runJsonLogAt InfoS (logMetadataFailure (unscopedNpm "mix") upstream MetadataAbsent)
             `shouldReturn` ""
 
-    for_ [(MetadataAbsent, 404, "Debug"), (MetadataHttpFailure 404, 404, "Debug"), (MetadataHttpFailure 301, 301, "Warning"), (MetadataHttpFailure 400, 400, "Warning"), (MetadataHttpFailure 408, 408, "Error"), (MetadataHttpFailure 429, 429, "Error"), (MetadataHttpFailure 500, 500, "Error"), (MetadataHttpFailure 503, 503, "Error")] $ \(failure, code, severity) ->
+    for_ [(MetadataAbsent, 404, "Debug"), (MetadataHttpFailure 404 Nothing, 404, "Debug"), (MetadataHttpFailure 301 Nothing, 301, "Warning"), (MetadataHttpFailure 400 Nothing, 400, "Warning"), (MetadataHttpFailure 408 Nothing, 408, "Error"), (MetadataHttpFailure 429 Nothing, 429, "Error"), (MetadataHttpFailure 500 Nothing, 500, "Error"), (MetadataHttpFailure 503 Nothing, 503, "Error")] $ \(failure, code, severity) ->
         it ("logs " <> show failure <> " as " <> toString severity <> " without credentials") $ do
             logged <- runJsonLog (logMetadataFailure (unscopedNpm "mix") "https://deploy:hunter2@registry.npmjs.org/path?sig=abc" failure)
             logged `shouldSatisfy` T.isInfixOf ("\"sev\":\"" <> severity <> "\"")
@@ -171,7 +171,7 @@ directoryFailureSpec = describe "logDirectoryFailure" $ do
         logged `shouldSatisfy` (not . T.isInfixOf "packument")
         logged `shouldSatisfy` (not . T.isInfixOf "\"package\"")
     it "logs a directory refusal with its upstream and status and no package field" $ do
-        logged <- runJsonLog (logDirectoryFailure "https://index.rubygems.org" (MetadataHttpFailure 503))
+        logged <- runJsonLog (logDirectoryFailure "https://index.rubygems.org" (MetadataHttpFailure 503 Nothing))
         logged `shouldSatisfy` T.isInfixOf "\"sev\":\"Error\""
         logged `shouldSatisfy` T.isInfixOf "\"module\":\"Ecluse.Server.Pipeline\""
         logged `shouldSatisfy` T.isInfixOf "\"upstream\":\"index.rubygems.org:443\""

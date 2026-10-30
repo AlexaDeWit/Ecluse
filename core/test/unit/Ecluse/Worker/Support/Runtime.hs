@@ -154,7 +154,7 @@ probeUnreadablePublish logRef outcome =
 probeRefusingPublish :: IORef PublishLog -> Either PublishFault () -> MirrorPublish
 probeRefusingPublish logRef outcome =
     (recordingPublish logRef outcome)
-        { mpProbeInventory = \_ -> const (pure (Left (MetadataHttpFailure 503)))
+        { mpProbeInventory = \_ -> const (pure (Left (MetadataHttpFailure 503 Nothing)))
         }
 
 -- | 'recordingPublish' whose inventory probe overruns the response bound, the probe leg's terminal fault.

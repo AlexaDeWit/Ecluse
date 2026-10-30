@@ -396,7 +396,7 @@ httpFailures :: [(MetadataError, Metric.Cause)]
 httpFailures =
     [(MetadataAuthorisationFailure code, Metric.OtherCause) | code <- [401, 403]]
         <> [(MetadataAbsent, Metric.UpstreamStatus)]
-        <> [(MetadataHttpFailure code, Metric.UpstreamStatus) | code <- [301, 400, 408, 429, 500, 503]]
+        <> [(MetadataHttpFailure code Nothing, Metric.UpstreamStatus) | code <- [301, 400, 408, 429, 500, 503]]
         <> [(MetadataUndecodable, Metric.Decode)]
 
 preparationSpec :: Spec

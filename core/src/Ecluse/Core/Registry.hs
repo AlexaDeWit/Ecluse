@@ -51,8 +51,8 @@ data RegistryResponse = RegistryResponse
 data BodyOutcome a
     = -- | The 2xx status and the consumer's result.
       SuccessBody Int a
-    | -- | A status outside 2xx. The consumer never ran, so no result exists.
-      UnreadStatus Int
+    | -- | A status outside 2xx, with any delay its @Retry-After@ asked for. The consumer never ran.
+      UnreadStatus Int (Maybe RetryAfter)
     deriving stock (Eq, Show, Functor)
 
 -- | Whether an upstream status explicitly refuses authentication or authorisation.

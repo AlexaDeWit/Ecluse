@@ -41,9 +41,9 @@ import Ecluse.Core.Server.Context (Handler, MountBinding (bindingPackumentDeps),
 import Ecluse.Core.Server.MirrorView (readMirrorCompanion, validateMirrorProject)
 import Ecluse.Core.Server.Path (Filename, unFilename)
 import Ecluse.Core.Server.Pipeline.Internal (VersionVerdict (VersionVerdict), logDenials, recordDenials, statusServeDecision)
-import Ecluse.Core.Server.Pipeline.Origin (ObservedReadBoundExceeded (ObservedReadBoundExceeded))
+import Ecluse.Core.Server.Pipeline.Origin (ObservedReadBoundExceeded (ObservedReadBoundExceeded), ReadFailure (ReadInvalid, ReadUnavailable), fetchReadFailure, statusReadFailure)
 import Ecluse.Core.Server.Pipeline.Packument (DocumentRejectionObserver (..), PackumentReplies (..), answerMetadataBytes, mapPackumentReplies, noSurvivors, withObservedAdmittedDocument)
-import Ecluse.Core.Server.Pipeline.Shared (forwardedCredential, withListingAdmission, withMetadataAdmission)
+import Ecluse.Core.Server.Pipeline.Shared (forwardedCredential, retryAfterHeaders, withListingAdmission, withMetadataAdmission)
 import Ecluse.Core.Server.Pipeline.Tarball (headTarball, serveTarball)
 import Ecluse.Core.Server.Pipeline.Tarball.Types (TarballReplies)
 import Ecluse.Core.Server.Response (RejectReason (..), Rejection (rejectionReason), ServeDecision (Reject), mkRefusal, packumentStatus)
@@ -177,8 +177,13 @@ fetchCompact ticket observe request (row, provenance) = do
         coordinate = grCoordinate row
         limits = pdLimits deps
         token = forwardedCredential mount request
-        unavailable = packumentUnavailable rubyReplies [] (mkRefusal (pdHelp deps) "the compact specification source is unavailable")
+        unavailableAfter retry = packumentUnavailable rubyReplies (retryAfterHeaders retry) (mkRefusal (pdHelp deps) "the compact specification source is unavailable")
+        unavailable = unavailableAfter Nothing
         invalid = packumentBadGateway rubyReplies [] (mkRefusal (pdHelp deps) "the compact specification disagrees with its admitted coordinate")
+        -- A failed private read refuses by cause. A public one stays unavailable.
+        privateFailure = \case
+            ReadUnavailable retry -> unavailableAfter retry
+            ReadInvalid -> packumentBadGateway rubyReplies [] (mkRefusal (pdHelp deps) "the private compact specification source returned an invalid or unusable reply")
     retained <- case (provenance, pdMirrorState deps) of
         (TrustedSource, Just mirror) ->
             liftIO (validateMirrorProject mirror ticket (coordinateName coordinate)) >>= \case
@@ -211,8 +216,10 @@ fetchCompact ticket observe request (row, provenance) = do
                     <&> \case
                         Left (ObservedReadBoundExceeded fault) -> Left (packumentBadGateway rubyReplies [] (mkRefusal Nothing ("the cumulative compact input exceeded its bound: " <> show fault)))
                         Right (Right (SuccessBody _ (_, body))) -> Right body
-                        Right (Right (UnreadStatus code)) | private && (code == 401 || code == 403) -> Left (packumentPrivateRefused rubyReplies code [] (mkRefusal Nothing "the private compact specification source refused access"))
-                        Right (Right (UnreadStatus 404)) -> Left (packumentNotFound rubyReplies [] (mkRefusal Nothing "the compact specification is absent"))
+                        Right (Right (UnreadStatus code _)) | private && (code == 401 || code == 403) -> Left (packumentPrivateRefused rubyReplies code [] (mkRefusal Nothing "the private compact specification source refused access"))
+                        Right (Right (UnreadStatus 404 _)) -> Left (packumentNotFound rubyReplies [] (mkRefusal Nothing "the compact specification is absent"))
+                        Right (Right (UnreadStatus code retry)) | private -> Left (privateFailure (statusReadFailure code retry))
+                        Right (Left fault) | private -> Left (privateFailure (fetchReadFailure fault))
                         _ -> Left unavailable
     case bytes of
         Left refusal -> pure refusal

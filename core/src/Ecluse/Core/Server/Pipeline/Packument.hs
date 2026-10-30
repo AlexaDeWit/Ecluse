@@ -3,7 +3,7 @@
 -- SPDX-License-Identifier: MIT
 
 {- | Merge authorised private metadata with admitted public versions. First-party names use only
-private metadata, and a private read that fails refuses every name.
+private metadata, and a private read that fails refuses every name with the status its cause sets.
 -}
 module Ecluse.Core.Server.Pipeline.Packument (
     PackumentReplies (..),
@@ -110,6 +110,7 @@ import Ecluse.Core.Server.Pipeline.Internal (
 import Ecluse.Core.Server.Pipeline.Origin (
     OriginMiss (MissAbsent, MissUnresolved),
     OriginResult (..),
+    ReadFailure (ReadInvalid, ReadUnavailable),
     fetchPrivateOriginObserved,
     fetchPublicOriginObserved,
     originManifest,
@@ -128,6 +129,7 @@ import Ecluse.Core.Server.Response (
     Transience (WillResolve),
     mkRefusal,
     packumentStatus,
+    rejectUnavailable,
     serveDecisionOf,
  )
 import Ecluse.Core.Server.Response.Summary (detailedRejections)
@@ -329,12 +331,10 @@ serveAdmittedPackument serving clientToken = do
                 concurrently
                     ( do
                         private <- readPrivate serving clientToken
-                        -- An access refusal or an unread private origin refuses before mirror state matters.
-                        checked <- case private of
-                            OriginAuthorisationFailure _ -> pure (Right Nothing)
-                            OriginUnresolved -> pure (Right Nothing)
-                            OriginCooling _ -> pure (Right Nothing)
-                            _ -> liftIO (validateMirrorProject mirror (psvTicket serving) (psvName serving))
+                        checked <-
+                            if refusesBeforeMirror private
+                                then pure (Right Nothing)
+                                else liftIO (validateMirrorProject mirror (psvTicket serving) (psvName serving))
                         pure (private, checked)
                     )
                     (readPublic serving)
@@ -350,6 +350,14 @@ serveAdmittedPackument serving clientToken = do
                 _ -> serveMergedPackument serving evalCtx Nothing private public
   where
     deps = psvDeps serving
+
+-- An access refusal or a failed private read decides the request before mirror state can.
+refusesBeforeMirror :: OriginResult -> Bool
+refusesBeforeMirror = \case
+    OriginAuthorisationFailure _ -> True
+    result -> case originMiss result of
+        Just (MissUnresolved _) -> True
+        _ -> False
 
 resolveOrigins :: PackumentServing response -> Maybe ClientCredential -> Handler (OriginResult, OriginResult)
 resolveOrigins serving clientToken
@@ -376,8 +384,8 @@ serveMergedPackument ::
     Handler response
 serveMergedPackument serving evalCtx record privResult pubResult
     | OriginBudgetExceeded fault <- privResult = budgetRefused fault
+    | Just (MissUnresolved failure) <- originMiss privResult = privateUnresolved serving evalCtx privResult failure
     | OriginBudgetExceeded fault <- pubResult = budgetRefused fault
-    | Just MissUnresolved <- originMiss privResult = privateUnresolved serving evalCtx privResult pubResult
     | Just absent <- psvAbsent serving
     , isNothing record
     , not (pdFirstParty (psvDeps serving) (psvName serving))
@@ -659,10 +667,9 @@ privateDecision = \case
     OriginBudgetExceeded _ -> [upstreamInvalidDecision]
     OriginAuthorisationFailure _ -> []
     OriginResolved _ -> []
-    -- A merged name keeps a private 404 and a private outage on one refusal, so a name
-    -- neither leg could serve still invites a retry.
-    OriginNotFound -> [neededUpstreamUnavailable]
-    OriginUnresolved -> [neededUpstreamUnavailable]
+    -- A private 404 with no public survivor keeps the outage refusal, so it still invites a retry.
+    OriginNotFound -> [neededUpstreamUnavailable Nothing]
+    OriginUnresolved failure -> [privateReadDecision failure]
     OriginCooling retry -> [upstreamCooling retry]
     OriginNameMismatch -> [upstreamInvalidDecision]
     -- An unconfigured private leg (a serve-only pure gate) is not an outage:
@@ -676,22 +683,28 @@ publicDecision = \case
     OriginNameMismatch -> [upstreamInvalidDecision]
     OriginResolved _ -> []
     OriginNotFound -> []
-    OriginUnresolved -> []
+    OriginUnresolved _ -> []
     OriginCooling retry -> [upstreamCooling retry]
     OriginAbsent -> []
 
-neededUpstreamUnavailable :: ServeDecision
-neededUpstreamUnavailable = Reject (Rejection (Unavailable (WillResolve Nothing)) "a needed upstream was unavailable")
+neededUpstreamUnavailable :: Maybe RetryAfter -> ServeDecision
+neededUpstreamUnavailable retry = rejectUnavailable (WillResolve retry) "a needed upstream was unavailable"
+
+-- An unavailable private registry refuses with its own delay. An invalid reply is a bad gateway.
+privateReadDecision :: ReadFailure -> ServeDecision
+privateReadDecision = \case
+    ReadUnavailable retry -> neededUpstreamUnavailable retry
+    ReadInvalid -> privateReplyInvalid
 
 upstreamInvalidDecision :: ServeDecision
 upstreamInvalidDecision = Reject (Rejection UpstreamInvalid "an upstream returned a packument for a different package")
 
 -- A private origin that was not read refuses every name, so no public namesake stands in for a
--- private package. A failed public leg adds its own decision, as when neither leg resolves.
-privateUnresolved :: PackumentServing response -> EvalContext -> OriginResult -> OriginResult -> Handler response
-privateUnresolved serving evalCtx privResult pubResult
-    | pdFirstParty (psvDeps serving) (psvName serving) = firstPartyMissed serving MissUnresolved
-    | otherwise = noServeableVersions serving (ctxAdvisoryEtag evalCtx) [] (collectDecisions privResult pubResult [])
+-- private package. Its cause alone sets the status, whatever the public leg did.
+privateUnresolved :: PackumentServing response -> EvalContext -> OriginResult -> ReadFailure -> Handler response
+privateUnresolved serving evalCtx privResult failure
+    | pdFirstParty (psvDeps serving) (psvName serving) = firstPartyMissed serving (MissUnresolved failure)
+    | otherwise = noServeableVersions serving (ctxAdvisoryEtag evalCtx) [] (privateDecision privResult)
 
 firstPartyMissed :: PackumentServing response -> OriginMiss -> Handler response
 firstPartyMissed serving miss = do
@@ -710,25 +723,31 @@ firstPartyMissMessage name = \case
         "'"
             <> rendered
             <> "' did not resolve from the private upstream, and its namespace is first-party to this deployment, so it is never fetched from the public registry"
-    MissUnresolved ->
+    MissUnresolved (ReadUnavailable _) ->
         "the private upstream did not answer for '"
+            <> rendered
+            <> "', and its namespace is first-party to this deployment, so no public document may stand in for it"
+    MissUnresolved ReadInvalid ->
+        "the private upstream returned an invalid or unusable reply for '"
             <> rendered
             <> "', and its namespace is first-party to this deployment, so no public document may stand in for it"
   where
     rendered = renderPackageName name
 
--- | Classify a first-party absence as a policy refusal and an unread origin as an outage.
+-- | Classify a first-party absence as a policy refusal, and an unread origin by its cause.
 firstPartyMissDecision :: PackageName -> OriginMiss -> ServeDecision
 firstPartyMissDecision name miss = Reject (Rejection reason (firstPartyMissMessage name miss))
   where
     reason = case miss of
         MissAbsent -> ByPolicy firstPartyRule []
-        MissUnresolved -> Unavailable (WillResolve Nothing)
+        MissUnresolved (ReadUnavailable retry) -> Unavailable (WillResolve retry)
+        MissUnresolved ReadInvalid -> UpstreamInvalid
 
--- | Render a settled absence as @404@ and an unread origin as @503@ without @Retry-After@.
+-- | Render a settled absence as @404@, an unavailable origin as @503@ with its delay, and an invalid reply as @502@.
 firstPartyMissReply :: PackumentReplies response -> Maybe HelpMessage -> PackageName -> OriginMiss -> response
 firstPartyMissReply replies help name miss = case miss of
     MissAbsent -> packumentNotFound replies [] body
-    MissUnresolved -> packumentUnavailable replies [] body
+    MissUnresolved (ReadUnavailable retry) -> packumentUnavailable replies (retryAfterHeaders retry) body
+    MissUnresolved ReadInvalid -> packumentBadGateway replies [] body
   where
     body = mkRefusal help (firstPartyMissMessage name miss)

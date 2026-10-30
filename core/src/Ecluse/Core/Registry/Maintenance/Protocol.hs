@@ -181,7 +181,7 @@ listPackages store =
         Left fault -> Left fault
         Right (SuccessBody 200 streamed) -> first (parseFault "package listing") (streamValue streamed)
         Right (SuccessBody status _) -> Left (listingUnavailable status)
-        Right (UnreadStatus status) -> Left (listingUnavailable status)
+        Right (UnreadStatus status _) -> Left (listingUnavailable status)
   where
     origin = prOrigin store
     fetch request =
@@ -213,8 +213,8 @@ listVersionsWith store name walk =
     formThen unformableFault fetch (pcProbeRequest codec (originBase store) (originToken store) name) <&> \case
         Left fault -> Left fault
         Right (SuccessBody _ listed) -> first (parseFault "version list") (map stored <$> listed)
-        Right (UnreadStatus 404) -> Right []
-        Right (UnreadStatus status) -> Left (readFault "version list" status)
+        Right (UnreadStatus 404 _) -> Right []
+        Right (UnreadStatus status _) -> Left (readFault "version list" status)
   where
     origin = prOrigin store
     codec = prCodec store

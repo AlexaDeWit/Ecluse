@@ -446,7 +446,7 @@ storeFaultOfFetch = \case
 storeFaultOfMetadata :: MetadataError -> StoreFault
 storeFaultOfMetadata = \case
     MetadataAbsent -> protocolFault "the store has no metadata for the requested package (HTTP 404)"
-    MetadataHttpFailure code ->
+    MetadataHttpFailure code _ ->
         statusFault isRetryableStatusCode code ("the store refused the metadata read with HTTP " <> show code)
     MetadataAuthorisationFailure _ -> protocolFault "the store refused metadata access"
     MetadataFetch fault -> storeFaultOfFetch fault

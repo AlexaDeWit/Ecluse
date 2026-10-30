@@ -8,12 +8,13 @@ import Crypto.Hash (Digest, SHA256, hash)
 import Data.ByteArray.Encoding (Base (Base64), convertToBase)
 import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as LBS
-import Network.HTTP.Client (brRead, responseBody, responseStatus)
+import Network.HTTP.Client (brRead, responseBody, responseHeaders, responseStatus)
 import Network.HTTP.Types (statusCode)
 import Network.Wai (Request, ResponseReceived)
 import UnliftIO (evaluate, withRunInIO)
 
 import Ecluse.Core.Credential (ClientCredential)
+import Ecluse.Core.Fault.RetryAfter (responseRetryAfter)
 import Ecluse.Core.Package (PackageName)
 import Ecluse.Core.Registry (BodyOutcome (SuccessBody, UnreadStatus), FetchFault (FetchBoundExceeded, FetchUrlUnformable))
 import Ecluse.Core.Registry.CachedDocument (rubyGemsCached)
@@ -38,10 +39,10 @@ import Ecluse.Core.Server.Cache.Types (directoryKey)
 import Ecluse.Core.Server.Context
 import Ecluse.Core.Server.Metadata (recordedFetch)
 import Ecluse.Core.Server.Pipeline.Diagnostics (logDirectoryFailure, logDirectoryInvalidEntries)
-import Ecluse.Core.Server.Pipeline.Origin (publicSource)
+import Ecluse.Core.Server.Pipeline.Origin (ReadFailure (ReadInvalid, ReadUnavailable), metadataReadFailure, publicSource)
 import Ecluse.Core.Server.Pipeline.Packument (PackumentReplies (..), answerDigestedMetadataBytes, mapPackumentReplies, withObservedAdmittedDocument)
-import Ecluse.Core.Server.Pipeline.Shared (flightOf, forwardedCredential, withListingAdmission)
-import Ecluse.Core.Server.Response (mkRefusal)
+import Ecluse.Core.Server.Pipeline.Shared (flightOf, forwardedCredential, retryAfterHeaders, withListingAdmission)
+import Ecluse.Core.Server.Response (Refusal, mkRefusal)
 import Ecluse.Core.Telemetry.Metrics qualified as Metric
 import Ecluse.Core.Telemetry.Record (MetricsPort (mpServeDecision))
 import Ecluse.Core.Telemetry.Span (TracingPort (spanDirectoryDecode, spanDirectoryFetch))
@@ -54,7 +55,7 @@ serveDirectory request respond =
         withListingAdmission
         request
         (liftIO . respond)
-        (const (Metric.Unavailable, directoryFailure (MetadataHttpFailure 503)))
+        (const (Metric.Unavailable, directoryFailure (MetadataHttpFailure 503 Nothing)))
         (answerDirectory request)
         ( \(decision, response) -> do
             metrics <- asks (srMetrics . ctxRuntime)
@@ -68,7 +69,7 @@ answerDirectory request ticket deps = do
     publicRead <- liftIO (newChargePart ticket)
     private <- readPrivateDirectory request deps privateRead
     case private of
-        Left fault -> pure (privateDecision fault, directoryFailure fault)
+        Left fault -> pure (privateDecision fault, privateDirectoryFailure fault)
         Right privateView -> do
             public <- readPublicDirectory ticket deps publicRead
             case (public, privateView) of
@@ -133,7 +134,7 @@ serveInfo name request respond =
         withListingAdmission
         request
         (liftIO . respond)
-        (const (directoryFailure (MetadataHttpFailure 503)))
+        (const (directoryFailure (MetadataHttpFailure 503 Nothing)))
         ( \ticket deps -> do
             observe <- liftIO (newNativeReadBudget (maxMetadataBytes (pdLimits deps)))
             check <- liftIO (newNativeDocumentBudget (maxMetadataBytes (pdLimits deps)) (Left (directoryFailure MetadataUndecodable)))
@@ -182,7 +183,7 @@ fetchDirectory runInIO tracing pay limits (DirectorySource policy client control
                     ( \upstream -> runExchangeUsing control client (progressFloor limits) upstream $ \response ->
                         if statusCode (responseStatus response) == 200
                             then fmap (SuccessBody 200) <$> spanDirectoryDecode tracing (readStepsWithEnd id finishRecordSteps (MetadataBodyLimit (maxMetadataBytes limits)) (directorySteps workspace) (brRead (responseBody response)))
-                            else pure (Right (UnreadStatus (statusCode (responseStatus response))))
+                            else Right . UnreadStatus (statusCode (responseStatus response)) <$> responseRetryAfter (responseHeaders response)
                     )
                     (sealRequest <$> gemDirectoryRequestUnder base credential)
                 )
@@ -219,13 +220,22 @@ overMetadataBound deps bytes = BS.length bytes > maxMetadataBytes (pdLimits deps
 
 directoryFailure :: MetadataError -> RubyResponse
 directoryFailure fault = case fault of
-    MetadataAuthorisationFailure code -> packumentPrivateRefused rubyReplies code [] refusal
-    MetadataUndecodable -> packumentBadGateway rubyReplies [] refusal
-    MetadataBoundExceeded _ -> packumentBadGateway rubyReplies [] refusal
-    MetadataFetch (FetchBoundExceeded _) -> packumentBadGateway rubyReplies [] refusal
-    MetadataHttpFailure 400 -> packumentBadGateway rubyReplies [] (mkRefusal Nothing "the native directory rejected the read with HTTP 400. CodeArtifact directories support at most 5,000 gem names")
-    MetadataAbsent -> packumentBadGateway rubyReplies [] refusal
-    MetadataHttpFailure code | code >= 200 && code < 400 -> packumentBadGateway rubyReplies [] refusal
-    _ -> packumentUnavailable rubyReplies [] refusal
-  where
-    refusal = mkRefusal Nothing "the RubyGems Compact Index response is unavailable"
+    MetadataAuthorisationFailure code -> packumentPrivateRefused rubyReplies code [] directoryRefusal
+    MetadataUndecodable -> packumentBadGateway rubyReplies [] directoryRefusal
+    MetadataBoundExceeded _ -> packumentBadGateway rubyReplies [] directoryRefusal
+    MetadataFetch (FetchBoundExceeded _) -> packumentBadGateway rubyReplies [] directoryRefusal
+    MetadataHttpFailure 400 _ -> packumentBadGateway rubyReplies [] (mkRefusal Nothing "the native directory rejected the read with HTTP 400. CodeArtifact directories support at most 5,000 gem names")
+    MetadataAbsent -> packumentBadGateway rubyReplies [] directoryRefusal
+    MetadataHttpFailure code _ | code >= 200 && code < 400 -> packumentBadGateway rubyReplies [] directoryRefusal
+    _ -> packumentUnavailable rubyReplies [] directoryRefusal
+
+-- A private fault refuses by cause, as a package read does. Absence, access refusal and the name limit keep their replies.
+privateDirectoryFailure :: MetadataError -> RubyResponse
+privateDirectoryFailure fault = case (fault, metadataReadFailure fault) of
+    (MetadataHttpFailure 400 _, _) -> directoryFailure fault
+    (_, Just (ReadUnavailable retry)) -> packumentUnavailable rubyReplies (retryAfterHeaders retry) directoryRefusal
+    (_, Just ReadInvalid) -> packumentBadGateway rubyReplies [] directoryRefusal
+    (_, Nothing) -> directoryFailure fault
+
+directoryRefusal :: Refusal
+directoryRefusal = mkRefusal Nothing "the RubyGems Compact Index response is unavailable"
