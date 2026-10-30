@@ -172,6 +172,10 @@ spec = do
                     simpleStatus response `shouldBe` status403
                     lookup "WWW-Authenticate" (simpleHeaders response) `shouldBe` Nothing
                     map fst <$> readIORef hits `shouldReturn` [["private", "versions"]]
+        it "fails private discovery on a malformed private row before any public read" $
+            withDirectoryBodies "---\npublic-gem 1.0 \n" "---\nprivate-gem 1.0 \nbroken\n" $ \runtime binding hits _ -> do
+                simpleStatus <$> capture runtime binding "GET" "/versions" [] `shouldReturn` status502
+                map fst <$> readIORef hits `shouldReturn` [["private", "versions"]]
         for_ [status206, status304] $ \originStatus ->
             it ("rejects an unsolicited directory response with " <> show originStatus) $
                 withDirectorySources $ \runtime binding _ privateStatus -> do
@@ -217,6 +221,16 @@ spec = do
             withDirectoryFaults "---\npublic-gem 1.0 \n" "---\n" $ \runtime binding _ _ publicStatus -> do
                 writeIORef publicStatus status503
                 simpleStatus <$> capture runtime binding "GET" "/versions" [] `shouldReturn` status503
+        it "answers 502 and retains nothing when no public row is well formed and the private directory has no rows" $
+            withDirectoryBodies "---\nbroken\n" "---\n" $ \original binding _ _ -> do
+                (runtime, fetches) <- recordingFetches original
+                replicateM_ 2 (simpleStatus <$> capture runtime binding "GET" "/versions" [] `shouldReturn` status502)
+                fetches Metric.Public `shouldReturn` [Left Metric.Decode, Left Metric.Decode]
+        it "degrades a public directory with no well-formed row to private discovery" $
+            withDirectoryBodies "---\nbroken\n" "---\nprivate-gem 1.0 \n" $ \runtime binding _ _ -> do
+                response <- capture runtime binding "GET" "/versions" []
+                simpleStatus response `shouldBe` status200
+                simpleBody response `shouldBe` "---\nprivate-gem 1.0 \n"
         it "refuses a public directory over its byte bound with 502 beside private rows" $
             withDirectoryBodies oversizedPublicDirectory "---\nprivate-gem 1.0 \n" $ \runtime binding _ _ ->
                 simpleStatus <$> capture runtime (metadataByteCap 40 binding) "GET" "/versions" [] `shouldReturn` status502
@@ -301,6 +315,13 @@ spec = do
                 let runtime = original{srMetrics = (srMetrics original){mpDirectoryCacheRequest = \result -> modifyIORef' outcomes (<> [result])}}
                 replicateM_ 2 (capture runtime binding "GET" "/versions" [])
                 readIORef outcomes `shouldReturn` [Metric.Miss, Metric.Hit]
+        it "records no upstream fetch metric for private discovery" $
+            withDirectorySources $ \original binding _ privateStatus -> do
+                (runtime, fetches) <- recordingFetches original
+                simpleStatus <$> capture runtime binding "GET" "/versions" [] `shouldReturn` status200
+                writeIORef privateStatus status503
+                simpleStatus <$> capture runtime binding "GET" "/versions" [] `shouldReturn` status503
+                fetches Metric.Private `shouldReturn` []
 
     describe "examined per-gem source documents" $ do
         for_ [False, True] $ \warm ->
