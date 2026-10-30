@@ -221,7 +221,7 @@ residencyFor = \case
                 , residencyFigures = npmFigures
                 , residencyEntryBelowSource = True
                 , residencyLegacyRead = \limits name -> projectMetadata (parsePackageInfoFromValue name) limits
-                , residencyLegacyHeld = \info raw size digest -> HeldShared (CacheEntry info (fst npmCached raw) size 0 digest)
+                , residencyLegacyHeld = \info raw size digest -> HeldShared (CacheEntry info (fst npmCached raw) size mempty digest)
                 , residencyIdentity = \name version -> (,mkVersion Npm (toText version)) <$> either (fail . show) pure (Npm.projectName (toText name))
                 , residencyVersionList = readVersionList
                 }
@@ -537,7 +537,7 @@ prepare shape package = do
         Shared -> do
             (info, document) <- project package bytes
             -- The probe's own size and digest: the read's digest keeps a 4 KiB pinned block the gate omits.
-            let entry = CacheEntry info document (BS.length bytes) 0 (digestOf bytes)
+            let entry = CacheEntry info document (BS.length bytes) mempty (digestOf bytes)
             _ <- forceShown entry
             compact <- evaluate (LBS.length (encode (diagnosticDocumentValue document)))
             weight <- evaluate (weighCacheEntry entry)

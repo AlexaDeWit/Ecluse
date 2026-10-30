@@ -42,7 +42,7 @@ gemReadWith fullPay selectedPay sourceBase =
             , erUniqueFields = []
             , erWalkFull = \limits name _ -> readGemInfoCharged fullPay limits name sourceBase FullRead
             , erFinishFull = finishGemFull
-            , erRetainedEntries = const 0
+            , erRetainedEntries = const mempty
             , erWalkSelected = \limits name version -> readGemInfoCharged selectedPay limits name sourceBase (SelectedRead version)
             , erFinishSelected = \limits _ _ -> finishSelectedVersion gemReadInfo (\version result -> fst rubyGemsCached <$> selectGemVersion version (gemReadDocument result)) limits
             }

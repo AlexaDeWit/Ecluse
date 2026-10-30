@@ -62,7 +62,7 @@ readManifest EcosystemRead{erUniqueFields = uniqueFields, erWalkFull = walk, erF
         (streamed, digest) <- result
         -- The size, the count and the document are forced first, so the typed view's location check holds none of the walk's result.
         let !bodyBytes = streamBytes streamed
-            !entries = either (const 0) retained (streamValue streamed)
+            !entries = either (const mempty) retained (streamValue streamed)
         (info, raw) <- finish limits name base streamed
         pure (raw `pseq` Manifest{manifestInfo = info, manifestRaw = raw, manifestBodyBytes = bodyBytes, manifestRetainedEntries = entries, manifestDigest = digest})
   where

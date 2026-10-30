@@ -84,7 +84,7 @@ info name =
         }
 
 entry :: PackageName -> Text -> CacheEntry
-entry name marker = CacheEntry{entryInfo = info name, entryRaw = cachedRaw marker, entryBodyBytes = BS.length (encodeUtf8 marker), entryRetainedEntries = 0, entryDigest = digestOf (encodeUtf8 marker)}
+entry name marker = CacheEntry{entryInfo = info name, entryRaw = cachedRaw marker, entryBodyBytes = BS.length (encodeUtf8 marker), entryRetainedEntries = mempty, entryDigest = digestOf (encodeUtf8 marker)}
 
 cachedRaw :: Text -> CachedDoc
 cachedRaw = fst npmCached . String
