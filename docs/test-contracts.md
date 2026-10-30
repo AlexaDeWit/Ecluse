@@ -95,6 +95,7 @@ Each suffix expands to integration.serving.npm, integration.serving.pypi, integr
 | authorised-union | npm, PyPI, Cargo and RubyGems combine trusted-private and gated-public versions. |
 | quarantine-private-authority | Shared private young-release authority with old public survivor and rejected young public version. npm native latest-tag assertion remains in its existing gate case |
 | private-divergence | Shared private digest and exact bytes on same-version divergence. npm native latest-tag/divergence cases remain |
+| private-availability | A failing private origin (HTTP 500, HTTP 503, a closed connection) refuses listing and artifact with 503. A private 404 serves the gated public release, a private 401 or 403 refuses, and a public 503 serves the private release alone. New in every provider |
 | public-integrity | npm "filters a hashless public version out of the served listing" moves here, with PyPI counterpart |
 | trusted-integrity | npm "drops a hashless trusted-private version from the listing by default" moves here, with PyPI counterpart |
 | artifact-integrity | PyPI exact distribution bytes and advertised sha256 checks move here, with npm counterpart. Require fixture bytes, advertised digest and digest of actual response bytes |
@@ -107,7 +108,7 @@ Each suffix expands to integration.serving.npm, integration.serving.pypi, integr
 | metadata-gzip-policy | A gzip validator from an admitting policy gets 403, not 304, once policy denies the release |
 | artifact-uncoded | Artifact GET and HEAD under `Accept-Encoding: gzip` match the plain requests in status, headers and bytes, with no Content-Encoding |
 
-Seven native duplicate example bodies are removed. Thirty-two shared serving examples run.
+Seven native duplicate example bodies are removed. Sixty-eight shared serving examples run.
 Native npm tags, weaker/stronger floors, empty digests, retention, mutable cache representations, private authorisation, edge authorisation, origin failures and HEAD refusal cases remain.
 Native PyPI media type, multi-file identity, exact mount-local URLs, canonical sidecar advertisement and legacy-alias removal with adversarial retained-field controls, trailing slash, project-name canonicalization, content negotiation, helpful refusals, indexed-private credential routing, foreign-host refusal and mutable integrity-floor validators remain.
 Native deprecation/yank policy tests from the current baseline remain unchanged.

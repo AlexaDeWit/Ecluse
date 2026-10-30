@@ -16,8 +16,8 @@ shared registry is a supported reduced topology, subject to each role's endpoint
 
 | Role | Purpose |
 |------|---------|
-| **Private upstream** | The authoritative, already-vetted source, read as trusted. A tarball is a conventional stable read at `{base}/{pkg}/-/{file}`. Écluse trusts a packument's versions and merges them with the gated public set. Optional on a serve-only mount. |
-| **Public upstream** | The source of versions not yet in the private upstream. The rules gate everything here. It is the tarball fallback on a private miss, and Écluse fetches it alongside the private upstream for a packument. The only required role: a pure public gate serves from it alone. |
+| **Private upstream** | The authoritative, already-vetted source, read as trusted. A tarball is a conventional stable read at `{base}/{pkg}/-/{file}`. Écluse trusts a packument's versions and merges them with the gated public set. Its availability bounds the mount's: a failed private read refuses the request. Optional on a serve-only mount. |
+| **Public upstream** | The source of versions not yet in the private upstream. The rules gate everything here. It is the tarball fallback on a private `404`, and Écluse fetches it alongside the private upstream for a packument. The only required role: a pure public gate serves from it alone. |
 | **Mirror target** | Where the worker writes approved public packages once they pass the rules. Declaring one is what makes a mount mirror. Best a distinct store unioned into the private read path. |
 | **Publication target** | Where Écluse writes client-published first-party packages (`npm publish`). Distinct from the mirror target: client-driven first-party content, not proxy-driven approved-public content. See [Publishing first-party packages](#publishing-first-party-packages-the-publication-target). |
 
@@ -148,7 +148,8 @@ client's credential and disables redirect-following, so the leg never follows a 
 ([Security posture](security.md#trust-assumptions--credential-posture)).
 A `2xx` streams and a conditional `304` passes through. An explicit private `401` or `403`
 refuses the read, because public bytes can differ from a private patch under the same identity.
-Other unsuccessful statuses retain the private-miss policy. The leg applies **no
+A private `404` is a private miss. Any other unsuccessful status, an unfollowed redirect included,
+and a transport failure refuse the read with `503` for every name. The leg applies **no
 serve-time integrity floor**: it fast-tracks a lockfile-pinned version from a trusted registry.
 The client and the mirror worker still verify those bytes, so the leg gives up the proactive
 refuse-weak-integrity stance, not tamper-evidence. The packument route's listing-side trusted
@@ -179,7 +180,7 @@ The companion URL appends `.metadata` to the path before any query or fragment.
 Both private and public selection apply their own parent integrity floor and origin-sensitive authority check.
 The metadata path does not evaluate rules, read advisories or enqueue a mirror.
 Private index reads authorise each caller again, and only the private authority receives that caller's credential.
-A private refusal stops fallback, and first-party names never fall back to public metadata.
+A private refusal or a failed private read stops fallback, and first-party names never fall back to public metadata.
 A surviving private version owns its companion requests, including a missing declaration, missing parent or failed companion fetch.
 Public fallback remains available when no private version survives the listing's location and integrity checks.
 Selection releases metadata admission before the bounded relay streams the companion.
@@ -241,8 +242,16 @@ track which input a survivor came from, so assembly can select its retained sour
 - **Private access authority.** An explicit private `401` or `403` refuses the request even when
   public metadata succeeds. The refusal precedes merge and conditional response selection.
   See the [operator policy](../../web/content/docs/configuration.md#first-party-namespaces).
-- **Partial availability.** For other failures, if one upstream fails while another succeeds, the merge serves the
-  best-effort union with a degraded signal (readiness stays
+- **Private availability.** A failed private read refuses the request with `503` for every name: a
+  transport error, a timeout, an unexpected status, a backoff, or a document that does not decode
+  or exceeds its bound. A private `404` still lets the gated public set serve. Otherwise a private
+  package whose name is not declared first-party would be replaced by its public namesake once that
+  version passed the rules, and builds would switch packages silently. First-party declarations
+  cannot close that gap, because most registries give no reliable mechanism to establish a complete
+  first-party naming system, and a missed name fails silently. The mount's availability therefore
+  follows the private upstream's.
+- **Public availability.** If the public upstream fails while the private one succeeds, the merge
+  serves the private-only union with a degraded signal (readiness stays
   [lenient about public reachability](web-layer.md#meta-routes-ping-health-and-search)). Only when
   nothing resolves does the request error.
 
@@ -257,9 +266,9 @@ The proxy knows the requested name from the route, so an upstream's self-reporte
 is a cross-check, never the served authority. The served `name` is always a value an upstream
 genuinely reported, and validation guarantees it equals the route name. An origin whose
 `name` agrees merges normally. The proxy treats an origin whose `name` disagrees as untrusted for
-this request: it drops the origin and logs the drop. An absent or undecodable name is instead an
-undecodable-packument degrade. A single misreporting upstream drops out while any other valid
-origin still serves `200`. The request is `502 Bad Gateway` (`PackumentBadGateway`, see
+this request: it drops the origin and logs the drop. An absent or undecodable name instead makes the
+packument undecodable: a public one degrades, and a private one refuses the request. A single
+misreporting upstream drops out while any other valid origin still serves `200`. The request is `502 Bad Gateway` (`PackumentBadGateway`, see
 [Error model](web-layer.md#error-model)) only when no origin yields a valid packument *because the
 responding origins mismatched*. That is distinct from a genuine absence. This forecloses
 cache-poisoning: a misreporting upstream cannot shadow a real package or win the union with a
@@ -544,7 +553,7 @@ retained-live measurements remain distinct from the cached accounting estimate.
 RubyGems merges caller-authorised private gems with admitted public gems. It discovers gems through the global Compact Index and acquires metadata per gem.
 The public directory shares bounded retention. Caller-authorised private discovery remains fresh and separate from public retention.
 Discovery bounds gem names with a fixed ceiling rather than the per-package count limits, so lowering those limits for npm or PyPI cannot break RubyGems discovery.
-The public directory follows partial availability, except that a bound breach refuses the request as an exceeded input bound does.
+The public directory follows public availability, except that a bound breach refuses the request as an exceeded input bound does.
 Per-gem `/info/<gem>` rows follow the shared merge, admission and mirror restoration paths.
 Unknown transformed info-file MD5 values use explicit blank hints in the supported clients.
 This keeps detailed metadata acquisition on demand without publishing a false checksum.

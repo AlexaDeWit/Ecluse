@@ -68,13 +68,15 @@ The [Cargo protocol contract](@/docs/protocol-support.md#cargo) defines its disc
 {{ diagram(name="metadata-admission", alt="The proxy combines caller-authorised private metadata with admitted anonymous public metadata. First-party names stay private, and response reuse follows fresh private authorisation.", caption="Version discovery and admission. Advisory polling runs independently of each request.") }}
 
 1. **The listing.** For npm, PyPI, and RubyGems non-first-party names, Écluse fetches private and public metadata in parallel.
+   If the private read fails, the listing refuses with `503` rather than serving public versions alone.
    Private versions must meet the trusted integrity floor, and managed mirror versions must also prove completion.
    The policy filters public versions before the listing is merged. For npm, `dist-tags.latest` follows an admitted
    public tag, otherwise the highest admitted version, with stable versions before prereleases.
    It never exposes a private or mirror store's `latest` tag.
 2. **The artifact.** Private files use the trusted path. A managed mirror hit also requires current
-   authorisation, matching target identities, and a complete expected version. A private miss uses current
-   public metadata and policy. An admitted public request delivers the file and queues a whole-version job
+   authorisation, matching target identities, and a complete expected version. A private `404` uses current
+   public metadata and policy, and a failed private read refuses the download.
+   An admitted public request delivers the file and queues a whole-version job
    when mirroring is configured. Clients verify streamed archives against checksums from admitted metadata.
    For PyPI, that job copies every supported wheel and sdist in the admitted version.
    For RubyGems, it copies every platform archive in the admitted version.
