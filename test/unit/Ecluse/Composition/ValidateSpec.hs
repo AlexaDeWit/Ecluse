@@ -40,7 +40,6 @@ import Ecluse.Composition.BootError (
 import Ecluse.Composition.Endpoints (publicationTargetUrl)
 import Ecluse.Composition.Support (
     cargoCodeArtifactEnv,
-    cargoDependencyRefusal,
     cargoDeprecationRefusal,
     cargoGateEnv,
     cargoInstallRefusal,
@@ -230,9 +229,13 @@ cargoRuleBlocksSpec = describe "resolved Cargo rule blocks" $
             plan <- expectVetted role cargoGateEnv
             map vmEcosystem (vpMounts plan) `shouldBe` [Cargo]
             map (ruleName . prRule) (concatMap (mountPolicy . vmMount) (vpMounts plan)) `shouldBe` ["AllowIfOlderThan"]
-        for_ [(scopeRule, cargoScopeRefusal), (deprecatedRule, cargoDeprecationRefusal), (installRule, cargoInstallRefusal), (dependencyRule, cargoDependencyRefusal)] $ \(rules, refusal) ->
+        for_ [(scopeRule, cargoScopeRefusal), (deprecatedRule, cargoDeprecationRefusal), (installRule, cargoInstallRefusal)] $ \(rules, refusal) ->
             it ("refuses the shared " <> show refusal) $
                 refusalsFor role (overrideEnv "ECLUSE_RULES" rules cargoGateEnv) `shouldReturn` [refusal]
+        it "clears a shared external-dependency deny on the Cargo mount" $ do
+            refusalsFor role (overrideEnv "ECLUSE_RULES" dependencyRule cargoGateEnv) `shouldReturn` []
+            plan <- expectVetted role (overrideEnv "ECLUSE_RULES" dependencyRule cargoGateEnv)
+            map (ruleName . prRule) (concatMap (mountPolicy . vmMount) (vpMounts plan)) `shouldMatchList` ["AllowIfOlderThan", "DenyExternalDependencies"]
         it "refuses aliased Cargo blocks below a higher allow with an admission-only deny" $ do
             errors <- refusalsFor role (overrideEnv "ECLUSE_MOUNTS__CARGO__RULES" "{\"alias-scope\":{\"type\":\"AllowScope\",\"scope\":\"acme\",\"precedence\":1},\"alias-deprecated\":{\"type\":\"DenyIfDeprecated\",\"precedence\":1,\"appliesTo\":[\"admission\"]},\"alias-install\":{\"type\":\"DenyInstallTimeExecution\",\"precedence\":1,\"appliesTo\":[\"admission\"]},\"pin\":{\"type\":\"AllowByIdentity\",\"identity\":\"fixture@1.0.0\",\"precedence\":999}}" cargoGateEnv)
             errors `shouldMatchList` [cargoScopeRefusal, cargoDeprecationRefusal, cargoInstallRefusal]
@@ -359,9 +362,9 @@ ruleBlocksSpec = describe "vetBoot -- ecosystem rule blocks" $ do
         it "ignores a disabled PyPI mount's blocked declaration" $
             refusalsFor role (overrideEnv "ECLUSE_MOUNTS__PYPI__ENABLED" "false" (overrideEnv "ECLUSE_RULES" installRule bothMounts))
                 `shouldReturn` []
-        it "refuses a shared external-dependency deny on the PyPI, Cargo and RubyGems mounts" $
+        it "refuses a shared external-dependency deny on the PyPI and RubyGems mounts, and not on Cargo" $
             refusalsFor role (overrideEnv "ECLUSE_MOUNTS__CARGO__ENABLED" "true" (overrideEnv "ECLUSE_MOUNTS__RUBYGEMS__ENABLED" "true" (overrideEnv "ECLUSE_RULES" "{\"no-external\":{\"type\":\"DenyExternalDependencies\"}}" bothMounts)))
-                >>= (`shouldMatchList` [pypiDependencyBlock, cargoDependencyRefusal, rubyDependencyRefusal])
+                >>= (`shouldMatchList` [pypiDependencyBlock, rubyDependencyRefusal])
         it "clears the external-dependency deny when it lives under npm alone" $
             refusalsFor role (overrideEnv "ECLUSE_MOUNTS__NPM__RULES" "{\"no-external\":{\"type\":\"DenyExternalDependencies\"}}" bothMounts)
                 `shouldReturn` []
