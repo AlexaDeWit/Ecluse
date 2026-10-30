@@ -27,7 +27,7 @@ import Ecluse.Config.Types (
     StoreTag (..),
     Target (..),
  )
-import Ecluse.Core.Ecosystem (Ecosystem (Cargo))
+import Ecluse.Core.Ecosystem (Ecosystem)
 import Ecluse.Core.Security (hostAddress)
 import Ecluse.Core.Security.Egress (RegistryUrl, registryUrlText)
 import Ecluse.Core.Text (nonBlank, registryPath)
@@ -82,15 +82,13 @@ vetPrivateRepository eco target = case tgtTag target of
     TagCodeArtifact | isRight (codeArtifactHost eco privateUpstreamKey (tgtUrl target)) -> void (resolvePrivateBackend eco target)
     _ -> Right ()
 
--- | CodeArtifact publication uses one repository for read discovery and the approved upload root.
+-- | A CodeArtifact publication @uploadUrl@ addresses the same repository as its read root.
 vetPublicationRepository :: Ecosystem -> PublicationEndpoint -> Either ConfigError ()
-vetPublicationRepository eco endpoint = case tgtTag (peTarget endpoint) of
-    TagCodeArtifact | eco == Cargo || isJust (peUploadUrl endpoint) -> do
-        let readRoot = tgtUrl (peTarget endpoint)
-        original <- store RepositoryEndpoint "publicationTarget.codeArtifact.url" readRoot
-        for_ (peUploadUrl endpoint) $ \upload -> do
-            uploaded <- store UploadEndpoint "publicationTarget.codeArtifact.uploadUrl" upload
-            unless (original == uploaded) (Left (ParseError "CodeArtifact publication uploadUrl must address the same read repository"))
+vetPublicationRepository eco endpoint = case (tgtTag (peTarget endpoint), peUploadUrl endpoint) of
+    (TagCodeArtifact, Just upload) -> do
+        original <- store RepositoryEndpoint "publicationTarget.codeArtifact.url" (tgtUrl (peTarget endpoint))
+        uploaded <- store UploadEndpoint "publicationTarget.codeArtifact.uploadUrl" upload
+        unless (original == uploaded) (Left (ParseError "CodeArtifact publication uploadUrl must address the same read repository"))
     _ -> Right ()
   where
     store purpose key root = do

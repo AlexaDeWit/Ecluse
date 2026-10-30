@@ -65,8 +65,10 @@ data BootError
       MirrorTargetWithoutPublish Ecosystem
     | -- | A PyPI mirror role cannot retain or validate its expected inventory without durable state.
       MirrorStateRequired Ecosystem
-    | -- | An active native writer lacks its endpoint or credential convention.
+    | -- | An active native writer lacks the credential username its protocol requires. Carries the key path.
       UploadConfigurationRequired Ecosystem Text
+    | -- | An active writer on a protocol with a separate upload endpoint has no @uploadUrl@. Carries the key path.
+      UploadUrlRequired Ecosystem Text
     | -- | A publication target has no adapter that can write its ecosystem's protocol.
       PublicationTargetWithoutPublish Ecosystem
     | -- | A publication target with no first-party namespaces leaves the anti-shadowing guard nothing to enforce.
@@ -214,6 +216,11 @@ renderBootError = \case
         "mirrorState.url is required for mirroring on the " <> ecosystemName eco <> " mount"
     UploadConfigurationRequired eco key ->
         mountDocRef eco key <> " is required before this role writes native uploads"
+    UploadUrlRequired eco key ->
+        mountDocRef eco key
+            <> " ("
+            <> mountKeyRef eco key
+            <> ") is required before this role writes native uploads: url names where Écluse reads and uploadUrl names where it writes. If url holds the upload endpoint, move that address to uploadUrl and set url to the registry's read root."
     PublicationTargetWithoutPublish eco ->
         mountKeyRef eco "publicationTarget"
             <> " is set but this build writes nothing for the "
