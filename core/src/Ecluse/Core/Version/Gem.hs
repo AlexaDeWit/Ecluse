@@ -57,8 +57,8 @@ renderGem (GemKey tokens) = T.intercalate "." (map renderToken tokens)
 isGemStable :: GemKey -> Bool
 isGemStable (GemKey toks) = all isNumeric toks
 
-{- | Whether a @Gem::Requirement@ clause may use this comparison operator. Inline, so each caller
-tests the literals in place: a shared operator list allocated on every compact-index clause.
+{- | Whether a @Gem::Requirement@ clause may use this comparison operator. INLINE keeps the
+literals at each call site, because a shared operator list allocates on every parsed clause.
 -}
 isGemRequirementOperator :: Text -> Bool
 isGemRequirementOperator operator = operator `elem` ["=", "!=", ">", "<", ">=", "<=", "~>"]
