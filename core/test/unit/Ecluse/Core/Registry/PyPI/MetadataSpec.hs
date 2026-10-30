@@ -28,8 +28,8 @@ import Ecluse.Core.Registry.PyPI.Streaming (PyPIRead (..))
 import Ecluse.Core.Rules (prepare)
 import Ecluse.Core.Rules.Types (EvalContext (EvalContext), Rule (AllowByIdentity, AllowIfOlderThan), completeEvidence)
 import Ecluse.Core.Security (
-    LimitError (TooManyArtifacts, TooManyVersions),
-    Limits (maxArtifactCount, maxVersionCount),
+    LimitError (TooManyVersions),
+    Limits (maxVersionCount),
     defaultLimits,
  )
 import Ecluse.Test.Contract.Metadata.Projection (MetadataFraming (SingleDocument), ProjectionDriver (..), metadataProjectionContract)
@@ -70,16 +70,16 @@ indexSpec = describe "projectPyPIIndex" $ do
                 simpleValue raw `shouldBe` simpleIndex "requests" (filesNamed ["requests-2.34.2.tar.gz", "requests-2.34.1.tar.gz"])
             other -> expectationFailure ("expected a projection, got: " <> show other)
 
-    it "counts artifacts separately from distinct releases on full reads" $ do
+    it "counts every file position of one release toward the version ceiling on full reads" $ do
         let body = indexOf ["requests-2.34.2.tar.gz", "requests-2.34.2-py3-none-any.whl"]
-        projectPyPIIndex defaultLimits{maxVersionCount = 1} requestsName body `shouldSatisfy` isRight
-        projectPyPIIndex defaultLimits{maxArtifactCount = 1} requestsName body
-            `shouldBe` Left (MetadataBoundExceeded (TooManyArtifacts 2 1))
-        projectPyPIIndex defaultLimits{maxArtifactCount = 2} requestsName body `shouldSatisfy` isRight
+        projectPyPIIndex defaultLimits{maxVersionCount = 1} requestsName body
+            `shouldBe` Left (MetadataBoundExceeded (TooManyVersions 2 1))
+        projectPyPIIndex defaultLimits{maxVersionCount = 2} requestsName body `shouldSatisfy` isRight
 
-    it "counts only the files that name a release toward the artifact ceiling" $ do
+    it "counts files that name no release toward the version ceiling" $ do
         let body = encodeStrict (simpleIndex "requests" (filesNamed ["requests-2.34.2.tar.gz"] <> [simpleFile "not-a-distribution"]))
-        projectPyPIIndex defaultLimits{maxArtifactCount = 1} requestsName body `shouldSatisfy` isRight
+        projectPyPIIndex defaultLimits{maxVersionCount = 1} requestsName body
+            `shouldBe` Left (MetadataBoundExceeded (TooManyVersions 2 1))
 
 versionSpec :: Spec
 versionSpec = describe "projectPyPIVersion" $ do
@@ -91,7 +91,6 @@ versionSpec = describe "projectPyPIVersion" $ do
         let body = encodeStrict (simpleIndex "requests" [Number 7, simpleFile "requests-2.0.tar.gz", simpleFile "requests-1.0.tar.gz", simpleFile "requests-1.0-py3-none-any.whl"])
         projectPyPIVersion defaultLimits{maxVersionCount = 3} requestsName (pypiVersion "1") body
             `shouldBe` Left (MetadataBoundExceeded (TooManyVersions 4 3))
-        projectPyPIVersion defaultLimits{maxArtifactCount = 1} requestsName (pypiVersion "1") body `shouldSatisfy` isRight
 
 paritySpec :: Spec
 paritySpec = describe "the two decode paths agree on what they serve" $ do
@@ -127,11 +126,14 @@ protocolSpec = describe "protocol envelope parity" $ do
         it ("refuses a non-object meta value " <> show meta) $
             assertProtocolRefusal (protocolIndex (Just meta))
 
-    it "checks the protocol before the name mismatch and file count" $ do
+    it "checks the protocol before the name mismatch, and refuses a file past the ceiling before both" $ do
         let body = encodeStrict (simpleIndexWith "urllib3" ["meta" .= object ["api-version" .= ("2.0" :: Text)]] [simpleFile "urllib3-2.34.2.tar.gz"])
             limits = defaultLimits{maxVersionCount = 0}
-        projectPyPIIndex limits requestsName body `shouldBe` Left MetadataUndecodable
-        projectPyPIVersion limits requestsName (pypiVersion "2.34.2") body `shouldBe` Left MetadataUndecodable
+            refused = Left (MetadataBoundExceeded (TooManyVersions 1 0))
+        projectPyPIIndex defaultLimits requestsName body `shouldBe` Left MetadataUndecodable
+        projectPyPIVersion defaultLimits requestsName (pypiVersion "2.34.2") body `shouldBe` Left MetadataUndecodable
+        projectPyPIIndex limits requestsName body `shouldBe` refused
+        projectPyPIVersion limits requestsName (pypiVersion "2.34.2") body `shouldBe` refused
 
     for_ [("{\"api-version\":\"1.0\",\"api-version\":\"2.0\"}", True), ("{\"api-version\":\"2.0\",\"api-version\":\"1.0\"}", False), ("null,\"meta\":{\"api-version\":\"2.0\"}", True), ("{\"api-version\":\"2.0\"},\"meta\":null", False)] $ \(meta, accepted) ->
         it ("keeps the first protocol keys in " <> show meta) $ do

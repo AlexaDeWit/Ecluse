@@ -90,10 +90,9 @@ packedParitySpec = modifyMaxSuccess (const 2000) $
             chunks <- forAll (genChunks body)
             depth <- forAll (Gen.frequency [(3, pure 64), (2, Gen.int (Range.constant 0 6))])
             versions <- forAll (Gen.int (Range.constant 0 20))
-            artifacts <- forAll (Gen.int (Range.constant 0 30))
-            let limits = defaultLimits{maxNestingDepth = depth, maxVersionCount = versions, maxArtifactCount = artifacts, maxMetadataBytes = BS.length body}
+            let limits = defaultLimits{maxNestingDepth = depth, maxVersionCount = versions, maxMetadataBytes = BS.length body}
                 bound = MetadataBodyLimit (BS.length body)
-                referenceRead = first MetadataBoundExceeded (parseJsonChunks bound (pypiFields depth FullRead) (collectField limits FullRead) (emptyProjection thing) chunks)
+                referenceRead = first MetadataBoundExceeded (parseJsonChunks bound (pypiFields depth FullRead) (collectField limits) (emptyProjection thing) chunks)
                 expected = (\stream -> (streamBytes stream, second Just <$> projectPyPIStream limits thing stream)) <$> referenceRead
                 actual = (\stream -> (streamBytes stream, second packedSimpleDocument <$> projectPyPIPacked limits thing stream)) <$> projectPyPIPackedChunks limits thing chunks
             actual === expected
@@ -248,8 +247,8 @@ start :: (PyPIProjection, [PyPIField])
 start = (emptyProjection thing, [])
 
 collect :: Reading -> (PyPIProjection, [PyPIField]) -> PyPIField -> Either LimitError (PyPIProjection, [PyPIField])
-collect (Reading _ mode cap _) (projection, events) field = do
-    projected <- collectField defaultLimits mode projection field
+collect (Reading _ _ cap _) (projection, events) field = do
+    projected <- collectField defaultLimits projection field
     case cap of
         Just most | length events >= most -> Left (TooManyVersions (length events) most)
         _ -> Right (projected, field : events)
