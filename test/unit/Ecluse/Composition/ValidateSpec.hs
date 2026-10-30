@@ -119,7 +119,7 @@ mirrorCapabilitiesSpec = describe "role-specific mirror capabilities" $ do
             capabilityResult (BootMirrorPipeline role) app
                 `shouldBe` Left
                     [ MirrorStateRequired PyPI
-                    , UploadUrlRequired PyPI "mirrorTarget.registry.uploadUrl"
+                    , UploadConfigurationRequired PyPI "mirrorTarget.registry.uploadUrl"
                     , UploadConfigurationRequired PyPI "mirrorTarget.registry.username"
                     ]
     it "does not add mirror-state or writer dependencies to Dredger and Pilot" $ do
@@ -134,7 +134,7 @@ mirrorCapabilitiesSpec = describe "role-specific mirror capabilities" $ do
     it "requires only the native Cargo upload setting in both writer roles" $ do
         config <- expectConfig cargoMirrorEnv Nothing
         let app = withoutWriteSettings Cargo (configApp config)
-            upload = UploadUrlRequired Cargo "mirrorTarget.registry.uploadUrl"
+            upload = UploadConfigurationRequired Cargo "mirrorTarget.registry.uploadUrl"
         for_ [ServeAndMirror, MirrorOnly] $ \role -> do
             capabilityResult (BootMirrorPipeline role) app `shouldBe` Left [upload]
             capabilityResult (BootMirrorPipeline role) app{cfgMirrorState = Nothing} `shouldBe` Left [MirrorStateRequired Cargo, upload]
