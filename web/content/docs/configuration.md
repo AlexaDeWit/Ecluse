@@ -438,9 +438,8 @@ fetch directly, past Écluse: a git source (`git+https:`, `git:`, `git+ssh:`, `s
 `gitlab:`, `bitbucket:`, `gist:`, `sourcehut:`, `user/repo` shorthand, or a `user@host:path`
 address) or a remote tarball URL (`http:` or `https:`). It reads the specs the packument already
 carries, so it adds no fetch. `devDependencies`, which consumers do not install, `file:`, `link:` and
-`workspace:` specs, and `npm:` aliases do not trigger it. The type also loads on PyPI, Cargo and RubyGems
-mounts, where it abstains: pypi.org and crates.io refuse such dependencies at upload, and a
-RubyGems dependency names no source.
+`workspace:` specs, and `npm:` aliases do not trigger it. PyPI, Cargo and RubyGems block the type
+at boot, as the table of blocked types below lists.
 
 Disable either default under `mounts.npm.rules`, or admit a named package with an `AllowByIdentity`
 pin whose explicit `precedence` is above 300:
@@ -481,17 +480,20 @@ The following types are blocked:
 | Ecosystem | Blocked type | Reason |
 |---|---|---|
 | pypi | `DenyInstallTimeExecution` | Most PyPI releases offer a source distribution, which runs its own build on install, so this rule would deny nearly every release. |
+| pypi | `DenyExternalDependencies` | The PyPI adapter does not read where a release's dependencies install from. |
 | npm | `DenyIfYanked` | npm reports no yank flag. Removed releases disappear from its metadata. |
 | pypi | `DenyIfDeprecated` | The PyPI adapter supplies no deprecation flag. |
 | pypi | `AllowScope` | A PyPI project name has no scope, so this rule can never match one. |
 | cargo | `DenyInstallTimeExecution` | Cargo's sparse index does not declare build scripts or procedural macros. This rule is unsupported for the ecosystem. |
+| cargo | `DenyExternalDependencies` | The Cargo adapter does not read where a crate's dependencies install from. |
 | cargo | `AllowScope` | Cargo package names have no scope. |
 | cargo | `DenyIfDeprecated` | Cargo's sparse index supplies no deprecation flag. |
 | rubygems | `DenyInstallTimeExecution` | RubyGems native builds are normal installation behaviour. This rule is unsupported for the ecosystem. |
+| rubygems | `DenyExternalDependencies` | A RubyGems dependency names only a gem and its requirements, never a source, so this rule can never match one. |
 | rubygems | `DenyIfDeprecated` | RubyGems metadata supplies no supported deprecation flag. |
 | rubygems | `AllowScope` | RubyGems package names have no scope. |
 
-Move `DenyInstallTimeExecution`, `AllowScope`, or `DenyIfDeprecated` from shared `rules` into `mounts.npm.rules`:
+Move `DenyInstallTimeExecution`, `DenyExternalDependencies`, `AllowScope`, or `DenyIfDeprecated` from shared `rules` into `mounts.npm.rules`:
 
 ```yaml
 mounts:
