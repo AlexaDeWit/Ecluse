@@ -190,19 +190,22 @@ uploadBody chunks drained = do
             [] -> writeIORef drained True $> ""
             (ahead, chunk) : rest -> ahead >> writeIORef remaining rest $> chunk
 
--- Record at inspection, target preparation and relay whether the one serve slot is taken and the meter holds a charge.
+-- Inspection pays its workspace past the entry step. Each probe records whether the one serve slot is taken and the meter holds that payment.
 probingGates :: IORef [(Bool, Bool)] -> ServeRuntime -> AdapterPublish -> AdapterPublish
 probingGates held runtime publish =
     publish
-        { publishUploadClaims = \limits workspace registry body -> probe >> publishUploadClaims publish limits workspace registry body
+        { publishUploadClaims = \limits workspace registry body -> workspace inspectionCharge >> probe >> publishUploadClaims publish limits workspace registry body
         , publishCodec = \presentation -> let codec = publishCodec publish presentation in codec{pcPrepareTarget = \origin target -> probe >> pcPrepareTarget codec origin target}
         , publishRelay = \presentation origin name body -> probe >> publishRelay publish presentation origin name body
         }
   where
     probe = do
         slotTaken <- isLeft <$> withServeAdmission noopMetricsPort (srAdmission runtime) pass
-        charged <- (> 0) . snChargedBytes <$> meterSnapshot (srMemoryMeter runtime)
+        charged <- (>= inspectionCharge) . snChargedBytes <$> meterSnapshot (srMemoryMeter runtime)
         modifyIORef' held (<> [(slotTaken, charged)])
+
+inspectionCharge :: Int
+inspectionCharge = 8 * 1024 * 1024
 
 -- Record the presentation each relay receives before relaying.
 recordingPresentation :: IORef [ServicePresentation] -> ServeRuntime -> AdapterPublish -> AdapterPublish
