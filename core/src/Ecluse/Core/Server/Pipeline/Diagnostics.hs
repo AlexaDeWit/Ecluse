@@ -19,6 +19,7 @@ module Ecluse.Core.Server.Pipeline.Diagnostics (
 
     -- * Dropped entries and divergence
     logInvalidEntries,
+    logDirectoryInvalidEntries,
     warnDivergences,
 ) where
 
@@ -163,13 +164,20 @@ logUpstreamUnreachable name origin fault =
 
 -- | The malformed packument entries the projection dropped rather than failing the whole document.
 logInvalidEntries :: (KatipContext m) => PackageName -> Text -> [InvalidEntry] -> m ()
-logInvalidEntries name baseUrl entries =
+logInvalidEntries name = logDroppedEntries (sl "package" (renderPackageName name)) "packument"
+
+-- | The malformed rows a registry-wide directory dropped. The line names no package.
+logDirectoryInvalidEntries :: (KatipContext m) => Text -> [InvalidEntry] -> m ()
+logDirectoryInvalidEntries = logDroppedEntries mempty "directory"
+
+logDroppedEntries :: (KatipContext m) => SimpleLogPayload -> Text -> Text -> [InvalidEntry] -> m ()
+logDroppedEntries subject document baseUrl entries =
     katipAddContext payload $
         logFM WarningS (ls message)
   where
     payload =
         sl "module" pipelineModule
-            <> sl "package" (renderPackageName name)
+            <> subject
             <> sl "upstream" (authorityLabel baseUrl)
             <> sl "droppedByKind" (dropCountsByKind entries)
             <> sl "droppedEntries" (map renderDroppedEntry (take maxRenderedDrops entries))
@@ -179,7 +187,7 @@ logInvalidEntries name baseUrl entries =
 
     message :: Text
     message =
-        "dropped " <> show entriesLen <> " malformed entr" <> plural <> " from an upstream packument (the rest is served)"
+        "dropped " <> show entriesLen <> " malformed entr" <> plural <> " from an upstream " <> document <> " (the rest is served)"
     plural = if entriesLen == 1 then "y" else "ies"
 
 renderDroppedEntry :: InvalidEntry -> Text

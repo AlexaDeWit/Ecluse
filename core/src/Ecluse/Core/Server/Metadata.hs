@@ -17,6 +17,9 @@ module Ecluse.Core.Server.Metadata (
     preparePublicVersion,
     privateMetadataClient,
 
+    -- * Recording one upstream read
+    recordedFetch,
+
     -- * Projecting one version
     selectVersion,
 ) where
@@ -205,7 +208,7 @@ entryToManifest entry =
         , manifestDigest = entryDigest entry
         }
 
--- Only leaders record upstream work, so followers and retention hits do not inflate it.
+-- | Record one upstream metadata read's latency or error cause. Only leaders call it, so followers and hits do not inflate it.
 recordedFetch :: MetricsPort -> Metric.Upstream -> IO (Either MetadataError a) -> IO (Either MetadataError a)
 recordedFetch metrics upstream action = do
     (result, seconds) <- timedSeconds action
