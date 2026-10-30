@@ -62,7 +62,7 @@ rubyPublishCodec factors presentation =
         , pcPrepareUpload = \deadlines limits charge inventory () file verified -> inspectionDeadline deadlines (PublishSourceUnavailable "gem archive validation timed out") $ do
             inspected <- inspectGemArchive limits charge (verifiedBytes verified)
             evaluate $ do
-                archive <- first (PublishSourceUnavailable . parseErrorMessage) inspected
+                archive <- first (PublishSourceUnavailable . parseErrorMessage) (inspected >>= checkRawEnvelope)
                 row <- mirrorRow inventory file
                 checked <- first (PublishSourceUnavailable . parseErrorMessage) (checkGemArchive (grCoordinate row) (hashValue (grChecksum row)) archive)
                 _ <- first (PublishSourceUnavailable . parseErrorMessage) (checkGemSpecification (grCoordinate row) row (gemArchiveSpecification checked))
