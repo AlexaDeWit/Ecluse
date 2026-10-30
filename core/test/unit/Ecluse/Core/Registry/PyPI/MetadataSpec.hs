@@ -26,7 +26,7 @@ import Ecluse.Core.Registry.Metadata (
     Manifest (manifestRetainedEntries),
     MetadataError (MetadataBoundExceeded, MetadataUndecodable),
  )
-import Ecluse.Core.Registry.Metadata.EntryFloor (entryFloorBytes, entryFloorCharge)
+import Ecluse.Core.Registry.Metadata.EntryFloor (RetainedEntries (RetainedEntries), entryFloorBytes, entryFloorCharge)
 import Ecluse.Core.Registry.Publish (PublishCodec (pcTargetRead))
 import Ecluse.Core.Registry.PyPI.Adapter (pypiAdapter)
 import Ecluse.Core.Registry.PyPI.Document (simpleEnvelope)
@@ -88,6 +88,14 @@ entryFloorSpec = describe "the full-read entry floor" $ do
         (result, peak) <- heldWorkspacePeak adapterRead pypiBase (unscopedPyPI "thing") [body]
         void result `shouldSatisfy` isRight
         peak `shouldBe` releaseFloor * 300 - scaleCharge (cfFullReadPermille pypiChargeFactors) (BS.length body)
+
+    it "counts every file, dropped version entry and envelope item, which the finished document keeps" $ do
+        (dense, _) <- heldWorkspacePeak adapterRead pypiBase requestsName [denseBody]
+        manifestRetainedEntries <$> expectRight dense `shouldReturn` RetainedEntries files drops
+        let items = BS.intercalate "," (replicate 30 "0")
+            body = "{\"meta\":{\"api-version\":\"1.1\",\"tracks\":[" <> items <> "]},\"name\":\"requests\",\"alternate-locations\":[" <> items <> "],\"files\":[]}"
+        (envelope, _) <- heldWorkspacePeak adapterRead pypiBase requestsName [body]
+        manifestRetainedEntries <$> expectRight envelope `shouldReturn` RetainedEntries 0 60
 
     it "charges no workspace for files whose source bytes cover the floor" $ do
         (result, peak) <- heldWorkspacePeak adapterRead pypiBase requestsName [indexOf ["requests-2.34.2.tar.gz", "requests-2.34.1.tar.gz"]]

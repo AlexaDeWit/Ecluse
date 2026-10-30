@@ -3,7 +3,8 @@
 -- SPDX-License-Identifier: MIT
 
 {- | Dense npm and PyPI listings, many retained entries in few bytes, each read in a fresh child
-process. Their bytes pay almost nothing, so the entry floor alone covers what the read holds.
+process. Their bytes pay almost nothing, so the floors alone cover what the read holds, and the floors
+for the entries the finished document keeps cover what it holds once read.
 -}
 module Ecluse.Core.Registry.Metadata.EntryFloorResidencySpec (spec) where
 
@@ -33,11 +34,13 @@ import Ecluse.Test.Registry.PyPI (minimalIndex)
 import Ecluse.Test.Server.Mount (requiredAdapter)
 import Ecluse.Test.Support (expectRight)
 
--- | One dense document: the entry kind it repeats, and its bytes for a count of entries.
+-- | One dense document: the entry kind it repeats, its bytes for a count of entries, and the entries its read holds and its finished document keeps.
 data Dense = Dense
     { denseEcosystem :: Ecosystem
     , denseKind :: Text
     , denseDocument :: Int -> ByteString
+    , denseRead :: RetainedEntries
+    , denseKept :: RetainedEntries
     }
 
 -- | The read's peak and what it holds once read, against the floor and against each figure's limit.
@@ -50,18 +53,20 @@ spec = describe "dense listing live bytes" $
                 size = BS.length bytes
             BS.writeFile path bytes
             adapter <- requiredAdapter (denseEcosystem dense)
-            (result, _) <- heldWorkspacePeak (metadataRead (adapterMetadata adapter)) (registryOf (denseEcosystem dense)) (mkPackageName (denseEcosystem dense) Nothing "thing") [bytes]
-            retained <- manifestRetainedEntries <$> expectRight result
-            let total = retainedReleases retained + retainedOthers retained
+            (result, workspace) <- heldWorkspacePeak (metadataRead (adapterMetadata adapter)) (registryOf (denseEcosystem dense)) (mkPackageName (denseEcosystem dense) Nothing "thing") [bytes]
+            kept <- manifestRetainedEntries <$> expectRight result
+            let held = denseRead dense
+                total = retainedReleases held + retainedOthers held
             measured <- measurePathInChild (Mode.ListingFor (toString (ecosystemName (denseEcosystem dense))) "thing") path
             peaks <- singlePeaks <$> expectRight measured
             let readRise = rise listingReadPeak peaks
                 heldRise = rise listingEntryLive peaks
                 factors = metadataChargeFactors (adapterMetadata adapter)
             report dense size total readRise heldRise
-            total `shouldSatisfy` (>= entries)
-            readRise `shouldSatisfy` (<= toInteger (max (scaleCharge (cfFullReadPermille factors) size) (entryFloorCharge retained)))
-            heldRise `shouldSatisfy` (<= toInteger (max (scaleCharge (cfKeptPermille factors) size) (entryFloorCharge retained)))
+            workspace `shouldBe` max 0 (entryFloorCharge held - scaleCharge (cfFullReadPermille factors) size)
+            kept `shouldBe` denseKept dense
+            readRise `shouldSatisfy` (<= toInteger (max (scaleCharge (cfFullReadPermille factors) size) (entryFloorCharge held)))
+            heldRise `shouldSatisfy` (<= toInteger (max (scaleCharge (cfKeptPermille factors) size) (entryFloorCharge kept)))
             figures <- maybe (fail "no dense listing figures") pure (Map.lookup (label dense) (denseFigures <> minimalBodyFigures))
             (1000 * readRise) `shouldSatisfy` (<= readPeakLimit (entryReadPeak figures) * toInteger total + 1000 * tolerance)
             (1000 * heldRise) `shouldSatisfy` (<= heldLimit (entryHeld figures) * toInteger total + 1000 * tolerance)
@@ -75,15 +80,16 @@ tolerance :: Integer
 tolerance = 16 * 1024
 
 -- The densest form of each entry kind a full read retains: a key and a value that does not decode, or an empty item.
+-- An npm timestamp under a key that names no version is dropped, so its document keeps only its one release.
 denseListings :: [Dense]
 denseListings =
-    [ Dense Npm "versions" (\count -> render ("{\"name\":\"thing\",\"versions\":{" <> commas [quoted ("0.0." <> Builder.intDec n) <> ":{}" | n <- [1 .. count]] <> "}}"))
-    , Dense Npm "timestamps" (packument "time")
-    , Dense Npm "dist-tags" (packument "dist-tags")
-    , Dense PyPI "files" (\count -> index ("\"files\":[" <> commas (validFile : replicate count "0") <> "]"))
-    , Dense PyPI "versions" (\count -> index ("\"versions\":[" <> commas (replicate count "0") <> "],\"files\":[" <> validFile <> "]"))
-    , Dense PyPI "alternate-locations" (\count -> index ("\"alternate-locations\":[" <> commas (replicate count "0") <> "],\"files\":[" <> validFile <> "]"))
-    , Dense PyPI "tracks" (\count -> render ("{\"meta\":{\"api-version\":\"1.1\",\"tracks\":[" <> commas (replicate count "0") <> "]},\"name\":\"thing\",\"files\":[" <> validFile <> "]}"))
+    [ Dense Npm "versions" (\count -> render ("{\"name\":\"thing\",\"versions\":{" <> commas [quoted ("0.0." <> Builder.intDec n) <> ":{}" | n <- [1 .. count]] <> "}}")) (releases entries) (releases entries)
+    , Dense Npm "timestamps" (packument "time") (RetainedEntries 1 entries) (RetainedEntries 1 0)
+    , Dense Npm "dist-tags" (packument "dist-tags") (RetainedEntries 1 entries) (RetainedEntries 1 entries)
+    , Dense PyPI "files" (\count -> index ("\"files\":[" <> commas (validFile : replicate count "0") <> "]")) (releases (entries + 1)) (releases (entries + 1))
+    , Dense PyPI "versions" (\count -> index ("\"versions\":[" <> commas (replicate count "0") <> "],\"files\":[" <> validFile <> "]")) (RetainedEntries 1 entries) (RetainedEntries 1 entries)
+    , Dense PyPI "alternate-locations" (\count -> index ("\"alternate-locations\":[" <> commas (replicate count "0") <> "],\"files\":[" <> validFile <> "]")) (RetainedEntries 1 entries) (RetainedEntries 1 entries)
+    , Dense PyPI "tracks" (\count -> render ("{\"meta\":{\"api-version\":\"1.1\",\"tracks\":[" <> commas (replicate count "0") <> "]},\"name\":\"thing\",\"files\":[" <> validFile <> "]}")) (RetainedEntries 1 entries) (RetainedEntries 1 entries)
     ]
   where
     -- One release that renders, beside an object of keys whose values do not decode.
@@ -101,9 +107,12 @@ denseListings =
 -- Versions and files with the smallest valid body, which hold more for each entry than any dense form.
 minimalBodies :: [Dense]
 minimalBodies =
-    [ Dense Npm "minimal-versions" minimalPackument
-    , Dense PyPI "minimal-files" minimalIndex
+    [ Dense Npm "minimal-versions" minimalPackument (releases entries) (releases entries)
+    , Dense PyPI "minimal-files" minimalIndex (releases entries) (releases entries)
     ]
+
+releases :: Int -> RetainedEntries
+releases count = RetainedEntries count 0
 
 label :: Dense -> Text
 label dense = ecosystemName (denseEcosystem dense) <> "/" <> denseKind dense

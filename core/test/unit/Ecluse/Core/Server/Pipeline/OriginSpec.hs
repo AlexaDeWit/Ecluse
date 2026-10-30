@@ -257,7 +257,8 @@ runFullRead (prefix, router, credential) name runtime deps ticket public = do
             else fetchPrivateOriginObserved (const pass) deps runtime part Nothing name
 
 -- A dense or minimal-body listing's bytes pay less than its floors, so its read keeps them once it completes.
--- Versions and files pay the release floor, and every other entry the entry floor.
+-- Versions and files pay the release floor, and every other entry the finished document keeps the entry floor.
+-- The dense npm document keeps its tags, and drops its timestamps, which name no version.
 keptFloorSpec :: Spec
 keptFloorSpec = describe "full npm and PyPI read payments" $
     for_ floorListings $ \(ecosystem, mount, name, (shape, body), (releases, others)) ->
@@ -280,7 +281,7 @@ keptFloorSpec = describe "full npm and PyPI read payments" $
                     snChargedBytes <$> meterSnapshot meter `shouldReturn` 0
   where
     floorListings =
-        [ (Npm, npmMount, thingName, ("dense", densePackument 300), (0, 600))
+        [ (Npm, npmMount, thingName, ("dense", densePackument 300), (0, 300))
         , (PyPI, pypiMount, requestsName, ("dense", denseIndex 150 400), (150, 400))
         , (Npm, npmMount, thingName, ("minimal-body", minimalPackument 300), (300, 0))
         , (PyPI, pypiMount, unscopedPyPI "thing", ("minimal-body", minimalIndex 300), (300, 0))

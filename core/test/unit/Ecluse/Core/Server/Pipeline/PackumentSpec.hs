@@ -442,12 +442,12 @@ data Listing = Listing
     , listingDeps :: Int -> IO PackumentDeps
     , listingOrigin :: Application
     , listingEntries :: (Int, Int)
-    -- ^ The versions or files, and the other entries, a full read of the origin's document retains.
+    -- ^ The versions or files, and the other entries, the finished document of a full read keeps.
     }
 
 listings :: [Listing]
 listings =
-    [ Listing "npm" (mkPackageName Npm Nothing "leftpad") npmRouter ["leftpad"] "npm" npmCredential (hAuthorization, "Bearer edge-token") (agedDeps npmServeDeps (UTCTime (fromGregorian 2020 1 1) 0)) npmOrigin (1, 2)
+    [ Listing "npm" (mkPackageName Npm Nothing "leftpad") npmRouter ["leftpad"] "npm" npmCredential (hAuthorization, "Bearer edge-token") (agedDeps npmServeDeps (UTCTime (fromGregorian 2020 1 1) 0)) npmOrigin (1, 1)
     , -- HTTP Basic, user:edge-token.
       Listing "PyPI" (mkPackageName PyPI Nothing "requests") pypiRouter ["simple", "requests"] "pypi" pypiCredential (hAuthorization, "Basic dXNlcjplZGdlLXRva2Vu") (agedDeps pypiServeDeps (UTCTime (fromGregorian 2026 6 20) 0)) pypiOrigin (1, 0)
     ]
