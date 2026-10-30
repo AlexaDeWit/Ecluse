@@ -72,8 +72,8 @@ spec = do
     releaseAgeSpec
     entryFloorSpec
 
--- Files whose names project no release, and dropped version entries, pay the entry floor their bytes leave uncovered.
--- Each read goes through the wiring that serve and publication use.
+-- Files whose names project no release, dropped version entries, and alternate-locations and tracks
+-- items pay the entry floor their bytes leave uncovered, through the wiring serve and publication use.
 entryFloorSpec :: Spec
 entryFloorSpec = describe "the full-read entry floor" $ do
     it "charges the workspace for files that name no release and dropped versions beyond their per-byte charge" $ do
@@ -90,6 +90,15 @@ entryFloorSpec = describe "the full-read entry floor" $ do
         (result, peak) <- heldWorkspacePeak (pcTargetRead (pypiPublishCodec nativePresentation)) pypiBase requestsName [denseBody]
         void result `shouldSatisfy` isRight
         peak `shouldBe` denseShortfall
+
+    it "charges the workspace for the alternate-locations and tracks items a dense listing keeps" $ do
+        let locations = 300
+            tracks = 200
+            items count = BS.intercalate "," (replicate count "0")
+            body = "{\"meta\":{\"api-version\":\"1.1\",\"tracks\":[" <> items tracks <> "]},\"name\":\"requests\",\"alternate-locations\":[" <> items locations <> "],\"alternate-locations\":[" <> items 100 <> "],\"files\":[]}"
+        (result, peak) <- heldWorkspacePeak adapterRead pypiBase requestsName [body]
+        void result `shouldSatisfy` isRight
+        peak `shouldBe` entryFloorBytes * (locations + tracks) - scaleCharge (cfFullReadPermille pypiChargeFactors) (BS.length body)
   where
     adapterRead = metadataRead (adapterMetadata pypiAdapter)
     pypiBase = "https://pypi.org/simple"
