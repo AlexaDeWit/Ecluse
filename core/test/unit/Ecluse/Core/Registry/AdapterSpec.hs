@@ -29,12 +29,13 @@ spec = describe "adapterFor (the ecosystem adapter registry)" $ do
         (adapterEcosystem <$> adapterFor Cargo) `shouldBe` Just Cargo
         (metadataChargeFactors . adapterMetadata <$> adapterFor Cargo) `shouldBe` Just cargoChargeFactors
 
-    it "blocks exactly Cargo's absent scope and deprecation capabilities" $
+    it "blocks exactly Cargo's install, deprecation and scope types with their reasons" $
         (adapterRuleBlocks <$> adapterFor Cargo)
             `shouldBe` Just
                 ( Map.fromList
-                    [ (AllowScopeType, "Cargo package names have no scope.")
+                    [ (DenyInstallTimeExecutionType, "Cargo's sparse index does not declare build scripts or procedural macros. This rule is unsupported for the ecosystem.")
                     , (DenyIfDeprecatedType, "Cargo's sparse index supplies no deprecation flag.")
+                    , (AllowScopeType, "Cargo package names have no scope.")
                     ]
                 )
 
