@@ -4,7 +4,8 @@
 
 {- | The least a full JSON listing read pays for each entry it retains. Per-byte charges are
 calibrated on realistic listings, so a document of many tiny entries would retain more than its
-bytes pay for. Such a read raises its workspace charge to the floor after each piece it walks.
+bytes pay for. Such a read raises its workspace charge to the floor after each piece it walks, and
+keeps the floor once it completes.
 -}
 module Ecluse.Core.Registry.Metadata.EntryFloor (
     entryFloorBytes,
@@ -24,9 +25,9 @@ import Ecluse.Core.Security (BodyLimit, LimitError)
 import Ecluse.Core.Server.Admission.Budget (scaleCharge)
 import Ecluse.Core.Server.MemoryModel (saturatingCharge)
 
--- | The bytes each retained entry costs at least: its map node or list cell, its key and its typed value.
+-- | The bytes each retained entry costs at least. A residency case measures dense listings to set it: see @docs/testing.md@.
 entryFloorBytes :: Int
-entryFloorBytes = 256
+entryFloorBytes = 704
 
 -- | The floor for a number of retained entries, saturating at the largest charge.
 entryFloorCharge :: Int -> Int
