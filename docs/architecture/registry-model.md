@@ -506,7 +506,9 @@ are CodeArtifact, any host that speaks the protocol, and Verdaccio for developme
 
 Shared code reads what it needs from an adapter's declarations instead of branching on its
 ecosystem. Durable mirror state stores, weighs and rechecks a mount's retained read data through the
-state format its adapter declares, so a new ecosystem extends no switch in mirror state.
+state format its adapter declares, so a new ecosystem extends no switch in mirror state. The
+adapter's first-party declaration reads a mount's `firstParty` entries and decides which names they
+own, so the configuration format stays the same while the parser names no ecosystem.
 
 ### Incremental npm extraction
 

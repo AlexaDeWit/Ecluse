@@ -55,8 +55,11 @@ An unavailable ordering key remains unavailable. It does not invent an order or 
 | Version grammar and advisory spelling | [Version.hs](../core/src/Ecluse/Core/Version.hs) | Ecosystem-specific keys over preserved text |
 | Adapter capabilities and typed rule blocks | [Adapter/Types.hs](../core/src/Ecluse/Core/Registry/Adapter/Types.hs) | [npm](../core/src/Ecluse/Core/Registry/Npm/Adapter.hs) and [PyPI](../core/src/Ecluse/Core/Registry/PyPI/Adapter.hs) |
 | Adapter registration | [Adapter.hs](../core/src/Ecluse/Core/Registry/Adapter.hs) | Explicit dispatch, including unsupported tags |
+| First-party names | `adapterFirstParty` and [Registry.FirstParty](../core/src/Ecluse/Core/Registry/FirstParty.hs) | [Cargo](../core/src/Ecluse/Core/Registry/Cargo/FirstParty.hs) names and prefixes over the shared grammar |
 | Configuration and role validation | [Composition/Validate.hs](../src/Ecluse/Composition/Validate.hs) | Refuse missing active capabilities and blocked policies |
 
+The first-party declaration reads each `firstParty` entry, names a refused entry, and decides which names the entries own.
+Configuration and composition read it, so neither names the ecosystem.
 Register new modules in the owning Cabal package. A tag alone does not establish supported behaviour.
 Keep incomplete providers explicit in tests and documentation until their required behaviours pass.
 Extend the default configuration reference and operator manual when the supported surface changes.
