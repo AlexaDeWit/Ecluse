@@ -742,6 +742,8 @@ The cases assert client- and mirror-observable outcomes:
 
 - an allow-listed package installs,
 - the shipped npm install-script deny blocks a package and never mirrors it,
+- the shipped npm external-dependency deny blocks a package whose dependency names a git source
+  and never mirrors it,
 - the worker mirrors an installed package, and a new project then installs it through a second
   proxy while both public upstreams are down,
 - a dependency graph installed from the mirror alone leaves the tree that the same install left

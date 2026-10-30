@@ -20,7 +20,7 @@ reference = "/docs/operations/#revoking-a-mirrored-version-internal-yank"
 
 An admission-only deny leaves stored copies readable through trusted private access. A deny applying to both phases can authorise removal when it becomes decisive.
 
-New rules apply to both phases unless narrowed. The shipped npm install-script deny is admission-only.
+New rules apply to both phases unless narrowed. The shipped npm install-script and external-dependency denies are admission-only.
 
 ## No allow does not mean delete {#retention}
 
