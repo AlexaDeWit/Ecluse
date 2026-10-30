@@ -17,16 +17,15 @@ import Ecluse.Core.Package (
     InvalidEntryKind (InvalidDistTag, InvalidIndexFile, InvalidVersionListing, InvalidVersionManifest),
     mkInvalidEntry,
  )
-import Ecluse.Core.Registry (UrlFormationError (EmptyBaseUrl, UnparseableUrl))
-import Ecluse.Core.Registry.Metadata (MetadataError (MetadataAbsent, MetadataAuthorisationFailure, MetadataHttpFailure, MetadataUndecodable))
+import Ecluse.Core.Registry (FetchFault (FetchUrlUnformable), UrlFormationError (EmptyBaseUrl, UnparseableUrl))
+import Ecluse.Core.Registry.Metadata (
+    MetadataError (MetadataAbsent, MetadataAuthorisationFailure, MetadataFetch, MetadataHttpFailure, MetadataNameMismatch, MetadataUndecodable),
+ )
 import Ecluse.Core.Server.Pipeline.Diagnostics (
-    logDecodeFailure,
     logDirectoryFailure,
     logDirectoryInvalidEntries,
     logInvalidEntries,
     logMetadataFailure,
-    logNameMismatch,
-    logUpstreamUnformable,
  )
 import Ecluse.Test.Log (runJsonLog, runJsonLogAt)
 import Ecluse.Test.Package (unscopedNpm)
@@ -41,52 +40,50 @@ spec = do
     directoryFailureSpec
 
 upstreamWarningSpec :: Spec
-upstreamWarningSpec = do
-    describe "logDecodeFailure" $
-        it "logs a WARNING tagged with this module and the package, naming the decode failure" $ do
-            logged <- runJsonLog (logDecodeFailure (unscopedNpm "is-odd"))
-            logged `shouldSatisfy` T.isInfixOf "\"sev\":\"Warning\""
-            logged `shouldSatisfy` T.isInfixOf "\"module\":\"Ecluse.Server.Pipeline.Internal\""
-            logged `shouldSatisfy` T.isInfixOf "\"package\":\"is-odd\""
-            logged `shouldSatisfy` T.isInfixOf "did not decode into a usable packument"
+upstreamWarningSpec = describe "logMetadataFailure on a bad upstream" $ do
+    it "logs a WARNING tagged with this module and the package, naming the decode failure" $ do
+        logged <- runJsonLog (logMetadataFailure (unscopedNpm "is-odd") "http://upstream.test" MetadataUndecodable)
+        logged `shouldSatisfy` T.isInfixOf "\"sev\":\"Warning\""
+        logged `shouldSatisfy` T.isInfixOf "\"module\":\"Ecluse.Server.Pipeline.Internal\""
+        logged `shouldSatisfy` T.isInfixOf "\"package\":\"is-odd\""
+        logged `shouldSatisfy` T.isInfixOf "did not decode into a usable packument"
 
-    describe "logNameMismatch" $
-        it "logs a WARNING carrying both names and the origin when an upstream reports a different package" $ do
-            -- No span is active here, so the line carries no @dd@ object. The serve path adds that
-            -- correlation and is otherwise identical.
-            logged <- runJsonLog (logNameMismatch (unscopedNpm "thing") "http://upstream.test" "other")
-            logged `shouldSatisfy` T.isInfixOf "\"sev\":\"Warning\""
-            logged `shouldSatisfy` T.isInfixOf "\"module\":\"Ecluse.Server.Pipeline.Internal\""
-            logged `shouldSatisfy` T.isInfixOf "\"package\":\"thing\""
-            logged `shouldSatisfy` T.isInfixOf "\"upstreamName\":\"other\""
-            logged `shouldSatisfy` T.isInfixOf "\"origin\":\"upstream.test:443\""
-            logged `shouldSatisfy` T.isInfixOf "different package"
+    it "logs a WARNING carrying both names and the origin when an upstream reports a different package" $ do
+        -- No span is active here, so the line carries no @dd@ object. The serve path adds that
+        -- correlation and is otherwise identical.
+        logged <- runJsonLog (logMetadataFailure (unscopedNpm "thing") "http://upstream.test" (MetadataNameMismatch "other"))
+        logged `shouldSatisfy` T.isInfixOf "\"sev\":\"Warning\""
+        logged `shouldSatisfy` T.isInfixOf "\"module\":\"Ecluse.Server.Pipeline.Internal\""
+        logged `shouldSatisfy` T.isInfixOf "\"package\":\"thing\""
+        logged `shouldSatisfy` T.isInfixOf "\"upstreamName\":\"other\""
+        logged `shouldSatisfy` T.isInfixOf "\"origin\":\"upstream.test:443\""
+        logged `shouldSatisfy` T.isInfixOf "different package"
 
-    describe "logUpstreamUnformable" $
-        it "logs a WARNING naming the misconfigured origin and the URL fault, distinct from an outage" $ do
-            logged <- runJsonLog (logUpstreamUnformable (unscopedNpm "is-odd") "http://upstream.test" EmptyBaseUrl)
-            logged `shouldSatisfy` T.isInfixOf "\"sev\":\"Warning\""
-            logged `shouldSatisfy` T.isInfixOf "\"module\":\"Ecluse.Server.Pipeline.Internal\""
-            logged `shouldSatisfy` T.isInfixOf "\"package\":\"is-odd\""
-            logged `shouldSatisfy` T.isInfixOf "\"origin\":\"upstream.test:443\""
-            logged `shouldSatisfy` T.isInfixOf "\"urlError\":\"EmptyBaseUrl\""
-            logged `shouldSatisfy` T.isInfixOf "could not be formed"
+    it "logs a WARNING naming the misconfigured origin and the URL fault, distinct from an outage" $ do
+        logged <- runJsonLog (logMetadataFailure (unscopedNpm "is-odd") "http://upstream.test" (unformable EmptyBaseUrl))
+        logged `shouldSatisfy` T.isInfixOf "\"sev\":\"Warning\""
+        logged `shouldSatisfy` T.isInfixOf "\"module\":\"Ecluse.Server.Pipeline.Internal\""
+        logged `shouldSatisfy` T.isInfixOf "\"package\":\"is-odd\""
+        logged `shouldSatisfy` T.isInfixOf "\"origin\":\"upstream.test:443\""
+        logged `shouldSatisfy` T.isInfixOf "\"urlError\":\"EmptyBaseUrl\""
+        logged `shouldSatisfy` T.isInfixOf "could not be formed"
 
-    describe "logUpstreamUnformable (url minimisation)" $
-        it "reduces the offending URL to its authority, dropping userinfo and query" $ do
-            -- The URL a fault carries can be an upstream-supplied artifact location.
-            -- That location can hold a credential in its userinfo or a signed query,
-            -- so the rendered fault names the authority alone.
-            let offending = UnparseableUrl "https://deploy:hunter2@upstream.test/base?token=abc"
-            logged <- runJsonLog (logUpstreamUnformable (unscopedNpm "is-odd") "https://ops:s3cret@upstream.test/base?k=v" offending)
-            logged `shouldSatisfy` T.isInfixOf "\"urlError\":\"UnparseableUrl upstream.test:443\""
-            -- The origin field takes the same reduction on the same line, so it holds
-            -- for every URL the payload names, not only the carried fault.
-            logged `shouldSatisfy` T.isInfixOf "\"origin\":\"upstream.test:443\""
-            logged `shouldSatisfy` (not . T.isInfixOf "hunter2")
-            logged `shouldSatisfy` (not . T.isInfixOf "token=abc")
-            logged `shouldSatisfy` (not . T.isInfixOf "s3cret")
-            logged `shouldSatisfy` (not . T.isInfixOf "k=v")
+    it "reduces the offending URL to its authority, dropping userinfo and query" $ do
+        -- The URL a fault carries can be an upstream-supplied artifact location.
+        -- That location can hold a credential in its userinfo or a signed query,
+        -- so the rendered fault names the authority alone.
+        let offending = UnparseableUrl "https://deploy:hunter2@upstream.test/base?token=abc"
+        logged <- runJsonLog (logMetadataFailure (unscopedNpm "is-odd") "https://ops:s3cret@upstream.test/base?k=v" (unformable offending))
+        logged `shouldSatisfy` T.isInfixOf "\"urlError\":\"UnparseableUrl upstream.test:443\""
+        -- The origin field takes the same reduction on the same line, so it holds
+        -- for every URL the payload names, not only the carried fault.
+        logged `shouldSatisfy` T.isInfixOf "\"origin\":\"upstream.test:443\""
+        logged `shouldSatisfy` (not . T.isInfixOf "hunter2")
+        logged `shouldSatisfy` (not . T.isInfixOf "token=abc")
+        logged `shouldSatisfy` (not . T.isInfixOf "s3cret")
+        logged `shouldSatisfy` (not . T.isInfixOf "k=v")
+  where
+    unformable = MetadataFetch . FetchUrlUnformable
 
 metadataFailureSpec :: Spec
 metadataFailureSpec = describe "logMetadataFailure" $ do
