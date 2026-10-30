@@ -22,6 +22,7 @@ module Ecluse.Runtime.Test.PackageStore.FixedPages (
     -- * Response builders
     packagesPage,
     versionsPage,
+    versionSummariesPage,
     taggedWith,
     markerTag,
     describing,
@@ -217,10 +218,14 @@ packagesPage token names =
 
 -- | A @ListPackageVersions@ page of published versions, continued by the token when there is one.
 versionsPage :: Maybe Text -> [Text] -> CA.ListPackageVersionsResponse
-versionsPage token raws =
+versionsPage token raws = versionSummariesPage token [CA.newPackageVersionSummary raw CA.PackageVersionStatus_Published | raw <- raws]
+
+-- | A @ListPackageVersions@ page of these entries, for a status or revision other than the default.
+versionSummariesPage :: Maybe Text -> [CA.PackageVersionSummary] -> CA.ListPackageVersionsResponse
+versionSummariesPage token summaries =
     CA.newListPackageVersionsResponse 200
         & (CAL.listPackageVersionsResponse_nextToken .~ token)
-        & (CAL.listPackageVersionsResponse_versions ?~ [CA.newPackageVersionSummary raw CA.PackageVersionStatus_Published | raw <- raws])
+        & (CAL.listPackageVersionsResponse_versions ?~ summaries)
 
 -- | A @ListTagsForResource@ answer carrying these tags.
 taggedWith :: [CA.Tag] -> CA.ListTagsForResourceResponse

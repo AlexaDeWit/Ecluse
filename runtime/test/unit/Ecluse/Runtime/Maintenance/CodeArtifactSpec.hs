@@ -33,7 +33,7 @@ import Ecluse.Core.Registry.Maintenance (
     StoreObservation (obEnumerateVersions, obListPackagesIn, obProbeUpstream),
     StoredVersion (..),
     VersionOutcome (VersionRefused, VersionRemoved, VersionUncertain, VersionUnreached),
-    VersionPresence (VersionServed),
+    VersionPresence (VersionServed, VersionWithdrawn),
     chunksOfCeiling,
     collectPages,
     refusalCode,
@@ -84,7 +84,7 @@ import Ecluse.Runtime.Maintenance.CodeArtifact.Support (
     withNpmStore,
  )
 import Ecluse.Runtime.Test.Aws (loopbackAwsEnv)
-import Ecluse.Runtime.Test.PackageStore.FixedPages (markerTag, packagesPage, taggedWith, versionsPage)
+import Ecluse.Runtime.Test.PackageStore.FixedPages (markerTag, packagesPage, taggedWith, versionSummariesPage, versionsPage)
 import Ecluse.Test.Contract.Maintenance (MaintenanceProfile (..), maintenanceConsentContract, maintenanceDeletionContract, maintenanceFactsContract, maintenanceInventoryContract)
 import Ecluse.Test.Maintenance (testDeleteGuard, withBucket)
 import Ecluse.Test.Package (lodashName, sampleManifest, unscopedNpm)
@@ -163,13 +163,13 @@ enumerationCases store = describe "the handle's paged enumerations" $ do
     before
         ( do
             packages <- answersFrom [packagesPage (Just "p2") ["lodash"], packagesPage Nothing ["axios"]]
-            versions <- answersFrom [versionsPage (Just "v2") ["1.0.0"], versionsPage Nothing ["1.1.0"]]
+            versions <- answersFrom [versionSummariesPage (Just "v2") [revisedRelease], versionSummariesPage Nothing [archivedRelease]]
             pure (handleOver store (reading inertReader{rpListPackages = const packages, rpListVersions = const versions}))
         )
         $ maintenanceInventoryContract
             "maintenance/codeartifact/inventory"
             [lodashName, unscopedNpm "axios"]
-            [(lodashName, [served "1.0.0", served "1.1.0"])]
+            [(lodashName, [(served "1.0.0"){storedRevision = Just "rev-1"}, (served "1.1.0"){storedPresence = VersionWithdrawn}])]
     it "pages the package listing to exhaustion, sending back the token the last page returned" $ do
         tokens <- newIORef []
         answer <- answersFrom [packagesPage (Just "p2") ["lodash"], packagesPage Nothing ["axios"]]
@@ -654,6 +654,11 @@ refusalCodeOf = \case
 
 served :: Text -> StoredVersion
 served raw = StoredVersion{storedVersion = mkVersion Npm raw, storedPresence = VersionServed, storedRevision = Nothing}
+
+-- | A published entry carrying a revision, and an archived one carrying none, for the inventory law.
+revisedRelease, archivedRelease :: CA.PackageVersionSummary
+revisedRelease = CA.newPackageVersionSummary "1.0.0" CA.PackageVersionStatus_Published & (CAL.packageVersionSummary_revision ?~ "rev-1")
+archivedRelease = CA.newPackageVersionSummary "1.1.0" CA.PackageVersionStatus_Archived
 
 withheld :: ConsentVerdict -> Bool
 withheld = \case
