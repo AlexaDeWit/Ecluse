@@ -165,7 +165,7 @@ cargoDeprecationRefusal = RuleBlockedOnMount Cargo DenyIfDeprecatedType "Cargo's
 cargoInstallRefusal :: BootError
 cargoInstallRefusal = RuleBlockedOnMount Cargo DenyInstallTimeExecutionType "Cargo's sparse index does not declare build scripts or procedural macros. This rule is unsupported for the ecosystem."
 
--- | The dependency-source refusal: the adapter reads no dependency source.
+-- | The dependency-source refusal: the adapter projects no dependency source into rule evidence.
 cargoDependencyRefusal :: BootError
 cargoDependencyRefusal = RuleBlockedOnMount Cargo DenyExternalDependenciesType "The Cargo adapter does not project where a public crate's dependencies install from into rule evidence."
 
