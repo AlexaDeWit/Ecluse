@@ -134,8 +134,8 @@ cache:
   # maxEntries: 1024
   # The local backend never retains full metadata. Active fetches still coalesce.
   # Selected versions, assembled responses and the public RubyGems discovery directory share
-  # one byte budget, with no reserved shares. No gauge reports the directory's bytes.
-  # A pod too small for the plan sheds the
+  # one byte budget, with no reserved shares. ecluse.metadata_cache.resident_bytes with
+  # store=directory reports the directory's bytes. A pod too small for the plan sheds the
   # mirror-artifact cap first and this aggregate second.
   # maxBytes: 268435456
 
