@@ -184,6 +184,8 @@ Dependency inventories, aliases, kinds, targets, registry sources, version requi
 Package feature graphs, native-library `links` declarations, and the optional minimum Rust version must also agree, allowing native normalisation.
 Upload dependencies must not carry the `artifact`, `bindep_target`, `lib`, or `public` fields of unstable Cargo features such as nightly `-Z bindeps`.
 Écluse refuses such an upload with `400`, as mirroring refuses index rows that carry them.
+The archived `Cargo.toml` dependency tables must not carry the same features' `artifact`, `target`, `lib`, or `public` keys either, because the upload cannot state them.
+Écluse refuses such an archive with `400` and names the dependency. Mirroring does not apply this manifest check.
 Target comparison parses native cfg expressions under the configured nesting limit, including final commas in `all` and `any` lists.
 Registry comparison uses native logical identities, preserving source kinds and sparse registry paths.
 A null upload dependency registry identifies this `/cargo/` registry. An absent manifest registry identifies crates.io.

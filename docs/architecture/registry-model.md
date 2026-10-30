@@ -486,6 +486,7 @@ Both passes charge their work.
 Resolver disagreement can change the package description used for resolution without changing archive bytes.
 First-party validation therefore compares upload claims, including native-library uniqueness constraints, with the retained effective manifest before target discovery.
 It also refuses the unstable dependency fields that mirroring refuses, so both paths take one stance on nightly-only resolver features.
+It refuses their manifest keys in the archived dependency tables too, since the upload cannot carry them, so the index row and the archive never describe different dependencies.
 After agreement, every normal and build dependency must come from crates.io or Écluse, because a dependency on another registry would send every consumer's Cargo to that registry directly.
 A development dependency is exempt, as npm's `devDependencies` are, because no consumer resolves it.
 Écluse knows its own Cargo index from `server.publicUrl` and the mount path, so this check needs no configuration of its own.
