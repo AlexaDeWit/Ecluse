@@ -214,7 +214,7 @@ proxyApp deadlines ruleDeps policy privateUrl publicUrl = do
                 { pdMountBaseUrl = "https://proxy.test/npm"
                 , pdEgressUrl = Right . loopbackRegistryUrl
                 }
-    pure (application (mkServerConfig (maybeToList (mountBindingFor Npm deps Nothing Nothing))) env)
+    pure (application (mkServerConfig (maybeToList (mountBindingFor Npm deps Nothing))) env)
 
 -- A young fixed version whose artifact URL resolves against the local stub.
 withPublicUpstream :: (Text -> IO a) -> IO a

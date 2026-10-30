@@ -39,7 +39,7 @@ rubyGemsAdapter factors =
                 ]
         , adapterServe =
             AdapterServe
-                { serveRouter = const rubyGemsRouter
+                { serveRouter = rubyGemsRouter
                 , serveRoutes = rubyGemsRouteSpecs
                 , serveCredential = rubyReadCredential
                 }

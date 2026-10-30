@@ -2,7 +2,7 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | Bind validated mounts, source views and publication targets without origin discovery.
+{- | Bind validated mounts and publication targets without origin discovery.
 Live wiring prepares rule state and the credentials required by each role.
 -}
 module Ecluse.Composition (
@@ -66,7 +66,7 @@ import Ecluse.Config (
  )
 import Ecluse.Core.Credential (CredentialProvider)
 import Ecluse.Core.Credential.Refresh (CredentialReporters)
-import Ecluse.Core.Ecosystem (Ecosystem (Cargo), prefixFor)
+import Ecluse.Core.Ecosystem (Ecosystem, prefixFor)
 import Ecluse.Core.Package (PackageName)
 import Ecluse.Core.Registry.Adapter (
     RegistryAdapter,
@@ -91,7 +91,7 @@ import Ecluse.Core.Server.Upstream (MirrorServePlan (MirrorOnAdmit, NoMirrorWrit
 import Ecluse.Core.Text (stripTrailingSlash)
 
 -- | Resolve an ecosystem's deps to its mount, 'Nothing' without an adapter. "Ecluse.Service" implements it.
-type ResolveAdapter = Ecosystem -> PackumentDeps -> Maybe PackumentDeps -> Maybe PublishDeps -> Maybe MountBinding
+type ResolveAdapter = Ecosystem -> PackumentDeps -> Maybe PublishDeps -> Maybe MountBinding
 
 -- | The capabilities the wiring is built through, injected so a unit test assembles it with no listener.
 data WiringPorts = WiringPorts
@@ -172,7 +172,7 @@ planMounts resolveAdapter clock ruleDepsFor mintPlan providers limits publishBud
     bindingFor :: VettedMount -> IO (Either [BootError] MountBinding)
     bindingFor vetted = do
         deps <- packumentDepsFor ctx (vmAdapter vetted) (vmMount vetted) (vmConfig vetted)
-        pure $ case (credentialError mintPlan providers (vmMount vetted), resolveAdapter eco (primaryView vetted deps) (privateView vetted deps) (mountPublishDeps ctx plan vetted)) of
+        pure $ case (credentialError mintPlan providers (vmMount vetted), resolveAdapter eco deps (mountPublishDeps ctx plan vetted)) of
             (Nothing, Just binding) -> Right binding
             (mCredErr, mBinding) ->
                 Left (maybeToList mCredErr <> [MissingAdapter eco | isNothing mBinding])
@@ -189,41 +189,6 @@ data WiringContext = WiringContext
     , wcPublishBudget :: Maybe PublishBudget
     , wcHelp :: Maybe HelpMessage
     }
-
-primaryView :: VettedMount -> PackumentDeps -> PackumentDeps
-primaryView vetted deps
-    | vmEcosystem vetted == Cargo =
-        deps
-            { pdReadSourceSelection = ManagedMirrorAndPublic
-            , pdUpstreams =
-                mountUpstreams
-                    (artifactHosts (pdArtifact deps))
-                    (mtUrl <$> regMirrorTarget regs)
-                    (regPublicUpstream regs)
-                    (maybe NoMirrorWrite (MirrorOnAdmit . mtUrl) (regMirrorTarget regs))
-            }
-    | otherwise = deps
-  where
-    regs = mountRegistries (vmMount vetted)
-
-privateView :: VettedMount -> PackumentDeps -> Maybe PackumentDeps
-privateView vetted deps
-    | vmEcosystem vetted == Cargo =
-        Just
-            deps
-                { pdReadSourceSelection = PrivateOnly
-                , pdMountBaseUrl = pdMountBaseUrl deps <> "/private"
-                , pdMirrorState = Nothing
-                , pdUpstreams =
-                    mountUpstreams
-                        (artifactHosts (pdArtifact deps))
-                        (regPrivateUpstream regs)
-                        (regPublicUpstream regs)
-                        NoMirrorWrite
-                }
-    | otherwise = Nothing
-  where
-    regs = mountRegistries (vmMount vetted)
 
 -- A mount the pass cleared no publication for leaves @PUT \/{pkg}@ answering @405@.
 mountPublishDeps :: WiringContext -> ValidatedPlan -> VettedMount -> Maybe PublishDeps

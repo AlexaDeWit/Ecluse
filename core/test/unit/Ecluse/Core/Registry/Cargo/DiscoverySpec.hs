@@ -14,7 +14,7 @@ import Test.Hspec
 
 import Ecluse.Core.Ecosystem (Ecosystem (Cargo))
 import Ecluse.Core.Package (HashAlg (SHA1, SHA256), mkHash)
-import Ecluse.Core.Registry.Cargo.Discovery (bindCargoDownload, cargoArtifactCoordinate, cargoDiscovery, coordinateChecksum, coordinateFilename, coordinateName, coordinateVersion, discoveryApi, discoveryAuthRequired, discoveryDl, parseDiscoveryWithDepth, renderCargoDiscovery)
+import Ecluse.Core.Registry.Cargo.Discovery (bindCargoDownload, cargoArtifactCoordinate, cargoDiscovery, coordinateChecksum, coordinateFilename, coordinateName, coordinateVersion, discoveryApi, discoveryDl, parseDiscoveryWithDepth, renderCargoDiscovery)
 import Ecluse.Core.Registry.Cargo.Request (cargoArtifactHosts)
 import Ecluse.Core.Registry.Metadata (MetadataError (MetadataBoundExceeded, MetadataUndecodable))
 import Ecluse.Core.Registry.Origin (OriginClient (ocChargeFullRead), originClient)
@@ -70,7 +70,6 @@ spec = describe "Cargo discovery" $ do
         for_ ["{\"dl\":\"https://index.crates.io\"}", "{\"dl\":\"https://index.crates.io\",\"api\":null}"] $ \bytes -> do
             discovery <- expectRight (parseCargoDiscovery hosts origin bytes)
             discoveryApi discovery `shouldBe` Nothing
-            discoveryAuthRequired discovery `shouldBe` False
         for_ ["/relative", "https:///missing", "https://user:token@api.test", "https://api.test/#fragment", "https://api.test/a b", "https://{crate}.test"] $ \api ->
             fmap discoveryApi (parseCargoDiscovery hosts origin (renderCargoDiscovery "https://index.crates.io" (Just api) False)) `shouldBe` Left MetadataUndecodable
         fmap discoveryApi (parseCargoDiscovery hosts origin (renderCargoDiscovery "https://index.crates.io" (Just "https://foreign.test/api") False))
@@ -81,10 +80,9 @@ spec = describe "Cargo discovery" $ do
         cargoArtifactCoordinate "invalid/name" (cargoTestVersion "1.0.0") checksum `shouldBe` Left "invalid Cargo package name"
         cargoArtifactCoordinate "fixture" (mkVersion Cargo "not-a-version") checksum `shouldBe` Left "invalid Cargo version"
         cargoArtifactCoordinate "fixture" (cargoTestVersion "1.0.0") sha1 `shouldBe` Left "Cargo requires SHA-256"
-    it "retains trusted authentication and rejects a malformed declaration" $ do
+    it "accepts a Boolean authentication declaration and rejects a malformed one" $ do
         let trusted = renderCargoDiscovery "https://index.crates.io/{crate}" Nothing True
-        discovery <- expectRight (parseCargoDiscovery hosts origin trusted)
-        discoveryAuthRequired discovery `shouldBe` True
+        fmap discoveryDl (parseCargoDiscovery hosts origin trusted) `shouldBe` Right "https://index.crates.io/{crate}"
         fmap discoveryDl (parseCargoDiscovery hosts origin "{\"dl\":\"https://index.crates.io\",\"auth-required\":null}") `shouldSatisfy` isLeft
     it "pays each discovery chunk's own charge, never a running total" $ do
         let body = renderCargoDiscovery "https://static.crates.io/{crate}" Nothing False <> BS.replicate 51200 32

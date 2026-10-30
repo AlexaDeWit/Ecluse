@@ -117,7 +117,7 @@ tracesExporter = [("OTEL_TRACES_EXPORTER", "otlp"), ("OTEL_BSP_SCHEDULE_DELAY", 
 -- A bare npm mount with no serve or publish dependencies, the same shape the
 -- composition root derives from configuration.
 npmTestConfig :: ServerConfig
-npmTestConfig = mkServerConfig (maybeToList (mountBindingFor Npm inertPackumentDeps Nothing Nothing))
+npmTestConfig = mkServerConfig (maybeToList (mountBindingFor Npm inertPackumentDeps Nothing))
 
 -- A minimal composition root for the traced front door. The route under test matches no
 -- mount, so placeholder registry, credential, and cache handles suffice.

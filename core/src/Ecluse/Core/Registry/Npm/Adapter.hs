@@ -47,7 +47,7 @@ npmAdapter =
         , adapterRuleBlocks = Map.singleton DenyIfYankedType "npm reports no yank flag. Removed releases disappear from its metadata."
         , adapterServe =
             AdapterServe
-                { serveRouter = const NpmRoute.npmRouter
+                { serveRouter = NpmRoute.npmRouter
                 , serveRoutes = NpmRoute.npmRouteSpecs
                 , serveCredential = npmCredential
                 }

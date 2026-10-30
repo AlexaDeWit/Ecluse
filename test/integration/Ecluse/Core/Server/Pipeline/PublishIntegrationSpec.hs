@@ -93,7 +93,7 @@ publishDepsAt targetPort staticToken bodyBudget =
 proxyOver :: Deadlines -> Maybe PublishDeps -> IO Application
 proxyOver deadlines publishDeps = do
     env <- newTestEnv deadlines
-    let cfg = mkServerConfig (maybeToList (mountBindingFor Npm inertPackumentDeps Nothing publishDeps))
+    let cfg = mkServerConfig (maybeToList (mountBindingFor Npm inertPackumentDeps publishDeps))
     pure (application cfg env)
 
 proxyWith :: Deadlines -> Maybe (ByteAdmission -> PublishDeps) -> IO Application
@@ -360,7 +360,7 @@ pypiProxy :: Deadlines -> Maybe (ByteAdmission -> PublishDeps) -> IO Application
 pypiProxy deadlines build = do
     env <- newTestEnv deadlines
     deps <- traverse (\mk -> mk <$> newByteAdmission deadlines (128 * 1024 * 1024)) build
-    pure (application (mkServerConfig (maybeToList (mountBindingFor PyPI (inertDepsFor pypiAdapter) Nothing deps))) env)
+    pure (application (mkServerConfig (maybeToList (mountBindingFor PyPI (inertDepsFor pypiAdapter) deps))) env)
 
 pypiDeps :: Int -> ByteAdmission -> PublishDeps
 pypiDeps port budget =
@@ -653,7 +653,7 @@ cargoProxy deadlines stub = do
                 , pubAllowed = \name -> projectName "fixture" == Right name
                 , pubAdapter = cargoPublish factors
                 }
-    pure (application (mkServerConfig (maybeToList (mountBindingFor Cargo deps Nothing (Just publication)))) env)
+    pure (application (mkServerConfig (maybeToList (mountBindingFor Cargo deps (Just publication)))) env)
 
 cargoPut :: LByteString -> Application -> IO SResponse
 cargoPut bytes = runSession (srequest (SRequest request bytes))
