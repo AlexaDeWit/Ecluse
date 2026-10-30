@@ -62,6 +62,7 @@ module Ecluse.Config.Types (
     Config (..),
     ConfigError (..),
     renderConfigError,
+    npmShippedRules,
 ) where
 
 import Data.IP (IPRange)
@@ -559,7 +560,7 @@ data Config = Config
 data ConfigError
     = ParseError Text
     | PolicyErrors [PolicyError]
-    | -- | Shared rule errors that include suppression of the shipped npm mount default.
+    | -- | Shared rule errors that include suppression of a shipped npm mount default.
       SharedPolicyErrors [PolicyError]
     | -- | A mount is active but @server.publicUrl@ is unset. Deriving it from a spoofable @Host@ header would poison the shared cache.
       PublicUrlRequired
@@ -618,12 +619,17 @@ renderConfigError (UploadUrlRefused eco path) =
         <> ecosystemName eco
         <> " derives its write address from url: remove uploadUrl and keep the registry address in url"
 
+-- | The rule names @config/default.yaml@ ships under @mounts.npm.rules@, which the shared layer does not define.
+npmShippedRules :: [Text]
+npmShippedRules = ["deny-scripts", "deny-external-dependencies"]
+
 renderSharedPolicyError :: PolicyError -> Text
-renderSharedPolicyError err@(SuppressUnknownRule "deny-scripts") =
-    renderPolicyError err
-        <> ". Disable the shipped npm default with enabled: false under "
-        <> keyRef Npm "rules"
-        <> " instead."
+renderSharedPolicyError err@(SuppressUnknownRule name)
+    | name `elem` npmShippedRules =
+        renderPolicyError err
+            <> ". Disable the shipped npm default with enabled: false under "
+            <> keyRef Npm "rules"
+            <> " instead."
 renderSharedPolicyError err = renderPolicyError err
 
 -- A mount-scoped key in both spellings, the form every refusal above names it in.

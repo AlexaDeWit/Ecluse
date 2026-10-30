@@ -60,6 +60,9 @@ reasonPins =
     , (VersionDeprecated, "version is deprecated")
     , (VersionNotDeprecated, "version is not deprecated")
     , (InstallCodeUndetermined, "install-time code execution not yet determined")
+    , (FetchesOutside "dependency 'left-pad' in dependencies names a git source", "installs a dependency from outside the registry: dependency 'left-pad' in dependencies names a git source")
+    , (FetchesOutside "", "installs a dependency from outside the registry: ")
+    , (DependenciesThroughRegistry, "every installable dependency resolves through the registry")
     , (IdentityRevoked "thing@1.0.0", "identity thing@1.0.0 is revoked by operator")
     , (IdentityNotRevoked "thing@1.0.0", "identity is not the revoked thing@1.0.0")
     , (IdentityAllowListed "@myorg/thing", "identity @myorg/thing is allow-listed by operator")
@@ -87,6 +90,7 @@ reasonPins =
     , (NotAffectedAtThreshold Epss, "no advisory at or above the EPSS threshold affects this version")
     , (RuleUnable "AllowIfOlderThan" PublishTimeUnread, "AllowIfOlderThan: the publish time is not available")
     , (RuleUnable "DenyInstallTimeExecution" InstallSignalUnread, "DenyInstallTimeExecution: the install-time execution signal is not available")
+    , (RuleUnable "DenyExternalDependencies" DependencySourcesUnread, "DenyExternalDependencies: the dependency sources are not available")
     , (RuleUnable "DenyIfCve" NoDatabaseLoaded, "DenyIfCve: no advisory database loaded")
     , (RuleUnable "DenyIfEpss" NoDatabaseLoaded, "DenyIfEpss: no advisory database loaded")
     , (RuleUnable "DenyIfCve" SourceBreakerOpen, "DenyIfCve: the rule source circuit breaker is open")
@@ -100,6 +104,7 @@ inabilityPins =
     [ (PublishTimeUnread, "the publish time is not available")
     , (AvailabilityUnread, "the availability flag is not available")
     , (InstallSignalUnread, "the install-time execution signal is not available")
+    , (DependencySourcesUnread, "the dependency sources are not available")
     , (NoDatabaseLoaded, "no advisory database loaded")
     , (PushPastMaximum (AdvisoryAge pushedAt (9 * nominalDay) (6 * nominalDay)), "the advisory push is 9 days old, past the maximum of 6 days (pushed at 2026-06-11T00:00:00Z)")
     , (PushPastMaximum (AdvisoryAge pushedAt (6 * nominalDay + 1) (6 * nominalDay)), "the advisory push is 6 days 1 second old, past the maximum of 6 days (pushed at 2026-06-11T00:00:00Z)")
@@ -138,6 +143,8 @@ data ReasonTag
     | VersionDeprecatedTag
     | VersionNotDeprecatedTag
     | InstallCodeUndeterminedTag
+    | FetchesOutsideTag
+    | DependenciesThroughRegistryTag
     | IdentityRevokedTag
     | IdentityNotRevokedTag
     | IdentityAllowListedTag
@@ -169,6 +176,8 @@ reasonTag = \case
     VersionDeprecated -> VersionDeprecatedTag
     VersionNotDeprecated -> VersionNotDeprecatedTag
     InstallCodeUndetermined -> InstallCodeUndeterminedTag
+    FetchesOutside{} -> FetchesOutsideTag
+    DependenciesThroughRegistry -> DependenciesThroughRegistryTag
     IdentityRevoked{} -> IdentityRevokedTag
     IdentityNotRevoked{} -> IdentityNotRevokedTag
     IdentityAllowListed{} -> IdentityAllowListedTag
@@ -190,6 +199,7 @@ data InabilityTag
     = PublishTimeUnreadTag
     | AvailabilityUnreadTag
     | InstallSignalUnreadTag
+    | DependencySourcesUnreadTag
     | NoDatabaseLoadedTag
     | PushPastMaximumTag
     | PushUndatedTag
@@ -204,6 +214,7 @@ inabilityTag = \case
     PublishTimeUnread -> PublishTimeUnreadTag
     AvailabilityUnread -> AvailabilityUnreadTag
     InstallSignalUnread -> InstallSignalUnreadTag
+    DependencySourcesUnread -> DependencySourcesUnreadTag
     NoDatabaseLoaded -> NoDatabaseLoadedTag
     PushPastMaximum{} -> PushPastMaximumTag
     PushUndated -> PushUndatedTag
@@ -357,6 +368,8 @@ oracleReason = \case
     VersionDeprecated -> "version is deprecated"
     VersionNotDeprecated -> "version is not deprecated"
     InstallCodeUndetermined -> "install-time code execution not yet determined"
+    FetchesOutside which -> "installs a dependency from outside the registry: " <> which
+    DependenciesThroughRegistry -> "every installable dependency resolves through the registry"
     IdentityRevoked ident -> "identity " <> ident <> " is revoked by operator"
     IdentityNotRevoked ident -> "identity is not the revoked " <> ident
     IdentityAllowListed ident -> "identity " <> ident <> " is allow-listed by operator"
@@ -413,6 +426,7 @@ oracleInability = \case
     PublishTimeUnread -> "the publish time" <> " is not available"
     AvailabilityUnread -> "the availability flag is not available"
     InstallSignalUnread -> "the install-time execution signal" <> " is not available"
+    DependencySourcesUnread -> "the dependency sources" <> " are not available"
     NoDatabaseLoaded -> "no advisory database loaded"
     PushPastMaximum observed ->
         "the advisory push is "
@@ -456,6 +470,8 @@ genReason =
         , pure VersionDeprecated
         , pure VersionNotDeprecated
         , pure InstallCodeUndetermined
+        , FetchesOutside <$> genFact
+        , pure DependenciesThroughRegistry
         , IdentityRevoked <$> genFact
         , IdentityNotRevoked <$> genFact
         , IdentityAllowListed <$> genFact
@@ -479,6 +495,7 @@ genInability =
         [ pure PublishTimeUnread
         , pure AvailabilityUnread
         , pure InstallSignalUnread
+        , pure DependencySourcesUnread
         , pure NoDatabaseLoaded
         , PushPastMaximum <$> (AdvisoryAge <$> genInstant <*> genDuration <*> genDuration)
         , pure PushUndated

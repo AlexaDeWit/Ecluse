@@ -40,6 +40,7 @@ import Ecluse.Config.DefaultConfig (defaultConfigBytes)
 import Ecluse.Config.Resolve (deepMerge)
 import Ecluse.Core.Ecosystem (Ecosystem (Cargo, Npm, PyPI))
 import Ecluse.Core.Osv.Schema (EpssRequirement (..))
+import Ecluse.Core.Package (DependencySources (RegistryDependencies))
 import Ecluse.Core.Queue (DeliveryBudget (DeliveryBudget), defaultDeliveryBudget)
 import Ecluse.Core.Rules (prepare)
 import Ecluse.Core.Rules.Types (
@@ -52,7 +53,7 @@ import Ecluse.Core.Rules.Types (
     PrecededRule (..),
     RemainingAdvisories (..),
     Rule (AllowIfRemediatesCve, DenyIfKnownMalicious),
-    RuleEvidence (evPublishedAt),
+    RuleEvidence (evDependencySources, evPublishedAt),
     RuleReach (AdmissionAndRevocation, AdmissionOnly),
     defaultDifferentialLimits,
     identityEvidence,
@@ -573,7 +574,7 @@ modeOf cfg = regMode . mountRegistries <$> Map.lookup Npm (configMounts cfg)
 
 scriptEvidence :: Ecosystem -> RuleEvidence
 scriptEvidence eco =
-    withInstallScripts (identityEvidence name version){evPublishedAt = Known (Just (addUTCTime (negate (30 * nominalDay)) fixedNow))}
+    withInstallScripts (identityEvidence name version){evPublishedAt = Known (Just (addUTCTime (negate (30 * nominalDay)) fixedNow)), evDependencySources = Known RegistryDependencies}
   where
     (name, version) = if eco == PyPI then (unscopedPyPI "thing", pypiVersion "1.0.0") else (thingName, v1_0_0)
 

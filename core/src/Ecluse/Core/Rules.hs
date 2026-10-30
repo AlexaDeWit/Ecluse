@@ -139,6 +139,10 @@ verdictSource = \case
         Known (RunsCodeOnInstall how) -> Deny Nothing (RunsOnInstall how)
         Known NoCodeOnInstall -> NoDecision NothingRunsOnInstall
         Known CodeExecUnknown -> NoDecision InstallCodeUndetermined
+    DenyExternalDependencies -> FromEvidence $ \_ ev -> case evDependencySources ev of
+        Unread -> CannotVet FailDeny DependencySourcesUnread
+        Known (FetchesOutsideRegistry which) -> Deny Nothing (FetchesOutside which)
+        Known RegistryDependencies -> NoDecision DependenciesThroughRegistry
     DenyIfYanked -> availabilityVerdict Yanked VersionYanked VersionNotYanked
     DenyIfDeprecated -> availabilityVerdict Deprecated VersionDeprecated VersionNotDeprecated
     DenyByIdentity ident -> FromEvidence $ \_ ev ->
