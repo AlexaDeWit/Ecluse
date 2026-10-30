@@ -1,7 +1,6 @@
 -- SPDX-FileCopyrightText: 2026 Alexandra de Wit
 --
 -- SPDX-License-Identifier: MIT
-{-# LANGUAGE ImportQualifiedPost #-}
 {-# LANGUAGE TupleSections #-}
 
 -- | Native packaged Cargo manifests and publication metadata, without executing package code.
@@ -135,9 +134,9 @@ checkUploadAgreement :: Limits -> Text -> CargoManifest -> Value -> Either Parse
 checkUploadAgreement limits registry manifest (Object metadata) = do
     (dependencies, features, rustVersion, links) <- resolverMetadata manifest
     currentRegistry <- parseSource registry
-    expected <- traverse (uploadDependency currentRegistry) dependencies >>= foldM (insertDependency limits) Map.empty
+    expected <- traverse (uploadDependency currentRegistry) dependencies >>= foldM (insertDependency indexRepeat limits) Map.empty
     uploaded <- requiredJson "deps" metadata >>= array >>= traverse (uploadDependency currentRegistry)
-    actual <- foldM (insertDependency limits) Map.empty uploaded
+    actual <- foldM (insertDependency indexRepeat limits) Map.empty uploaded
     unless (Map.keysSet expected == Map.keysSet actual) (parseRefusal "Cargo upload and manifest dependency inventories disagree")
     for_ (Map.toList expected) $ \(key, value) -> do
         agreed <- maybe (parseRefusal "Cargo upload omits a manifest dependency") Right (Map.lookup key actual)
@@ -215,8 +214,8 @@ checkPublicationIndex limits (CargoPublishMetadata (Object metadata)) (Object in
     projected <- traverse indexDependency nativeDeps
     unless (length expectedDeps == length projected) (parseRefusal "Cargo manifest and index dependency counts disagree")
     registry <- parseSource cratesIoIndex
-    byIdentity <- traverse (uploadDependency registry) projected >>= foldM (insertDependency limits) Map.empty
-    declared <- traverse (uploadDependency registry) expectedDeps >>= foldM (insertDependency limits) Map.empty
+    byIdentity <- traverse (uploadDependency registry) projected >>= foldM (insertDependency indexRepeat limits) Map.empty
+    declared <- traverse (uploadDependency registry) expectedDeps >>= foldM (insertDependency "Cargo manifest repeats a dependency identity" limits) Map.empty
     unless (Map.keysSet declared == Map.keysSet byIdentity) (parseRefusal "Cargo manifest and index dependency identities disagree")
     for_ (Map.toList declared) $ \(key, expected) -> do
         actual <- maybe (parseRefusal "Cargo manifest and index dependency identities disagree") Right (Map.lookup key byIdentity)
@@ -418,11 +417,15 @@ dependencyKey limits (Object fields) =
         <*> (requiredJson "kind" fields >>= jsonString)
 dependencyKey _ _ = parseRefusal "Cargo publication dependency is not an object"
 
-insertDependency :: Limits -> Map DependencyKey Value -> Value -> Either ParseError (Map DependencyKey Value)
-insertDependency limits values dependencyValue = do
+insertDependency :: Text -> Limits -> Map DependencyKey Value -> Value -> Either ParseError (Map DependencyKey Value)
+insertDependency refusal limits values dependencyValue = do
     key <- dependencyKey limits dependencyValue
-    when (Map.member key values) (parseRefusal "Cargo index repeats a dependency identity")
+    when (Map.member key values) (parseRefusal refusal)
     pure (Map.insert key dependencyValue values)
+
+-- First-party agreement refuses a repeat on either side with this text, which its client receives.
+indexRepeat :: Text
+indexRepeat = "Cargo index repeats a dependency identity"
 
 checkDependency :: Value -> Value -> Either ParseError ()
 checkDependency (Object expected) (Object actual) = do

@@ -1,7 +1,6 @@
 -- SPDX-FileCopyrightText: 2026 Alexandra de Wit
 --
 -- SPDX-License-Identifier: MIT
-{-# LANGUAGE ImportQualifiedPost #-}
 
 -- | Ruby read credentials and publication keys use distinct native presentations.
 module Ecluse.Core.Registry.RubyGems.Credential (

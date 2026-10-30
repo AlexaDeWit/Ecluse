@@ -1,7 +1,6 @@
 -- SPDX-FileCopyrightText: 2026 Alexandra de Wit
 --
 -- SPDX-License-Identifier: MIT
-{-# LANGUAGE ImportQualifiedPost #-}
 
 -- | Verified native Cargo archives exercise complete traversal and selected text retention.
 module Ecluse.Core.Registry.Cargo.ArchiveSpec (spec) where

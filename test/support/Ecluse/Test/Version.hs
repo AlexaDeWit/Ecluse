@@ -6,13 +6,13 @@
 'genNpm', 'genPyPI' and 'genGem' emit structurally valid versions that
 'Ecluse.Core.Version.mkVersion' parses to a key. Their draw space is small, so two draws
 collide often enough to reach the @EQ@ branch of an ordering law, and wide enough to span
-@LT@ and @GT@. 'genNpmNearPlain' and 'genPyPINearPlain' emit plain releases and near misses
-of them. 'digitRunIs' and 'leadsWithZero' classify one digit run of a generated text.
+@LT@ and @GT@.
 -}
 module Ecluse.Test.Version (
     genNpm,
     genPyPI,
     genGem,
+    genCargo,
     genNpmNearPlain,
     genPyPINearPlain,
     digitRunIs,
@@ -55,6 +55,10 @@ genGem = do
         c <- Gen.element ['a' .. 'z']
         rest <- Gen.text (Range.linear 0 4) (Gen.element (['a' .. 'z'] <> ['0' .. '9']))
         pure (T.cons c rest)
+
+-- | Cargo SemVer: 'genNpm' beside the @u64@ boundary and one past it, a prerelease, and build-only twins.
+genCargo :: Gen Text
+genCargo = Gen.choice [genNpm, Gen.element ["18446744073709551615.0.0", "18446744073709551616.0.0", "1.2.3+build.1", "1.2.3+build.2", "1.2.3-rc.1", "1.2.3"]]
 
 -- | Plain npm releases (@N.N.N@), and near misses: two or four numbers, a misspelt number, or text before or after.
 genNpmNearPlain :: Gen Text

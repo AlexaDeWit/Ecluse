@@ -1,7 +1,6 @@
 -- SPDX-FileCopyrightText: 2026 Alexandra de Wit
 --
 -- SPDX-License-Identifier: MIT
-{-# LANGUAGE ImportQualifiedPost #-}
 
 -- | Native tar fixtures shared across registry ecosystems.
 module Ecluse.Test.Registry.Archive (tarBytes, tarEntries, regular, pax, paxAt, paxRecord) where

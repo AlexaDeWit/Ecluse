@@ -569,8 +569,8 @@ the full document. No external cache service is required.
 Boot and `check-config` output report these local capabilities. `cache.maxBytes` applies only to
 eligible local retention. Increasing it cannot enable full retention.
 Each store evicts its own least-recently used entries under shared pressure. It cannot evict another
-store's live entries. The shipped eviction floors are zero. If the other store holds the capacity,
-the request serves without retention until expiry releases room.
+store's live entries. The shipped eviction floors are zero. If other stores hold the capacity, the
+request serves without retention until expiry releases room.
 One selected provider owns every metadata retention capability. Unsupported capabilities stay
 uncached. A failed backend read fetches metadata from its origin or rerenders an assembled response
 from authorised inputs. A failed write skips retention. Neither failure uses a retained local fallback.
@@ -649,7 +649,8 @@ it uses it, against one budget:
 | A full metadata read, which a listing makes | Per decompressed source byte, chunk by chunk before parsing: 1.1 bytes for npm, 3.5 bytes for PyPI, 1.7 bytes for Cargo, 18.0 bytes for RubyGems |
 | A listing's response | Per byte of its output basis, before assembly: 2.0 bytes for npm, 1.9 bytes for PyPI, 2.6 bytes for Cargo, 4.6 bytes for RubyGems |
 | A selected read, which a public artifact decision makes | Nothing beyond the entry step |
-| An assembled hit or a `304` | Its reads, but no response charge |
+| A RubyGems gem or compact specification coordinate lookup | A full metadata read and a response charge for each candidate gem name's `/info` document, at the RubyGems factors |
+| An assembled hit or a `304` | Its reads, but no response charge. A RubyGems `/info` or `/versions` `304` also pays its serialisation or merge charge |
 | A gzip listing response, hit or miss | 512 KiB for the deflater, then 36 KiB for each 32 KiB output buffer |
 | A request that joins another request's public fetch or render | Nothing for that fetch or render |
 | A first-party publication, once its upload is read | Its archive inspection for Cargo and RubyGems, and for Cargo a full metadata read of the target registry's `config.json` |

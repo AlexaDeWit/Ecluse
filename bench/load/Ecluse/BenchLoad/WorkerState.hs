@@ -10,7 +10,6 @@ module Ecluse.BenchLoad.WorkerState (
     countRequest,
     acceptUpload,
     targetStateApp,
-    stateAppFor,
 ) where
 
 import Data.ByteString.Lazy qualified as LBS
@@ -61,18 +60,14 @@ acceptUpload target filename bytes accepted = do
                     countRequest target "upload"
                     pure accepted
 
--- | Serve the target's durable objects under the shared conditional object semantics.
+-- | Serve the target's durable objects with S3's compare-and-swap semantics: opaque revisions and conditional writes.
 targetStateApp :: Int -> WorkerTarget -> Application
-targetStateApp latency target = stateAppFor (wtObjects target) (wtCounts target) latency
-
--- | Opaque revisions and conditional writes retain S3's compare-and-swap behaviour.
-stateAppFor :: IORef (Map ByteString (ByteString, ByteString)) -> IORef (Map Text Int) -> Int -> Application
-stateAppFor objectsRef countsRef latency request respond = do
+targetStateApp latency target request respond = do
     delayUpstream latency
-    count "state"
+    countRequest target "state"
     let key = rawPathInfo request
         headers = requestHeaders request
-    objects <- readIORef objectsRef
+    objects <- readIORef (wtObjects target)
     case (requestMethod request, Map.lookup key objects) of
         ("GET", stored) -> respond (conditionalObjectRead request stored)
         ("PUT", previous) -> do
@@ -83,10 +78,8 @@ stateAppFor objectsRef countsRef latency request respond = do
                 nextRevision = objectRevision bytes
             if condition
                 then do
-                    modifyIORef' objectsRef (Map.insert key (nextRevision, bytes))
-                    count "state-write"
+                    modifyIORef' (wtObjects target) (Map.insert key (nextRevision, bytes))
+                    countRequest target "state-write"
                     respond (responseLBS status200 [("ETag", nextRevision)] "")
                 else respond (responseLBS status412 [(hContentType, "application/xml")] "<Error><Code>PreconditionFailed</Code></Error>")
         _ -> respond (responseLBS status400 [] "unexpected object request")
-  where
-    count name = atomicModifyIORef' countsRef (\counts -> (Map.insertWith (+) name 1 counts, ()))
