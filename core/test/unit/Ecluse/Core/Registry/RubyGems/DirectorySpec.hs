@@ -22,23 +22,27 @@ spec = describe "RubyGems packed discovery" $ do
         let body = "created_at: 2026-01-01T00:00:00Z\n---\nb 1.0,2.0 0123456789abcdef0123456789abcdef\na 1.0 \nb -1.0,3.0 \na -1.0 \n"
             expected = GemDirectory "b 2.0,3.0 \n"
         for_ [1 .. BS.length body] $ \cut -> do
-            result <- expectRight =<< parse defaultLimits [BS.take cut body, BS.drop cut body]
+            result <- expectRight =<< parse [BS.take cut body, BS.drop cut body]
             streamValue result `shouldBe` Right expected
     it "merges public and private collisions with explicit blank hints" $ do
         let public = GemDirectory "a 1.0 \nc 2.0 \n"
             private = GemDirectory "b 1.0 \nc 1.0,3.0 \n"
         mergeDirectories public private `shouldBe` GemDirectory "a 1.0 \nb 1.0 \nc 1.0,2.0,3.0 \n"
     it "rejects malformed rows even when a later delimiter appears" $ do
-        result <- expectRight =<< parse defaultLimits ["---\na 1.0 wrong\n---\n"]
+        result <- expectRight =<< parse ["---\na 1.0 wrong\n---\n"]
         streamValue result `shouldSatisfy` isLeft
-    it "bounds names, repeated rows and complete source bytes" $ do
+    it "bounds distinct gem names at the directory ceiling" $ do
+        parseWithin 1 ["---\na 1.0 \nb 1.0 \n"] `shouldReturn` Left (TooManyVersions 2 1)
+        result <- expectRight =<< parseWithin 1 ["---\na 1.0 \na 2.0 \n"]
+        streamValue result `shouldBe` Right (GemDirectory "a 1.0,2.0 \n")
+    it "fixes the documented ceiling at 2,000,000 gem names" $
+        directoryNameCeiling `shouldBe` 2000000
+    it "keeps the complete source byte bound" $ do
         let body = "---\na 1.0 \nb 1.0 \n"
-        parse defaultLimits{maxVersionCount = 1} [body] `shouldReturn` Left (TooManyVersions 2 1)
-        parse defaultLimits{maxArtifactCount = 1} [body] `shouldReturn` Left (TooManyArtifacts 2 1)
-        parse defaultLimits{maxMetadataBytes = BS.length body - 1} [body] `shouldReturn` Left (BodyTooLarge (MetadataBodyLimit (BS.length body - 1)))
+        parseCapped (BS.length body - 1) [body] `shouldReturn` Left (BodyTooLarge (MetadataBodyLimit (BS.length body - 1)))
     it "rejects missing delimiters and invalid names" $ do
         for_ ["a 1.0 \n", "---\n../a 1.0 \n", "---\na 1.0 0123\n"] $ \body -> do
-            result <- expectRight =<< parse defaultLimits [body]
+            result <- expectRight =<< parse [body]
             streamValue result `shouldSatisfy` isLeft
     it "charges a long public history colliding with one private token" $ do
         let row = "a " <> B8.intercalate "," [show n | n <- [1 .. 10000 :: Int]] <> " "
@@ -48,9 +52,12 @@ spec = describe "RubyGems packed discovery" $ do
         directoryMergeWorkspace public (GemDirectory "b 1 \n") `shouldBe` 0
         BS.length (directoryBytes (mergeDirectories public private)) `shouldSatisfy` (> BS.length row)
     it "retains only packed bytes after parsing" $ do
-        result <- expectRight . streamValue =<< expectRight =<< parse defaultLimits ["created_at: 2026-01-01T00:00:00Z\n", "---\na 1.0,2.0 ", "0123456789abcdef0123456789abcdef\n"]
+        result <- expectRight . streamValue =<< expectRight =<< parse ["created_at: 2026-01-01T00:00:00Z\n", "---\na 1.0,2.0 ", "0123456789abcdef0123456789abcdef\n"]
         directoryBytes result `shouldBe` "a 1.0,2.0 \n"
   where
-    parse limits chunks = do
+    parse = parseCapped (maxMetadataBytes defaultLimits)
+    parseCapped cap = readWith cap (directorySteps (const pass))
+    parseWithin nameCeiling = readWith (maxMetadataBytes defaultLimits) (directoryStepsWithin nameCeiling (const pass))
+    readWith cap steps chunks = do
         next <- heldChunks chunks
-        readStepsWithEnd id finishRecordSteps (MetadataBodyLimit (maxMetadataBytes limits)) (directorySteps (const pass) limits) next
+        readStepsWithEnd id finishRecordSteps (MetadataBodyLimit cap) steps next

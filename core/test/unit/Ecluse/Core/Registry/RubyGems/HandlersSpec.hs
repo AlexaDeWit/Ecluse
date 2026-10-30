@@ -147,6 +147,16 @@ spec = do
                 -- The header and packed rows take 18 bytes before the merge and 15 after it, so only the pre-merge check refuses 17.
                 simpleStatus <$> capture runtime (metadataByteCap 18 binding) "GET" "/versions" [] `shouldReturn` status200
                 simpleStatus <$> capture runtime (metadataByteCap 17 binding) "GET" "/versions" [] `shouldReturn` status502
+        it "serves discovery whatever the per-package count limits" $
+            withDirectoryBodies "---\na 1.0 \nb 1.0 \n" "---\nprivate-gem 1.0 \n" $ \runtime binding _ _ -> do
+                response <- capture runtime (countLimits 1 binding) "GET" "/versions" []
+                simpleStatus response `shouldBe` status200
+                simpleBody response `shouldBe` "---\na 1.0 \nb 1.0 \nprivate-gem 1.0 \n"
+        it "shares one public directory snapshot across per-package count limits" $
+            withDirectorySources $ \runtime binding hits _ -> do
+                simpleStatus <$> capture runtime binding "GET" "/versions" [] `shouldReturn` status200
+                simpleStatus <$> capture runtime (countLimits 2 binding) "GET" "/versions" [] `shouldReturn` status200
+                filter (== ["public", "versions"]) . map fst <$> readIORef hits `shouldReturn` [["public", "versions"]]
         it "keeps a native400 directory limit failure at the capability boundary" $
             withDirectorySources $ \runtime binding hits privateStatus -> do
                 writeIORef privateStatus status400
@@ -703,6 +713,11 @@ metadataByteCap :: Int -> MountBinding -> MountBinding
 metadataByteCap cap binding =
     let deps = bindingPackumentDeps binding
      in binding{bindingPackumentDeps = deps{pdLimits = (pdLimits deps){maxMetadataBytes = cap}}}
+
+countLimits :: Int -> MountBinding -> MountBinding
+countLimits count binding =
+    let deps = bindingPackumentDeps binding
+     in binding{bindingPackumentDeps = deps{pdLimits = (pdLimits deps){maxVersionCount = count, maxArtifactCount = count}}}
 
 warmCoordinateCache :: ServeRuntime -> MountBinding -> IORef [[Text]] -> IO ServeRuntime
 warmCoordinateCache uncached binding hits = warmPublicDocuments uncached binding hits [("acme", status403), ("acme-1", status200)]
