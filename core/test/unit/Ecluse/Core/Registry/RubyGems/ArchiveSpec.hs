@@ -120,7 +120,7 @@ spec = describe "native gem validation" $ do
         inspect defaultLimits{maxMetadataBytes = 32} bytes >>= (`shouldSatisfy` isLeft)
     it "refuses the third outer-envelope member at the outer count bound" $ do
         bytes <- readFileBS fixture
-        void <$> inspect defaultLimits{maxArtifactCount = 2} bytes `shouldReturn` Left (ParseError "archive entry count exceeds its bound")
+        void <$> inspect defaultLimits{archiveEntryCeiling = 2} bytes `shouldReturn` Left (ParseError "archive entry count exceeds its bound")
     it "reaches the inner member count after the envelope and YAML fit their bounds" $ do
         bytes <- readFileBS fixture
         members <- nativeMembers bytes
@@ -134,7 +134,7 @@ spec = describe "native gem validation" $ do
             payload = BSL.toStrict (GZip.compress (Tar.write (entries <> directories)))
         changed <- repack members payload
         reference <- runRubyReference "archive" changed
-        archive <- inspect defaultLimits{maxArtifactCount = memberCount} changed >>= expectRight
+        archive <- inspect defaultLimits{archiveEntryCeiling = memberCount} changed >>= expectRight
         case reference of
             Object native
                 | Just (Array contents) <- KeyMap.lookup "files" native
@@ -142,7 +142,7 @@ spec = describe "native gem validation" $ do
                     length contents `shouldBe` memberCount
                     gemArchiveInventory archive `shouldBe` Set.fromList (map Key.toText (KeyMap.keys regularFiles))
             _ -> fail "native archive reference lacks its physical and regular-file inventories"
-        void <$> inspect defaultLimits{maxArtifactCount = memberCount - 1} changed `shouldReturn` Left (ParseError "archive entry count exceeds its bound")
+        void <$> inspect defaultLimits{archiveEntryCeiling = memberCount - 1} changed `shouldReturn` Left (ParseError "archive entry count exceeds its bound")
     it "accepts the gem build envelope and refuses a PAX or GNU extended header in front of it" $ do
         bytes <- readFileBS fixture
         void <$> published bytes `shouldReturn` Right ()

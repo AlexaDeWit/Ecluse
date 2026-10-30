@@ -4,7 +4,7 @@
 
 module Ecluse.Core.Security.LimitsSpec (spec) where
 
-import Ecluse.Test.Security.Limits (checkDocumentArtifacts, checkNestingDepth, checkVersionCount)
+import Ecluse.Test.Security.Limits (checkNestingDepth, checkVersionCount)
 
 import Data.Aeson (Value (Array, Bool, Null, Number, Object, String), eitherDecodeStrict)
 import Data.Aeson.KeyMap qualified as KeyMap
@@ -16,11 +16,10 @@ import Hedgehog qualified as H
 import Hedgehog.Gen qualified as Gen
 import Hedgehog.Range qualified as Range
 import Test.Hspec
-import Test.Hspec.Hedgehog (hedgehog, modifyMaxSuccess)
+import Test.Hspec.Hedgehog (hedgehog)
 
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Package (
-    PackageDetails (..),
     PackageInfo (..),
     renderPackageName,
  )
@@ -32,7 +31,6 @@ import Ecluse.Core.Security (
     Limits (..),
     ProgressFloorError (..),
     boundedRead,
-    checkArtifactCount,
     checkVersionCountOf,
     defaultLimits,
     floorMinBytes,
@@ -62,7 +60,6 @@ spec = do
     progressFloorSpec
     boundedReadSpec
     versionCountSpec
-    artifactCountSpec
     nestingDepthSpec
     realPackumentSpec
     propertiesSpec
@@ -70,13 +67,11 @@ spec = do
 defaultLimitsSpec :: Spec
 defaultLimitsSpec =
     describe "defaultLimits" $
-        it "ships a 128 MiB body, one million version and artifact ceilings, and 64 nesting levels" $
-            ( maxMetadataBytes defaultLimits
-            , maxVersionCount defaultLimits
-            , maxArtifactCount defaultLimits
-            , maxNestingDepth defaultLimits
+        it "ships a 128 MiB body, a one million version ceiling, 64 nesting levels and fixed one million decoder ceilings" $
+            ( (maxMetadataBytes defaultLimits, maxVersionCount defaultLimits, maxNestingDepth defaultLimits)
+            , [archiveEntryCeiling defaultLimits, compressedMemberCeiling defaultLimits, inertNodeCeiling defaultLimits, multipartPartCeiling defaultLimits, mirrorStateFileCeiling defaultLimits]
             )
-                `shouldBe` (128 * 1024 * 1024, 1_000_000, 1_000_000, 64)
+                `shouldBe` ((128 * 1024 * 1024, 1_000_000, 64), replicate 5 1_000_000)
 
 progressFloorSpec :: Spec
 progressFloorSpec = describe "mkProgressFloor" $ do
@@ -182,57 +177,6 @@ versionCountSpec = describe "checkVersionCount" $ do
         checkVersionCountOf limits 3 `shouldBe` Right ()
         checkVersionCountOf limits 4 `shouldBe` Left (TooManyVersions 4 3)
 
--- A version can carry many artifacts, so its artifact count drives projection cost and residency.
-artifactCountSpec :: Spec
-artifactCountSpec = describe "checkArtifactCount" $ do
-    let limits = defaultLimits{maxArtifactCount = 4}
-
-    it "passes a count at the ceiling and refuses the next, naming the count and the ceiling" $ do
-        checkArtifactCount limits 4 `shouldBe` Right ()
-        checkArtifactCount limits 5 `shouldBe` Left (TooManyArtifacts 5 4)
-
-    it "passes a document within the artifact budget (returns it unchanged)" $
-        checkDocumentArtifacts limits (packumentWith 4) `shouldBe` Right (packumentWith 4)
-
-    it "rejects a document with too many artifacts, fail-closed" $
-        checkDocumentArtifacts limits (packumentWith 5) `shouldBe` Left (TooManyArtifacts 5 4)
-
-    it "passes a document carrying no versions at all" $
-        checkDocumentArtifacts limits (packumentWith 0) `shouldBe` Right (packumentWith 0)
-
-    it "counts every version's artifacts, not the versions" $ do
-        -- Two versions carrying three artifacts each breach a budget the version count clears.
-        let fanned = fanOutTo 3 (packumentWith 2)
-        checkDocumentArtifacts limits fanned `shouldBe` Left (TooManyArtifacts 6 4)
-        checkVersionCount limits fanned `shouldBe` Right fanned
-
-    it "keeps the original artifacts for nonpositive fan-out and repeats them for positive counts" $ do
-        let details = sampleDetails (unscopedNpm "thing") (mkVersion Npm "0.0.1")
-            artifacts = pkgArtifacts details
-        for_ [minBound, -1, 0, 1, 2, 4] $ \n -> do
-            let fanned = withFanOut n details
-            toList (pkgArtifacts fanned) `shouldBe` concat (replicate (max 1 n) (toList artifacts))
-            fanned{pkgArtifacts = artifacts} `shouldBe` details
-
-    it "leaves a one-artifact-per-version document at its version count" $
-        -- npm publishes one tarball per version, so the two bounds coincide there and this
-        -- one never refuses a document the version bound has not refused already.
-        checkDocumentArtifacts defaultLimits (packumentWith 25) `shouldBe` Right (packumentWith 25)
-
-    modifyMaxSuccess (const 500) $
-        it "refuses the documents its reference refuses, naming the same count and ceiling" $
-            hedgehog $ do
-                cap <- forAll (Gen.int (Range.constant 0 12))
-                fanOuts <- forAll (Gen.choice [Gen.list (Range.constant 0 6) (pure 1), Gen.list (Range.constant 0 6) (Gen.int (Range.constant 1 4))])
-                let capped = defaultLimits{maxArtifactCount = cap}
-                    document = fannedDocument fanOuts
-                H.cover 15 "within the ceiling" (sum fanOuts < cap)
-                H.cover 1 "at the ceiling" (sum fanOuts == cap)
-                H.cover 15 "past the ceiling" (sum fanOuts > cap)
-                H.cover 15 "one artifact a version, the npm shape" (all (== 1) fanOuts)
-                H.cover 15 "several artifacts in a version, the PyPI shape" (any (> 1) fanOuts)
-                void (checkDocumentArtifacts capped document) === referenceArtifactCeiling capped document
-
 nestingDepthSpec :: Spec
 nestingDepthSpec = describe "checkNestingDepth" $ do
     let limits = defaultLimits{maxNestingDepth = 3}
@@ -336,29 +280,6 @@ nestArray :: Int -> Value
 nestArray n
     | n <= 1 = Number 1
     | otherwise = Array (V.singleton (nestArray (n - 1)))
-
--- The artifact ceiling as it read a typed document, held as the reference for the production ceiling.
-referenceArtifactCeiling :: Limits -> PackageInfo -> Either LimitError ()
-referenceArtifactCeiling limits document
-    | seen > cap = Left (TooManyArtifacts seen cap)
-    | otherwise = Right ()
-  where
-    cap = maxArtifactCount limits
-    seen = Map.foldl' (\acc details -> acc + length (pkgArtifacts details)) 0 (infoVersions document)
-
-fanOutTo :: Int -> PackageInfo -> PackageInfo
-fanOutTo n info = info{infoVersions = Map.map (withFanOut n) (infoVersions info)}
-
-fannedDocument :: [Int] -> PackageInfo
-fannedDocument fanOuts = document{infoVersions = Map.fromList (zipWith fan (Map.toList (infoVersions document)) fanOuts)}
-  where
-    document = packumentWith (length fanOuts)
-    fan (key, details) n = (key, withFanOut n details)
-
-withFanOut :: Int -> PackageDetails -> PackageDetails
-withFanOut n details = details{pkgArtifacts = foldl' (<>) artifacts (replicate (max 1 n - 1) artifacts)}
-  where
-    artifacts = pkgArtifacts details
 
 packumentWith :: Int -> PackageInfo
 packumentWith n =

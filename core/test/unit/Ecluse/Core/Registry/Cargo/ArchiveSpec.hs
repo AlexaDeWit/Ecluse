@@ -91,7 +91,7 @@ spec = do
             for_
                 [ (defaultLimits{maxMirrorArtifactBytes = 10}, ParseError "Cargo compressed archive exceeds its byte bound")
                 , (defaultLimits{maxMirrorArtifactBytes = 8192}, ParseError "archive inflated bytes exceed their bound")
-                , (defaultLimits{maxArtifactCount = 1}, ParseError "archive entry count exceeds its bound")
+                , (defaultLimits{archiveEntryCeiling = 1}, ParseError "archive entry count exceeds its bound")
                 ]
                 $ \(limits, fault) -> do
                     result <- inspect limits bytes

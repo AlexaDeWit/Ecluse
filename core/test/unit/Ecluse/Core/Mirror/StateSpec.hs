@@ -263,7 +263,7 @@ spec = describe "durable mirror expectations" $ do
         inventory <- mirrorSample [1, 2] False "https://first.test/" "original"
         record <- expectRight (extendProjectRecord defaultLimits target inventory Nothing)
         bytes <- expectRight (encodeProjectRecord defaultLimits record)
-        chargedDecodeProjectRecord (const (pure ())) defaultLimits{maxArtifactCount = 1} target mirrorPackage bytes >>= (`shouldSatisfy` isLeft)
+        chargedDecodeProjectRecord (const (pure ())) defaultLimits{mirrorStateFileCeiling = 1} target mirrorPackage bytes >>= (`shouldSatisfy` isLeft)
         chargedDecodeProjectRecord (const (pure ())) defaultLimits{maxVersionCount = 0} target mirrorPackage bytes >>= (`shouldSatisfy` isLeft)
 
     it "round trips every admission fact and original source field" $ do
