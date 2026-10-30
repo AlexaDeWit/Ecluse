@@ -358,8 +358,7 @@ publicationCredential :: MountConfig -> Maybe ClientCredential
 publicationCredential mount = do
     endpoint <- mntPublicationTarget mount
     token <- peToken endpoint
-    let username = if tgtTag (peTarget endpoint) == TagCodeArtifact then Just "aws" else peUsername endpoint
-    pure (ClientCredential username token)
+    pure (ClientCredential (peUsername endpoint) token)
 
 -- The publication target's store decides how a static credential travels, as it does for the mirror worker's token.
 publicationPresentation :: Ecosystem -> MountConfig -> ServicePresentation

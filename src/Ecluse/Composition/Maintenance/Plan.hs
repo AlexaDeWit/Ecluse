@@ -140,7 +140,7 @@ vetPrivateCaches resolveAdapter configured mounts = withRole $ \case
     resolve role eco endpoint = case tgtTag target of
         TagCodeArtifact -> do
             (backend, store) <- first (PrivateCacheUnavailable . show) (resolvePrivateBackend eco target)
-            pure (Just backend, clearedBackend (tgtUrl target) (Just "aws") adapter presentation (ClearedCodeArtifactCache store))
+            pure (Just backend, clearedBackend (tgtUrl target) Nothing adapter presentation (ClearedCodeArtifactCache store))
         TagRegistry -> Left (PrivateCacheUnavailable "registry has no inventory control plane")
         TagVerdaccio -> do
             when (refusesWithoutConsent role && preConsent endpoint == DeletionWithheld) $

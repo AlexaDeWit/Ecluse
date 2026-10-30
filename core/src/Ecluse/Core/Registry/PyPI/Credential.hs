@@ -11,12 +11,12 @@ import Data.ByteArray.Encoding (Base (Base64), convertFromBase)
 import Data.Text qualified as T
 import Network.HTTP.Types.Header (RequestHeaders, hAuthorization)
 
-import Ecluse.Core.Credential (ClientCredential (ClientCredential), mkSecret)
+import Ecluse.Core.Credential (ClientCredential (ClientCredential, credUsername), mkSecret)
 import Ecluse.Core.Registry.Request (AuthMechanism (AuthBasic), CredentialMapping, authorizationUnder, credentialMapping, renderAuthMechanism)
 
--- | PyPI's credential mapping: recover the client's Basic pair, re-present it upstream.
+-- | PyPI's credential mapping: recover the client's Basic pair, re-present it upstream under its own username, empty when it has none.
 pypiCredential :: CredentialMapping
-pypiCredential = credentialMapping recoverBasic hAuthorization (renderAuthMechanism AuthBasic)
+pypiCredential = credentialMapping recoverBasic hAuthorization (\credential -> renderAuthMechanism (AuthBasic (fromMaybe "" (credUsername credential))) credential)
 
 -- The password half may itself carry a colon, so the split takes the first one. Another scheme,
 -- undecodable base64, no colon, an empty password, or no header yields 'Nothing'.
