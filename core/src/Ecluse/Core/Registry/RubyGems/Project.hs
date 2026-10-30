@@ -106,8 +106,9 @@ mkCoordinate name version platform = do
     pure (GemCoordinate checkedName checkedVersion platform file)
 
 -- | Return the native filename without its @.gem@ extension for quick specifications.
+-- 'mkCoordinate' always appends the extension, so the fallback never applies.
 coordinateStem :: GemCoordinate -> Text
-coordinateStem = T.dropEnd 4 . unFilename . coordinateFilename
+coordinateStem coordinate = let raw = unFilename (coordinateFilename coordinate) in fromMaybe raw (gemFileStem raw)
 
 -- | Enumerate bounded native capture candidates before checking admitted artifact inventory.
 candidateCoordinates :: Int -> Filename -> Either ParseError [GemCoordinate]

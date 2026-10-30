@@ -17,8 +17,9 @@ import Ecluse.Core.Registry.MirrorUpload
 import Ecluse.Core.Registry.Publish (MirrorCompanion (..))
 import Ecluse.Core.Registry.RubyGems.CompactSpec (compactSpecBytes, validateCompactSpec)
 import Ecluse.Core.Registry.RubyGems.Document (GemDocument (gemRows), GemRow (..))
-import Ecluse.Core.Registry.RubyGems.Project (coordinateStem, gemFileStem)
+import Ecluse.Core.Registry.RubyGems.Project (coordinateFilename, gemFileStem)
 import Ecluse.Core.Registry.RubyGems.Request (compactSpecPath, gemPath)
+import Ecluse.Core.Server.Path (unFilename)
 
 -- | A companion cannot supply authority or substitute another platform's specification.
 rubyMirrorCompanion :: MirrorCompanion
@@ -38,6 +39,6 @@ rubyMirrorCompanion =
 mirrorRow :: MirrorInventory -> ExpectedMirrorFile -> Either PublishFault GemRow
 mirrorRow inventory file = case inventoryReadData inventory of
     RubyGemsMirrorRead source -> case filter ((== artEntryKey (expectedArtifact file)) . grEntryKey) (gemRows source) of
-        [row] | coordinateStem (grCoordinate row) <> ".gem" == artFilename (expectedArtifact file) -> Right row
+        [row] | unFilename (coordinateFilename (grCoordinate row)) == artFilename (expectedArtifact file) -> Right row
         _ -> Left (PublishSourceUnavailable "RubyGems upload has no unique paired source row")
     _ -> Left (PublishSourceUnavailable "RubyGems upload has no native source document")
