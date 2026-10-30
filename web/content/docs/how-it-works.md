@@ -155,8 +155,8 @@ stronger-algorithm mismatch. This alternative rule applies only to SRI component
 ### The policy
 
 The policy is deny by default: a public version reaches a build only when a rule admits it. Rules
-run in precedence order and the first decisive one wins. The revoke and the install-time deny sit
-above every allow by default.
+run in precedence order and the first decisive one wins. The revoke, the install-time deny and the
+external-dependency deny sit above every allow by default.
 
 | Rule | Band | On by default | What it decides |
 |------|------|----------------|-----------------|

@@ -367,7 +367,7 @@ advisory evidence is unavailable (see
 `deny-known-malicious` (`DenyIfKnownMalicious`) ranks at 300, above every default allow (see
 [Rules engine](rules-engine.md#denyifknownmalicious-primary-namespace-evidence)). Without a source,
 neither shared advisory rule is active. The age rule supplies the shared allow, and npm's
-install-script deny still applies.
+install-script and external-dependency denies still apply.
 
 The npm mount adds `deny-scripts` (`DenyInstallTimeExecution`) and `deny-external-dependencies`
 (`DenyExternalDependencies`) at admission only. They do not activate a mount. The operator can
