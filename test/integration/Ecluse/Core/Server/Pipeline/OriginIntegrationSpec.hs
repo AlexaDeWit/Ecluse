@@ -306,27 +306,27 @@ partialAvailabilitySpec = describe "partial-upstream availability" $ do
             status resp `shouldBe` 200
             servedVersions resp `shouldBe` ["1.0.0"]
 
-    it (caseLabel "integration/origin/native-014" "refuses with 503 when the private body is unparseable") $ do
+    it (caseLabel "integration/origin/native-014" "refuses with 502 when the private body is unparseable") $ do
         privateUp <- servingUpstream "this is not json at all"
         publicUp <-
             servingUpstream
                 (encodePackument (packument [("2.0.0", plainVersion "2.0.0")] "2.0.0" [("2.0.0", publishedDaysAgo 30)]))
         withProxy privateUp publicUp Nothing $ \app -> do
             resp <- getThing Nothing app
-            status resp `shouldBe` 503
+            status resp `shouldBe` 502
             servedVersions resp `shouldBe` []
 
-    it (caseLabel "integration/origin/native-015" "refuses with 503 when the private body decodes but does not project to a packument") $ do
+    it (caseLabel "integration/origin/native-015" "refuses with 502 when the private body decodes but does not project to a packument") $ do
         privateUp <- servingUpstream "[1, 2, 3]"
         publicUp <-
             servingUpstream
                 (encodePackument (packument [("2.0.0", plainVersion "2.0.0")] "2.0.0" [("2.0.0", publishedDaysAgo 30)]))
         withProxy privateUp publicUp Nothing $ \app -> do
             resp <- getThing Nothing app
-            status resp `shouldBe` 503
+            status resp `shouldBe` 502
             servedVersions resp `shouldBe` []
 
-    it (caseLabel "integration/origin/native-016" "drops a private leg that self-reports a different package, serving the public set (200)") $ do
+    it (caseLabel "integration/origin/native-016" "refuses with 502 when the private leg self-reports a different package, serving no public versions") $ do
         privateUp <-
             servingUpstream
                 (encodePackument (packumentNamed "other" [("1.0.0", plainVersion "1.0.0")] "1.0.0" [("1.0.0", publishedDaysAgo 30)]))
@@ -335,9 +335,8 @@ partialAvailabilitySpec = describe "partial-upstream availability" $ do
                 (encodePackument (packument [("2.0.0", plainVersion "2.0.0")] "2.0.0" [("2.0.0", publishedDaysAgo 30)]))
         withProxy privateUp publicUp Nothing $ \app -> do
             resp <- getThing Nothing app
-            status resp `shouldBe` 200
-            servedVersions resp `shouldBe` ["2.0.0"]
-            fieldAt "name" (decodedBody resp) `shouldBe` Just (String "thing")
+            status resp `shouldBe` 502
+            servedVersions resp `shouldBe` []
 
     it (caseLabel "integration/origin/native-017" "drops a public leg that self-reports a different package, serving the private set (200)") $ do
         privateUp <- servingUpstream (encodePackument (privatePackument [("1.0.0", plainVersion "1.0.0")] "1.0.0"))
