@@ -114,8 +114,9 @@ sourceName = \case
     Object fields -> maybeToRight (PublishSourceUnavailable "Cargo source row has no published name") (stringField "name" fields)
     _ -> Left (PublishSourceUnavailable "Cargo source row is not an object")
 
--- | Bind resolver claims to the verified archive, and dependencies to crates.io or this proxy, before any
--- publication discovery or upstream write.
+{- | Bind resolver claims to the verified archive, and dependencies to crates.io or this proxy, before any
+publication discovery or upstream write.
+-}
 uploadClaims :: Limits -> (Int -> IO ()) -> Text -> PublishRequestBody -> IO (Either PublishBodyFault [Text])
 uploadClaims limits charge registry body = do
     decoded <- Body.readUpload limits charge (publishBodyBytes body)
@@ -128,15 +129,16 @@ uploadClaims limits charge registry body = do
             case inspected of
                 Left fault -> pure (Left (PublishMalformed fault))
                 Right metadata -> do
-                    let registries = ownRegistries registry
-                    agreement <- cargoUploadAgreement limits withMetadata metadataCost (head registries) (Body.uploadMetadata upload) metadata
+                    let publication :| replacement = ownRegistries registry
+                    agreement <- cargoUploadAgreement limits withMetadata metadataCost publication (Body.uploadMetadata upload) metadata
                     pure . first PublishMalformed $ do
                         agreement
-                        checkDependencyRegistries (toList registries) (Body.uploadMetadata upload)
+                        checkDependencyRegistries (publication : replacement) (Body.uploadMetadata upload)
                         pure [Body.uploadName upload]
 
--- | The publication view's sparse registry first. Publishing through the private view at @/private@ adds
--- the mount's crates.io replacement above it, which is also this proxy.
+{- | The publication view's sparse registry first. Publishing through the private view at @/private@ adds
+the mount's crates.io replacement above it, which is also this proxy.
+-}
 ownRegistries :: Text -> NonEmpty Text
 ownRegistries registry = sparse trimmed :| maybeToList (sparse <$> T.stripSuffix "/private" trimmed)
   where
