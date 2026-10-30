@@ -38,6 +38,7 @@ import Data.Aeson.Types (parseEither)
 import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import Data.Time (UTCTime)
+import Data.Universe.Class qualified as Universe
 
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Package (InvalidEntry, InvalidEntryKind (..), PackageDetails (..), PackageInfo (..), PackageName, mkInvalidEntry)
@@ -261,7 +262,7 @@ retainedEntries (PackedRead acc _) = Map.size (projectedVersions acc) + Map.size
 
 -- Keep the diagnostic field selection to preserve decoder refusal priority. Dependency maps never refuse.
 typedMembers :: Pick
-typedMembers = Only [(field, if field == "dist" then Only [(member, Whole) | member <- distFields] else Whole) | field <- versionListFields <> map installableFieldName [minBound .. maxBound]]
+typedMembers = Only [(field, if field == "dist" then Only [(member, Whole) | member <- distFields] else Whole) | field <- versionListFields <> map installableFieldName Universe.universe]
 
 -- | Bind the reported name, and serve each kept release packed over the read's sealed table.
 finishPacked :: PackageName -> Text -> DocTable -> PackedRead -> Either MetadataError (PackageInfo, PackedPackument)

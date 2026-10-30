@@ -13,10 +13,6 @@ module Ecluse.Core.Server.Pipeline.Diagnostics (
     -- * Metadata-read failures
     logMetadataFailure,
     logDirectoryFailure,
-    logDecodeFailure,
-    logNameMismatch,
-    logUpstreamUnformable,
-    logUpstreamUnreachable,
 
     -- * Dropped entries and divergence
     logInvalidEntries,
@@ -154,17 +150,9 @@ warnUpstream :: (KatipContext m) => Subject -> SimpleLogPayload -> Text -> m ()
 warnUpstream subject extra message =
     katipAddContext (sl "module" pipelineInternalModule <> subjectPayload subject <> extra) $ logFM WarningS (ls message)
 
--- | Warn that an upstream body did not decode into a usable packument.
-logDecodeFailure :: (KatipContext m) => PackageName -> m ()
-logDecodeFailure = warnDecodeFailure . PackageSubject
-
 warnDecodeFailure :: (KatipContext m) => Subject -> m ()
 warnDecodeFailure subject =
     warnUpstream subject mempty ("refused an upstream metadata document: it did not decode into a usable " <> documentNoun subject)
-
--- | Warn when an upstream declares a different package identity.
-logNameMismatch :: (KatipContext m) => PackageName -> Text -> Text -> m ()
-logNameMismatch = warnNameMismatch . PackageSubject
 
 warnNameMismatch :: (KatipContext m) => Subject -> Text -> Text -> m ()
 warnNameMismatch subject origin reported =
@@ -173,20 +161,12 @@ warnNameMismatch subject origin reported =
         (sl "origin" (authorityLabel origin) <> sl "upstreamName" reported)
         "dropped an upstream contribution: its packument self-reported a name for a different package"
 
--- | Warn when a configured origin cannot form a request URL.
-logUpstreamUnformable :: (KatipContext m) => PackageName -> Text -> UrlFormationError -> m ()
-logUpstreamUnformable = warnUnformable . PackageSubject
-
 warnUnformable :: (KatipContext m) => Subject -> Text -> UrlFormationError -> m ()
 warnUnformable subject origin urlErr =
     warnUpstream
         subject
         (sl "origin" (authorityLabel origin) <> sl "urlError" (renderUrlFormationError urlErr))
         "refused an upstream metadata fetch: the configured base URL could not be formed into a request"
-
--- | Report transport failure separately from decoding and configuration failures.
-logUpstreamUnreachable :: (KatipContext m) => PackageName -> Text -> TransportFault -> m ()
-logUpstreamUnreachable = warnUnreachable . PackageSubject
 
 warnUnreachable :: (KatipContext m) => Subject -> Text -> TransportFault -> m ()
 warnUnreachable subject origin fault =

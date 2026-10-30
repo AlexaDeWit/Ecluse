@@ -37,7 +37,7 @@ import Ecluse.Core.Server.Path (Filename, unFilename)
 import Ecluse.Core.Server.Pipeline.Origin (OriginMiss (..), withPrivateMetadataClient, withPublicMetadata)
 import Ecluse.Core.Server.Pipeline.Shared
 import Ecluse.Core.Server.Pipeline.Tarball.Private (privateMetadataMiss, privateReadUnresolved)
-import Ecluse.Core.Server.Pipeline.Tarball.Refusal (artifactError, firstPartyMissRefusal, upstreamUnavailable, versionAbsent)
+import Ecluse.Core.Server.Pipeline.Tarball.Refusal (artifactError, privateMissRefusal, upstreamUnavailable, versionAbsent)
 import Ecluse.Core.Server.Pipeline.Tarball.Relay (ArtifactServe (..), acceptPrivateArtifact, privateArtifactResponder, relayPublicResult, relayUnjudged, relayUpstreamResult, withMethod, withValidators)
 import Ecluse.Core.Server.Pipeline.Tarball.Types (ArtifactRequest (..), TarballReplies (..), relayResponder)
 import Ecluse.Core.Server.Response (ServeDecision, mkRefusal)
@@ -170,10 +170,8 @@ servePrivate ctx = \case
             UpstreamCooling retry -> answerError ctx (upstreamCooling retry)
 
 fallback :: ArtifactRequest response -> OriginMiss -> Handler ResponseReceived
-fallback ctx miss
-    | pdFirstParty (arDeps ctx) (arPackage ctx) = answerError ctx (firstPartyMissRefusal miss)
-    | MissUnresolved <- miss = answerError ctx upstreamUnavailable
-    | otherwise = admittedRead ctx (publicSelection ctx) (servePublic ctx)
+fallback ctx miss =
+    maybe (admittedRead ctx (publicSelection ctx) (servePublic ctx)) (answerError ctx) (privateMissRefusal (arDeps ctx) (arPackage ctx) miss)
 
 servePublic :: ArtifactRequest response -> Selection -> Handler ResponseReceived
 servePublic ctx = \case

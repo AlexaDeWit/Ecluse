@@ -272,9 +272,10 @@ mergedPrivate plane = withPrivateRegistry plane privateConfig CargoRegistryHealt
         assertCargoRouting (cargoInvocationTraffic invocation)
     let config = privateConfig{ecExtraEnv = ecExtraEnv privateConfig <> [("ECLUSE_MOUNTS__CARGO__FIRST_PARTY", "ecluse-e2e-build")]}
     withObservedNativeProxy config plane $ \firstPartyProxy -> do
-        before <- stubReadsNow plane
+        let publicReads = filter ((== CargoPublic) . srRoute) <$> stubReadsNow plane
+        before <- publicReads
         proxyStatus (observedProxy firstPartyProxy) ("/cargo/" <> cargoShard "ecluse-e2e-build") `shouldReturn` 404
-        stubReadsNow plane `shouldReturn` before
+        publicReads `shouldReturn` before
 
 localDiscovery :: GlobalDataPlane -> IO ()
 localDiscovery plane = withPrivateRegistry plane privateConfig CargoRegistryHealthy $ \registry observed -> do
@@ -358,7 +359,8 @@ dependencySources plane = for_ [currentCargo, floorCargo] $ \toolchain ->
                     assertCargoAssets project (cargoInvocationTraffic invocation)
                     graph <- readGraph project []
                     package <- nativePackage name graph
-                    map cargoDependencyRegistry (cargoPackageDependencies package) `shouldBe` [Nothing]
+                    -- cargo metadata reads the packaged manifest, where cargo package turned registry = "ecluse-test" into its index.
+                    map cargoDependencyRegistry (cargoPackageDependencies package) `shouldBe` [if named then Just ("sparse+" <> e2eBaseUrl proxy <> "/cargo/") else Nothing]
                     map cargoDependencyRename (cargoPackageDependencies package) `shouldBe` [Just "renamed_leaf"]
                     void (runCargo project ["build", "--features", toString (name <> "/forwarded")] >>= shouldSucceed)
                 files <- cargoRegistryFiles registry
