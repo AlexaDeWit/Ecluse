@@ -405,14 +405,17 @@ open edge, the client supplies a credential the private registry accepts, keyed 
 in whatever per-registry auth configuration that client keeps. Écluse forwards it to the private
 upstream, which authorises the caller. So what someone reaches through the proxy is what your
 registry already grants them. Public installs without credentials still work unless a private
-upstream explicitly refuses access. The private set is what the credential unlocks.
+upstream explicitly refuses access or fails. The private set is what the credential unlocks.
 
 Public success does not prove the private credential worked. For npm, PyPI and RubyGems, an explicit
 private `401` or `403` stops metadata and artifact reads with a local `403`, including HEAD and
 conditional requests. Cargo keeps its native refusal statuses. In every ecosystem, public content
 cannot replace the private copy after that refusal. A genuine private `404` still permits public
-fallback for a name outside your first-party namespaces, and first-party names stay private-only. A backend that masks a refusal as `404` does not prove authentication
-succeeded. The [private access policy](@/docs/configuration.md#first-party-namespaces) gives each
+fallback for a name outside your first-party namespaces, and first-party names stay private-only.
+Any other private read failure refuses the request with `503`, so the mount's availability follows
+the private registry's ([a failing private registry](@/docs/private-reads.md#private-outage)).
+A backend that masks a refusal as `404` does not prove authentication succeeded. The
+[private access policy](@/docs/configuration.md#first-party-namespaces) gives each
 ecosystem's statuses.
 
 Two rules hold whatever ecosystem the client speaks:

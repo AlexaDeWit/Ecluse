@@ -399,6 +399,8 @@ mounts:
     # enabled: true
     # The read authority. Required on a mirrored mount, so the mirror reads back.
     # Optional on a serve-only mount, where it still merges with the gated public set.
+    # A failed private read refuses the mount's reads with 503, for every name. A private
+    # 404 still lets the gated public set serve.
     # Must name a different repository from this mount's publicUpstream. Boot refuses
     # equal repository identities, including equivalent URL spellings.
     # Proxy reads forward the caller's credential. Dredger uses this target's own authority.

@@ -34,6 +34,23 @@ Cargo's discovery document is answered locally after edge authentication, so it 
 
 When `server.authToken` is set, the shared edge token also travels to the private registry. That mode cannot preserve a different registry identity for each caller.
 
+## A failing private registry stops the mount {#private-outage}
+
+This matters on every mount that sets `privateUpstream`, because Écluse reads it on each listing and download. The private registry's answer decides what the client receives.
+
+| Private registry answer | What Écluse does |
+| --- | --- |
+| A document | Merges it with the admitted public versions. |
+| `404` | Serves admitted public content. A first-party name answers `404`. |
+| `401` or `403` | Refuses with the statuses the [private access policy](@/docs/configuration.md#first-party-namespaces) lists. |
+| A transport error, a timeout, any other status, or a document Écluse cannot decode or that exceeds its bound | Refuses with `503` for every name and serves no public content. |
+
+Any other status includes a `5xx`, a `429`, and a redirect, which Écluse does not follow. RubyGems discovery reads the private `/versions` directory as a whole, and the [protocol reference](@/docs/protocol-support.md#rubygems) describes how a failure there refuses discovery.
+
+A private package whose name you have not declared first-party can share its name with a public package. If Écluse served public content while the private read failed, the public package would replace the private one as soon as its version passed your rules, and builds would switch packages without notice. Declaring every private name cannot close that gap reliably, because most registries give no complete list of first-party names.
+
+So the mount's availability follows the private registry's. A private outage stops every build through the mount, including builds that need only public packages. A public outage with a healthy private registry still serves the private versions. Écluse logs each failed read with its cause.
+
 ## First-party names stay private {#names}
 
 A first-party declaration selects the private source exclusively. A missing first-party package stays missing. Écluse does not look for the same name publicly.

@@ -314,8 +314,10 @@ For sparse index and archive requests, Cargo's public policy and evaluation refu
 Private refusals, access refusals, and missing or excluded package replies keep only configured operator help.
 Without configured help, those replies have no body.
 
-Check the caller's private credential and access when this refusal appears. Ordinary private
-`404` responses and other transient or transport failures keep their existing fallback policy.
+Check the caller's private credential and access when this refusal appears. A private `404` lets
+admitted public content serve for a name outside your first-party namespaces. Any other private
+read failure refuses with `503` for every name, as
+[a failing private registry](@/docs/private-reads.md#private-outage) describes.
 First-party names remain private-only. A backend that masks an access refusal as `404` supplies
 no proof that authentication succeeded.
 

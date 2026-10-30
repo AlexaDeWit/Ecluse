@@ -944,7 +944,7 @@ These counts reflect shipped request paths checked on 2026-10-18, and the Cargo 
 
 A successful admitted artifact GET can enqueue a separate mirror job. A companion request does not enqueue one. PyPI, Cargo, and RubyGems workers always read their own public document, because they need publication and source fields. PyPI workers copy the whole supported version, including its wheels, source distributions, and declared companions. RubyGems workers copy every platform gem of the version, each with its original compact specification. Completion passes and queue retries add requests.
 
-First-party names never fall back to public registries. A private authorisation refusal also stops public fallback.
+First-party names never fall back to public registries. A private authorisation refusal or a failed private read also stops public fallback.
 
 ### Cache and mirror effects
 
