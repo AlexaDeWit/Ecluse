@@ -34,7 +34,7 @@ data MirrorDocuments = MirrorDocuments
     , mdAssemble :: ProjectMirrorRecord -> [VersionDoc] -> CachedDoc
     -- ^ Assemble the managed listing from rebased versions in listing order.
     , mdCompanions :: CompanionRequirement
-    -- ^ Which files need a retained companion. Boot requires the mirror codec to prepare native ones.
+    -- ^ Must name the value mirror state applies to the format's read data. Boot checks the codec's native preparation against it.
     }
 
 -- | Pair each fragment's retained entries with the current target file of the same name, numbering artifacts across fragments.

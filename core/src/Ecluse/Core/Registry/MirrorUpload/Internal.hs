@@ -50,9 +50,9 @@ import Ecluse.Core.Package.Integrity (IntegrityResult (..), assertedAlg, authori
 import Ecluse.Core.Registry (CompanionRequirement (DeclaredCompanions), MirrorArtifact (..), PublishFault (PublishIntegrityMismatch, PublishSourceUnavailable))
 import Ecluse.Core.Registry.CachedDocument (CachedDoc, cargoCached, npmCached, pypiSimpleCached, rubyGemsCached)
 import Ecluse.Core.Registry.Cargo.Document (CargoDocument)
-import Ecluse.Core.Registry.Cargo.SourceState (restrictCargoDocument, validateCargoSource)
+import Ecluse.Core.Registry.Cargo.SourceState (cargoSourceCompanions, restrictCargoDocument, validateCargoSource)
 import Ecluse.Core.Registry.Metadata (VersionDoc (..))
-import Ecluse.Core.Registry.PyPI.Document (SimpleDocument, restrictSimpleFiles, simpleEnvelope, simpleFiles)
+import Ecluse.Core.Registry.PyPI.Document (SimpleDocument, restrictSimpleFiles, simpleEnvelope, simpleFiles, simpleSourceCompanions)
 import Ecluse.Core.Registry.PyPI.Project (fileCoordinate, projectFile, projectName, projectSimpleIndex)
 import Ecluse.Core.Registry.PyPI.Wire (IndexFile (ifEntryKey, ifFilename))
 import Ecluse.Core.Registry.RubyGems.Document (GemDocument, restrictGemDocument)
@@ -78,12 +78,12 @@ mirrorReadDocument = \case
     CargoMirrorRead document -> fst cargoCached document
     RubyGemsMirrorRead document -> fst rubyGemsCached document
 
--- | The source format's rule for which files need a retained metadata companion.
+-- | Which files need a retained metadata companion. A durable format's declaration names the same value.
 readDataCompanions :: MirrorReadData -> CompanionRequirement
 readDataCompanions = \case
     NpmMirrorRead _ -> DeclaredCompanions
-    PyPIMirrorRead _ -> DeclaredCompanions
-    CargoMirrorRead _ -> DeclaredCompanions
+    PyPIMirrorRead _ -> simpleSourceCompanions
+    CargoMirrorRead _ -> cargoSourceCompanions
     RubyGemsMirrorRead _ -> gemSourceCompanions
 
 -- | Membership comes from the complete paired version snapshot, never a requested-file subset.
