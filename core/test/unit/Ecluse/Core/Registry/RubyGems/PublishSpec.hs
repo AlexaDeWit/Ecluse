@@ -61,6 +61,15 @@ spec = describe "RubyGems publication" $ do
                         headerValue "OTP" written `shouldBe` Just "opaque-code"
                     _ -> expectationFailure "expected exactly one native publication"
 
+    it "relays a static key under a store-declared Bearer write" $
+        withRoutedStub (const (status200, [], "owned native reply")) $ \target -> do
+            archive <- readFileBS rootArchive
+            name <- expectRight (projectName "ecluse-fixture-root")
+            withExchangeClient (newManager defaultManagerSettings) $ \client -> do
+                let origin = originClient defaultLimits client (loopbackRegistryUrl (stubBaseUrl target <> "/private")) (Just (bareCredential (mkSecret "static-key")))
+                void (publishRelay publisher basicReadsBearerWrites origin name (PublishRequestBody archive (Just "application/octet-stream") NoPublishExtras) >>= expectRight)
+                map (headerValue "Authorization") <$> allCaptured target `shouldReturn` [Just "Bearer static-key"]
+
     it "relays an authorised body without inspecting the archive a second time" $
         withRoutedStub (const (status200, [], "owned native reply")) $ \target -> do
             archive <- readFileBS rootArchive

@@ -27,8 +27,8 @@ import Ecluse.Core.Registry.Cargo.Publish
 import Ecluse.Core.Registry.Cargo.Publish.Body qualified as Body
 import Ecluse.Core.Registry.Metadata (VersionDoc (..))
 import Ecluse.Core.Registry.Origin (originClient)
-import Ecluse.Core.Registry.Publish (MirrorTransport (..), PublishCodec (pcNativeComplete), PublishPlan (PublishPlan), newMirrorPublish)
-import Ecluse.Core.Registry.Request (nativePresentation)
+import Ecluse.Core.Registry.Publish (MirrorPublish (mpProbeInventory), MirrorTransport (..), PublishCodec (pcNativeComplete), PublishPlan (PublishPlan), newMirrorPublish)
+import Ecluse.Core.Registry.Request (AuthMechanism (AuthBearer), declaredPresentation, nativePresentation)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Core.Security.Limits (BodyLimit (MetadataBodyLimit), LimitError (BodyTooLarge), Limits (maxMetadataBytes), defaultLimits)
 import Ecluse.Core.Server.Admission.Types (ChargeFactors (ChargeFactors))
@@ -69,6 +69,19 @@ spec = do
                     KeyMap.lookup "readme" (uploadMetadata parsed) `shouldBe` Just (String "owned readme")
                     KeyMap.lookup "authors" (uploadMetadata parsed) `shouldBe` Just (Array (fromList [String "Ecluse contributors"]))
                     headerValue "Content-Type" written `shouldBe` Just "application/octet-stream"
+        it "renders a store-declared mechanism on discovery, the index read and the upload" $
+            withRoutedStub (targetReply "/registry") $ \stub -> do
+                release <- cargoPublicationFixture
+                doc <- cargoSourceVersion (cargoIndexRecord release)
+                let details = vdDetails doc
+                withExchangeClient (newManager defaultManagerSettings) $ \exchanges -> do
+                    let transport = MirrorTransport exchanges (pure (Just (bareCredential (mkSecret "cargo-token")))) defaultLimits passthroughTracingPort
+                        writer = newMirrorPublish transport (loopbackRegistryUrl (stubBaseUrl stub <> "/index")) (loopbackRegistryUrl (stubBaseUrl stub <> "/registry")) (cargoPublishCodec factors (declaredPresentation (const AuthBearer)))
+                    _ <- mpProbeInventory writer (const pass) (pkgName details)
+                    publishOnlyFile writer doc (PublishPlan (pkgVersion details)) (releaseArchive release) `shouldReturn` Right ()
+                    captures <- allCaptured stub
+                    map capMethod captures `shouldBe` ["GET", "GET", "GET", "PUT"]
+                    map (headerValue "Authorization") captures `shouldBe` replicate 4 (Just "Bearer cargo-token")
         it "publishes modern source omissions with interpreted dependency defaults" $
             withRoutedStub (targetReply "/registry") $ \stub -> do
                 original <- cargoPublicationFixture

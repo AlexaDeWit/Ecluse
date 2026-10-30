@@ -26,15 +26,23 @@ import Ecluse.Core.BuildIdentity (userAgent)
 import Ecluse.Core.Credential (ClientCredential (ClientCredential, credSecret, credUsername), bareCredential, mkSecret, unSecret)
 import Ecluse.Core.Registry (UrlFormationError (EmptyBaseUrl, UnparseableUrl))
 import Ecluse.Core.Registry.Request (
+    AuthMechanism (AuthBasic, AuthBearer, AuthRawKey),
     CredentialMapping,
+    ServicePresentation,
+    StoreOperation (StoreRead, StoreWrite),
     artifactRequestByUrl,
     attachCredential,
     credentialMapping,
     credentialRecover,
+    declaredPresentation,
     finaliseRequest,
     joinPath,
     mkBaseRequest,
+    nativePresentation,
     parseRequestEither,
+    presentedMapping,
+    presentedRequest,
+    renderAuthMechanism,
     requestAt,
     sealRequest,
  )
@@ -51,6 +59,7 @@ spec = do
     sealRequestSpec
     finaliseRequestSpec
     credentialMappingSpec
+    servicePresentationSpec
     artifactByUrlSpec
     joinPathSpec
     parseSpec
@@ -96,6 +105,43 @@ credentialMappingSpec = describe "a credential mapping carries one ecosystem's p
     it "pins the redirect count on an anonymous request too" $ do
         req <- parseRequestOrFail "https://reg.test/x"
         Client.redirectCount (attachCredential apiKeyMapping Nothing req) `shouldBe` 0
+
+servicePresentationSpec :: Spec
+servicePresentationSpec = describe "a store-declared service presentation" $ do
+    it "renders each mechanism, Basic over the credential's own username" $ do
+        let named = ClientCredential (Just "aws") (mkSecret "tok-abc")
+        renderAuthMechanism AuthBearer named `shouldBe` "Bearer tok-abc"
+        renderAuthMechanism AuthBasic named `shouldBe` "Basic YXdzOnRvay1hYmM="
+        renderAuthMechanism AuthBasic (bareCredential (mkSecret "tok-abc")) `shouldBe` "Basic OnRvay1hYmM="
+        renderAuthMechanism AuthRawKey named `shouldBe` "tok-abc"
+
+    it "keeps the ecosystem's own mapping for an operation the store declares nothing for" $ do
+        req <- parseRequestOrFail "https://reg.test/x"
+        for_ [StoreRead, StoreWrite] $ \operation -> do
+            let headers = Client.requestHeaders (attachCredential (presentedMapping nativePresentation operation apiKeyMapping) (Just (bareCredential (mkSecret "tok-abc"))) req)
+            lookup "X-Api-Key" headers `shouldBe` Just "tok-abc"
+            lookup "Authorization" headers `shouldBe` Nothing
+
+    it "renders each operation's declared mechanism on Authorization in place of the ecosystem's header" $ do
+        req <- parseRequestOrFail "https://reg.test/x"
+        let headersFor operation = Client.requestHeaders (attachCredential (presentedMapping basicReadsBearerWrites operation apiKeyMapping) (Just (ClientCredential (Just "aws") (mkSecret "tok-abc"))) req)
+        lookup "Authorization" (headersFor StoreRead) `shouldBe` Just "Basic YXdzOnRvay1hYmM="
+        lookup "Authorization" (headersFor StoreWrite) `shouldBe` Just "Bearer tok-abc"
+        lookup "X-Api-Key" (headersFor StoreWrite) `shouldBe` Nothing
+
+    it "keeps the ecosystem's own recovery under a declared mechanism" $
+        credentialRecover (presentedMapping basicReadsBearerWrites StoreWrite apiKeyMapping) [("X-Api-Key", "tok-abc")]
+            `shouldBe` Just (bareCredential (mkSecret "tok-abc"))
+
+    it "forms a request anonymously, then attaches the credential once under the mapping and seals it" $ do
+        let build credential = attachCredential schemedMapping credential <$> parseRequestEither "https://reg.test/x"
+            mapping = presentedMapping (declaredPresentation (const AuthRawKey)) StoreRead schemedMapping
+        case presentedRequest mapping (Just (bareCredential (mkSecret "tok-abc"))) build of
+            Left err -> fail ("expected a formed request, got " <> show err)
+            Right request -> do
+                headerValues "Authorization" request `shouldBe` ["tok-abc"]
+                Client.redirectCount request `shouldBe` 0
+                userAgents request `shouldBe` [userAgent]
 
 sealRequestSpec :: Spec
 sealRequestSpec = describe "sealRequest carries the outbound invariants onto every request" $ do
@@ -252,6 +298,12 @@ schemedMapping = credentialMapping recoverApiKey "Authorization" (\credential ->
 {- | A presentation that carries a username beside its secret, so a case can assert the pair
 travels whole.
 -}
+-- A store that asks for Basic on reads and Bearer on writes.
+basicReadsBearerWrites :: ServicePresentation
+basicReadsBearerWrites = declaredPresentation $ \case
+    StoreRead -> AuthBasic
+    StoreWrite -> AuthBearer
+
 basicMapping :: CredentialMapping
 basicMapping = credentialMapping recoverApiKey "Authorization" renderPair
   where

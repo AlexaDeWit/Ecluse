@@ -53,6 +53,7 @@ module Ecluse.Composition.Support (
     expectEnv,
     expectAppConfig,
     expectProviders,
+    slotCredentials,
     expectConfig,
     expectValidated,
     bootInputsFor,
@@ -68,7 +69,7 @@ import System.Exit (ExitCode)
 import UnliftIO (timeout, try)
 
 import Ecluse.Composition.BootError (BootError (MirrorTargetOnMountEndpoint, RuleBlockedOnMount, StoreMaintenanceUnavailable), StoreMaintenanceReason (NoControlPlane, PrivateCacheUnavailable))
-import Ecluse.Composition.Credential (CredentialProviders, initCredentialProviders, initTargetCredentialProviders)
+import Ecluse.Composition.Credential (BuildCredentials, CredentialProviders, initCredentialProviders, initTargetCredentialProviders)
 import Ecluse.Composition.Maintenance.Plan (ClearedBackend (cbUrl))
 import Ecluse.Composition.Plan (
     BootInputs (BootInputs, biConfig, biDocument, biEnvVars, biFdLimit, biRuntimePlan),
@@ -79,7 +80,8 @@ import Ecluse.Composition.Plan (
 import Ecluse.Composition.Types (BootRole (BootWithoutPipeline), RegistryRole (MirrorWriter))
 import Ecluse.Composition.Validate (ValidatedPlan (vpMounts), VettedMount (vmMount), vetBoot)
 import Ecluse.Composition.Vet (runVet)
-import Ecluse.Config (AppConfig, Config (configApp), StoreTag (TagRegistry), loadConfig, renderConfigError)
+import Ecluse.Config (AppConfig, Config (configApp), StoreBackend (BackendRegistry), StoreTag (TagRegistry), loadConfig, renderConfigError)
+import Ecluse.Core.Credential (mkSecret)
 import Ecluse.Core.Ecosystem (Ecosystem (Cargo, Npm, RubyGems))
 import Ecluse.Core.Package (PackageName, mkPackageName, mkScope)
 import Ecluse.Core.Rules.Types (RuleType (AllowScopeType, DenyIfDeprecatedType, DenyInstallTimeExecutionType))
@@ -313,6 +315,11 @@ expectProviders config = do
     plan <- expectValidated config
     initCredentialProviders initTargetCredentialProviders (const (const noCredentialReporters)) (map vmMount (vpMounts plan))
         >>= either (\errs -> fail ("provider init failed: " <> show errs)) pure
+
+-- | Mints each slot a static token that spells the slot, so a store's ports show which credential reached it.
+slotCredentials :: BuildCredentials
+slotCredentials reportersFor targets =
+    initTargetCredentialProviders reportersFor [(slot, BackendRegistry (mkSecret (show slot))) | (slot, _) <- targets]
 
 -- | Build a 'Config' from an env and an optional document, failing the test on a policy error.
 expectConfig :: [(String, String)] -> Maybe ByteString -> IO Config
