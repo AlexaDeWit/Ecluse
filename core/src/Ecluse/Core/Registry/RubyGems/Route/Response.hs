@@ -32,7 +32,7 @@ rubyContract media =
                         chooseContract (text status404 "The requested coordinate is absent.") $
                             chooseContract (text status406 "The representation is unavailable.") $
                                 chooseContract (text status500 "The registry could not decide.") $
-                                    chooseContract (text status502 "The origin returned invalid metadata.") (text status503 "The registry is temporarily unavailable.")
+                                    chooseContract (text status502 "An origin reply was invalid or unusable.") (text status503 "The registry is temporarily unavailable.")
   where
     text status description = mediaContract status description (SchemaText "text/plain")
 

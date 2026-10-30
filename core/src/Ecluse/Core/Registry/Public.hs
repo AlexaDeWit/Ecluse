@@ -20,7 +20,7 @@ import Network.HTTP.Types (ResponseHeaders, Status, statusCode)
 
 import Ecluse.Core.Fault (RetryAfter (RetryAfter))
 import Ecluse.Core.Fault.Http (hostPortLabel)
-import Ecluse.Core.Fault.RetryAfter (parseRetryAfter)
+import Ecluse.Core.Fault.RetryAfter (parseRetryAfter, upstreamRetryCap)
 import Ecluse.Core.Registry (FetchFault (FetchCooldown, FetchUrlUnformable), UrlFormationError (UnparseableUrl))
 import Ecluse.Core.Registry.Backoff (CooldownEvent, PublicBackoff, PublicResponse (..), newPublicBackoff, publicRetryAfter, recordPublicResponse, reportingBackoff, withPublicAttempt)
 import Ecluse.Core.Registry.Exchange.Observe (observeExchange)
@@ -72,7 +72,7 @@ withReadControl (Controlled control kind) request action = case hostPortAddress 
 -- | Every 429 cools down. A 503 does so only with a valid positive hint, capped at ten minutes.
 classifyPublicResponse :: UTCTime -> Status -> ResponseHeaders -> PublicResponse
 classifyPublicResponse now status headers =
-    case (statusCode status, parseRetryAfter now (RetryAfter 600) (lookup "Retry-After" headers)) of
+    case (statusCode status, parseRetryAfter now upstreamRetryCap (lookup "Retry-After" headers)) of
         (429, hint) -> Throttled hint
         (503, Just hint) -> Throttled (Just hint)
         _ -> NonThrottling

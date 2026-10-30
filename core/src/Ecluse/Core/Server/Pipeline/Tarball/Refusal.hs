@@ -15,6 +15,7 @@ module Ecluse.Core.Server.Pipeline.Tarball.Refusal (
     upstreamCooling,
     versionAbsent,
     privateMissRefusal,
+    privateReadRefusal,
 ) where
 
 import Network.HTTP.Types (ResponseHeaders, status403, status500)
@@ -25,13 +26,14 @@ import Ecluse.Core.Registry.Metadata (
     versionTransience,
  )
 import Ecluse.Core.Server.Context (PackumentDeps (pdFirstParty, pdHelp))
-import Ecluse.Core.Server.Pipeline.Origin (OriginMiss (MissAbsent, MissUnresolved))
+import Ecluse.Core.Server.Pipeline.Origin (OriginMiss (MissAbsent, MissUnresolved), ReadFailure (ReadInvalid, ReadUnavailable))
 import Ecluse.Core.Server.Pipeline.Shared
 import Ecluse.Core.Server.Pipeline.Tarball.Types (TarballReplies (tarballError))
 import Ecluse.Core.Server.Response (
-    ArtifactStatus (Forbidden, NotFound, Ok, ServerError, Unavailable'),
-    RejectReason (ByPolicy),
+    ArtifactStatus (BadGateway, Forbidden, NotFound, Ok, ServerError, Unavailable'),
+    RejectReason (ByPolicy, UpstreamInvalid),
     Rejection (Rejection, rejectionMessage),
+    RetryAfter,
     ServeDecision (Admit, Reject),
     Transience (WillResolve, WontResolve),
     artifactHttpStatus,
@@ -60,6 +62,7 @@ artifactError replies deps decision =
         Ok -> []
         Forbidden -> []
         ServerError -> []
+        BadGateway -> []
         NotFound -> []
 
     message :: Text
@@ -80,7 +83,10 @@ crossHostRefused replies =
 -- | A transient upstream outage, public or private (to @503@).
 upstreamUnavailable :: ServeDecision
 upstreamUnavailable =
-    versionUnresolved VersionMetadataUnavailable "the upstream registry was unavailable"
+    versionUnresolved VersionMetadataUnavailable upstreamUnavailableMessage
+
+upstreamUnavailableMessage :: Text
+upstreamUnavailableMessage = "the upstream registry was unavailable"
 
 -- | A version absent from the public metadata. Its cause is terminal, and 'artifactOutcomeStatus' overrides it to a @404@ forwarded miss.
 versionAbsent :: ServeDecision
@@ -93,14 +99,21 @@ absence of a name outside first-party reaches that leg, so no public namesake re
 privateMissRefusal :: PackumentDeps -> PackageName -> OriginMiss -> Maybe ServeDecision
 privateMissRefusal deps name miss
     | pdFirstParty deps name = Just (firstPartyMissRefusal miss)
-    | MissUnresolved <- miss = Just upstreamUnavailable
+    | MissUnresolved failure <- miss = Just (privateReadRefusal failure)
     | otherwise = Nothing
 
--- | The refusal a first-party private miss renders: a settled absence @404@, an outage @503@.
+-- | A failed private read: an unavailable registry @503@ with its delay, an invalid reply @502@.
+privateReadRefusal :: ReadFailure -> ServeDecision
+privateReadRefusal = \case
+    ReadUnavailable retry -> rejectUnavailable (WillResolve retry) upstreamUnavailableMessage
+    ReadInvalid -> privateReplyInvalid
+
+-- The refusal a first-party private miss renders: a settled absence @404@, else its cause's status.
 firstPartyMissRefusal :: OriginMiss -> ServeDecision
 firstPartyMissRefusal = \case
     MissAbsent -> firstPartyAbsent
-    MissUnresolved -> firstPartyUnresolved
+    MissUnresolved (ReadUnavailable retry) -> firstPartyUnresolved retry
+    MissUnresolved ReadInvalid -> firstPartyInvalid
 
 {- A first-party artifact the private upstream does not hold. No public artifact may stand in for
 it, and 'artifactOutcomeStatus' renders it @404@. -}
@@ -114,11 +127,20 @@ firstPartyAbsent =
 
 {- A first-party artifact whose private upstream could not be read. That upstream is the name's one
 authority, so a retry may still resolve it. -}
-firstPartyUnresolved :: ServeDecision
-firstPartyUnresolved =
+firstPartyUnresolved :: Maybe RetryAfter -> ServeDecision
+firstPartyUnresolved retry =
     rejectUnavailable
-        (WillResolve Nothing)
+        (WillResolve retry)
         "the private upstream for this first-party artifact was unavailable"
+
+-- A first-party artifact whose private upstream answered with an invalid or unusable reply.
+firstPartyInvalid :: ServeDecision
+firstPartyInvalid =
+    Reject
+        ( Rejection
+            UpstreamInvalid
+            "the private upstream for this first-party artifact returned an invalid or unusable reply"
+        )
 
 {- The refusal a version the single-version read could not resolve renders as. Its transience is
 the shared projection's, the one the worker's retry-versus-drop reads. -}

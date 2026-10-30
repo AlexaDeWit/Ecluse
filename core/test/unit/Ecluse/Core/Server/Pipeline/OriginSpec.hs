@@ -70,6 +70,7 @@ import Ecluse.Core.Server.Pipeline.Origin (
         OriginResolved,
         OriginUnresolved
     ),
+    ReadFailure (ReadInvalid, ReadUnavailable),
     fetchPrivateOriginObserved,
     fetchPublicOriginObserved,
     originManifest,
@@ -99,25 +100,27 @@ spec = describe "originMiss -- the outcomes that leave nothing to serve" $ do
     retainedConsumerSpec
     selectedChargeSpec
     fullReadSpec
-    it "reports no miss for a document, an access refusal, or an identity refusal" $
+    it "reports no miss for a document or an access refusal" $
         map
             originMiss
             [ OriginResolved (sampleManifest thingName [])
             , OriginAuthorisationFailure 401
             , OriginAuthorisationFailure 403
-            , OriginNameMismatch
             ]
-            `shouldBe` [Nothing, Nothing, Nothing, Nothing]
+            `shouldBe` [Nothing, Nothing, Nothing]
 
-    it "separates an origin that answered 404 from one that was never read" $
-        map originMiss [OriginNotFound, OriginUnresolved]
-            `shouldBe` [Just MissAbsent, Just MissUnresolved]
+    it "reports an identity refusal as an unread origin whose reply was invalid" $
+        originMiss OriginNameMismatch `shouldBe` Just (MissUnresolved ReadInvalid)
+
+    it "separates an origin that answered 404 from one that was never read, keeping the cause" $
+        map originMiss [OriginNotFound, OriginUnresolved (ReadUnavailable Nothing), OriginUnresolved ReadInvalid]
+            `shouldBe` [Just MissAbsent, Just (MissUnresolved (ReadUnavailable Nothing)), Just (MissUnresolved ReadInvalid)]
 
     it "groups an unconfigured origin with an absence, because no retry reaches it" $
         originMiss OriginAbsent `shouldBe` Just MissAbsent
 
     it "contributes no manifest from any miss" $
-        map (isNothing . originManifest) [OriginNotFound, OriginUnresolved, OriginAbsent]
+        map (isNothing . originManifest) [OriginNotFound, OriginUnresolved (ReadUnavailable Nothing), OriginAbsent]
             `shouldBe` [True, True, True]
 
 fullReadSpec :: Spec
@@ -146,7 +149,7 @@ fullReadSpec = describe "full Cargo read payments" $ do
                         result <- runCargoFull runtime deps ticket public
                         if refused
                             then do
-                                originMiss result `shouldBe` Just MissUnresolved
+                                originMiss result `shouldBe` Just (MissUnresolved ReadInvalid)
                                 snChargedBytes <$> meterSnapshot meter `shouldReturn` 0
                             else do
                                 manifest <- maybe (fail "full Cargo read returned no manifest") pure (originManifest result)
@@ -524,7 +527,7 @@ observedReadSpec = describe "observed full origin reads" $ do
     it "reports actual input bytes even when native parsing rejects the response" $ do
         seen <- newIORef 0
         result <- readObserved (\bytes -> modifyIORef' seen (+ bytes))
-        (case result of OriginUnresolved -> True; _ -> False) `shouldBe` True
+        (case result of OriginUnresolved _ -> True; _ -> False) `shouldBe` True
         readIORef seen `shouldReturn` BS.length malformed
     it "retains a typed request-wide bound refusal instead of a transport outcome" $ do
         let fault = BodyTooLarge (MetadataBodyLimit 12)

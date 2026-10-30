@@ -169,7 +169,7 @@ indexContract =
                         chooseContract (refusalContract status406 "The requested encoding is unavailable.") $
                             chooseContract (refusalContract status500 "The registry could not decide.") $
                                 chooseContract
-                                    (refusalContract status502 "The origin returned a different identity.")
+                                    (refusalContract status502 "An origin reply was invalid or unusable, such as a different identity.")
                                     (refusalContract status503 "The registry is temporarily unavailable.")
 
 refusalContract :: Status -> Text -> ResponseContract (ResponseValue (Maybe LByteString))

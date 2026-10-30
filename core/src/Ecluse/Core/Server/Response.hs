@@ -40,7 +40,7 @@ module Ecluse.Core.Server.Response (
 
 import Data.Semigroup (Max (Max, getMax))
 import Data.Text qualified as T
-import Network.HTTP.Types (Status, status200, status403, status404, status500, status503)
+import Network.HTTP.Types (Status, status200, status403, status404, status500, status502, status503)
 
 import Ecluse.Core.Rules.Render (renderDecision)
 import Ecluse.Core.Rules.Types (
@@ -78,7 +78,7 @@ data RejectReason
       MissingIntegrity
     | -- | A public artifact's strongest digest falls below the configured floor. Trusted private artifacts are exempt.
       BelowIntegrityFloor
-    | -- | An upstream packument names a different package and cannot enter the merge.
+    | -- | An upstream reply was invalid or unusable, such as a document that names a different package.
       UpstreamInvalid
     deriving stock (Eq, Show)
 
@@ -114,6 +114,8 @@ data ArtifactStatus
       Unavailable' (Maybe RetryAfter)
     | -- | @500@: a permanent or internal inability to decide. Not retryable.
       ServerError
+    | -- | @502@: an upstream reply was invalid or unusable.
+      BadGateway
     | -- | @404@: the upstream did not have the artifact (forwarded miss).
       NotFound
     deriving stock (Eq, Show)
@@ -128,9 +130,7 @@ artifactStatus = \case
         BelowIntegrityFloor -> Forbidden
         Unavailable (WillResolve retryAfter) -> Unavailable' retryAfter
         Unavailable WontResolve -> ServerError
-        -- The artifact path never validates a packument name, so this cause does not arise here. A
-        -- misbehaving upstream on this path is an internal inability to serve.
-        UpstreamInvalid -> ServerError
+        UpstreamInvalid -> BadGateway
 
 -- | The HTTP status an 'ArtifactStatus' renders as.
 artifactHttpStatus :: ArtifactStatus -> Status
@@ -139,6 +139,7 @@ artifactHttpStatus = \case
     Forbidden -> status403
     Unavailable'{} -> status503
     ServerError -> status500
+    BadGateway -> status502
     NotFound -> status404
 
 -- | The HTTP status a __packument__ request renders to. There is no @404@: absence is decided before the merge.
@@ -149,7 +150,7 @@ data PackumentStatus
       PackumentForbidden
     | -- | @503@: no version survived and an exclusion can recover. A suggested delay becomes @Retry-After@.
       PackumentUnavailable (Maybe RetryAfter)
-    | -- | @502@: no valid origin remained and an upstream packument named a different package.
+    | -- | @502@: no valid origin remained and an upstream reply was invalid or unusable.
       PackumentBadGateway
     | -- | @500@: no version survived, no exclusion is retryable, and one is a permanent or internal inability to decide. Retrying cannot help.
       PackumentServerError
@@ -194,7 +195,7 @@ data PackumentTally = PackumentTally
     , tallyWillResolveDelays :: [Maybe RetryAfter]
     -- ^ The suggested delay of every transient ('WillResolve') exclusion.
     , tallyUpstreamInvalid :: Bool
-    -- ^ A responding upstream returned a packument naming a different package.
+    -- ^ An upstream reply was invalid or unusable.
     , tallyWontResolve :: Bool
     -- ^ An exclusion was a permanent ('WontResolve') inability to decide.
     }
