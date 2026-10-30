@@ -69,8 +69,9 @@ cargoPublicationFixture = do
     bytes <- cargoCrateArchive "fixture" "1.0.0" [("README.md", "owned readme"), ("Cargo.toml", manifest), ("src/lib.rs", "pub fn owned() {}\n")]
     pure (minimalCargoRelease "fixture" "1.0.0"){releaseArchive = bytes, releaseChecksum = hexSha256Of bytes, releaseReadme = "owned readme"}
 
--- | Literal resolver declarations pair native normalisation controls with an independently authored upload.
--- The renamed dependency comes from Écluse's crates.io replacement, spelled without its trailing slash.
+{- | Literal resolver declarations pair native normalisation controls with an independently authored upload.
+The renamed dependency comes from Écluse's crates.io replacement, spelled without its trailing slash.
+-}
 cargoResolverManifest :: ByteString
 cargoResolverManifest = resolverManifest "sparse+https://proxy.test/cargo"
 
