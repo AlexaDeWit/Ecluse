@@ -35,7 +35,6 @@ import Ecluse.Core.Registry.Npm.Publish (npmPublishCodec)
 import Ecluse.Core.Registry.Npm.Request (artifactRequestByUrl)
 import Ecluse.Core.Registry.Origin (OriginClient (..), ocBaseUrl)
 import Ecluse.Core.Registry.Publish (MirrorPublish (..), MirrorTransport (..), PublishPlan (..), newMirrorPublish)
-import Ecluse.Core.Rules.Install (unavailableInstallArtifactRead)
 import Ecluse.Core.Security (BodyLimit (MirrorArtifactBodyLimit), defaultLimits)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Test.Contract.PackageStore
@@ -131,7 +130,6 @@ protocolMaintenance origin _ = do
                         , prListing = listing
                         , prCodec = npmPublishCodec
                         , prReadManifest = readStoreManifestOver origin
-                        , prReadArtifact = unavailableInstallArtifactRead
                         , prBackendName = "verdaccio"
                         , prPermitDeletion = True
                         , prConsentDescriptor = "test fixture permits deletion"

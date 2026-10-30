@@ -48,7 +48,6 @@ import Ecluse.Core.Package (mkPackageName, renderPackageName)
 import Ecluse.Core.Registry.Maintenance (StoreObservation (..), StoredVersion (storedVersion), collectPages)
 import Ecluse.Core.Registry.Maintenance.NameSpace (mkNameAlphabet)
 import Ecluse.Core.Registry.PyPI.Project (pypiNameLeadChars)
-import Ecluse.Core.Rules.Install (unavailableInstallArtifactRead)
 import Ecluse.Core.Security.Limits (BodyLimit (PublishRequestBodyLimit), boundedRead)
 import Ecluse.Core.Version (renderVersion)
 import Ecluse.E2E.Harness.Container (withBridgeApplication)
@@ -150,7 +149,7 @@ fixtureObservation fixture repository = do
             Cargo -> "-0123456789_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
             RubyGems -> ".-0123456789_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
             _ -> pypiNameLeadChars
-    pure (observationFor (mkNameAlphabet alphabet) (\_ -> fail "direct inventory must not read package metadata") unavailableInstallArtifactRead store plane)
+    pure (observationFor (mkNameAlphabet alphabet) (\_ -> fail "direct inventory must not read package metadata") store plane)
 
 codeArtifactApplication :: [RepositoryBoundary] -> CodeArtifactFixture -> Application
 codeArtifactApplication repositories fixture request respond = case pathInfo request of

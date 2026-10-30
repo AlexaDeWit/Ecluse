@@ -357,7 +357,6 @@ library ecluse-core
     Ecluse.Core.Registry.RubyGems.Wire
     Ecluse.Core.Registry.Cargo.Metadata
     Ecluse.Core.Registry.Cargo.Serving
-    Ecluse.Core.Registry.InstallEvidence
     Ecluse.Core.Registry.Cargo.Adapter
     Ecluse.Core.Registry.Cargo.Route
     Ecluse.Core.Registry.Cargo.Route.Internal
@@ -372,7 +371,6 @@ library ecluse-core
     Ecluse.Core.Registry.ServedDocument
     Ecluse.Core.Registry.WireSupport
     Ecluse.Core.Rules
-    Ecluse.Core.Rules.Install
     Ecluse.Core.Rules.Effectful
     Ecluse.Core.Rules.Freshness
     Ecluse.Core.Rules.Outage
@@ -409,7 +407,6 @@ library ecluse-core
     Ecluse.Core.Server.Admission.Weighted
     Ecluse.Core.Server.Conditional
     Ecluse.Core.Server.Context
-    Ecluse.Core.Server.InstallEvidence
     Ecluse.Core.Server.Contract
     Ecluse.Core.Server.Encoding
     Ecluse.Core.Server.Fault

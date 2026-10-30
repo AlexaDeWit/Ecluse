@@ -177,10 +177,10 @@ completion native store publish = do
     target <- mpProbeInventory publish (const pass) (jobPackage job) >>= expectRight
     pure (checkMirrorCompletion version (concatMap (toList . pkgArtifacts) (Map.elems (infoVersions target))))
 
--- Fixture budgets retain independent charge regions without a shared evidence-flight ledger.
+-- Fixture budgets retain independent charge regions.
 withinWorkerBudget :: MemoryMeter -> (WorkerStateBudget -> IO a) -> IO (Maybe a)
 withinWorkerBudget meter action = fmap rightToMaybe . withMemoryEntry noopMetricsPort meter $ \ticket -> do
-    budget <- WorkerStateBudget <$> region ticket <*> region ticket <*> region ticket <*> region ticket <*> region ticket <*> region ticket <*> region ticket <*> pure Nothing
+    budget <- WorkerStateBudget <$> region ticket <*> region ticket <*> region ticket <*> region ticket <*> region ticket <*> region ticket <*> region ticket
     action budget
   where
     region = newChargeRegion . charge

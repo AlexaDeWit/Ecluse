@@ -8,7 +8,7 @@ The serve path and worker share rules, filename selection, and integrity-floor c
 module Ecluse.Core.Package.Admission (
     ArtifactAdmission (..),
     admissionTransience,
-    admitArtifactWithInstallRead,
+    admitArtifactWithDecision,
 ) where
 
 import Ecluse.Core.Package (Artifact, Hash, PackageDetails, artFilename, artHashes, pkgArtifacts)
@@ -17,8 +17,7 @@ import Ecluse.Core.Package.Integrity (
     VersionIntegrity (BelowFloor, MeetsFloor, NoIntegrity),
     classifyDigests,
  )
-import Ecluse.Core.Rules (PreparedRule, evalRulesWithInstallRead)
-import Ecluse.Core.Rules.Install (InstallEvidenceMode, InstallEvidenceRead)
+import Ecluse.Core.Rules (PreparedRule, evalRules)
 import Ecluse.Core.Rules.Types (
     Decision (Admitted, Blocked, BlockedByDefault, Undecidable),
     EvalContext,
@@ -43,10 +42,10 @@ data ArtifactAdmission
       AdmissionBelowFloor
     deriving stock (Show)
 
--- | Retain the selected version and the closed evidence read through the shared admission gate.
-admitArtifactWithInstallRead :: InstallEvidenceMode -> Maybe InstallEvidenceRead -> EvalContext -> [PreparedRule] -> MinIntegrity -> Filename -> PackageDetails -> IO (ArtifactAdmission, Decision)
-admitArtifactWithInstallRead mode installRead ctx rules minIntegrity file details = do
-    decision <- evalRulesWithInstallRead mode ctx rules (completeEvidence details) installRead
+-- | Retain the evaluated decision for a mirror publication audit without running the rules again.
+admitArtifactWithDecision :: EvalContext -> [PreparedRule] -> MinIntegrity -> Filename -> PackageDetails -> IO (ArtifactAdmission, Decision)
+admitArtifactWithDecision ctx rules minIntegrity file details = do
+    decision <- evalRules ctx rules (completeEvidence details)
     pure (admissionOf minIntegrity file details decision, decision)
 
 -- The filename and integrity steps over a settled rules decision.

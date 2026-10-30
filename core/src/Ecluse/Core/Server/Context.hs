@@ -61,7 +61,6 @@ import Ecluse.Core.Registry.Exchange.Types (ExchangeClient)
 import Ecluse.Core.Registry.Public (PublicControl)
 import Ecluse.Core.Registry.Request (BaseRequest, CredentialMapping)
 import Ecluse.Core.Rules (PreparedRule)
-import Ecluse.Core.Rules.Install (InstallEvidenceProvider)
 import Ecluse.Core.Rules.Outage (AdmissionIdentity)
 import Ecluse.Core.Security (HostPort, Limits, Origin, TarballHostGate, tarballHostAllowed, thgAllowlist, thgEcosystemHosts)
 import Ecluse.Core.Security.Egress (RegistryUrl)
@@ -127,8 +126,6 @@ data PackumentDeps = PackumentDeps
     -- ^ Whether this deployment owns the name, derived once at the composition root and deny by default. Only the private upstream serves it, and a private miss is @404@.
     , pdMountBaseUrl :: Text
     -- ^ The mount's external base URL, under which served artifact URLs route back through the gate.
-    , pdInstallEvidence :: Maybe InstallEvidenceProvider
-    -- ^ The native provider resolves unknown facts only at a reached execution rule.
     , pdRules :: [PreparedRule]
     -- ^ Rules prepared at boot and evaluated against every public version.
     , pdAdditionalBlockedRanges :: [IPRange]

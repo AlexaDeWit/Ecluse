@@ -68,7 +68,6 @@ rubyGemsPolicy adapter environment = do
         WorkerPolicy
             { wpFirstParty = const False
             , wpResolveVersion = \pay name version -> chargingNativeReads factors pay (weSourceOrigin environment) >>= \origin -> versionEvaluation <$> prepareVersion prepareGemRead passthroughTracingPort (originClientOf origin) name version
-            , wpInstallEvidence = Nothing
             , wpRules = weRules environment
             , wpMinIntegrity = defaultMinIntegrity
             , wpArtifactHostHonoured = const True

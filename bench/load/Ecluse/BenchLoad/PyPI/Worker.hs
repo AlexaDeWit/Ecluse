@@ -66,7 +66,6 @@ pypiPolicy environment =
         WorkerPolicy
             { wpFirstParty = const False
             , wpResolveVersion = \pay name version -> versionEvaluation <$> fetchVersion (chargingSelectedReads decodedDocumentCharge pay pypiMirrorRead) passthroughTracingPort sourceOrigin name version
-            , wpInstallEvidence = Nothing
             , wpRules = weRules environment
             , wpMinIntegrity = defaultMinIntegrity
             , wpArtifactHostHonoured = const True

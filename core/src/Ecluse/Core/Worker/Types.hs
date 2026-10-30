@@ -39,7 +39,6 @@ import Ecluse.Core.Registry.Metadata (VersionEvaluation)
 import Ecluse.Core.Registry.Public (PublicControl)
 import Ecluse.Core.Registry.Publish (MirrorPublish)
 import Ecluse.Core.Rules (PreparedRule)
-import Ecluse.Core.Rules.Install (InstallEvidenceFlightBudget, InstallEvidenceProvider)
 import Ecluse.Core.Security (HostPort, Limits)
 import Ecluse.Core.Security.Egress (RegistryUrl)
 import Ecluse.Core.Telemetry.Record (WorkerMetricsPort)
@@ -73,8 +72,6 @@ data WorkerPolicy = WorkerPolicy
     -- ^ Whether a name belongs to a namespace this deployment owns.
     , wpResolveVersion :: StateCharge -> PackageName -> Version -> IO VersionEvaluation
     -- ^ Resolve through the guarded public origin, charging retained source fields before parsing.
-    , wpInstallEvidence :: Maybe InstallEvidenceProvider
-    -- ^ Rebind each immutable subject to this job's anonymous artifact reader.
     , wpRules :: [PreparedRule]
     -- ^ The prepared rule set re-evaluated against the resolved version.
     , wpMinIntegrity :: MinIntegrity
@@ -113,7 +110,6 @@ data WorkerStateBudget = WorkerStateBudget
     , wsbArchive :: StateCharge
     , wsbSource :: StateCharge
     , wsbTargets :: StateCharge
-    , wsbEvidenceFlight :: Maybe InstallEvidenceFlightBudget
     }
 
 -- | Key bundles by ecosystem. Jobs without a bundle are dropped without publication.

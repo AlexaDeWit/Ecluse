@@ -65,7 +65,7 @@ data ManagedFixture = ManagedFixture
 
 -- | Unit fixtures keep production region boundaries without claiming process memory admission.
 unmeteredStateBudget :: WorkerStateBudget
-unmeteredStateBudget = WorkerStateBudget ignore ignore ignore ignore ignore ignore ignore Nothing
+unmeteredStateBudget = WorkerStateBudget ignore ignore ignore ignore ignore ignore ignore
   where
     ignore = const (pure ())
 

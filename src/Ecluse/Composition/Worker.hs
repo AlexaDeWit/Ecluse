@@ -39,7 +39,6 @@ import Ecluse.Core.Server.Context (
     pdArtifact,
     pdEgressUrl,
     pdFirstParty,
-    pdInstallEvidence,
     pdLimits,
     pdMetadata,
     pdMinIntegrity,
@@ -50,7 +49,6 @@ import Ecluse.Core.Server.Context (
     pdTarballHostGate,
     tarballHostHonoured,
  )
-import Ecluse.Core.Server.InstallEvidence (newTicketInstallEvidenceFlightBudget)
 import Ecluse.Core.Server.MemoryModel (decodedDocumentCharge)
 import Ecluse.Core.Server.Metadata (ecosystemMetadataReads, publicMetadataClient, uncachedPublicMetadataClient)
 import Ecluse.Core.Telemetry.Upstream (PublicReadKind (WorkerMetadata))
@@ -90,8 +88,7 @@ workerPoliciesWithState env states bindings targets artifactMaxBytes =
                         archiveCharge <- newChargeRegion (charge ticket)
                         sourceCharge <- newChargeRegion (charge ticket)
                         targetCharge <- newChargeRegion (charge ticket)
-                        evidenceFlight <- traverse (const (newTicketInstallEvidenceFlightBudget ticket)) (pdInstallEvidence deps)
-                        action WorkerStateBudget{wsbState = stateCharge, wsbRecords = recordCharge, wsbCompanions = companionCharge, wsbArtifacts = artifactCharge, wsbArchive = archiveCharge, wsbSource = sourceCharge, wsbTargets = targetCharge, wsbEvidenceFlight = evidenceFlight}
+                        action WorkerStateBudget{wsbState = stateCharge, wsbRecords = recordCharge, wsbCompanions = companionCharge, wsbArtifacts = artifactCharge, wsbArchive = archiveCharge, wsbSource = sourceCharge, wsbTargets = targetCharge}
                 }
     targetsByEcosystem = Map.fromList [(ptEcosystem target, target) | target <- targets]
 
@@ -124,7 +121,6 @@ workerPolicyFor env requirements deps publish artifactMaxBytes =
     WorkerPolicy
         { wpFirstParty = pdFirstParty deps
         , wpResolveVersion = \pay name version -> client pay >>= \metadata -> fetchVersionDetails metadata name version
-        , wpInstallEvidence = pdInstallEvidence deps
         , wpRules = pdRules deps
         , wpMinIntegrity = pdMinIntegrity deps
         , wpArtifactHostHonoured =

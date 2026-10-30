@@ -62,5 +62,4 @@ rubyGemsAdapter factors =
         , adapterProjectName = rightToMaybe . projectName
         , adapterPublish = Just (rubyPublish factors)
         , adapterMaintenance = AdapterMaintenance Nothing Nothing (mkNameAlphabet rubyGemsNameChars)
-        , adapterInstallEvidence = Nothing
         }

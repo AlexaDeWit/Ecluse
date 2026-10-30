@@ -38,7 +38,6 @@ serveDepsFor adapter privateBaseUrl publicBaseUrl mirror rules clock =
         { pdUpstreams = mountUpstreams (artifactHosts (adapterArtifact adapter)) privateBaseUrl publicBaseUrl mirror
         , pdFirstParty = const False
         , pdReadSourceSelection = MergePrivateAndPublic
-        , pdInstallEvidence = Nothing
         , pdMountBaseUrl = "https://proxy.test"
         , pdRules = rules
         , pdAdditionalBlockedRanges = []

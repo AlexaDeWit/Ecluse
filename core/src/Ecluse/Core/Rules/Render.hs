@@ -112,7 +112,6 @@ renderInability = \case
             <> ")"
     PushUndated -> "the object store reported no publication time for the serving advisory artifact"
     SourceBreakerOpen -> "the rule source circuit breaker is open"
-    InstallEvidenceFailed detail -> "install evidence could not be read: " <> detail
     EvaluationFailed -> "the rule could not be evaluated"
     RuleThrew thrown -> "the rule threw: " <> thrown
     AttemptTimedOut -> "the attempt timed out"
