@@ -15,6 +15,7 @@ module Ecluse.Core.Registry.Cargo.Manifest (
     parseRustRelease,
     publishMetadataValue,
     cratesIoIndex,
+    usesUnstableDependencyField,
 ) where
 
 import Control.Monad (foldM)
@@ -350,9 +351,13 @@ dependency target kind alias value = do
 cratesIoIndex :: Text
 cratesIoIndex = "https://github.com/rust-lang/crates.io-index"
 
+-- | Nightly @-Z bindeps@ and public-dependency fields, by presence. Mirrored index rows and first-party uploads both refuse them.
+usesUnstableDependencyField :: KeyMap.KeyMap Value -> Bool
+usesUnstableDependencyField fields = any (`KeyMap.member` fields) ["artifact", "bindep_target", "lib", "public"]
+
 indexDependency :: Value -> Either ParseError Value
 indexDependency (Object fields) = do
-    when (any (`KeyMap.member` fields) ["artifact", "bindep_target", "lib", "public"]) (parseRefusal "unsupported Cargo index dependency capability")
+    when (usesUnstableDependencyField fields) (parseRefusal "unsupported Cargo index dependency capability")
     alias <- requiredJson "name" fields >>= jsonString
     original <- nullableString "package" fields
     requirement <- requiredJson "req" fields >>= jsonString
