@@ -23,7 +23,7 @@ import Ecluse.Core.Registry.Adapter.Capability (
  )
 import Ecluse.Core.Registry.Request (CredentialMapping)
 import Ecluse.Core.Rules.Types (RuleType)
-import Ecluse.Core.Server.Context (MountRouter, PackumentDeps)
+import Ecluse.Core.Server.Context (MountRouter)
 import Ecluse.Core.Server.RouteDescription (RouteSpec)
 
 {- | One ecosystem's complete capability record, which the composition root wires every
@@ -56,8 +56,8 @@ data RegistryAdapter = RegistryAdapter
 declarative route table, so the routed surface and the documented one cannot drift apart.
 -}
 data AdapterServe = AdapterServe
-    { serveRouter :: Maybe PackumentDeps -> MountRouter
-    -- ^ Bind an optional private view before routing. Unrecognised paths answer @404@.
+    { serveRouter :: MountRouter
+    -- ^ Route a request. Unrecognised paths answer @404@.
     , serveRoutes :: NonEmpty RouteSpec
     -- ^ The same route table as data, which the OpenAPI spec ("Ecluse.Manifest") renders.
     , serveCredential :: CredentialMapping

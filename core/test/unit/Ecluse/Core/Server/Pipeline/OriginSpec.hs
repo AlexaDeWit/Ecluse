@@ -236,7 +236,7 @@ runCargoFull :: ServeRuntime -> PackumentDeps -> MemoryTicket -> Bool -> IO Orig
 runCargoFull runtime deps ticket public = do
     part <- newChargePart ticket
     logEnv <- newTestLogEnv
-    let binding = MountBinding ("cargo" :| []) (cargoRouter Nothing) cargoCredential deps Nothing
+    let binding = MountBinding ("cargo" :| []) cargoRouter cargoCredential deps Nothing
     runHandler logEnv mempty (RequestCtx runtime binding) $
         if public
             then fetchPublicOriginObserved (const pass) deps runtime ticket part cargoTestName
@@ -423,7 +423,7 @@ runCargoConsumer runtime deps ticket consume =
 runCargoRead :: ServeRuntime -> PackumentDeps -> MemoryTicket -> (IO (Either MetadataError VersionRead) -> IO a) -> IO a
 runCargoRead runtime deps ticket consume = do
     logEnv <- newTestLogEnv
-    let binding = MountBinding ("cargo" :| []) (cargoRouter Nothing) cargoCredential deps Nothing
+    let binding = MountBinding ("cargo" :| []) cargoRouter cargoCredential deps Nothing
     runHandler logEnv mempty (RequestCtx runtime binding) $
         withPublicMetadata runtime deps ticket cargoTestName (cargoTestVersion "1.0.0") (liftIO . consume)
 

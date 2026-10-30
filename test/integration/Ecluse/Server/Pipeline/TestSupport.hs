@@ -559,7 +559,7 @@ withProxyOverRuntime tweakEnv logEnv queue privateUp publicUp inbound tweakDeps 
 -- | Mount one ecosystem over the supplied runtime and native dependencies.
 proxyApplication :: Ecosystem -> Env -> PackumentDeps -> Application
 proxyApplication ecosystem env dependencies =
-    application (mkServerConfig (maybeToList (mountBindingFor ecosystem dependencies Nothing Nothing))) env
+    application (mkServerConfig (maybeToList (mountBindingFor ecosystem dependencies Nothing))) env
 
 -- | Apply dependency changes before the proxy handles requests.
 withProxyEnvQueueDeps ::

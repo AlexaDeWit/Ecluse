@@ -110,20 +110,20 @@ spec = do
 
     describe "mountBindingFor, where the ecosystem drives the binding" $ do
         it "resolves npm to a binding whose prefix is derived from the ecosystem (/npm)" $
-            (bindingPrefix <$> mountBindingFor Npm inertPackumentDeps Nothing Nothing) `shouldBe` Just ("npm" :| [])
+            (bindingPrefix <$> mountBindingFor Npm inertPackumentDeps Nothing) `shouldBe` Just ("npm" :| [])
 
         it "resolves PyPI to a binding under its own derived prefix (/pypi)" $
-            (bindingPrefix <$> mountBindingFor PyPI inertPackumentDeps Nothing Nothing) `shouldBe` Just ("pypi" :| [])
+            (bindingPrefix <$> mountBindingFor PyPI inertPackumentDeps Nothing) `shouldBe` Just ("pypi" :| [])
 
-        it "binds Cargo's public and private views under the native prefix" $ do
+        it "binds Cargo under its own prefix" $ do
             adapter <- maybe (fail "Cargo has no registered adapter") pure (adapterFor Cargo)
             let deps = inertDepsFor adapter
-            (bindingPrefix <$> mountBindingFor Cargo deps (Just deps) Nothing) `shouldBe` Just ("cargo" :| [])
+            (bindingPrefix <$> mountBindingFor Cargo deps Nothing) `shouldBe` Just ("cargo" :| [])
 
         it "binds RubyGems under its own prefix without publication dependencies" $ do
             adapter <- maybe (fail "RubyGems has no registered adapter") pure (adapterFor RubyGems)
             let deps = inertDepsFor adapter
-            (bindingPrefix <$> mountBindingFor RubyGems deps Nothing Nothing) `shouldBe` Just ("rubygems" :| [])
+            (bindingPrefix <$> mountBindingFor RubyGems deps Nothing) `shouldBe` Just ("rubygems" :| [])
 
 dataPlaneSpec :: Spec
 dataPlaneSpec = describe "the data-plane clients" $ do

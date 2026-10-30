@@ -130,21 +130,16 @@ uploadClaims limits charge registry body = do
             case inspected of
                 Left fault -> pure (Left (PublishMalformed fault))
                 Right metadata -> do
-                    let publication :| replacement = ownRegistries registry
+                    let publication = sparseRegistry registry
                     agreement <- cargoUploadAgreement limits withMetadata metadataCost publication (Body.uploadMetadata upload) metadata
                     pure . first PublishMalformed $ do
                         agreement
-                        checkDependencyRegistries (publication : replacement) (Body.uploadMetadata upload)
+                        checkDependencyRegistries [publication] (Body.uploadMetadata upload)
                         pure [Body.uploadName upload]
 
-{- | The publication view's sparse registry first. Publishing through the private view at @/private@ adds
-the mount's crates.io replacement above it, which is also this proxy.
--}
-ownRegistries :: Text -> NonEmpty Text
-ownRegistries registry = sparse trimmed :| maybeToList (sparse <$> T.stripSuffix "/private" trimmed)
-  where
-    trimmed = T.dropWhileEnd (== '/') registry
-    sparse base = "sparse+" <> base <> "/"
+-- | The mount's own sparse index, which a null upload dependency source also names.
+sparseRegistry :: Text -> Text
+sparseRegistry registry = "sparse+" <> T.dropWhileEnd (== '/') registry <> "/"
 
 -- | Discovery cannot grant an API root. The complete configured base path must agree before a token is attached.
 preparePublishTarget :: OriginClient -> RegistryUrl -> IO (Either MetadataError RegistryUrl)

@@ -414,4 +414,4 @@ withManagedProxyOver (queue, configure) view firstParty private public action = 
                         , pdFirstParty = const firstParty
                         , pdMountBaseUrl = "http://ecluse.test/pypi"
                         }
-            action (application (mkServerConfig (maybeToList (mountBindingFor PyPI (configure deps) Nothing Nothing))) env)
+            action (application (mkServerConfig (maybeToList (mountBindingFor PyPI (configure deps) Nothing))) env)

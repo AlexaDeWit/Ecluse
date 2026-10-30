@@ -132,11 +132,11 @@ publishMountAt prefix router publishDeps =
 
 -- One npm mount over closed-port upstreams and no publish target, resolved as the composition root resolves it.
 npmApp :: Deadlines -> IO Application
-npmApp deadlines = application (mkServerConfig (maybeToList (mountBindingFor Npm inertPackumentDeps Nothing Nothing))) <$> newTestEnv deadlines
+npmApp deadlines = application (mkServerConfig (maybeToList (mountBindingFor Npm inertPackumentDeps Nothing))) <$> newTestEnv deadlines
 
 -- One PyPI mount over closed-port upstreams and no publication target.
 pypiApp :: Deadlines -> IO Application
-pypiApp deadlines = application (mkServerConfig (maybeToList (mountBindingFor PyPI (inertDepsFor pypiAdapter) Nothing Nothing))) <$> newTestEnv deadlines
+pypiApp deadlines = application (mkServerConfig (maybeToList (mountBindingFor PyPI (inertDepsFor pypiAdapter) Nothing))) <$> newTestEnv deadlines
 
 -- | An unreachable target distinguishes a refused publish from one that reached the relay.
 npmMountApp :: Deadlines -> IO Application
@@ -566,7 +566,7 @@ pipelineFallbacks =
 escapingApp :: Deadlines -> IO Application
 escapingApp deadlines = application (mkServerConfig (map escaping mounts)) <$> newTestEnv deadlines
   where
-    mounts = catMaybes [mountBindingFor Npm inertPackumentDeps Nothing Nothing, mountBindingFor PyPI (inertDepsFor pypiAdapter) Nothing Nothing]
+    mounts = catMaybes [mountBindingFor Npm inertPackumentDeps Nothing, mountBindingFor PyPI (inertDepsFor pypiAdapter) Nothing]
     escaping binding = binding{bindingRouter = escapingBeforeCommit (bindingRouter binding)}
 
 -- Keep the route's contract and fallback, and replace its handler with one that escapes before it responds.
@@ -788,7 +788,7 @@ refusingRenderApp deadlines upstreamBase logEnv = do
     env <- newTestEnvLogging deadlines logEnv queue (manager, manager) telemetryDisabled
     let deps = npmServeDeps Nothing (loopbackRegistryUrl upstreamBase) NoMirrorWrite rules (pure servedAt)
         refusing = deps{pdMetadata = (pdMetadata deps){metadataSerialise = const (Left RenderRefused)}}
-    pure (application (mkServerConfig (maybeToList (mountBindingFor Npm refusing Nothing Nothing))) env)
+    pure (application (mkServerConfig (maybeToList (mountBindingFor Npm refusing Nothing))) env)
 
 -- | Bind both mounts to their advisory handles, with the named ecosystems initially loaded.
 advisoryApp :: Deadlines -> Text -> [PrecededRule] -> [Ecosystem] -> Bool -> IO (Application, Map.Map Ecosystem CveSyncHandle)
@@ -804,8 +804,8 @@ advisoryApp deadlines upstreamBase policy initiallyLoaded trusted = do
         private = if trusted then Just public else Nothing
         bindings =
             catMaybes
-                [ mountBindingFor Npm (npmServeDeps private public NoMirrorWrite npmRules (pure servedAt)) Nothing Nothing
-                , mountBindingFor PyPI (pypiServeDeps private public NoMirrorWrite pypiRules (pure servedAt)) Nothing Nothing
+                [ mountBindingFor Npm (npmServeDeps private public NoMirrorWrite npmRules (pure servedAt)) Nothing
+                , mountBindingFor PyPI (pypiServeDeps private public NoMirrorWrite pypiRules (pure servedAt)) Nothing
                 ]
         cfg = (mkServerConfig bindings){scCheckReady = cveSyncReadiness handles}
     pure (application cfg env, handles)
