@@ -253,11 +253,17 @@ and the ceiling the budget may reach, set out below, falls as that remainder gro
 
 One such shape is a document of many tiny entries, whose map nodes, keys and typed values outweigh
 the source bytes they come from. An npm or PyPI full read therefore pays at least 256 bytes for each
-entry it retains, through its workspace, after each piece it parses: npm versions, timestamps and
-dist-tags, and PyPI files and dropped version entries. Timestamps, dist-tags and files whose names
-project no release are entries no count bounds. Realistic listings carry enough bytes per entry
-that the floor adds nothing. The floor is the condition for later dropping the version count from
-listing reads, where it still caps the entries a dense document retains.
+entry it retains, through its workspace, after each piece it parses:
+
+| Full read | Entries the floor charges | Of those, entries no count bounds |
+|---|---|---|
+| npm | Versions, timestamps and dist-tags | Timestamps and dist-tags |
+| PyPI | Files, dropped version entries, and `alternate-locations` and `meta.tracks` items | Dropped version entries, and `alternate-locations` and `meta.tracks` items |
+
+A PyPI read counts `alternate-locations` and `meta.tracks` items when their array closes, so the
+floor reaches them from the next piece. Realistic listings carry enough bytes per entry that the
+floor adds nothing. The floor is the condition for later dropping the version count from listing
+reads, where it still caps the entries a dense document retains.
 
 A listing's response pays per byte of its output basis. The basis is the larger of two estimates,
 one anchored on the largest document the listing merges and one on the base document, whose
@@ -302,15 +308,19 @@ charges act the moment work starts and the measurement arrives later, so neither
 line.
 
 Écluse keeps a structural count only where no byte, memory or deadline bound already covers the
-work. `maxNestingDepth` is the only bound on recursion and tar link chains. `maxVersionCount` bounds
-the inventory the Dredger gathers across store listing pages, which has no deadline and no byte
-bound across pages, the versions a mirror-state record holds, and the entries a dense npm or PyPI
-listing retains. On every listing it counts source entry positions, and a read refuses at the first
-entry past it. Both stay pinned policy: they bound document shape, not bytes, and do not scale with
-RAM. Work that bytes and per-entry charges already bound has no key: tar and ZIP entries, gzip and
-bzip2 members, Marshal and YAML nodes, multipart parts, and mirror-state files each keep a fixed
-ceiling in code, as the RubyGems directory keeps its gem-name ceiling. Resolution remains
-role-agnostic across proxy, Pilot, and Dredger. The body bounds name their operations separately:
+work. Both count keys stay pinned policy: they bound document shape, not bytes, and do not scale
+with RAM.
+
+| Bound | Work it covers | Why no other bound covers it |
+|---|---|---|
+| `maxNestingDepth` | Recursion while decoding, and tar path depth and link chains | Source bytes do not bound depth or link chains |
+| `maxVersionCount` | The versions the Dredger gathers for one package across store listing pages | That work has no deadline, and no byte bound across pages |
+| `maxVersionCount` | The versions one mirror-state record holds | A pre-scan counts them before the record decodes |
+| `maxVersionCount` | Source entry positions on every listing read, which refuses at the first entry past it | Per-byte charges are calibrated on realistic listings, so a dense npm or PyPI listing can retain more than its bytes pay for |
+| Fixed ceilings in code | Tar and ZIP entries, gzip and bzip2 members, Marshal and YAML nodes, multipart parts, mirror-state files, and RubyGems directory gem names | Bytes and per-entry charges already bound this work, so it has no key |
+
+Resolution remains role-agnostic across proxy, Pilot, and Dredger. The body bounds name their
+operations separately:
 
 | Bound | Consumers | Source |
 |---|---|---|
