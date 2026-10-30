@@ -68,22 +68,23 @@ queue:
   # maxMemoryDepth: 50000
 
 limits:
-  # Structural policy limits stay independent of the memory and CPU controls.
-  # The RubyGems /versions directory reads neither count key below. A fixed ceiling of
-  # 2,000,000 gem names in code bounds it, maxResponseBytes bounds its rows, and raising
-  # the ceiling takes a release.
-  # maxVersionCount counts every source npm version. PyPI full reads count distinct
-  # releases, while selected reads count all source file positions, including skips.
-  # Cargo full and selected reads count every nonblank source index record, including invalid records.
-  # RubyGems /info full reads count distinct raw versions. Selected reads count every
-  # nonblank artifact position, including skipped and malformed rows.
+  # Écluse keeps a structural count only where no byte, memory or deadline bound already
+  # covers the work, so maxVersionCount and maxNestingDepth are the only count keys.
+  # Fixed ceilings in code bound the rest, and raising one takes a release: 1,000,000 each
+  # of tar members or ZIP entries per archive, gzip or bzip2 members per archive, Marshal
+  # or YAML nodes per decode, multipart parts per upload and files per mirror-state record,
+  # and 2,000,000 gem names in the RubyGems /versions directory, whose rows
+  # maxResponseBytes bounds.
+  # maxVersionCount counts every source entry position in one package's metadata: npm
+  # versions, PyPI files, Cargo index records and RubyGems /info rows, including invalid,
+  # skipped and unselected entries. A read refuses at the first entry past it. It also
+  # bounds the versions the Dredger gathers for one package across store listing pages,
+  # and the versions one mirror-state record holds.
   maxVersionCount: 1000000
-  # Valid retained npm artifacts and full-read PyPI distribution files. The selected
-  # PyPI path uses maxVersionCount's source-file bound instead of a separate check.
-  # Cargo full and selected reads count every valid projected archive before version selection.
-  # RubyGems /info reads count every nonblank artifact row before parsing or version selection.
-  # This counts files. maxArtifactBytes below bounds worker artifact bodies.
-  maxArtifactCount: 1000000
+  # Deprecated compatibility key, with no effect:
+  # maxArtifactCount: 1000000
+  # Écluse still reads it as a positive integer. Remove it and ECLUSE_LIMITS__MAX_ARTIFACT_COUNT:
+  # the next release removes the key, and a document or environment that sets it then refuses to load.
   # Nesting in retained metadata fields and Cargo records. Skipped npm/PyPI fields do not use this limit.
   maxNestingDepth: 64
   # Refuse to download an advisory database larger than this many bytes (512 MiB). The
