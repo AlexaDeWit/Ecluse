@@ -14,7 +14,7 @@ import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Data.Time (UTCTime (UTCTime), fromGregorian)
 import Katip (LogEnv)
-import Network.HTTP.Types (Header, Method, Status, status200, status206, status304, status400, status401, status403, status404, status406, status502, status503)
+import Network.HTTP.Types (Header, Method, Status, status200, status206, status304, status400, status401, status403, status404, status406, status500, status502, status503)
 import Network.Wai (Request (..), defaultRequest, pathInfo, responseLBS)
 import Network.Wai.Handler.Warp (testWithApplication)
 import Network.Wai.Test (SRequest (SRequest), SResponse (..), runSession, setPath, srequest)
@@ -33,6 +33,7 @@ import Ecluse.Core.Registry.RubyGems.Route (rubyGemsRouter)
 import Ecluse.Core.Rules (PreparedRule (prepEval), RuleEval (PerPackage, PerVersion), prepare)
 import Ecluse.Core.Rules.Types (FailureAlignment (FailDeny), Inability (NoDatabaseLoaded), Rule (AllowIfOlderThan), RuleEvidence (evVersion), RuleVerdict (CannotVet))
 import Ecluse.Core.Security (Limits (..))
+import Ecluse.Core.Security (authorityLabel)
 import Ecluse.Core.Security.Egress (RegistryUrl, registryUrlText)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Core.Server.Admission (newServeAdmissionTuned)
@@ -46,7 +47,7 @@ import Ecluse.Core.Server.Contract (responseToWai)
 import Ecluse.Core.Server.Encoding (MetadataCompression (GzipWhenAccepted))
 import Ecluse.Core.Server.Upstream (MirrorServePlan (NoMirrorWrite))
 import Ecluse.Core.Telemetry.Metrics qualified as Metric
-import Ecluse.Core.Telemetry.Record (MetricsPort (mpRuleDenial))
+import Ecluse.Core.Telemetry.Record (MetricsPort (mpRuleDenial, mpUpstreamFetch, mpUpstreamFetchError))
 import Ecluse.Core.Version (renderVersion)
 import Ecluse.Test.Deadline (withSweeper)
 import Ecluse.Test.Log (captureJsonLog, lineMessage, newTestLogEnv)
@@ -199,6 +200,57 @@ spec = do
                 simpleStatus response `shouldBe` status403
                 lookup "WWW-Authenticate" (simpleHeaders response) `shouldBe` Nothing
                 readIORef hits >>= (`shouldSatisfy` elem ["private", "quick", "Marshal.4.8", "acme-1-1.0.gemspec.rz"])
+
+    describe "public directory faults" $ do
+        for_ [status500, status503] $ \outage ->
+            it ("serves caller-authorised private discovery during a public outage " <> show outage) $
+                withDirectoryFaults "---\npublic-gem 1.0 \n" "---\nprivate-gem 1.0 \n" $ \runtime binding _ _ publicStatus -> do
+                    writeIORef publicStatus outage
+                    response <- capture runtime binding "GET" "/versions" []
+                    simpleStatus response `shouldBe` status200
+                    simpleBody response `shouldBe` "---\nprivate-gem 1.0 \n"
+        it "degrades an undecodable public directory to private discovery" $
+            withDirectoryBodies "public-gem 1.0 \n" "---\nprivate-gem 1.0 \n" $ \runtime binding _ _ -> do
+                response <- capture runtime binding "GET" "/versions" []
+                simpleStatus response `shouldBe` status200
+                simpleBody response `shouldBe` "---\nprivate-gem 1.0 \n"
+        it "answers 503 rather than an empty 200 when the public directory fails and the private directory has no rows" $
+            withDirectoryFaults "---\npublic-gem 1.0 \n" "---\n" $ \runtime binding _ _ publicStatus -> do
+                writeIORef publicStatus status503
+                simpleStatus <$> capture runtime binding "GET" "/versions" [] `shouldReturn` status503
+        it "refuses a public directory over its byte bound with 502 beside private rows" $
+            withDirectoryBodies oversizedPublicDirectory "---\nprivate-gem 1.0 \n" $ \runtime binding _ _ ->
+                simpleStatus <$> capture runtime (metadataByteCap 40 binding) "GET" "/versions" [] `shouldReturn` status502
+        it "drops one malformed public row, serves the rest and logs it once" $
+            withDirectoryBodies "---\npublic-gem 1.0 \nbroken\n" "---\nprivate-gem 1.0 \n" $ \runtime binding _ _ -> do
+                let authority = authorityLabel (registryUrlText (pdPublicBaseUrl (bindingPackumentDeps binding)))
+                    drops = filter (T.isInfixOf "droppedByKind") . T.lines
+                    serve = captureJsonLog (\logEnv -> captureWithLog logEnv runtime binding "GET" "/versions" [])
+                (response, logged) <- serve
+                simpleStatus response `shouldBe` status200
+                simpleBody response `shouldBe` "---\nprivate-gem 1.0 \npublic-gem 1.0 \n"
+                case drops logged of
+                    [line] -> do
+                        line `shouldSatisfy` T.isInfixOf "\"sev\":\"Warning\""
+                        line `shouldSatisfy` T.isInfixOf "\"droppedByKind\":{\"version-listing\":1}"
+                        line `shouldSatisfy` T.isInfixOf ("\"upstream\":\"" <> authority <> "\"")
+                        line `shouldSatisfy` (not . T.isInfixOf "\"package\"")
+                    other -> expectationFailure ("expected one dropped-row line, got " <> show other)
+                (cached, again) <- serve
+                simpleBody cached `shouldBe` simpleBody response
+                drops again `shouldBe` []
+        for_ [("---\npublic-gem 1.0 \n", Nothing, status503, Metric.UpstreamStatus), (oversizedPublicDirectory, Just 40, status200, Metric.OtherCause), ("public-gem 1.0 \n", Nothing, status200, Metric.Decode)] $ \(body, cap, status, cause) ->
+            it ("records a public directory fault on the upstream fetch error metric as " <> show cause) $
+                withDirectoryFaults body "---\nprivate-gem 1.0 \n" $ \original binding _ _ publicStatus -> do
+                    (runtime, fetches) <- recordingFetches original
+                    writeIORef publicStatus status
+                    _ <- capture runtime (maybe binding (`metadataByteCap` binding) cap) "GET" "/versions" []
+                    fetches Metric.Public `shouldReturn` [Left cause]
+        it "records one public directory fetch for a cached directory" $
+            withDirectorySources $ \original binding _ _ -> do
+                (runtime, fetches) <- recordingFetches original
+                replicateM_ 2 (capture runtime binding "GET" "/versions" [])
+                fetches Metric.Public `shouldReturn` [Right Metric.Status2xx]
 
     describe "examined per-gem source documents" $ do
         for_ [False, True] $ \warm ->
@@ -551,22 +603,41 @@ withDirectorySources = withDirectoryBodies "---\npublic-gem 1.0 \n" "---\nprivat
 
 -- | Serve the given public and private @/versions@ bodies to a merging mount.
 withDirectoryBodies :: LByteString -> LByteString -> (ServeRuntime -> MountBinding -> IORef [([Text], [Header])] -> IORef Status -> IO a) -> IO a
-withDirectoryBodies publicBody privateBody use = do
+withDirectoryBodies publicBody privateBody use =
+    withDirectoryFaults publicBody privateBody (\runtime binding hits privateStatus _ -> use runtime binding hits privateStatus)
+
+-- | 'withDirectoryBodies' with the private, then the public, directory status held for the test to change.
+withDirectoryFaults :: LByteString -> LByteString -> (ServeRuntime -> MountBinding -> IORef [([Text], [Header])] -> IORef Status -> IORef Status -> IO a) -> IO a
+withDirectoryFaults publicBody privateBody use = do
     hits <- newIORef []
     privateStatus <- newIORef status200
-    let upstream request respond = do
+    publicStatus <- newIORef status200
+    let answer variable body = do
+            status <- readIORef variable
+            pure (responseLBS status [] body)
+        upstream request respond = do
             modifyIORef' hits (<> [(pathInfo request, requestHeaders request)])
             case pathInfo request of
-                ["private", "versions"] -> do
-                    status <- readIORef privateStatus
-                    respond (responseLBS status [] privateBody)
-                ["public", "versions"] -> respond (responseLBS status200 [] publicBody)
+                ["private", "versions"] -> answer privateStatus privateBody >>= respond
+                ["public", "versions"] -> answer publicStatus publicBody >>= respond
                 _ -> respond (responseLBS status404 [] "")
     testWithApplication (pure upstream) $ \port -> do
         let base = "http://localhost:" <> show port
         withNativeOrigins (Just (loopbackRegistryUrl (base <> "/private/"))) (loopbackRegistryUrl (base <> "/public/")) $ \runtime binding -> do
             let deps = bindingPackumentDeps binding
-            use runtime binding{bindingPackumentDeps = deps{pdReadSourceSelection = MergePrivateAndPublic}} hits privateStatus
+            use runtime binding{bindingPackumentDeps = deps{pdReadSourceSelection = MergePrivateAndPublic}} hits privateStatus publicStatus
+
+-- A public directory longer than the 40-byte cap its specs set, beside a private directory under it.
+oversizedPublicDirectory :: LByteString
+oversizedPublicDirectory = "---\n" <> mconcat (replicate 8 "public-gem 1.0 \n")
+
+-- Record each upstream metadata fetch as its error cause or success status class, by upstream.
+recordingFetches :: ServeRuntime -> IO (ServeRuntime, Metric.Upstream -> IO [Either Metric.Cause Metric.StatusClass])
+recordingFetches runtime = do
+    seen <- newIORef []
+    let record event = atomicModifyIORef' seen (\events -> (events <> [event], ()))
+        metrics = (srMetrics runtime){mpUpstreamFetch = \upstream status _ -> record (upstream, Right status), mpUpstreamFetchError = \upstream cause -> record (upstream, Left cause)}
+    pure (runtime{srMetrics = metrics}, \upstream -> map snd . filter ((== upstream) . fst) <$> readIORef seen)
 
 withNative :: (ServeRuntime -> MountBinding -> IORef [([Text], [Header])] -> IO a) -> IO a
 withNative = withNativeArchive status200

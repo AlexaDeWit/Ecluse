@@ -14,13 +14,14 @@ import Test.Hspec
 
 import Ecluse.Core.Package (
     InvalidEntry,
-    InvalidEntryKind (InvalidDistTag, InvalidIndexFile, InvalidVersionManifest),
+    InvalidEntryKind (InvalidDistTag, InvalidIndexFile, InvalidVersionListing, InvalidVersionManifest),
     mkInvalidEntry,
  )
 import Ecluse.Core.Registry (UrlFormationError (EmptyBaseUrl, UnparseableUrl))
 import Ecluse.Core.Registry.Metadata (MetadataError (MetadataAbsent, MetadataAuthorisationFailure, MetadataHttpFailure))
 import Ecluse.Core.Server.Pipeline.Diagnostics (
     logDecodeFailure,
+    logDirectoryInvalidEntries,
     logInvalidEntries,
     logMetadataFailure,
     logNameMismatch,
@@ -35,6 +36,7 @@ spec = do
     metadataFailureSpec
     upstreamWarningSpec
     invalidEntriesSpec
+    directoryInvalidEntriesSpec
 
 upstreamWarningSpec :: Spec
 upstreamWarningSpec = do
@@ -144,6 +146,16 @@ invalidEntriesSpec = describe "logInvalidEntries" $ do
         logged `shouldSatisfy` T.isInfixOf "registry.npmjs.org:443"
         logged `shouldSatisfy` (not . T.isInfixOf "hunter2")
         logged `shouldSatisfy` (not . T.isInfixOf "sig=abc")
+
+directoryInvalidEntriesSpec :: Spec
+directoryInvalidEntriesSpec = describe "logDirectoryInvalidEntries" $
+    it "logs dropped directory rows by kind without a package field" $ do
+        logged <- runJsonLog (logDirectoryInvalidEntries "https://index.rubygems.org" [dropOf InvalidVersionListing (Number 1)])
+        logged `shouldSatisfy` T.isInfixOf "\"sev\":\"Warning\""
+        logged `shouldSatisfy` T.isInfixOf "\"module\":\"Ecluse.Server.Pipeline\""
+        logged `shouldSatisfy` T.isInfixOf "\"upstream\":\"index.rubygems.org:443\""
+        logged `shouldSatisfy` T.isInfixOf "\"droppedByKind\":{\"version-listing\":1}"
+        logged `shouldSatisfy` (not . T.isInfixOf "\"package\"")
 
 upstream :: Text
 upstream = "https://registry.npmjs.org"
