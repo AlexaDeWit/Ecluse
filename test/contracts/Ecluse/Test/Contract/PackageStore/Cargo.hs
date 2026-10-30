@@ -64,14 +64,15 @@ withCargoSession maintenance use = do
                 , sbRemove = \versions -> modifyIORef' held (\releases -> foldr Map.delete releases versions)
                 , sbTakeDeleteFailure = takeStoreFailure failDelete
                 }
-    withStoreSession (reply held writes failWrite) (build boundary) (reverse <$> readIORef writes) failWrite failDelete use
+    withStoreSession ((== "/registry/index/" <> encodeUtf8 (cargoShard packageText)) . capPath) (reply held writes failWrite) (build boundary) (reverse <$> readIORef writes) failWrite failDelete use
   where
     build boundary base exchanges = do
         let origin = originClient defaultLimits exchanges (loopbackRegistryUrl (base <> "/registry/index")) (Just credential)
             source = originClient defaultLimits exchanges (loopbackRegistryUrl (base <> "/source")) Nothing
             publisher = newMirrorPublish (MirrorTransport exchanges (pure (Just credential)) defaultLimits passthroughTracingPort) (ocBaseUrl origin) (loopbackRegistryUrl (base <> "/registry")) (cargoPublishCodec (ChargeFactors 1000 1000 1000) nativePresentation)
+            readArchive version _ = fetchStoredArtifact (MirrorArtifactBodyLimit 32768) origin (cargoArtifactRequest (ocToken origin) (base <> "/registry/" <> cargoArchivePathFor packageText version))
         store <- maintenance origin boundary
-        pure (storeOperations packageName cargoTestVersion (readRelease origin) (writeRelease source publisher) store)
+        pure (storeOperations packageName cargoTestVersion (readRelease origin) readArchive (writeRelease source publisher) store)
 
 -- | Prepare discovery under the authenticated store origin supplied by backend composition.
 readCargoStoreManifestOver :: OriginClient -> StoreManifestRead
