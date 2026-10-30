@@ -275,6 +275,7 @@ library ecluse-core
     Ecluse.Core.Registry.Npm
     Ecluse.Core.Registry.Npm.Adapter
     Ecluse.Core.Registry.Npm.Credential
+    Ecluse.Core.Registry.Npm.DependencySource
     Ecluse.Core.Registry.Npm.Document
     Ecluse.Core.Registry.Npm.Filter
     Ecluse.Core.Registry.Npm.Maintenance
