@@ -15,10 +15,11 @@ module Ecluse.Core.Registry.PyPI.StreamingProjection (
 ) where
 
 import Control.Monad.ST (ST)
-import Data.Aeson (Value)
+import Data.Aeson (Value (Array, Object))
 import Data.Aeson.Key qualified as Key
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.Aeson.Types (parseEither)
+import Data.Vector qualified as V
 
 import Ecluse.Core.Package (InvalidEntry, InvalidEntryKind (InvalidVersionListing), PackageInfo, PackageName, mkInvalidEntry)
 import Ecluse.Core.Package.Entry (EntryKey (ArrayEntry))
@@ -59,17 +60,19 @@ emptyProjection name = PyPIProjection mempty [] (filenameMemo name) [] [] 0 True
 keepsFile :: PyPIProjection -> Bool
 keepsFile = projectedFilesActive
 
--- | The files, file drops and version drops the projection holds.
+-- | The files, file and version drops, and envelope array items the projection holds.
 retainedEntries :: PyPIProjection -> Int
 retainedEntries = projectedEntries
 
--- | Decode one compact file, refusing the read at the first file position past the version ceiling.
+-- | Take one field. A file refuses the read at the first file position past the version ceiling.
 collectField :: Limits -> PyPIProjection -> PyPIField -> Either LimitError PyPIProjection
 collectField limits acc = \case
     IgnoredField -> Right acc
     EnvelopeField key value
         | KeyMap.member (Key.fromText key) (projectedEnvelope acc) -> Right acc
-        | otherwise -> Right acc{projectedEnvelope = KeyMap.insert (Key.fromText key) value (projectedEnvelope acc)}
+        | otherwise ->
+            let !entries = projectedEntries acc + envelopeItems value
+             in Right acc{projectedEnvelope = KeyMap.insert (Key.fromText key) value (projectedEnvelope acc), projectedEntries = entries}
     FilesShape valid -> Right acc{projectedFilesSeen = True, projectedFilesActive = not (projectedFilesSeen acc), projectedShape = projectedShape acc && (projectedFilesSeen acc || valid)}
     VersionsShape valid -> Right acc{projectedVersionsSeen = True, projectedVersionsActive = not (projectedVersionsSeen acc), projectedShape = projectedShape acc && (projectedVersionsSeen acc || valid)}
     InvalidVersionField position value
@@ -81,6 +84,13 @@ collectField limits acc = \case
             checkVersionCountOf limits (position + 1)
             Right (maybe acc (\value -> retainFile position value acc) raw)
         | otherwise -> Right acc
+
+-- The items of a kept envelope array: alternate-locations, or tracks within meta. Other members are scalars.
+envelopeItems :: Value -> Int
+envelopeItems = \case
+    Array items -> V.length items
+    Object members -> sum [V.length items | Array items <- KeyMap.elems members]
+    _ -> 0
 
 -- The served file, or its invalid-entry diagnostic, under its source position.
 retainFile :: Int -> Value -> PyPIProjection -> PyPIProjection
