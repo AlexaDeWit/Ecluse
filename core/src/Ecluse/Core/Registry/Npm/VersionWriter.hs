@@ -142,7 +142,8 @@ instance Build (VersionWriter st) (ST st (Steps (ST st) s)) where
                         repeated || case key of
                             OwnKey _ -> Set.member (memberText key) seen
                             SharedKey _ -> False
-                writeMutVar (nextRole writer) (if duplicate then Ignore else memberRole fields (memberText key))
+                -- A role written lazily would allocate a thunk for every member, every dependency spec included.
+                writeMutVar (nextRole writer) $! if duplicate then Ignore else memberRole fields (memberText key)
                 next duplicate
     addMember writer key value frame next = case frame of
         -- The packed writer returns the same frame after each member.
@@ -180,7 +181,7 @@ instance Build (VersionWriter st) (ST st (Steps (ST st) s)) where
     {-# INLINE addItem #-}
     {-# INLINE closeArray #-}
 
--- A registry spec classifies without allocating, so a release's dependencies cost no more than before.
+-- A registry spec must classify without allocating: the npm full reads' allocation budgets hold a 1% margin.
 observeString :: VersionWriter st -> Text -> Value -> ST st VersionValue
 observeString writer text value = do
     role <- readMutVar (nextRole writer)
