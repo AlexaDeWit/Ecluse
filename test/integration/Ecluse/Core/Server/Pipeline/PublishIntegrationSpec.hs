@@ -60,7 +60,7 @@ import Ecluse.Test.Contract.Catalogue (caseLabel)
 import Ecluse.Test.Deadline (withSweeper)
 import Ecluse.Test.Registry.Cargo.Fixtures (CargoRelease (releaseArchive), cargoUpload, cargoUploadMetadata, cargoUploadWithMetadata)
 import Ecluse.Test.Registry.Cargo.Publish (cargoForeignRegistryArchive, cargoForeignRegistryMetadata, cargoForeignRegistryRefusal, cargoPublicationFixture, cargoResolverAgreements, cargoResolverArchive, cargoResolverContradictions, cargoResolverDependencyField)
-import Ecluse.Test.Registry.Npm.Publish (npmDeprecateDocument, npmMisfiledVersion, npmReleaseDocument, npmRepeatedAttachments, npmTaggedRelease)
+import Ecluse.Test.Registry.Npm.Publish (npmDependentRelease, npmDeprecateDocument, npmExternalDependencyRefusal, npmMisfiledVersion, npmReleaseDocument, npmRepeatedAttachments, npmTaggedRelease)
 import Ecluse.Test.Server.Mount (inertDepsFor, inertPackumentDeps)
 import Ecluse.Test.Stub (Captured (capBody, capHeaders, capMethod, capPath), Stub, allCaptured, headerValue, stubBaseUrl, stubPort, withRoutedStub, withStubHeaders)
 import Ecluse.Test.Support (expectRight)
@@ -355,6 +355,30 @@ npmPublishSpec = describe "first-party npm publication relay" $ do
             resp <- putPublish "/npm/@acme/widget" (Just "publisher-token") npmMisfiledVersion app
             status resp `shouldBe` 400
             targetSaw target `shouldReturn` []
+
+    it (caseLabel "integration/publication/native-025" "refuses an npm release whose dependency names a git source with 400 naming the dependency before any relay") $
+        withTarget 201 "{\"success\":true}" $ \targetPort target -> withSweeper $ \deadlines -> do
+            app <- proxyWith deadlines (Just (publishDepsAt targetPort Nothing))
+            resp <- putPublish "/npm/@acme/widget" (Just "publisher-token") (npmDependentRelease ["dependencies" .= Aeson.object ["left-pad" .= ("github:acme/left-pad" :: Text)]]) app
+            status resp `shouldBe` 400
+            Aeson.decode (simpleBody resp) `shouldBe` Just (Aeson.object ["error" .= npmExternalDependencyRefusal "left-pad" "dependencies" "a git source"])
+            targetSaw target `shouldReturn` []
+
+    it (caseLabel "integration/publication/native-026" "refuses an npm release whose optional dependency names a remote URL with 400 before any relay") $
+        withTarget 201 "{\"success\":true}" $ \targetPort target -> withSweeper $ \deadlines -> do
+            app <- proxyWith deadlines (Just (publishDepsAt targetPort Nothing))
+            resp <- putPublish "/npm/@acme/widget" (Just "publisher-token") (npmDependentRelease ["optionalDependencies" .= Aeson.object ["left-pad" .= ("https://example.test/left-pad-1.0.0.tgz" :: Text)]]) app
+            status resp `shouldBe` 400
+            Aeson.decode (simpleBody resp) `shouldBe` Just (Aeson.object ["error" .= npmExternalDependencyRefusal "left-pad" "optionalDependencies" "a remote URL"])
+            targetSaw target `shouldReturn` []
+
+    it (caseLabel "integration/publication/native-027" "relays an npm release whose git source sits only in devDependencies") $
+        withTarget 201 "{\"success\":true}" $ \targetPort target -> withSweeper $ \deadlines -> do
+            app <- proxyWith deadlines (Just (publishDepsAt targetPort Nothing))
+            let body = npmDependentRelease ["devDependencies" .= Aeson.object ["left-pad" .= ("github:acme/left-pad" :: Text)]]
+            resp <- putPublish "/npm/@acme/widget" (Just "publisher-token") body app
+            status resp `shouldBe` 201
+            targetSaw target `shouldReturn` [(Just "Bearer publisher-token", LBS.toStrict body)]
 
 pypiProxy :: Deadlines -> Maybe (ByteAdmission -> PublishDeps) -> IO Application
 pypiProxy deadlines build = do
