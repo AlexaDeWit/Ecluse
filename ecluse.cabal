@@ -1226,6 +1226,7 @@ test-suite ecluse-core-unit
     Ecluse.Core.Registry.PyPI.Archive.BZipSpec
     Ecluse.Core.Registry.Archive.InflateSpec
     Ecluse.Core.Registry.Archive.PathSpec
+    Ecluse.Core.Registry.Archive.TarSpec
     Ecluse.Core.Registry.PyPI.Archive.LzmaSpec
     Ecluse.Core.Registry.PyPI.Archive.TarSpec
     Ecluse.Core.Registry.PyPI.UploadMetadataSpec
