@@ -1910,6 +1910,7 @@ test-suite ecluse-residency
     Ecluse.Core.Registry.JsonStreamResidencySpec
     Ecluse.Core.Server.Response.SummaryResidencySpec
     Ecluse.Core.Registry.MetadataResidencySpec
+    Ecluse.Core.Registry.Metadata.EntryFloorResidencySpec
     Ecluse.Core.Registry.Npm.ReaderResidencySpec
     Ecluse.Core.Registry.PyPI.ReaderResidencySpec
     Ecluse.Core.Registry.Cargo.ReaderResidencySpec
