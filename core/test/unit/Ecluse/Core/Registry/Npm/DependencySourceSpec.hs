@@ -8,6 +8,7 @@ module Ecluse.Core.Registry.Npm.DependencySourceSpec (spec) where
 import Data.Aeson (Value (Null, Object, String), object, toJSON, (.=))
 import Data.Aeson.KeyMap (KeyMap)
 import Data.Aeson.Types (Pair)
+import Data.Universe.Class qualified as Universe
 import Hedgehog (Gen, forAll, (===))
 import Hedgehog.Gen qualified as Gen
 import Hedgehog.Range qualified as Range
@@ -43,7 +44,7 @@ releaseSpec = describe "externalDependencyOf" $ do
         externalDependencyOf (release ["peerDependencies" .= object ["left-pad" .= git]])
             `shouldBe` Just (ExternalDependency PeerDependencies "left-pad" GitSource)
     it "reads dependencies, optionalDependencies and peerDependencies, never devDependencies" $ do
-        for_ [minBound .. maxBound] $ \field ->
+        for_ Universe.universe $ \field ->
             fmap edField (externalDependencyOf (release [fromString (toString (installableFieldName field)) .= object ["left-pad" .= git]])) `shouldBe` Just field
         externalDependencyOf (release ["devDependencies" .= object ["left-pad" .= git]]) `shouldBe` Nothing
     it "picks the earliest field, then the smallest name, whatever the document order" $
@@ -89,7 +90,7 @@ asMembers dependencies =
 genDependency :: Gen ExternalDependency
 genDependency =
     ExternalDependency
-        <$> Gen.enumBounded
+        <$> Gen.element Universe.universe
         <*> Gen.element ["alpha", "beta", "left-pad", "@acme/thing", "zeta"]
         <*> Gen.element [GitSource, RemoteUrl]
 
