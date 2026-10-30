@@ -1,7 +1,6 @@
 -- SPDX-FileCopyrightText: 2026 Alexandra de Wit
 --
 -- SPDX-License-Identifier: MIT
-{-# LANGUAGE ImportQualifiedPost #-}
 
 -- | Native filename captures resolve only against admitted inventory coordinates.
 module Ecluse.Core.Registry.RubyGems.Handlers.Coordinate (
