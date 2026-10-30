@@ -1416,8 +1416,10 @@ TTL is 0. The private copy stays fixed for the run, so each scenario measures on
 | `npm/heavy-private-25pct`, `pypi/heavy-private-25pct`, `cargo/heavy-private-25pct`, `rubygems/heavy-private-25pct` | The newest 25% of the versions |
 | `npm/heavy-private`, `pypi/heavy-private`, `cargo/heavy-private`, `rubygems/heavy-private` | The complete capture, as a private registry that proxies the public one returns |
 
-Cargo's `index-cold` comparison has no completed private source copy.
-Its private-copy variants retain checked source rows and verify matching target archives before measurement.
+Only Cargo's private-copy rows, `cargo/herd-under-heavy-private` included, boot with durable mirror state and a mirror target.
+Before boot, their state fixture keeps each private row that matches its public source row and verifies the matching target archive, so these rows also measure the managed read.
+The npm, PyPI and RubyGems private-copy rows read no durable state.
+Every other Cargo row boots without durable state or a mirror target, as its counterparts do, so `cargo/crate-onboarding` enqueues no mirror job.
 
 The full profile runs the 25% and complete-copy cases after the cold listing and its advisory variants.
 The 25% case keeps an intermediate comparison, and the complete copy keeps the stress case.
