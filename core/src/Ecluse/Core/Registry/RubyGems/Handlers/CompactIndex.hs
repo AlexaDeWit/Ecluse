@@ -38,8 +38,8 @@ import Ecluse.Core.Server.Cache.Types (directoryKey)
 import Ecluse.Core.Server.Context
 import Ecluse.Core.Server.Metadata (recordedFetch)
 import Ecluse.Core.Server.Pipeline.Diagnostics (logDirectoryFailure, logDirectoryInvalidEntries)
-import Ecluse.Core.Server.Pipeline.Packument (PackumentReplies (..), answerDigestedMetadataBytes, mapPackumentReplies, withObservedAdmittedDocument)
 import Ecluse.Core.Server.Pipeline.Origin (publicSource)
+import Ecluse.Core.Server.Pipeline.Packument (PackumentReplies (..), answerDigestedMetadataBytes, mapPackumentReplies, withObservedAdmittedDocument)
 import Ecluse.Core.Server.Pipeline.Shared (flightOf, forwardedCredential, withListingAdmission)
 import Ecluse.Core.Server.Response (mkRefusal)
 import Ecluse.Core.Telemetry.Metrics qualified as Metric
@@ -89,7 +89,7 @@ answerDirectory request ticket deps = do
         bytes <- evaluate body
         liftIO (traverse_ (`stepDown` 0) released)
         (if overMetadataBound deps bytes then Metric.Unavailable else Metric.Admit,) <$> answerCompact deps ticket request bytes
-    -- A private refusal denies, as on a package read. Any other fault leaves the request unanswered.
+    -- A private refusal denies, as on a package read. Any other private fault is unavailable.
     privateDecision = \case
         MetadataAuthorisationFailure _ -> Metric.Deny
         _ -> Metric.Unavailable
