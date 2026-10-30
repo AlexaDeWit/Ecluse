@@ -26,6 +26,7 @@ module Ecluse.Core.Text (
     readHexText,
     writeDigits,
     displayExceptionT,
+    joinAlternatives,
     textStorageBytes,
 ) where
 
@@ -152,6 +153,12 @@ writeDigits buffer !at !value = do
 -- | Render an exception as 'Text' for a log line or error value.
 displayExceptionT :: (Exception e) => e -> Text
 displayExceptionT = toText . displayException
+
+-- | Join items as prose alternatives: @a@, @a or b@, @a, b or c@.
+joinAlternatives :: [Text] -> Text
+joinAlternatives items = case reverse items of
+    final : earlier@(_ : _) -> T.intercalate ", " (reverse earlier) <> " or " <> final
+    _ -> T.intercalate ", " items
 
 -- | The byte size of the array behind a text. A slice keeps the whole array of the text it came from.
 textStorageBytes :: Text -> Int
