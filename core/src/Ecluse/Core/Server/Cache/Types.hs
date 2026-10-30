@@ -68,6 +68,8 @@ data CacheEntry = CacheEntry
     -- ^ The source representation from which the adapter builds the served body.
     , entryBodyBytes :: Int
     -- ^ Decompressed source bytes, retained independently of the cache weight.
+    , entryRetainedEntries :: Int
+    -- ^ The entries the source read retained, which the per-entry floor charges.
     , entryDigest :: ContentDigest
     }
     deriving stock (Eq, Show)

@@ -66,6 +66,7 @@ pypiReadOf pay mode retain =
         , erUniqueFields = fileUniqueFields
         , erWalkFull = \limits name _ -> readPyPIFull pay limits name
         , erFinishFull = finishPyPIFull
+        , erRetainedEntries = \(Walked _ acc) -> retainedEntries acc
         , erWalkSelected = \limits name version -> readPyPIIndex limits name (mode name (renderVersion version))
         , erFinishSelected = finishPyPIVersion retain
         }

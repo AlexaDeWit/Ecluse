@@ -20,7 +20,7 @@ import Ecluse.Core.Package (PackageName)
 import Ecluse.Core.Registry (FetchFault (FetchUrlUnformable))
 import Ecluse.Core.Registry.Exchange (accumulatingCharge, chargedRead, chargedReadWith, digestingRead, formThen, withSuccessBodyUsing)
 import Ecluse.Core.Registry.Json.Intern (newInternTable, newTableKey)
-import Ecluse.Core.Registry.JsonStream (StreamResult (streamBytes))
+import Ecluse.Core.Registry.JsonStream (StreamResult (streamBytes, streamValue))
 import Ecluse.Core.Registry.Metadata (Manifest (..), MetadataError, VersionRead, metadataResponse)
 import Ecluse.Core.Registry.Metadata.Fetch.Types (Body (Body), DocumentWalk, EcosystemRead (..), ManifestFetch, ReadTerms (..))
 import Ecluse.Core.Registry.Origin (OriginClient (ocBaseRequest, ocChargeFullRead, ocClient, ocLimits, ocPublicControl, ocReadKind, ocToken), originBaseUrl)
@@ -33,12 +33,13 @@ import Ecluse.Core.Version (Version)
 
 -- | Charge selected-read chunks before the adapter retains raw publication fields.
 chargingSelectedReads :: (ByteString -> Int) -> (Int -> IO ()) -> EcosystemRead -> EcosystemRead
-chargingSelectedReads weigh charge EcosystemRead{erRequest, erUniqueFields, erWalkFull, erFinishFull, erWalkSelected, erFinishSelected} =
+chargingSelectedReads weigh charge EcosystemRead{erRequest, erUniqueFields, erWalkFull, erFinishFull, erRetainedEntries, erWalkSelected, erFinishSelected} =
     EcosystemRead
         { erRequest
         , erUniqueFields
         , erWalkFull
         , erFinishFull
+        , erRetainedEntries
         , erWalkSelected = \limits name version bound table readChunk -> do
             pay <- accumulatingCharge charge
             erWalkSelected limits name version bound table (chargedReadWith (pay . weigh) readChunk)
@@ -55,14 +56,15 @@ fetchVersion eco tracing origin name version = readVersion eco tracing (originTe
 
 -- | Read a full manifest from any body, charging and hashing chunks before decoding, then finishing after closure.
 readManifest :: EcosystemRead -> TracingPort -> ReadTerms -> PackageName -> Body -> IO (Either MetadataError Manifest)
-readManifest EcosystemRead{erUniqueFields = uniqueFields, erWalkFull = walk, erFinishFull = finish} tracing terms name body = do
+readManifest EcosystemRead{erUniqueFields = uniqueFields, erWalkFull = walk, erFinishFull = finish, erRetainedEntries = retained} tracing terms name body = do
     result <- exchange tracing name body (digestingRead decode . chargedRead (rtChargeFullRead terms))
     pure $ do
         (streamed, digest) <- result
-        -- The size is read and the document forced first, so the typed view's location check holds none of the walk's result.
+        -- The size, the count and the document are forced first, so the typed view's location check holds none of the walk's result.
         let !bodyBytes = streamBytes streamed
+            !entries = either (const 0) retained (streamValue streamed)
         (info, raw) <- finish limits name base streamed
-        pure (raw `pseq` Manifest{manifestInfo = info, manifestRaw = raw, manifestBodyBytes = bodyBytes, manifestDigest = digest})
+        pure (raw `pseq` Manifest{manifestInfo = info, manifestRaw = raw, manifestBodyBytes = bodyBytes, manifestRetainedEntries = entries, manifestDigest = digest})
   where
     limits = rtLimits terms
     base = rtBaseUrl terms

@@ -46,6 +46,8 @@ data Manifest = Manifest
     -- ^ The supported source fields ('CachedDoc') used to assemble the served body.
     , manifestBodyBytes :: Int
     -- ^ Decompressed byte count from the source read, before projection.
+    , manifestRetainedEntries :: Int
+    -- ^ The entries the source read retained, which the per-entry floor charges. Zero where no floor applies.
     , manifestDigest :: ContentDigest
     -- ^ Digest of the wire bytes behind 'manifestInfo' and 'manifestRaw'.
     }

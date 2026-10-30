@@ -33,7 +33,7 @@ import Ecluse.Core.Package.Entry (EntryKey (..))
 import Ecluse.Core.Registry (FetchFault (FetchTransport))
 import Ecluse.Core.Registry.CachedDocument (CachedDoc, npmCached)
 import Ecluse.Core.Registry.Metadata (
-    Manifest (Manifest, manifestBodyBytes, manifestDigest, manifestInfo, manifestRaw),
+    Manifest (Manifest, manifestBodyBytes, manifestDigest, manifestInfo, manifestRaw, manifestRetainedEntries),
     MetadataClient (fetchFullManifest, fetchVersionMetadata),
     MetadataError (MetadataAbsent, MetadataAuthorisationFailure, MetadataFetch, MetadataHttpFailure, MetadataUndecodable),
     VersionDoc (VersionDoc, vdDetails, vdRaw),
@@ -529,7 +529,7 @@ stubUrl = loopbackRegistryUrl "http://localhost:1"
 countingFull :: IORef Int -> PackageInfo -> PackageName -> IO (Either MetadataError Manifest)
 countingFull calls info _name = do
     atomicModifyIORef' calls (\n -> (n + 1, ()))
-    pure (Right Manifest{manifestInfo = info, manifestRaw = fst npmCached packument, manifestBodyBytes = 9, manifestDigest = digestOf "raw-bytes"})
+    pure (Right Manifest{manifestInfo = info, manifestRaw = fst npmCached packument, manifestBodyBytes = 9, manifestRetainedEntries = 0, manifestDigest = digestOf "raw-bytes"})
   where
     packument :: Value
     packument = object ["versions" .= object [Key.fromText v .= object ["marker" .= v] | v <- Map.keys (infoVersions info)]]
