@@ -532,6 +532,7 @@ mounts:
     #     token:
     # pypi blocks these rule types at boot, even through shared rules:
     # DenyInstallTimeExecution: Most PyPI releases offer a source distribution, which runs its own build on install, so this rule would deny nearly every release.
+    # DenyExternalDependencies: The PyPI adapter does not read where a release's dependencies install from.
     # DenyIfDeprecated: The PyPI adapter supplies no deprecation flag.
     # AllowScope: A PyPI project name has no scope, so this rule can never match one.
     # Move supported types from shared rules into mounts.npm.rules, or disable its configured
@@ -570,6 +571,7 @@ mounts:
     # firstParty: "acme-tools,acme-*"
     # cargo blocks these rule types at boot, even through shared rules:
     # DenyInstallTimeExecution: Cargo's sparse index does not declare build scripts or procedural macros. This rule is unsupported for the ecosystem.
+    # DenyExternalDependencies: The Cargo adapter does not read where a crate's dependencies install from.
     # DenyIfDeprecated: Cargo's sparse index supplies no deprecation flag.
     # AllowScope: Cargo package names have no scope.
     # Move supported types from shared rules into mounts.npm.rules, or disable its configured
@@ -582,6 +584,7 @@ mounts:
   # Mirroring requires mirrorState.url and retains every supported platform artifact,
   # original compact specifications and source facts. Preserve that state across restarts.
   # DenyInstallTimeExecution: RubyGems native builds are normal installation behaviour. This rule is unsupported for the ecosystem.
+  # DenyExternalDependencies: A RubyGems dependency names only a gem and its requirements, never a source, so this rule can never match one.
   # DenyIfDeprecated: RubyGems metadata supplies no supported deprecation flag.
   # AllowScope: RubyGems package names have no scope.
   # Active entries refuse boot, including rules inherited from the shared policy.
