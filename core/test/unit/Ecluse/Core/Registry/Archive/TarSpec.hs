@@ -31,6 +31,8 @@ spec = describe "scanTar" $ do
         let limits = defaultLimits{maxMetadataBytes = 300}
         scan limits [single] `shouldReturn` Right selected
         scan limits [double] `shouldReturn` Left (ParseError "archive path inventory exceeds its bound")
+        for_ ["data", "extra"] $ \kept ->
+            scanSelecting (== ["example-1", kept]) limits [double] `shouldReturn` Left (ParseError "archive path inventory exceeds its bound")
     it "rejects a partial trailer and a truncated selected payload" $ do
         bytes <- BSL.toStrict <$> tarBytes [("example-1/data", payload)]
         scan defaultLimits [bytes] `shouldReturn` Right selected
@@ -52,3 +54,7 @@ payload = "Generic tar payload.\n"
 
 selected :: Map Text ByteString
 selected = Map.singleton "example-1/data" payload
+
+-- | Select only the members whose path parts satisfy the predicate, so an unselected member still meets each bound.
+scanSelecting :: ([Text] -> Bool) -> Limits -> [ByteString] -> IO (Either ParseError (Map Text ByteString))
+scanSelecting keep limits chunks = fmap tarContents <$> scanTar limits (const pass) (Right . keep) ($ yieldMany chunks)
