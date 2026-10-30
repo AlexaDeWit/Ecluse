@@ -434,6 +434,8 @@ uploadGuardSpec = describe "uploadClaims (the first-party new-release guard)" $ 
             , " github:acme/left-pad"
             , "git\t+https://github.com/acme/left-pad.git"
             , "user:secret@github.com:acme/left-pad"
+            , "\\x@github.com:acme/left-pad"
+            , "\\x@github.com/acme/left-pad"
             ]
         ]
             <> [(written, "a remote URL") | written <- ["https://example.test/left-pad-1.0.0.tgz", "http://example.test/left-pad-1.0.0.tgz", "HTTPS://example.test/left-pad.tgz"]]
