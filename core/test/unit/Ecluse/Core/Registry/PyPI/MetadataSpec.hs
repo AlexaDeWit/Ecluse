@@ -7,6 +7,7 @@ module Ecluse.Core.Registry.PyPI.MetadataSpec (spec) where
 
 import Data.Aeson (Value (Array, Bool, Null, Number, Object, String), object, (.=))
 import Data.Aeson.KeyMap qualified as KeyMap
+import Data.ByteString qualified as BS
 import Data.Map.Strict qualified as Map
 import Data.Time (UTCTime (UTCTime), fromGregorian, nominalDay)
 import Test.Hspec
@@ -22,8 +23,9 @@ import Ecluse.Core.Package.Entry (EntryKey (ArrayEntry))
 import Ecluse.Core.Registry.Metadata (
     MetadataError (MetadataBoundExceeded, MetadataUndecodable),
  )
+import Ecluse.Core.Registry.Metadata.EntryFloor (entryFloorBytes)
 import Ecluse.Core.Registry.PyPI.Document (simpleEnvelope)
-import Ecluse.Core.Registry.PyPI.Metadata (projectPyPIStream)
+import Ecluse.Core.Registry.PyPI.Metadata (preparePyPIRead, projectPyPIStream, pypiChargeFactors)
 import Ecluse.Core.Registry.PyPI.Streaming (PyPIRead (..))
 import Ecluse.Core.Rules (prepare)
 import Ecluse.Core.Rules.Types (EvalContext (EvalContext), Rule (AllowByIdentity, AllowIfOlderThan), completeEvidence)
@@ -32,10 +34,13 @@ import Ecluse.Core.Security (
     Limits (maxVersionCount),
     defaultLimits,
  )
+import Ecluse.Core.Server.Admission.Budget (scaleCharge)
+import Ecluse.Core.Server.Admission.Types (ChargeFactors (cfFullReadPermille))
 import Ecluse.Test.Contract.Metadata.Projection (MetadataFraming (SingleDocument), ProjectionDriver (..), metadataProjectionContract)
 import Ecluse.Test.Json (encodeStrict)
 import Ecluse.Test.Package (defaultMinIntegrity, pypiVersion, requestsName, unsafeFilename)
 import Ecluse.Test.Package.Admission (admitArtifactWithEvidence)
+import Ecluse.Test.Registry.Metadata.Fetch (heldWorkspacePeak)
 import Ecluse.Test.Registry.PyPI (filesNamed, simpleFile, simpleIndex, simpleIndexWith, withFileKeys)
 import Ecluse.Test.Registry.PyPI.Metadata (projectPyPIChunks, projectPyPIIndex, projectPyPIVersion, simpleValue)
 import Ecluse.Test.Rules (admittedBy, atDefaultPrecedence, evalRules, inertRuleDeps)
@@ -59,6 +64,24 @@ spec = do
     paritySpec
     protocolSpec
     releaseAgeSpec
+    entryFloorSpec
+
+-- Files whose names project no release, and dropped version entries, pay the entry floor their bytes leave uncovered.
+entryFloorSpec :: Spec
+entryFloorSpec = describe "the full-read entry floor" $ do
+    it "charges the workspace for files that name no release and dropped versions beyond their per-byte charge" $ do
+        let files = 150
+            drops = 400
+            file at = "{\"filename\":\"x" <> at <> "\",\"url\":\"https://files.pythonhosted.org/x" <> at <> "\"}"
+            body = "{\"meta\":{\"api-version\":\"1.1\"},\"name\":\"requests\",\"files\":[" <> BS.intercalate "," [file (show at) | at <- [1 .. files :: Int]] <> "],\"versions\":[" <> BS.intercalate "," (replicate drops "7") <> "]}"
+        (result, peak) <- heldWorkspacePeak preparePyPIRead "https://pypi.org/simple" requestsName [body]
+        void result `shouldSatisfy` isRight
+        peak `shouldBe` entryFloorBytes * (files + drops) - scaleCharge (cfFullReadPermille pypiChargeFactors) (BS.length body)
+
+    it "charges no workspace for files whose source bytes cover the floor" $ do
+        (result, peak) <- heldWorkspacePeak preparePyPIRead "https://pypi.org/simple" requestsName [indexOf ["requests-2.34.2.tar.gz", "requests-2.34.1.tar.gz"]]
+        void result `shouldSatisfy` isRight
+        peak `shouldBe` 0
 
 indexSpec :: Spec
 indexSpec = describe "projectPyPIIndex" $ do

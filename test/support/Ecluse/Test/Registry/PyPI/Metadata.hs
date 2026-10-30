@@ -15,6 +15,7 @@ module Ecluse.Test.Registry.PyPI.Metadata (
 import Data.Aeson (Value (Array, Object))
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.Map.Strict qualified as Map
+import Data.Primitive.PrimVar (newPrimVar)
 
 import Ecluse.Core.Package (PackageDetails, PackageInfo (infoVersions), PackageName)
 import Ecluse.Core.Package.Entry (EntryKey (ArrayEntry))
@@ -59,7 +60,8 @@ projectPyPIPackedChunks limits name =
             ( do
                 writer <- newWriter Nothing
                 build <- fileWriter writer
-                pure (pypiPackedWalk writer build limits name (testTable fileUniqueFields))
+                entries <- newPrimVar 0
+                pure (pypiPackedWalk entries writer build limits name (testTable fileUniqueFields))
             )
 
 -- | Build assembly fixtures without projection, including intentionally malformed entries.

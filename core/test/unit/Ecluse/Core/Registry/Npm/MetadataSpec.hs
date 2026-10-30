@@ -54,11 +54,12 @@ import Ecluse.Core.Registry.Metadata (
     VersionDoc (vdRaw),
     VersionRead (vrBodyBytes, vrUpstreamLatest, vrVersion),
  )
+import Ecluse.Core.Registry.Metadata.EntryFloor (entryFloorBytes)
 import Ecluse.Core.Registry.Metadata.Projection (projectionResult, streamError, validateReportedName)
 import Ecluse.Core.Registry.Npm.DependencySource (installableFieldName)
 import Ecluse.Core.Registry.Npm.Document (PackedPackument (..), tarballHole, tarballUrl)
 import Ecluse.Core.Registry.Npm.Filter (assembleMergedDocument, serialiseMergedDocument)
-import Ecluse.Core.Registry.Npm.Metadata (npmPackumentWalk, projectNpmPacked, projectNpmStream, selectNpmVersionDoc)
+import Ecluse.Core.Registry.Npm.Metadata (npmChargeFactors, npmPackumentWalk, prepareNpmRead, projectNpmPacked, projectNpmStream, selectNpmVersionDoc)
 import Ecluse.Core.Registry.Npm.Project (projectName, projectVersionEntryResult)
 import Ecluse.Core.Registry.Npm.Reader (PackumentRead (WholePackument), npmWalk, releaseUniqueFields)
 import Ecluse.Core.Registry.Npm.Request (packageUrl)
@@ -73,6 +74,8 @@ import Ecluse.Core.Security (
     checkVersionCountOf,
     defaultLimits,
  )
+import Ecluse.Core.Server.Admission.Budget (scaleCharge)
+import Ecluse.Core.Server.Admission.Types (ChargeFactors (cfFullReadPermille))
 import Ecluse.Core.Server.Conditional (Conditional (..), ETag, evaluateETag, renderETag)
 import Ecluse.Core.Server.Pipeline.Packument.Representation (packumentETag)
 import Ecluse.Core.Snapshot (Snapshot (Snapshot))
@@ -84,6 +87,7 @@ import Ecluse.Test.Json (fieldAt, isObject, withKeys)
 import Ecluse.Test.Package (unscopedNpm, validSha1, validSha512Sri)
 import Ecluse.Test.Registry.JsonBytes (damaged, genChunks, genPackumentBytes, genServablePackumentBytes)
 import Ecluse.Test.Registry.JsonStream (byteChunks, testTable, walkJsonChunks, walkWritingChunks)
+import Ecluse.Test.Registry.Metadata.Fetch (heldWorkspacePeak)
 import Ecluse.Test.Registry.Npm.Metadata (npmFullTestWalk, projectNpmManifest, projectNpmVersion)
 import Ecluse.Test.Registry.Packed (walkedLength)
 import Ecluse.Test.Snapshot (digestOf, readDetails)
@@ -97,6 +101,25 @@ spec = do
     projectNpmVersionSpec
     packedReadSpec
     integratedFactsSpec
+    entryFloorSpec
+
+-- A full read's timestamps and tags pay the entry floor that their per-byte charge leaves uncovered.
+entryFloorSpec :: Spec
+entryFloorSpec = describe "the full-read entry floor" $ do
+    it "charges the workspace for dense timestamps and tags beyond their per-byte charge" $ do
+        let entries = 300
+            members render = BS.intercalate "," [render (show at :: ByteString) | at <- [1 .. entries :: Int]]
+            body = "{\"name\":\"thing\",\"time\":{" <> members (\at -> "\"v" <> at <> "\":\"2020-01-01T00:00:00.000Z\"") <> "},\"dist-tags\":{" <> members (\at -> "\"t" <> at <> "\":\"1.0." <> at <> "\"") <> "}}"
+        (result, peak) <- heldWorkspacePeak prepareNpmRead captureRegistry (unscopedNpm "thing") [body]
+        void result `shouldSatisfy` isRight
+        peak `shouldBe` entryFloorBytes * 2 * entries - scaleCharge (cfFullReadPermille npmChargeFactors) (BS.length body)
+
+    it "charges no workspace when releases carry more source bytes than their entries' floor" $ do
+        let release at = "\"1.0." <> at <> "\":" <> policyRelease [("readme", String (T.replicate 512 "x"))]
+            body = "{\"name\":\"thing\",\"versions\":{" <> BS.intercalate "," [release (show at) | at <- [1 .. 20 :: Int]] <> "}}"
+        (result, peak) <- heldWorkspacePeak prepareNpmRead captureRegistry (unscopedNpm "thing") [body]
+        void result `shouldSatisfy` isRight
+        peak `shouldBe` 0
 
 packedReadSpec :: Spec
 packedReadSpec = describe "packed full read" $ do
