@@ -39,9 +39,9 @@ import Ecluse.Composition.BootError (
 import Ecluse.Composition.Endpoints (publicationTargetUrl)
 import Ecluse.Composition.Support (
     cargoCodeArtifactEnv,
+    cargoDependencyRefusal,
     cargoDeprecationRefusal,
     cargoGateEnv,
-    cargoDependencyRefusal,
     cargoInstallRefusal,
     cargoMirrorEnv,
     cargoScopeRefusal,
