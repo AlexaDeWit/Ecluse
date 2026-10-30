@@ -38,7 +38,6 @@ rubyPublicationConfig =
             [ ("ECLUSE_MOUNTS__RUBYGEMS__PRIVATE_UPSTREAM__REGISTRY__URL", stubUrl RubyGemsPrivate)
             , ("ECLUSE_MOUNTS__RUBYGEMS__FIRST_PARTY", "ecluse-fixture-firstparty")
             , ("ECLUSE_MOUNTS__RUBYGEMS__PUBLICATION_TARGET__REGISTRY__URL", stubUrl RubyGemsPrivate)
-            , ("ECLUSE_MOUNTS__RUBYGEMS__PUBLICATION_TARGET__REGISTRY__UPLOAD_URL", T.dropWhileEnd (== '/') (stubUrl RubyGemsPrivate))
             , ("ECLUSE_MOUNTS__RUBYGEMS__PUBLICATION_TARGET__REGISTRY__TOKEN", rubyRegistryToken)
             , ("ECLUSE_SERVER__AUTH_TOKEN", rubyRegistryToken)
             ]

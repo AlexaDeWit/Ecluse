@@ -45,7 +45,6 @@ rubyMirrorConfig =
             [ ("ECLUSE_MIRROR_STATE__URL", "s3://" <> advisoryBucket <> "/rubygems-mirror")
             , ("ECLUSE_MOUNTS__RUBYGEMS__PRIVATE_UPSTREAM__REGISTRY__URL", stubUrl RubyGemsMirror)
             , ("ECLUSE_MOUNTS__RUBYGEMS__MIRROR_TARGET__REGISTRY__URL", stubUrl RubyGemsMirror)
-            , ("ECLUSE_MOUNTS__RUBYGEMS__MIRROR_TARGET__REGISTRY__UPLOAD_URL", T.dropWhileEnd (== '/') (stubUrl RubyGemsMirror))
             , ("ECLUSE_MOUNTS__RUBYGEMS__MIRROR_TARGET__REGISTRY__TOKEN", rubyRegistryToken)
             ]
                 <> ministackAwsEnv
