@@ -223,7 +223,7 @@ These measurement paths retain their native sampling and verdict logic:
 | Allocation | `acceptance/app/Main.hs` over `EcosystemBench` | Four measured legs, fresh timed input allocation, forcing boundaries, corpus/advisory setup, per-capture criteria, refusals, unavailable rows, and report verdicts. |
 | Benchmarks | `bench/Main.hs` and `Ecluse/Core/*Bench.hs` over `EcosystemBench` | Native operations and synthetic checks, committed captures, independent expected output fixtures, calibration, and benchmark group order. |
 | Load | `BenchLoad.Harness`, native fixtures, `Scenarios`, and `Verdict` | Process isolation, quotas, affinity, RTS flags, upstream latency, request patterns, concurrency-one passes, success floors, refused/unavailable rows, and gating semantics. |
-| Live native protocol | npm and PyPI registry smoke specs | npm abbreviated parsing, bounded abbreviated fetch, raw SHA-1/SRI syntax, and PyPI exact wheel observations remain native. |
+| Live native protocol | npm, PyPI and RubyGems registry smoke specs | npm abbreviated parsing, bounded abbreviated fetch, raw SHA-1/SRI syntax, PyPI exact wheel observations, and RubyGems archive coordinate and checksum checks remain native. |
 
 Existing corpus bytes, expected outputs, remaining floor values, and RTS settings stay fixed.
 Provider coverage runs outside measured operations. New PyPI stress rows add samples without changing that boundary.
