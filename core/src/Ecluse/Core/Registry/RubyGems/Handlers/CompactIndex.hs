@@ -102,7 +102,7 @@ readPrivateDirectory request deps privateRead = case pdPrivateBase deps of
         runtime <- asks ctxRuntime
         mount <- asks ctxMount
         let source = DirectorySource RejectMalformedRows (srPrivateClient runtime) Uncontrolled base (forwardedCredential mount request)
-        withRunInIO $ \runInIO -> fmap Just <$> recordedFetch (srMetrics runtime) Metric.Private (fetchDirectory runInIO (srTracing runtime) (chargePart privateRead) (pdLimits deps) source)
+        withRunInIO $ \runInIO -> fmap Just <$> fetchDirectory runInIO (srTracing runtime) (chargePart privateRead) (pdLimits deps) source
 
 -- Only the flight leader fetches, records the fetch and logs. Followers and retained snapshots do neither.
 readPublicDirectory :: MemoryTicket -> PackumentDeps -> ChargePart -> Handler (Either MetadataError GemDirectory)
