@@ -54,7 +54,7 @@ import Ecluse.Test.Package (hexSha256Of)
 import Ecluse.Test.Queue (newTestMemoryQueue)
 import Ecluse.Test.Rules (admissionOnly, atDefaultPrecedence, inertRuleDeps)
 import Ecluse.Test.Server.Mount (pypiServeDeps, withMirrorPlan)
-import Ecluse.Test.Wai (decodedBody, localhost, lookupAuth, pacedBody, selfBaseUrl)
+import Ecluse.Test.Wai (closedResponse, decodedBody, localhost, lookupAuth, pacedBody, selfBaseUrl)
 
 spec :: Spec
 spec = do
@@ -247,18 +247,22 @@ sidecarSpec = describe "the metadata companion" $ do
                 hits <- privateHits proxy
                 map fst hits `shouldNotContain` [sdistPath <> ".metadata"]
 
-    for_ [status404, status503] $ \privateStatus ->
-        it (caseLabel ("integration/pypi/native-030/" <> show (statusCode privateStatus)) (toText (("falls back anonymously after private metadata HTTP " <> show (statusCode privateStatus)) :: String))) $
-            testWithApplication (pure (\_ respond -> respond (responseLBS privateStatus [] "private miss"))) $ \privatePort ->
-                withPyPIProxyOver publicIndex (pypiDeps (Just (loopbackRegistryUrl (localhost privatePort))) . loopbackRegistryUrl . localhost) $ \proxy -> do
-                    response <- getPathWith [clientCredential] (sdistPath <> ".metadata") (proxyApp proxy)
-                    statusOf response `shouldBe` 200
-                    simpleBody response `shouldBe` metadataBytes
-                    hits <- privateHits proxy
-                    map snd hits `shouldSatisfy` all isNothing
+    it (caseLabel "integration/pypi/native-030/404" "falls back anonymously after private metadata HTTP 404") $
+        withPrivateStatus status404 $ \proxy -> do
+            response <- getPathWith [clientCredential] (sdistPath <> ".metadata") (proxyApp proxy)
+            statusOf response `shouldBe` 200
+            simpleBody response `shouldBe` metadataBytes
+            hits <- privateHits proxy
+            map snd hits `shouldSatisfy` all isNothing
+
+    it (caseLabel "integration/pypi/native-030/503" "refuses the companion after private metadata HTTP 503") $
+        withPrivateStatus status503 $ \proxy -> do
+            response <- getPathWith [clientCredential] (sdistPath <> ".metadata") (proxyApp proxy)
+            statusOf response `shouldBe` 503
+            privateHits proxy `shouldReturn` []
 
     it (caseLabel "integration/pypi/native-031" "reports a companion transport failure before committing bytes") $
-        withPyPIProxyResponding (onCompanion (\_ respond -> respond (Wai.responseRaw (\_ _ -> pass) (responseLBS status503 [] "")))) publicIndex publicPypiDeps $ \proxy -> do
+        withPyPIProxyResponding (onCompanion (\_ respond -> respond closedResponse)) publicIndex publicPypiDeps $ \proxy -> do
             response <- getPath (sdistPath <> ".metadata") (proxyApp proxy)
             statusOf response `shouldBe` 503
 
@@ -354,7 +358,7 @@ sidecarCollisionSpec = describe "companions keep the winning source" $ do
                     privateHits proxy `shouldReturn` publicBefore
 
     it (caseLabel "integration/pypi/native-041" "does not replace a private companion after a transport failure") $
-        withCollision (privateCollisionIndex id) (onCompanion (\_ respond -> respond (Wai.responseRaw (\_ _ -> pass) (responseLBS status503 [] "")))) $ \proxy -> do
+        withCollision (privateCollisionIndex id) (onCompanion (\_ respond -> respond closedResponse)) $ \proxy -> do
             index <- getIndex (proxyApp proxy)
             mapMaybe (fieldAt "size") (servedFiles index) `shouldBe` [Number 17, Number 17]
             publicBefore <- privateHits proxy
@@ -381,6 +385,12 @@ sidecarCollisionSpec = describe "companions keep the winning source" $ do
                     let newPublicReads = drop (length publicBefore) publicAfter
                     map fst newPublicReads `shouldContain` [sdistPath <> ".metadata"]
                     map snd newPublicReads `shouldSatisfy` all isNothing
+
+-- A private origin that answers every request with one status, beside the public index.
+withPrivateStatus :: Status -> (PyPIProxy -> IO a) -> IO a
+withPrivateStatus privateStatus use =
+    testWithApplication (pure (\_ respond -> respond (responseLBS privateStatus [] "private answer"))) $ \privatePort ->
+        withPyPIProxyOver publicIndex (pypiDeps (Just (loopbackRegistryUrl (localhost privatePort))) . loopbackRegistryUrl . localhost) use
 
 withCollision :: (Text -> Value) -> (Application -> Application) -> (PyPIProxy -> IO a) -> IO a
 withCollision privateIndex transform use =
@@ -460,15 +470,19 @@ refusalBodySpec = describe "the operator help message on a refusal the route tab
 
 privateLegSpec :: Spec
 privateLegSpec = describe "the private artifact leg, addressed by the index's own location" $ do
-    for_ [status404, status503] $ \upstreamStatus ->
-        it (caseLabel ("integration/pypi/native-016/" <> show (statusCode upstreamStatus)) (toText ("keeps public artifact fallback after private index HTTP " <> show (statusCode upstreamStatus) :: String))) $
-            testWithApplication (pure (\_ respond -> respond (responseLBS upstreamStatus [] "private index unavailable"))) $ \privatePort ->
-                withPyPIProxyOver publicIndex (pypiDeps (Just (loopbackRegistryUrl (localhost privatePort))) . loopbackRegistryUrl . localhost) $ \proxy -> do
-                    response <- getPathWith [clientCredential] sdistPath (proxyApp proxy)
-                    statusOf response `shouldBe` 200
-                    simpleBody response `shouldBe` artifactBytes
-                    hits <- privateHits proxy
-                    map snd hits `shouldSatisfy` all isNothing
+    it (caseLabel "integration/pypi/native-016/404" "keeps public artifact fallback after private index HTTP 404") $
+        withPrivateStatus status404 $ \proxy -> do
+            response <- getPathWith [clientCredential] sdistPath (proxyApp proxy)
+            statusOf response `shouldBe` 200
+            simpleBody response `shouldBe` artifactBytes
+            hits <- privateHits proxy
+            map snd hits `shouldSatisfy` all isNothing
+
+    it (caseLabel "integration/pypi/native-016/503" "refuses the artifact after private index HTTP 503") $
+        withPrivateStatus status503 $ \proxy -> do
+            response <- getPathWith [clientCredential] sdistPath (proxyApp proxy)
+            statusOf response `shouldBe` 503
+            privateHits proxy `shouldReturn` []
 
     for_ [status401, status403] $ \upstreamStatus ->
         it (caseLabel ("integration/pypi/native-017/" <> show (statusCode upstreamStatus)) (toText ("refuses an index HTTP " <> show (statusCode upstreamStatus) <> " on metadata and indexed artifacts" :: String))) $

@@ -126,13 +126,14 @@ privateAuthorisationSpec = describe "private authorisation refusal" $ do
                 publicUp <- servingUpstream (encodePackument (admittingPublic "1.0.0"))
                 queue <- newTestMemoryQueue
                 withProxyEnvQueueDeps queue privateUp publicUp Nothing (\d -> d{pdFirstParty = const firstParty}) $ \app _ _ -> do
+                    let served = not firstParty && outcomeId == "absent"
                     response <- getThing Nothing app
-                    status response `shouldBe` if firstParty then firstPartyStatus else 200
-                    servedVersions response `shouldBe` ["1.0.0" | not firstParty]
+                    status response `shouldBe` if served then 200 else firstPartyStatus
+                    servedVersions response `shouldBe` ["1.0.0" | served]
                     seenAuth publicUp `shouldReturn` [Nothing | not firstParty]
 
 -- The private outcomes a first-party name must tell apart, with the status each renders for it.
--- A merged name serves the public set whichever it is.
+-- A merged name serves the public set only after a private 404.
 privateOutcomes :: [(Text, String, IO Upstream, Int)]
 privateOutcomes =
     -- Only the origin's own 404 settles the question. A 5xx and an undecodable body leave it
@@ -287,15 +288,15 @@ storedTransitionBody store req = do
 
 partialAvailabilitySpec :: Spec
 partialAvailabilitySpec = describe "partial-upstream availability" $ do
-    it (caseLabel "integration/origin/native-012" "serves the public set when the private upstream is unavailable") $ do
+    it (caseLabel "integration/origin/native-012" "refuses with 503 when the private upstream is unavailable, serving no public versions") $ do
         privateUp <- failingUpstream
         publicUp <-
             servingUpstream
                 (encodePackument (packument [("2.0.0", plainVersion "2.0.0")] "2.0.0" [("2.0.0", publishedDaysAgo 30)]))
         withProxy privateUp publicUp Nothing $ \app -> do
             resp <- getThing Nothing app
-            status resp `shouldBe` 200
-            servedVersions resp `shouldBe` ["2.0.0"]
+            status resp `shouldBe` 503
+            servedVersions resp `shouldBe` []
 
     it (caseLabel "integration/origin/native-013" "serves the private set when the public upstream is unavailable") $ do
         privateUp <- servingUpstream (encodePackument (privatePackument [("1.0.0", plainVersion "1.0.0")] "1.0.0"))
@@ -305,25 +306,25 @@ partialAvailabilitySpec = describe "partial-upstream availability" $ do
             status resp `shouldBe` 200
             servedVersions resp `shouldBe` ["1.0.0"]
 
-    it (caseLabel "integration/origin/native-014" "degrades a private leg whose body is unparseable, serving the public set") $ do
+    it (caseLabel "integration/origin/native-014" "refuses with 503 when the private body is unparseable") $ do
         privateUp <- servingUpstream "this is not json at all"
         publicUp <-
             servingUpstream
                 (encodePackument (packument [("2.0.0", plainVersion "2.0.0")] "2.0.0" [("2.0.0", publishedDaysAgo 30)]))
         withProxy privateUp publicUp Nothing $ \app -> do
             resp <- getThing Nothing app
-            status resp `shouldBe` 200
-            servedVersions resp `shouldBe` ["2.0.0"]
+            status resp `shouldBe` 503
+            servedVersions resp `shouldBe` []
 
-    it (caseLabel "integration/origin/native-015" "degrades a private leg that decodes but does not project to a packument") $ do
+    it (caseLabel "integration/origin/native-015" "refuses with 503 when the private body decodes but does not project to a packument") $ do
         privateUp <- servingUpstream "[1, 2, 3]"
         publicUp <-
             servingUpstream
                 (encodePackument (packument [("2.0.0", plainVersion "2.0.0")] "2.0.0" [("2.0.0", publishedDaysAgo 30)]))
         withProxy privateUp publicUp Nothing $ \app -> do
             resp <- getThing Nothing app
-            status resp `shouldBe` 200
-            servedVersions resp `shouldBe` ["2.0.0"]
+            status resp `shouldBe` 503
+            servedVersions resp `shouldBe` []
 
     it (caseLabel "integration/origin/native-016" "drops a private leg that self-reports a different package, serving the public set (200)") $ do
         privateUp <-

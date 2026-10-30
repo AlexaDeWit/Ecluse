@@ -341,6 +341,18 @@ pypiReads = describe "managed PyPI mirror reads" $ do
                 response <- getPath (artifactPath <> ".metadata") app
                 simpleStatus response `shouldBe` status503
 
+    it (caseLabel "integration/mirror-view/native-021" "refuses a failing private origin before reading retained state, even when public covers the record") $ do
+        inventory <- mirrorSample [1, 2] False "https://public.test/" "source"
+        record <- expectRight (extendProjectRecord defaultLimits target inventory Nothing)
+        calls <- newIORef (0 :: Int)
+        view <- testView (modifyIORef' calls (+ 1) $> Right (StateLoaded revision record))
+        rules <- prepare inertRuleDeps [atDefaultPrecedence (AllowByIdentity "demo")]
+        queue <- newTestMemoryQueue
+        withManagedProxyOver (queue{enqueue = \_ -> fail "unexpected mirror enqueue"}, \deps -> deps{pdRules = rules}) view False (native status503 []) (native status200 [1, 2]) $ \app ->
+            for_ (["/pypi/simple/demo/", artifactPath] <> newFilePaths) $ \path ->
+                getPath path app >>= \response -> simpleStatus response `shouldBe` status503
+        readIORef calls `shouldReturn` 0
+
 newFilePaths :: [ByteString]
 newFilePaths = [path, path <> ".metadata"]
   where
