@@ -131,16 +131,17 @@ spec = do
             (mediaTypesAt 200 <$> getOp "/pypi/simple/{project}")
                 `shouldBe` Just ["application/vnd.pypi.simple.v1+json"]
 
-        it "documents both Cargo sparse views and their native media types" $
-            for_ ["/cargo", "/cargo/private"] $ \prefix -> do
-                (mediaTypesAt 200 <$> getOp (prefix <> "/config.json")) `shouldBe` Just ["application/json"]
-                (mediaTypesAt 200 <$> getOp (prefix <> "/{indexPath}")) `shouldBe` Just ["text/plain"]
-                (statusCodes <$> getOp (prefix <> "/{indexPath}")) `shouldBe` Just [200, 304, 401, 403, 404, 406, 500, 502, 503]
-                (defaultMediaTypes <$> getOp (prefix <> "/crates/{crate}/{version}/{file}")) `shouldBe` Just ["*/*"]
+        it "documents the merged Cargo registry and its native media types" $ do
+            (mediaTypesAt 200 <$> getOp "/cargo/config.json") `shouldBe` Just ["application/json"]
+            (statusCodes <$> getOp "/cargo/config.json") `shouldBe` Just [200, 401, 503]
+            (mediaTypesAt 200 <$> getOp "/cargo/{indexPath}") `shouldBe` Just ["text/plain"]
+            (statusCodes <$> getOp "/cargo/{indexPath}") `shouldBe` Just [200, 304, 401, 403, 404, 406, 500, 502, 503]
+            (defaultMediaTypes <$> getOp "/cargo/crates/{crate}/{version}/{file}") `shouldBe` Just ["*/*"]
+            getOp "/cargo/private/config.json" `shouldSatisfy` isNothing
 
-        it "documents Cargo publication only on the private view" $ do
-            putOp "/cargo/private/api/v1/crates/new" `shouldSatisfy` isJust
-            putOp "/cargo/api/v1/crates/new" `shouldSatisfy` isNothing
+        it "documents Cargo publication on the merged registry" $ do
+            putOp "/cargo/api/v1/crates/new" `shouldSatisfy` isJust
+            putOp "/cargo/private/api/v1/crates/new" `shouldSatisfy` isNothing
             (InsOrdSet.member "cargo" . _operationTags <$> getOp "/cargo/{indexPath}") `shouldBe` Just True
 
         it "documents the RubyGems Compact Index reads and publication" $ do
