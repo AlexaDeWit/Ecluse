@@ -90,13 +90,14 @@ asMembers dependencies =
     spellingOf = \case
         GitSource -> "github:acme/left-pad"
         RemoteUrl -> "https://example.test/left-pad.tgz"
+        UnsupportedScheme -> "jsr:@std/left-pad@^1"
 
 genDependency :: Gen ExternalDependency
 genDependency =
     ExternalDependency
         <$> Gen.element Universe.universe
         <*> Gen.element ["alpha", "beta", "left-pad", "@acme/thing", "zeta"]
-        <*> Gen.element [GitSource, RemoteUrl]
+        <*> Gen.element Universe.universe
 
 gitSpecs :: [Text]
 gitSpecs =
