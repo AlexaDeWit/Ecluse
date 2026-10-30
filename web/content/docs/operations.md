@@ -804,6 +804,7 @@ the document, so removing a document pin alone does not restore the automatic va
 | `limits.maxResponseBytes: 12582912` | The old 12 MiB pin still refuses larger metadata after the upgrade | Remove the pin to adopt the shipped ingest ceiling, or retain it as an intentional policy |
 | A larger response pin used as a workaround | The declared ceiling still wins, including above the shipped default | Compare the effective ceiling and warning with your source sizes and process headroom |
 | An explicit `limits.maxVersionCount` pin | The pinned count still applies | Remove an old pin to adopt the larger default, or keep the intended restriction |
+| An explicit `limits.maxArtifactCount` pin | The key is removed, and a config that sets it refuses at load. Archive, compression, Marshal, YAML, multipart and mirror-state decoders use fixed internal ceilings | No key replaces it |
 | An explicit `runtime.serveMaxInFlight` pin | The declared positive concurrency still wins, and it also sizes the memory gate's waiting room | Review it against the pod's cores and concurrent workload |
 | No explicit response or CPU pin | The new automatic controls apply | Compare boot output with `check-config` under the deployment's actual resources |
 
