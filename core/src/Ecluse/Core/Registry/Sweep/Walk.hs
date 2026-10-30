@@ -44,21 +44,18 @@ bucketDepthLimit = 4
 walkBuckets :: NameAlphabet -> [NamePrefix]
 walkBuckets = toList . initialBuckets
 
-{- | The buckets still to cover, given the one last completed. A bucket the record falls inside is
-kept, because the walk stopped part way through that bucket's own split.
+{- | The buckets of a sibling sequence in walk order still to cover, given the one last completed:
+those after the bucket that is or holds the record, and one that holds it, which is part done.
 -}
 resumeAfter :: Maybe NamePrefix -> [NamePrefix] -> [NamePrefix]
-resumeAfter = maybe id (filter . stillToDo)
-
-{- A bucket is done when it sorts at or before the record without containing it. Containing it
-means the record is a narrower bucket inside this one, so this one is only part done. -}
-stillToDo :: NamePrefix -> NamePrefix -> Bool
-stillToDo done bucket = bucket > done || properlyCovers bucket done
-
-properlyCovers :: NamePrefix -> NamePrefix -> Bool
-properlyCovers bucket done = raw /= renderNamePrefix done && raw `T.isPrefixOf` renderNamePrefix done
+resumeAfter Nothing buckets = buckets
+resumeAfter (Just done) buckets = case break (`holds` done) buckets of
+    (_, bucket : rest) | bucket == done -> rest
+    (_, partDone@(_ : _)) -> partDone
+    -- The walk splits only a bucket after the record or holding it, so a sequence without one follows it.
+    (_, []) -> buckets
   where
-    raw = renderNamePrefix bucket
+    holds bucket record = renderNamePrefix bucket `T.isPrefixOf` renderNamePrefix record
 
 -- | What reading one bucket's listing produced.
 data BucketNames fault a
