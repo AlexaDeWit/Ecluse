@@ -33,15 +33,15 @@ import Ecluse.Core.Registry.RubyGems.Serving (serialiseRubyGemsDocument)
 import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), LimitError (BodyTooLarge), Limits (..))
 import Ecluse.Core.Security.Egress (registryUrlText)
 import Ecluse.Core.Server.Admission.Meter (ChargePart, MemoryTicket, awaitingFlight, charge, chargePart, newChargePart, newChargeRegion, servingPart, stepDown)
-import Ecluse.Core.Server.Admission.Types (FlightKey (FlightKey))
 import Ecluse.Core.Server.Cache (resolveDirectory)
+import Ecluse.Core.Server.Cache.Types (directoryKey)
 import Ecluse.Core.Server.Context
 import Ecluse.Core.Server.Metadata (recordedFetch)
 import Ecluse.Core.Server.Pipeline.Diagnostics (logDirectoryInvalidEntries)
 import Ecluse.Core.Server.Pipeline.Packument (PackumentReplies (..), answerDigestedMetadataBytes, mapPackumentReplies, withObservedAdmittedDocument)
-import Ecluse.Core.Server.Pipeline.Shared (forwardedCredential, withListingAdmission)
+import Ecluse.Core.Server.Pipeline.Origin (publicSource)
+import Ecluse.Core.Server.Pipeline.Shared (flightOf, forwardedCredential, withListingAdmission)
 import Ecluse.Core.Server.Response (mkRefusal)
-import Ecluse.Core.Telemetry.Metrics (CacheStore (FullStore))
 import Ecluse.Core.Telemetry.Metrics qualified as Metric
 import Ecluse.Core.Telemetry.Upstream (PublicReadKind (Listing))
 
@@ -104,13 +104,13 @@ readPublicDirectory ticket deps publicRead
         let source = DirectorySource (srPublicClient runtime) (Controlled (srPublicControl runtime) Listing) (pdPublicBase deps) Nothing
         withRunInIO $ \runInIO ->
             awaitingFlight ticket flight $
-                resolveDirectory (srMetadataCache runtime) key $
+                resolveDirectory (srMetrics runtime) (srMetadataCache runtime) key $
                     recordedFetch (srMetrics runtime) Metric.Public $
                         fetchDirectory runInIO (chargePart (servingPart flight publicRead)) limits source
   where
     limits = pdLimits deps
-    key = registryUrlText (pdPublicBaseUrl deps) <> "\0" <> show (maxMetadataBytes limits)
-    flight = FlightKey FullStore (toShort ("rubygems-directory:" <> encodeUtf8 key))
+    key = directoryKey (publicSource deps) (maxMetadataBytes limits)
+    flight = flightOf key
 
 -- A public directory past its byte bound or name ceiling refuses the request, as an exceeded npm input bound does.
 boundBreach :: MetadataError -> Bool

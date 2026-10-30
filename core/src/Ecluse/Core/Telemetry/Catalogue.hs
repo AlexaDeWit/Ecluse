@@ -77,7 +77,7 @@ data MetricName
       UpstreamFetchDuration
     | -- | @ecluse.upstream.fetch.errors@: upstream fetch errors (counter).
       UpstreamFetchErrors
-    | -- | @ecluse.metadata_cache.requests@: full-store hit\/miss\/collapsed (counter).
+    | -- | @ecluse.metadata_cache.requests@: full-store hit\/miss\/collapsed, and directory outcomes with @store=directory@ (counter).
       MetadataCacheRequests
     | -- | @ecluse.metadata_cache.version.requests@: selected-version request outcomes (counter).
       SingleVersionCacheRequests
@@ -87,7 +87,7 @@ data MetricName
       MetadataCacheRefused
     | -- | @ecluse.metadata_cache.entries@: metadata-cache occupancy (gauge).
       MetadataCacheEntries
-    | -- | @ecluse.metadata_cache.resident_bytes@: full-packument cache resident bytes (gauge).
+    | -- | @ecluse.metadata_cache.resident_bytes@: full-packument cache resident bytes, and the directory store's with @store=directory@ (gauge).
       MetadataCacheResidentBytes
     | -- | @ecluse.metadata_cache.version.resident_bytes@: single-version cache resident bytes (gauge).
       SingleVersionCacheResidentBytes

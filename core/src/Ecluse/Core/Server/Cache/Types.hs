@@ -16,6 +16,7 @@ module Ecluse.Core.Server.Cache.Types (
     fullKey,
     versionKey,
     assembledKey,
+    directoryKey,
     cacheKeyStore,
     cacheKeyIdentity,
 ) where
@@ -29,7 +30,7 @@ import Ecluse.Core.Registry.CachedDocument (CachedDoc)
 import Ecluse.Core.Registry.Metadata (ContentDigest)
 import Ecluse.Core.Server.Conditional (ETag, renderETag)
 import Ecluse.Core.Server.Framing (frameComponents)
-import Ecluse.Core.Telemetry.Metrics (CacheStore (AssembledStore, FullStore, VersionStore))
+import Ecluse.Core.Telemetry.Metrics (CacheStore (AssembledStore, DirectoryStore, FullStore, VersionStore))
 import Ecluse.Core.Version (Version, renderVersion)
 
 -- | Retention floors, used only to stop a store evicting its own live entries.
@@ -71,7 +72,7 @@ data CacheEntry = CacheEntry
     }
     deriving stock (Eq, Show)
 
-{- | One entry's address in one store, built only by 'fullKey', 'versionKey' and 'assembledKey'.
+{- | One entry's address in one store, built only by 'fullKey', 'versionKey', 'assembledKey' and 'directoryKey'.
 Two keys are equal when their stores and their identities are, so no two stores share a key.
 -}
 data CacheKey = CacheKey
@@ -105,6 +106,10 @@ the inputs of the request that built it, and it carries no credential and no cal
 -}
 assembledKey :: ETag -> CacheKey
 assembledKey etag = storeKey AssembledStore [Just (encodeUtf8 (renderETag etag))]
+
+-- | The key of one source's public directory under the metadata byte bound it was read with.
+directoryKey :: Source -> Int -> CacheKey
+directoryKey (Source source) bound = storeKey DirectoryStore [Just (encodeUtf8 source), Just (show bound)]
 
 -- The fields 'PackageName' equality reads, under the source: the scope is absent for an unscoped name.
 packageComponents :: Source -> PackageName -> [Maybe ByteString]

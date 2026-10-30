@@ -179,7 +179,7 @@ data CacheResult = Hit | Miss | Collapsed
 instance Universe CacheResult where universe = universeGeneric
 
 -- | The independently budgeted metadata stores. A cache key and a flight key carry this tag, so it decides which keys are equal.
-data CacheStore = FullStore | VersionStore | AssembledStore
+data CacheStore = FullStore | VersionStore | AssembledStore | DirectoryStore
     deriving stock (Eq, Generic, Ord, Show)
 
 instance Hashable CacheStore
@@ -408,6 +408,7 @@ labelValue = \case
         FullStore -> "full"
         VersionStore -> "version"
         AssembledStore -> "assembled"
+        DirectoryStore -> "directory"
     LMirrorResult m -> case m of
         Published -> "published"
         Failed -> "failed"
