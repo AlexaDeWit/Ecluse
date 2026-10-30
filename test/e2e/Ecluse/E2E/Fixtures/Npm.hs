@@ -13,6 +13,7 @@ module Ecluse.E2E.Fixtures.Npm (
     allowPkg,
     advisoryPkg,
     denyPkg,
+    externalDependencyPkg,
     mirrorPkg,
     mirrorAuthorFields,
     mirrorOmittedAuthorFields,
@@ -118,6 +119,10 @@ allowPkg = defaultPkgSpec "e2e-allow"
 -- | A package with an install script: denied at the public surface.
 denyPkg :: PkgSpec
 denyPkg = (defaultPkgSpec "e2e-deny"){psInstallScript = True}
+
+-- | A package whose dependency names a git source: denied at the public surface by the shipped npm default.
+externalDependencyPkg :: PkgSpec
+externalDependencyPkg = (defaultPkgSpec "e2e-external-dependency"){psVersionFields = ["dependencies" .= object [Key.fromText (psName allowPkg) .= ("github:example/" <> psName allowPkg)]]}
 
 -- | The mirror must retain supported author fields and omit registry-owned fields.
 mirrorPkg :: PkgSpec
@@ -299,6 +304,7 @@ fixturePackages =
     [ allowPkg
     , advisoryPkg
     , denyPkg
+    , externalDependencyPkg
     , mirrorPkg
     , deprecatedPkg
     , latestPkg

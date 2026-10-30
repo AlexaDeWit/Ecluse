@@ -422,8 +422,9 @@ spec = sequential $ do
             output <- checkConfigOutput (overrideEnv "ECLUSE_MOUNTS__NPM__RULES" (limitedInstallDeny "[\"admission\"]") runEnv)
             filter (T.isPrefixOf "rule ") (lines output)
                 `shouldBe` [ "rule boot order for mount npm:"
-                           , "rule 1: DenyInstallTimeExecution (precedence 300, applies at admission only)"
-                           , "rule 2: AllowIfOlderThan (precedence 100, applies at admission and revocation)"
+                           , "rule 1: DenyExternalDependencies (precedence 300, applies at admission only)"
+                           , "rule 2: DenyInstallTimeExecution (precedence 300, applies at admission only)"
+                           , "rule 3: AllowIfOlderThan (precedence 100, applies at admission and revocation)"
                            ]
 
         it "prints the EPSS feed every compile attempts once, and never fetches it" $
