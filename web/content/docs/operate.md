@@ -37,7 +37,7 @@ Advisory schema 5 uses ecosystem-specific keys such as `npm-osv-schema5.db`. Con
 
 Queue schema 2 removes source URLs from jobs. Deploy compatible workers first and stop old workers before new producers enqueue schema 2 jobs.
 
-A PyPI `publicationTarget` now names its registry root in `url` and its upload endpoint in `uploadUrl`, as a PyPI `mirrorTarget` already does. If your `url` names the upload endpoint, such as `https://first-party.internal/legacy/`, move that address to `uploadUrl` and set `url` to the registry root. On CodeArtifact, both can name `/pypi/{repository}/`. `ecluse proxy` refuses to boot until `uploadUrl` is set, and `check-config` names the refusal. The [endpoint checks](@/docs/configuration.md#endpoint-collisions) now compare that registry root, so `ecluse dredger` refuses a publication target that names the same registry as its mount's `privateUpstream`.
+A PyPI `publicationTarget` now reads from `url` and writes to `uploadUrl`. The [endpoint checks](@/docs/configuration.md#endpoint-collisions) now compare that `url`, so `ecluse dredger` refuses a publication target that names the same registry as its mount's `privateUpstream`.
 
 An npm or RubyGems `mirrorTarget` or `publicationTarget` that sets `uploadUrl` now refuses at load, because those protocols derive the upload address from `url`. Remove the key, and check that `url` names the registry you write to.
 

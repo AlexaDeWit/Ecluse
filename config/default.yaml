@@ -385,9 +385,9 @@ mounts:
   # Every url must be an https:// URL carrying a dialable host, and none may carry
   # userinfo, a query, or a fragment: a credential belongs in its own key.
   # On mirrorTarget and publicationTarget, url is where Écluse reads and uploadUrl is
-  # where it writes. pypi and cargo upload to a separate endpoint, so a role that writes
-  # through either target refuses to boot without its uploadUrl. npm and rubygems derive
-  # the write address from url, so the load refuses uploadUrl on them.
+  # where it writes. pypi and cargo upload to a separate endpoint, so the load requires
+  # uploadUrl on both targets there. npm and rubygems derive the write address from url,
+  # so the load refuses uploadUrl on them.
   npm:
     # DenyIfYanked: npm reports no yank flag. Removed releases disappear from its metadata.
     publicUpstream:

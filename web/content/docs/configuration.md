@@ -169,8 +169,8 @@ Whether a target takes `uploadUrl`, under any tag, depends on how the ecosystem'
 | --- | --- |
 | npm | Refused at load. Écluse publishes below `url`. |
 | RubyGems | Refused at load. Écluse posts to `api/v1/gems` below `url`. |
-| PyPI | Required before a role writes through the target. It names the native upload endpoint. |
-| Cargo | Required before a role writes through the target. It names the approved API base. |
+| PyPI | Required at load. It names the native upload endpoint. |
+| Cargo | Required at load. It names the approved API base. |
 
 See [Cargo protocol support](@/docs/protocol-support.md#cargo) and [Cargo mirror setup](@/docs/mirror-setup.md#cargo).
 
