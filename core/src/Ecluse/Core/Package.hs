@@ -206,9 +206,7 @@ data CodeExecSignal
       NoCodeOnInstall
     | -- | Determined: installation runs code. The text says how, for the audit trail.
       RunsCodeOnInstall Text
-    | {- | Not yet determined (e.g. nothing has fetched the RubyGems gemspec yet).
-      Pure rules abstain, and the effectful tier may resolve it.
-      -}
+    | -- | Not determined from registry metadata. Rules that read it abstain.
       CodeExecUnknown
     deriving stock (Eq, Show)
 
