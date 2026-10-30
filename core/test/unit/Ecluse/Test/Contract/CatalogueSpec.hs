@@ -23,7 +23,19 @@ spec = do
                 altered = catalogue{catalogueObligations = obligation : plans}
             validateCatalogue altered `shouldBe` Right altered
         it "rejects a concrete case for a planned operation" $
-            validateCatalogue catalogue{catalogueObligations = [obligation{obligationSupport = Planned "delivery-issue"}]} `shouldSatisfy` isLeft
+            for_ [Planned "delivery-issue", Unsupported "no protocol"] $ \support -> do
+                let deferred = obligation{obligationId = "read/deferred", obligationSupport = support, obligationCases = ["example/read/deferred"]}
+                    altered = withSecondObligation deferred (Case "example/read/deferred" ["read/deferred"])
+                validateCatalogue altered `shouldBe` Left ["case does not satisfy its declared obligation: example/read/deferred: read/deferred"]
+        it "rejects an empty required case list" $ do
+            let other = obligation{obligationId = "read/other"}
+                altered = catalogue{catalogueObligations = [obligation{obligationCases = []}, other], catalogueGroups = [scenarioGroup{groupCases = [item{caseRequirements = ["read/other"]}]}]}
+            validateCatalogue altered `shouldBe` Left ["required obligation has no cases: read/identity"]
+        it "rejects a removed requirement" $ do
+            let other = obligation{obligationId = "read/other", obligationCases = ["example/read/other"]}
+                altered = withSecondObligation other (Case "example/read/other" ["read/other"])
+            validateCatalogue altered `shouldBe` Right altered
+            validateCatalogue altered{catalogueObligations = [other]} `shouldBe` Left ["unknown case requirement: read/identity"]
     describe "case identity" $ do
         it "preserves the ID while human text changes" $
             labelCaseId (caseLabel "example/read" "A renamed explanation") `shouldBe` Just "example/read"
@@ -38,14 +50,19 @@ omissions =
     [ ("rejects a removed group", catalogue{catalogueGroups = []})
     , ("rejects a removed required profile", catalogue{catalogueProfiles = []})
     , ("rejects a removed capability", catalogue{catalogueProfiles = [profile{profileCapabilities = []}]})
-    , ("rejects an empty required case list", catalogue{catalogueObligations = [obligation{obligationCases = []}]})
     , ("rejects an omitted case", catalogue{catalogueGroups = [scenarioGroup{groupCases = []}]})
     , ("rejects a duplicate group", catalogue{catalogueGroups = [scenarioGroup, scenarioGroup]})
     , ("rejects a duplicate case", catalogue{catalogueGroups = [scenarioGroup{groupCases = [item, item]}]})
     , ("rejects a ghost case", catalogue{catalogueGroups = [scenarioGroup{groupCases = [item{caseId = "ghost"}]}]})
     , ("rejects an empty added profile", catalogue{catalogueProfiles = [profile, profile{profileId = "empty"}]})
     , ("rejects a group omitting required capabilities", catalogue{catalogueGroups = [scenarioGroup{groupCapabilities = []}]})
-    , ("rejects a removed requirement", catalogue{catalogueObligations = []})
     , ("rejects a required new production ecosystem without a profile", catalogue{catalogueProductionEcosystems = ["example", "new"]})
     , ("rejects a profile for an unregistered production ecosystem", catalogue{catalogueProductionEcosystems = []})
     ]
+
+{- | The fixture with a second supported or deferred obligation and its own case, so removing or
+changing one obligation leaves the profile's other checks satisfied.
+-}
+withSecondObligation :: Obligation -> Case -> Catalogue
+withSecondObligation extra extraCase =
+    catalogue{catalogueObligations = [obligation, extra], catalogueGroups = [scenarioGroup{groupCases = [item, extraCase]}]}
