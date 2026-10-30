@@ -10,9 +10,11 @@ module Ecluse.Core.Registry.Adapter (
 
     -- * Registration
     adapterFor,
+    uploadEndpointFor,
 ) where
 
 import Ecluse.Core.Ecosystem (Ecosystem (Cargo, Npm, PyPI, RubyGems))
+import Ecluse.Core.Registry.Adapter.Capability (AdapterPublish (publishUploadEndpoint), UploadEndpointRequirement)
 import Ecluse.Core.Registry.Adapter.Types (AdapterServe (..), RegistryAdapter (..))
 import Ecluse.Core.Registry.Cargo.Adapter (cargoAdapter)
 import Ecluse.Core.Registry.Cargo.Metadata (cargoChargeFactors)
@@ -28,3 +30,7 @@ adapterFor = \case
     PyPI -> Just pypiAdapter
     Cargo -> Just (cargoAdapter cargoChargeFactors)
     RubyGems -> Just (rubyGemsAdapter rubyGemsChargeFactors)
+
+-- | Whether an ecosystem uploads at its read root or at a separate endpoint. 'Nothing' without publish support.
+uploadEndpointFor :: Ecosystem -> Maybe UploadEndpointRequirement
+uploadEndpointFor eco = publishUploadEndpoint <$> (adapterPublish =<< adapterFor eco)

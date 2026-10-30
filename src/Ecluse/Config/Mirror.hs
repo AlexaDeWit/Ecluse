@@ -10,8 +10,8 @@ import Data.Map.Strict qualified as Map
 import Ecluse.Config.Target (resolveStoreBackend, resolveUploadBackend, vetPublicationRepository)
 import Ecluse.Config.Types
 import Ecluse.Core.Ecosystem (Ecosystem)
-import Ecluse.Core.Registry.Adapter (RegistryAdapter (adapterPublish), adapterFor)
-import Ecluse.Core.Registry.Adapter.Capability (AdapterPublish (publishUploadEndpoint), UploadEndpointRequirement (ReadRootUpload))
+import Ecluse.Core.Registry.Adapter (uploadEndpointFor)
+import Ecluse.Core.Registry.Adapter.Capability (UploadEndpointRequirement (ReadRootUpload))
 
 {- | Reject an @uploadUrl@ the protocol cannot use, then conflicting repository and credential
 declarations, before role-specific checks. "Ecluse.Composition.Endpoints" vets upload API hosts.
@@ -50,6 +50,6 @@ refusedUploadUrls (eco, mount) =
     , (key, target, Just _) <- mirrorTarget <> publicationTarget
     ]
   where
-    derivesUploadAddress = (publishUploadEndpoint <$> (adapterPublish =<< adapterFor eco)) == Just ReadRootUpload
+    derivesUploadAddress = uploadEndpointFor eco == Just ReadRootUpload
     mirrorTarget = [("mirrorTarget", meTarget endpoint, meUploadUrl endpoint) | endpoint <- maybeToList (mntMirrorTarget mount)]
     publicationTarget = [("publicationTarget", peTarget endpoint, peUploadUrl endpoint) | endpoint <- maybeToList (mntPublicationTarget mount)]
