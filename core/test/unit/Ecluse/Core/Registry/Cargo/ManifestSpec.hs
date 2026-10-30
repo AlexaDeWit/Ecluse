@@ -67,36 +67,6 @@ spec = do
             annotated <- expectRight (parse (basic <> "[[package.metadata.notes]]\ntext='retained only in the manifest'\n"))
             expected <- expectRight (publicationMetadata manifest Map.empty)
             publicationMetadata annotated Map.empty `shouldBe` Right expected
-    describe "manifestExecution" $ do
-        it "uses the complete inventory for default build.rs detection" $ do
-            manifest <- expectRight (parse basic)
-            manifestExecution manifest Set.empty `shouldBe` Right False
-            manifestExecution manifest (Set.singleton "build.rs") `shouldBe` Right True
-        it "honours explicit disabling even with a root build script" $ do
-            manifest <- expectRight (parse (basic <> "build=false\n"))
-            manifestExecution manifest (Set.singleton "build.rs") `shouldBe` Right False
-        it "requires every declared build script to name a regular archive member" $ do
-            manifest <- expectRight (parse (basic <> "build='scripts/custom.rs'\n"))
-            manifestExecution manifest Set.empty `shouldBe` Left (ParseError "Cargo build declaration names an absent regular file")
-            manifestExecution manifest (Set.singleton "scripts/custom.rs") `shouldBe` Right True
-            auto <- expectRight (parse (basic <> "build=true\n"))
-            manifestExecution auto Set.empty `shouldBe` Left (ParseError "Cargo build declaration names an absent regular file")
-            manifestExecution auto (Set.singleton "build.rs") `shouldBe` Right True
-        it "normalises local script references without allowing an archive escape" $ do
-            manifest <- expectRight (parse (basic <> "build='./scripts/../build.rs'\n"))
-            manifestExecution manifest (Set.singleton "build.rs") `shouldBe` Right True
-        it "keeps unsupported build lists and escaping paths unknown" $
-            for_ [("build=['a.rs','b.rs']\n", "unsupported Cargo build declaration"), ("build='../build.rs'\n", "tar link escapes its archive")] $ \(declaration, reason) -> do
-                manifest <- expectRight (parse (basic <> declaration))
-                manifestExecution manifest Set.empty `shouldBe` Left (ParseError reason)
-        it "recognises each native procedural macro spelling and crate type form" $
-            for_ ["proc-macro=true", "proc_macro=true", "crate-type=['proc-macro']", "crate_type=['proc-macro']"] $ \declaration -> do
-                manifest <- expectRight (parse (basic <> "[lib]\n" <> declaration <> "\n"))
-                manifestExecution manifest Set.empty `shouldBe` Right True
-        it "rejects ambiguous or unsupported native library declarations" $
-            for_ [("proc-macro=true\nproc_macro=false", "ambiguous Cargo manifest spelling aliases"), ("proc-macro='false'", "Cargo manifest field is not a boolean"), ("crate-type=['unknown']", "unsupported Cargo library crate type")] $ \(declaration, reason) -> do
-                manifest <- expectRight (parse (basic <> "[lib]\n" <> declaration <> "\n"))
-                manifestExecution manifest Set.empty `shouldBe` Left (ParseError reason)
     describe "publicationMetadata" $ do
         it "uses Cargo README defaults and preserves publication-only data" $ do
             manifest <- expectRight (parse (basic <> "authors=['Alice']\nlicense='MIT'\nrust-version='1.74'\n"))

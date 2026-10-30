@@ -23,11 +23,10 @@ import Ecluse.Core.Osv.Types (UpperBound (LastAffected))
 import Ecluse.Core.Package (
     Artifact (artCoreMetadata, artFilename, artHashes),
     Availability (Deprecated, Yanked),
-    CodeExecSignal (CodeExecUnknown),
     CoreMetadata (MetadataDigests),
     Hash,
     HashAlg (Blake2b, SHA1, SHA256, SHA512, SRI),
-    PackageDetails (pkgArtifacts, pkgAvailability, pkgInstallCode, pkgPublishedAt),
+    PackageDetails (pkgArtifacts, pkgAvailability, pkgPublishedAt),
     PackageInfo (..),
     PackageName,
  )
@@ -54,9 +53,7 @@ import Ecluse.Core.Registry.Publish (
     PublishPlan (ppLatest),
  )
 import Ecluse.Core.Rules (prepare)
-import Ecluse.Core.Rules.Effectful (ReadFault (ReadFault))
-import Ecluse.Core.Rules.Install
-import Ecluse.Core.Rules.Types (Decision (Undecidable), DenyIfCveParams (DenyIfCveParams), FailureAlignment (FailDeny, FailNoDecision), Inability (EvaluationFailed, InstallSignalUnread, NoDatabaseLoaded, RuleThrew), Reason (RuleUnable), Rule (AllowIfOlderThan, DenyIfCve, DenyIfDeprecated, DenyIfKnownMalicious, DenyIfYanked, DenyInstallTimeExecution), Transience (WillResolve, WontResolve), ruleName)
+import Ecluse.Core.Rules.Types (Decision (Undecidable), DenyIfCveParams (DenyIfCveParams), FailureAlignment (FailDeny, FailNoDecision), Inability (NoDatabaseLoaded, RuleThrew), Reason (RuleUnable), Rule (AllowIfOlderThan, DenyIfCve, DenyIfDeprecated, DenyIfKnownMalicious, DenyIfYanked), Transience (WillResolve, WontResolve), ruleName)
 import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit, MirrorArtifactBodyLimit), LimitError (BodyTooLarge), defaultLimits, hostPortAddress)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Core.Version (Version, renderVersion)
@@ -64,7 +61,7 @@ import Ecluse.Core.Worker (
     JobOutcome (DeadLettered, Dropped, Retried, Succeeded),
     RetryLeg (AfterPublish, BeforePublish),
     WorkerPolicies,
-    WorkerPolicy (wpArtifact, wpArtifactHostHonoured, wpFirstParty, wpInstallEvidence, wpMirrorState, wpNow, wpPublish, wpRules),
+    WorkerPolicy (wpArtifact, wpArtifactHostHonoured, wpFirstParty, wpMirrorState, wpNow, wpPublish, wpRules),
     processJob,
  )
 import Ecluse.Core.Worker.Job (mirrorLatest, outcomeOfAdmission, outcomeOfFetchFault)
@@ -81,7 +78,7 @@ import Ecluse.Test.Registry.Npm (sourceVersionDoc)
 import Ecluse.Test.Registry.Publish (anonymousPublishAt)
 import Ecluse.Test.Rules (admissionOnly, admitRule, atDefaultPrecedence, cannotVetRule, constRule, denyRule, inertRuleDeps, servingRuleDeps)
 import Ecluse.Test.Snapshot (versionDocOf)
-import Ecluse.Test.Stub (allCaptured, capMethod, capPath, stubBaseUrl, stubLocalhostUrl, withRoutedStub, withStub)
+import Ecluse.Test.Stub (allCaptured, capMethod, capPath, stubBaseUrl, withRoutedStub, withStub)
 import Ecluse.Test.Support (TestContractEscape (TestContractEscape), decodeJsonOrFail, expectRight)
 import Ecluse.Worker.Support
 import Ecluse.Worker.Support.Managed
@@ -636,37 +633,6 @@ spec = do
                     outcome <- runWM (sourceAt url runtime) (processJob job)
                     outcome `shouldSatisfy` isDropped
     describe "processJob: ingest-time policy re-evaluation" $ do
-        for_ [(WillResolve Nothing, isRetried), (WontResolve, isDropped)] $ \(transience, expected) ->
-            it ("preserves execution-evidence refusal at worker re-admission: " <> show transience) $
-                withStub status200 (toLazy tarballBytes) $ \upstream -> do
-                    calls <- newIORef (0 :: Int)
-                    rules <- prepare inertRuleDeps [atDefaultPrecedence DenyInstallTimeExecution, atDefaultPrecedence (AllowIfOlderThan 0)]
-                    let resolver name version =
-                            presentResolver name version <&> \case
-                                VersionPresent doc latest -> VersionPresent doc{vdDetails = (vdDetails doc){pkgInstallCode = CodeExecUnknown}} latest
-                                other -> other
-                        provider = InstallEvidenceProvider $ \evidenceContext -> do
-                            ieRole evidenceContext `shouldBe` InstallWorkerReadmission
-                            pure (\_ -> pure (Just (InstallEvidenceRead (modifyIORef' calls (+ 1) $> InstallReadFailed (ReadFault transience EvaluationFailed InstallSignalUnread)))))
-                        policies = Map.map (\policy -> policy{wpInstallEvidence = Just provider}) (npmPolicies resolver rules)
-                    withRuntimePolicies policies noopWorkerMetricsPort (Right ()) $ \runtime queue logRef -> do
-                        job <- enqueueAndReceive queue sampleMirrorJob
-                        runWM (sourceAt (stubLocalhostUrl upstream) runtime) (processJob job) >>= (`shouldSatisfy` expected)
-                        readIORef calls `shouldReturn` 1
-                        plDocuments <$> readIORef logRef `shouldReturn` []
-                        allCaptured upstream `shouldReturn` []
-
-        it "does not construct public execution evidence for a first-party worker job" $ do
-            built <- newIORef (0 :: Int)
-            rules <- prepare inertRuleDeps [atDefaultPrecedence DenyInstallTimeExecution]
-            let provider = InstallEvidenceProvider (\_ -> modifyIORef' built (+ 1) $> const (pure Nothing))
-                policies = Map.map (\policy -> policy{wpInstallEvidence = Just provider, wpFirstParty = const True}) (npmPolicies presentResolver rules)
-            withRuntimePolicies policies noopWorkerMetricsPort (Right ()) $ \runtime queue logRef -> do
-                job <- enqueueAndReceive queue sampleMirrorJob
-                runWM runtime (processJob job) >>= (`shouldSatisfy` isDropped)
-                readIORef built `shouldReturn` 0
-                plDocuments <$> readIORef logRef `shouldReturn` []
-
         for_ [("an npm", Npm, sampleMirrorJob), ("a PyPI", PyPI, pypiMirrorJob)] $ \(label, eco, jobAt) ->
             it ("drops " <> label <> " job newly MAL-denied before fetching or publishing") $ do
                 let deps = servingRuleDeps (DbEtag "mal-generation") (fakeCveLookup [("thing", AdvisoryRange "MAL-worker" Nothing (Just "1.0.0") (LastAffected "1.0.0") Nothing)])

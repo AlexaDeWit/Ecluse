@@ -1283,7 +1283,6 @@ test-suite ecluse-core-unit
     Ecluse.Core.Registry.BackoffSpec
     Ecluse.Core.Registry.Exchange.ObserveSpec
     Ecluse.Core.Registry.ExchangeSpec
-    Ecluse.Core.Registry.InstallEvidenceSpec
     Ecluse.Core.Registry.Json.InternSpec
     Ecluse.Core.Registry.Json.PackedSpec
     Ecluse.Core.Registry.Json.ScratchSpec
@@ -1384,7 +1383,6 @@ test-suite ecluse-core-unit
     Ecluse.Core.Registry.Cargo.MetadataSpec
     Ecluse.Core.Registry.Cargo.StreamingSpec
     Ecluse.Core.Registry.Cargo.ServingSpec
-    Ecluse.Core.Registry.Cargo.ExecutionSpec
     Ecluse.Core.Registry.Cargo.ArchiveSpec
     Ecluse.Core.Registry.Cargo.ManifestSpec
     Ecluse.Core.Registry.Cargo.SourceSpec
@@ -1410,7 +1408,6 @@ test-suite ecluse-core-unit
     Ecluse.Core.Rules.RenderSpec
     Ecluse.Core.Rules.TypesSpec
     Ecluse.Core.RulesSpec
-    Ecluse.Core.Rules.InstallSpec
     Ecluse.Core.Security.AuthoritySpec
     Ecluse.Core.Security.EgressSpec
     Ecluse.Core.Security.HostSpec
@@ -1440,7 +1437,6 @@ test-suite ecluse-core-unit
     Ecluse.Core.Server.MemoryModelSpec
     Ecluse.Core.Server.MetadataGzipSpec
     Ecluse.Core.Server.MetadataSpec
-    Ecluse.Core.Server.InstallEvidenceSpec
     Ecluse.Core.Server.MirrorViewSpec
     Ecluse.Core.Server.PathSpec
     Ecluse.Core.Server.Pipeline.DiagnosticsSpec
@@ -2144,7 +2140,6 @@ library ecluse-e2e-test-support
     Ecluse.E2E.Cargo.DredgerE2ESpec
     Ecluse.E2E.Cargo.TelemetryE2ESpec
     Ecluse.E2E.Cargo.NativeE2ESpec
-    Ecluse.E2E.Cargo.ExecutionE2ESpec
     Ecluse.E2E.Drivers.Cargo
     Ecluse.E2E.Suites.Cargo
     Ecluse.E2E.Fixtures.PyPI.Dredger

@@ -28,20 +28,15 @@ import Ecluse.Test.Support (expectRight)
 spec :: Spec
 spec = do
     describe "inspectCargoArchive" $ do
-        it "counts complete inflated bytes across headers, payloads and the trailer" $ do
-            tar <- tarBytes [("example-1.2.3/Cargo.toml", manifest), ("example-1.2.3/src/lib.rs", "pub fn value() {}")]
-            metadata <- inspect defaultLimits (compress tar) >>= expectRight
-            cargoArchiveInflatedBytes metadata `shouldBe` fromIntegral (BSL.length tar)
         it "checks compressed SHA-256 before allocating decoder workspace" $ do
             bytes <- fixture [("Cargo.toml", manifest)]
             requests <- newIORef ([] :: [Int])
             result <- inspectCargoArchive defaultLimits (\wanted -> modifyIORef' requests (wanted :)) "example" "1.2.3" (Just (BS.replicate 64 48 & decodeUtf8)) bytes
             void result `shouldBe` Left (ParseError "Cargo compressed archive disagrees with its admitted SHA-256")
             readIORef requests `shouldReturn` []
-        it "uses only the effective manifest and enumerates later build scripts" $ do
+        it "uses only the effective manifest and enumerates every regular file" $ do
             bytes <- fixture [("Cargo.toml", manifest), ("Cargo.toml.orig", "unparsed original"), ("build.rs", "never execute")]
             metadata <- inspect defaultLimits bytes >>= expectRight
-            cargoArchiveExecution metadata `shouldBe` Right True
             cargoArchiveInventory metadata `shouldBe` Set.fromList ["Cargo.toml", "Cargo.toml.orig", "build.rs"]
         it "requires exact manifest identity and the one admitted archive root" $ do
             for_ ["[package]\nname='Example'\nversion='1.2.3'", "[package]\nname='example'\nversion='1.2.3+other'"] $ \other -> do
@@ -148,10 +143,9 @@ spec = do
                 case publishMetadataValue upload of
                     Object fields -> KeyMap.lookup "readme" fields `shouldBe` Just (String "readme first")
                     _ -> expectationFailure "Cargo publication is not an object"
-        it "keeps invalid README text irrelevant to execution but refuses publication" $ do
+        it "accepts invalid README text at inspection but refuses publication" $ do
             bytes <- fixture [("Cargo.toml", manifest), ("README.md", BS.singleton 255)]
             metadata <- inspect defaultLimits bytes >>= expectRight
-            cargoArchiveExecution metadata `shouldBe` Right False
             cargoPublicationMetadata defaultLimits (const (pure ())) metadata `shouldReturn` Left (ParseError "Cargo publication text is not UTF-8")
         it "does not substitute empty text for an absent explicitly declared file" $ do
             bytes <- fixture [("Cargo.toml", manifest <> "readme='missing.md'\n")]

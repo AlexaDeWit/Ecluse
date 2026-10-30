@@ -15,7 +15,6 @@ module Ecluse.Test.Registry.Cargo.Fixtures (
     cargoExpectedOutput,
     loadCargoGraph,
     cargoLeafRelease,
-    cargoLeafReleaseWithManifest,
 
     -- * Registry and publication bytes
     cargoCrateArchive,
@@ -168,17 +167,13 @@ loadCargoGraph fixtureRoot = do
 
 -- | Retain the owned leaf source while varying the native name and version for isolated policy cases.
 cargoLeafRelease :: Text -> Text -> IO CargoRelease
-cargoLeafRelease name version = cargoLeafReleaseWithManifest name version id
-
--- | Package owned leaf sources with a declared manifest mutation and a matching archive checksum.
-cargoLeafReleaseWithManifest :: Text -> Text -> (Text -> Text) -> IO CargoRelease
-cargoLeafReleaseWithManifest name version changeManifest = do
+cargoLeafRelease name version = do
     let features = object ["default" .= ["base" :: Text], "base" .= ([] :: [Text]), "extra" .= ([] :: [Text])]
         spec = CargoCrate name version "leaf-v1" [] features emptyFeatures commonFiles
         source = "test/fixtures/cargo/graph/leaf-v1"
     files <- forM commonFiles $ \path -> do
         bytes <- readFileBS (source </> path)
-        pure (path, if path == "Cargo.toml" then encodeUtf8 (changeManifest (T.replace "ecluse-e2e-leaf" name (T.replace "1.0.0" version (decodeUtf8 bytes)))) else bytes)
+        pure (path, if path == "Cargo.toml" then encodeUtf8 (T.replace "ecluse-e2e-leaf" name (T.replace "1.0.0" version (decodeUtf8 bytes))) else bytes)
     readme <- decodeUtf8 <$> readFileBS (source </> "README.md")
     packageCargoRelease spec files readme
 
