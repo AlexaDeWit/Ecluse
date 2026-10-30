@@ -1959,7 +1959,7 @@ mitigations:
       - 0ec10e5e-0000-4000-8000-00000000010b
   - id: mit-private-refusal-stops-read
     title: Private refusal stops the read
-    prose: "Private authentication or authorisation refusal never permits public substitution. npm and PyPI map private 401 or 403 to local 403 before parsing the error body. Cargo preserves native 401 with a Cargo challenge for credential-provider retry. A true 403 remains refusal. RubyGems preserves the private 401 or 403 status on metadata and archive reads. A private 404 permits public fallback only where source selection supports it and only for non-first-party packages. Cargo's private alternate never falls back. Discovery inability stays explicit and can prevent new-client bootstrap during a trusted-registry outage."
+    prose: "Private authentication or authorisation refusal never permits public substitution. npm, PyPI and RubyGems map private 401 or 403 to local 403 before parsing the error body. Cargo preserves native 401 with a Cargo challenge for credential-provider retry. A true 403 remains refusal. A private 404 permits public fallback only where source selection supports it and only for non-first-party packages. Cargo's private alternate never falls back. Discovery inability stays explicit and can prevent new-client bootstrap during a trusted-registry outage."
     status: implemented
     threats:
       - 0ec10e5e-0000-4000-8000-00000000010b
