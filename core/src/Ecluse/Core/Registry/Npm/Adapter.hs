@@ -79,6 +79,7 @@ npmPublish =
         , publishRelay = \origin name -> relayPublishDocument origin name . publishBodyBytes
         , publishUploadClaims = \_ _ _ -> pure . uploadClaims . publishBodyBytes
         , publishCodec = npmPublishCodec
-        , publishMirrorRequirements = MirrorRequirements CachedWorkerRead NativeVersionState ReadRootUpload
+        , publishMirrorRequirements = MirrorRequirements CachedWorkerRead NativeVersionState
+        , publishUploadEndpoint = ReadRootUpload
         , publishIdentity = TokenIdentity
         }

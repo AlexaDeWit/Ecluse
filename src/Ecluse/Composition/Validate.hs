@@ -76,8 +76,8 @@ import Ecluse.Core.Credential (ClientCredential (ClientCredential), Secret)
 import Ecluse.Core.Ecosystem (Ecosystem (Cargo))
 import Ecluse.Core.Registry.Adapter (RegistryAdapter, adapterFor, adapterPublish, adapterRuleBlocks)
 import Ecluse.Core.Registry.Adapter.Capability (
-    AdapterPublish (publishIdentity, publishMirrorRequirements),
-    MirrorRequirements (mirrorStateRequirement, mirrorUploadEndpoint),
+    AdapterPublish (publishIdentity, publishMirrorRequirements, publishUploadEndpoint),
+    MirrorRequirements (mirrorStateRequirement),
     MirrorStateRequirement (DurableVersionState),
     UploadEndpointRequirement (ExplicitUploadEndpoint),
     UploadIdentityRequirement (NamedIdentity),
@@ -146,11 +146,9 @@ vetMirrorCapabilities role app = decided $ case missing of
             maybe [] (mirrorNeeds eco publish) (mntMirrorTarget mount)
                 <> maybe [] (publicationNeeds eco publish) (mntPublicationTarget mount)
     mirrorNeeds eco publish endpoint =
-        [MirrorStateRequired eco | mirrorStateRequirement requirements == DurableVersionState, isJust pipeline, isNothing (cfgMirrorState app)]
-            <> [required eco "mirrorTarget" (meTarget endpoint) "uploadUrl" | mirrorUploadEndpoint requirements == ExplicitUploadEndpoint, mirrorWrites, isNothing (meUploadUrl endpoint)]
+        [MirrorStateRequired eco | mirrorStateRequirement (publishMirrorRequirements publish) == DurableVersionState, isJust pipeline, isNothing (cfgMirrorState app)]
+            <> [required eco "mirrorTarget" (meTarget endpoint) "uploadUrl" | publishUploadEndpoint publish == ExplicitUploadEndpoint, mirrorWrites, isNothing (meUploadUrl endpoint)]
             <> [required eco "mirrorTarget" (meTarget endpoint) "username" | publishIdentity publish == NamedIdentity, mirrorWrites, tgtTag (meTarget endpoint) /= TagCodeArtifact, isNothing (meUsername endpoint)]
-      where
-        requirements = publishMirrorRequirements publish
     publicationNeeds eco publish endpoint =
         [required eco "publicationTarget" (peTarget endpoint) "uploadUrl" | eco == Cargo, clientWrites, isNothing (peUploadUrl endpoint)]
             <> [required eco "publicationTarget" (peTarget endpoint) "username" | publishIdentity publish == NamedIdentity, clientWrites, isJust (peToken endpoint), tgtTag (peTarget endpoint) /= TagCodeArtifact, isNothing (peUsername endpoint)]

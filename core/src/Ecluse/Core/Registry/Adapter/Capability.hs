@@ -121,7 +121,7 @@ data MirrorStateRequirement
     | DurableVersionState
     deriving stock (Eq, Show)
 
--- | Mirror uploads use the read root or require a separate endpoint.
+-- | Whether the protocol writes at its read root or at a separate endpoint.
 data UploadEndpointRequirement
     = ReadRootUpload
     | ExplicitUploadEndpoint
@@ -139,8 +139,6 @@ data MirrorRequirements = MirrorRequirements
     -- ^ Cache and charging policy for worker metadata.
     , mirrorStateRequirement :: MirrorStateRequirement
     -- ^ State the configured mirror requires at boot.
-    , mirrorUploadEndpoint :: UploadEndpointRequirement
-    -- ^ Whether the writer requires a separate endpoint.
     }
 
 -- | Native relay, identity validation, and mirror publication for one ecosystem.
@@ -157,6 +155,8 @@ data AdapterPublish = AdapterPublish
     -- ^ The mirror write's document, requests, probe, and status semantics. The transport owns the manager, mint, and fault classification.
     , publishMirrorRequirements :: MirrorRequirements
     -- ^ The worker read and boot obligations for configured mirrors.
+    , publishUploadEndpoint :: UploadEndpointRequirement
+    -- ^ Where mirror and client uploads go: derived from the read root, or a separate endpoint.
     , publishIdentity :: UploadIdentityRequirement
     -- ^ Static credential requirements for mirror and client uploads.
     }

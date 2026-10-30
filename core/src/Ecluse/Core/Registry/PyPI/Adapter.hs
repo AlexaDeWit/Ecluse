@@ -110,6 +110,7 @@ pypiPublish =
                 )
         , publishUploadClaims = \limits _ _ body -> Multipart.uploadClaims limits (publishBodyContentType body) (publishBodyBytes body)
         , publishCodec = pypiPublishCodec
-        , publishMirrorRequirements = MirrorRequirements (ChargedWorkerRead (staticRead pypiMirrorRead)) DurableVersionState ExplicitUploadEndpoint
+        , publishMirrorRequirements = MirrorRequirements (ChargedWorkerRead (staticRead pypiMirrorRead)) DurableVersionState
+        , publishUploadEndpoint = ExplicitUploadEndpoint
         , publishIdentity = NamedIdentity
         }
