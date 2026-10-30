@@ -113,6 +113,7 @@ rubyGemsPrivateCopy =
         , pcUrl = listingUrl
         , pcPreflight = preflightListings
         , pcHerdPackage = "rails"
+        , pcManagedState = Nothing
         }
 
 -- | Relay bodies replace only checksum fields. Native worker archives remain independent genuine packages.

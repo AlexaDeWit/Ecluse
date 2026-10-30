@@ -7,6 +7,7 @@ module Ecluse.BenchLoad.Fixture (
     withProxyOverStubs,
     withProxyConfigured,
     withProxyPortsConfigured,
+    ProxyConfigure,
     httpTarget,
     longCacheTtl,
     artifactBytes,
@@ -44,12 +45,11 @@ import Network.Wai.Handler.Warp (testWithApplication)
 import UnliftIO (evaluate)
 
 import Ecluse.BenchLoad.CapturedArtifact (SelectedArtifact)
-import Ecluse.BenchLoad.Cargo.CopyState (withCopyState)
 import Ecluse.BenchLoad.Error (benchFail)
 import Ecluse.BenchLoad.Harness (Driver (DriveHttp), LoadKnobs (..), Target, proxied, urlLoad)
 import Ecluse.BenchLoad.Normalise (BaselineSource (InjectedFallback, MeasuredRtt))
-import Ecluse.BenchLoad.ProxyProcess (AdvisoryFeed (afObject), ProxyProcess, ProxySettings (..), mirrorStateBucket, proxyPort, proxySettings, withProxyProcess)
-import Ecluse.Core.Ecosystem (Ecosystem (Cargo, Npm, PyPI, RubyGems), ecosystemName)
+import Ecluse.BenchLoad.ProxyProcess (ProxyProcess, ProxySettings (..), proxyPort, proxySettings, withProxyProcess)
+import Ecluse.Core.Ecosystem (Ecosystem, ecosystemName)
 import Ecluse.Core.Package (PackageName, pkgEcosystem)
 import Ecluse.Test.Corpus (CorpusPackage (cpPackage, cpPath), cpName)
 import Ecluse.Test.Corpus qualified as Corpus
@@ -65,22 +65,18 @@ withProxyOverStubs ecosystem knobs ttl entries =
 withProxyConfigured :: Ecosystem -> LoadKnobs -> (Int -> IO (ProxySettings -> ProxySettings)) -> Application -> Application -> (Int -> [Text]) -> (ProxyProcess -> [Text] -> IO a) -> IO a
 withProxyConfigured ecosystem knobs configure = withProxyPortsConfigured ecosystem knobs (const configure)
 
+-- | Settings derived from the private and the public registry port, in that order, before the proxy boots.
+type ProxyConfigure = Int -> Int -> IO (ProxySettings -> ProxySettings)
+
 -- | Configure a measured proxy after both registry ports are available.
-withProxyPortsConfigured :: Ecosystem -> LoadKnobs -> (Int -> Int -> IO (ProxySettings -> ProxySettings)) -> Application -> Application -> (Int -> [Text]) -> (ProxyProcess -> [Text] -> IO a) -> IO a
+withProxyPortsConfigured :: Ecosystem -> LoadKnobs -> ProxyConfigure -> Application -> Application -> (Int -> [Text]) -> (ProxyProcess -> [Text] -> IO a) -> IO a
 withProxyPortsConfigured ecosystem knobs configure privateApp publicApp mkMix body =
     testWithApplication (pure privateApp) $ \privatePort ->
         testWithApplication (pure publicApp) $ \publicPort -> do
             adjust <- configure privatePort publicPort
-            let settings = adjust knobSettings
-            withNativeState (afObject <$> psAdvisories settings) privatePort publicPort $ \nativeState ->
-                withProxyProcess settings{psMirrorStatePort = psMirrorStatePort settings <|> nativeState} publicPort (Just privatePort) $ \proxy ->
-                    body proxy (mkMix (proxyPort proxy))
+            withProxyProcess (adjust knobSettings) publicPort (Just privatePort) $ \proxy ->
+                body proxy (mkMix (proxyPort proxy))
   where
-    withNativeState advisory privatePort publicPort use = case ecosystem of
-        Npm -> use Nothing
-        PyPI -> use Nothing
-        Cargo -> withCopyState (lkUpstreamLatencyMicros knobs) privatePort publicPort mirrorStateBucket advisory (use . Just)
-        RubyGems -> use Nothing
     knobSettings =
         (proxySettings ecosystem 60)
             { psServeMaxInFlight = lkServeMaxInFlight knobs

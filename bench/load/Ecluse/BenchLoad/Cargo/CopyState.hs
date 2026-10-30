@@ -2,8 +2,8 @@
 --
 -- SPDX-License-Identifier: MIT
 
--- | Native private-copy fixtures retain only checked source rows present in the actual target index.
-module Ecluse.BenchLoad.Cargo.CopyState (withCopyState, copyStateApplication) where
+-- | Durable state for Cargo's private-copy rows, retaining only checked source rows present in the actual target index.
+module Ecluse.BenchLoad.Cargo.CopyState (withCopyState, copyStateSettings, copyStateApplication) where
 
 import Control.Concurrent (threadDelay)
 import Control.Monad (foldM)
@@ -15,10 +15,12 @@ import Network.HTTP.Client (defaultManagerSettings, newManager, parseRequest)
 import Network.Wai (Application, rawPathInfo)
 import Network.Wai.Handler.Warp (testWithApplication)
 
-import Ecluse.BenchLoad.AdvisoryStore (AdvisoryObject, advisoryStoreApplication)
+import Ecluse.BenchLoad.AdvisoryStore (advisoryStoreApplication)
 import Ecluse.BenchLoad.Error (benchFail)
+import Ecluse.BenchLoad.Fixture (ProxyConfigure)
+import Ecluse.BenchLoad.Harness (LoadKnobs (lkAdvisories, lkUpstreamLatencyMicros))
 import Ecluse.BenchLoad.ObjectStore (conditionalObjectRead, objectRevision)
-import Ecluse.BenchLoad.ProxyProcess (copyStatePrivateHost, copyStatePublicHost)
+import Ecluse.BenchLoad.ProxyProcess (AdvisoryFeed (afObject), ProxySettings (..), mirrorStateBucket)
 import Ecluse.Core.Ecosystem (Ecosystem (Cargo))
 import Ecluse.Core.Mirror.State (encodeProjectRecord, extendProjectRecord, stateTarget)
 import Ecluse.Core.Mirror.State.Internal (projectKey, retainVerifiedIdentity)
@@ -39,10 +41,33 @@ import Ecluse.Test.Registry.Cargo.Metadata (cargoRead, parseCargoDiscovery)
 import Ecluse.Test.Registry.Cargo.Reference (IndexLine (indexValue), referenceIndex)
 import Ecluse.Test.Registry.Metadata.Fetch (captureManifest, fetchTestBody)
 
--- | Prepare records before proxy boot. Unmatched private records never acquire managed status.
-withCopyState :: Int -> Int -> Int -> Text -> Maybe AdvisoryObject -> (Int -> IO a) -> IO a
-withCopyState latency privatePort publicPort bucket advisory use = do
-    records <- withExchangeClient (newManager defaultManagerSettings) $ \client -> do
+-- | Serve state that the configure callback fills from both stubs before boot. Unmatched private rows never acquire managed status.
+withCopyState :: LoadKnobs -> (ProxyConfigure -> IO a) -> IO a
+withCopyState knobs use = do
+    records <- newIORef Map.empty
+    let native request respond = readIORef records >>= \current -> copyStateApplication (lkUpstreamLatencyMicros knobs) current request respond
+        application = maybe native ((`advisoryStoreApplication` native) . afObject) (lkAdvisories knobs)
+    testWithApplication (pure application) $ \statePort ->
+        use $ \privatePort publicPort -> do
+            writeIORef records =<< prepareRecords privatePort publicPort
+            pure (copyStateSettings statePort)
+
+-- | Bind the proxy to a state endpoint on this port, under the hosts its prepared records name.
+copyStateSettings :: Int -> ProxySettings -> ProxySettings
+copyStateSettings statePort settings =
+    settings{psMirrorStatePort = Just statePort, psPublicHost = Just copyStatePublicHost, psPrivateHost = Just copyStatePrivateHost}
+
+-- | The public upstream host a native private-copy state fixture reads its sources from.
+copyStatePublicHost :: Text
+copyStatePublicHost = "localhost"
+
+-- | The private upstream host a native private-copy state fixture keys its records by.
+copyStatePrivateHost :: Text
+copyStatePrivateHost = "127.0.0.1"
+
+prepareRecords :: Int -> Int -> IO (Map ByteString ByteString)
+prepareRecords privatePort publicPort =
+    withExchangeClient (newManager defaultManagerSettings) $ \client -> do
         config <- fetch client (MetadataBodyLimit 65536) (publicBase <> "/config.json")
         discovery <- either (benchFail . show) pure (parseCargoDiscovery (ecosystemArtifactAuthorities cargoArtifactHosts) publicBase (responseBody config))
         fmap (Map.fromList . catMaybes) $ forM cargoCorpusPackages $ \package -> do
@@ -60,14 +85,11 @@ withCopyState latency privatePort publicPort bucket advisory use = do
                     traverse
                         ( \value -> do
                             body <- either (benchFail . show) pure (encodeProjectRecord defaultLimits value)
-                            let key = encodeUtf8 ("/" <> bucket <> "/" <> projectKey target name <> "/project.json")
+                            let key = encodeUtf8 ("/" <> mirrorStateBucket <> "/" <> projectKey target name <> "/project.json")
                             pure (key, body)
                         )
                         record
                 statuses -> benchFail ("Cargo copy-state preparation received HTTP " <> show statuses)
-    let native = copyStateApplication latency records
-        application = maybe native (`advisoryStoreApplication` native) advisory
-    testWithApplication (pure application) use
   where
     publicBase = "http://" <> copyStatePublicHost <> ":" <> show publicPort
     privateBase = "http://" <> copyStatePrivateHost <> ":" <> show privatePort
