@@ -74,6 +74,7 @@ Use them where their HTTP contracts fit. A new protocol need not negotiate gzip 
 The [credential mapping](../core/src/Ecluse/Core/Registry/Request.hs) names the header and native token encoding.
 The common pipeline does not impose npm's bearer scheme or PyPI's basic scheme on another ecosystem.
 Render a service credential through the `ServicePresentation` the codec and relay receive, so a store that declares its own mechanism applies to the new ecosystem too.
+The Dredger reads a store through the codec's target read under the store's presentation, so the codec's read must present every request it forms, discovery included.
 Keep caller authorisation separate from service credentials used for mirror or maintenance operations.
 Never expand credential authority to satisfy a missing backend operation.
 

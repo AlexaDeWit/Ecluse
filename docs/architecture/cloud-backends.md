@@ -336,7 +336,8 @@ Operators store a bare secret on every ecosystem, and the declared backend decid
 Each ecosystem's credential mapping renders the protocol's own scheme. A store can instead declare
 an abstract mechanism for each ecosystem and for each read or write: Bearer, Basic over the
 credential's username, or the raw key. The ecosystem's codec renders the declared mechanism on the
-mirror worker's target reads and writes, and on a static publication token. CodeArtifact declares
+mirror worker's target reads and writes, on a static publication token, and on the Dredger's store
+reads. CodeArtifact declares
 one row per ecosystem, following AWS's client configuration for each format. Registry and
 Verdaccio stores declare nothing, so the protocol's own scheme applies to them.
 
