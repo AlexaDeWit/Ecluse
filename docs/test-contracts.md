@@ -70,13 +70,12 @@ RubyGems runs the caller-bound variant, with name-binding and origin-binding in 
 | missing-name | Native full and npm selected "reports an absent top-level name as undecodable". PyPI selected counterpart added |
 | name-mismatch | Native full and selected self-reported different-name errors remain MetadataNameMismatch, not decode errors |
 | version-bound | Native full and selected version/release/file count examples remain TooManyVersions 2 1. Both selected present versions now run |
-| artifact-bound | npm full artifact-count breach and exact ceiling. PyPI counterpart added alongside its unchanged file-grouping bound test |
 | missing-version | Both native missing-release examples remain Right Nothing |
 | selected-parity | Exact domain PackageDetails equality with full map lookup, nonempty expected two-version map. Native rich/corpus and grouping parity remain |
 
-Ten npm and eight PyPI duplicate example bodies are removed. Fourteen shared projection examples run.
+Ten npm and eight PyPI duplicate example bodies are removed. Twelve shared projection examples run for npm and PyPI.
 Native raw-document identity and exact filename observations remain in both specs.
-PyPI keeps the full read's artifact count, distinct-release count, selected file count over unselected and unusable entries, and absence of a selected-artifact ceiling.
+PyPI keeps the file-position count over unselected and unusable entries on full and selected reads.
 PyPI keeps API-version refusal, duplicate-key order, original array entry keys, multiple wheels/sdists, normalised version names and release timestamps.
 npm keeps packed/tree/reference-reader properties, damaged/raw duplicate wire inputs, source document retention, optional containers, rich version projection, real express corpus and nesting limits.
 Independent readers in both ReaderSpec and StreamingSpec trees are unchanged.
@@ -211,7 +210,7 @@ The live version-ordering smoke fetches the `smokeNames` packages in `bench/corp
 | RubyGems live index identity and gem evidence | `live/rubygems/rake` through `Contract.RegistrySmoke`, followed by its native archive checks | `rake` 13.2.1, no invalid rows, exact filename, package/version identity, one advertised SHA-256, status 200, non-empty bytes, integrity verification, archive coordinate and checksum checks, 1 MiB gem bound. |
 | Cargo live discovery, sparse index and crate evidence | `live/cargo/serde` through `Contract.RegistrySmoke` | crates.io discovery, `serde` 1.0.200, no invalid rows, exact filename, package/version identity, one advertised SHA-256, status 200, non-empty bytes, integrity verification, 1 MiB crate bound. |
 | npm repeated release keys, members, dependencies, and selected containers | `retention/npm/{selected,full}/{keys,members,dependencies}` and `retention/npm/selected/containers` through `Contract.Retention` | Original generators, 2,000 and 16,000 repeats, original read operations, chunking, GC sampling, and strict 256 KiB growth allowance. |
-| PyPI repeated containers/members, unselected releases, and past-limit files | `retention/pypi/selected/{containers,members,other-releases}`, `retention/pypi/full/{members,past-limit}` through `Contract.Retention` | Original generators and read modes. Each selected input still proves exactly one kept file before sampling. The past-limit case still uses `maxArtifactCount = 2`. |
+| PyPI repeated containers/members, unselected releases, and past-limit files | `retention/pypi/selected/{containers,members,other-releases}`, `retention/pypi/full/{members,past-limit}` through `Contract.Retention` | Original generators and read modes. Each selected input still proves exactly one kept file before sampling. The past-limit case uses `maxVersionCount = 2`, and the read refuses at the third file. |
 | Benchmark and allocation provider registration | `Ecluse.Test.EcosystemBench.checkBenchmarkCoverage`, enforced by `ecosystemBenches` | Reviewed native obligations and concrete providers must match the production adapter registry. Missing, duplicate, and unshipped providers fail before corpus loading. Empty corpora fail. |
 | Load read and stress registration | `readLoadContract` with `LoadReadDriver`, checked by `Ecluse.BenchLoad.Scenarios.checkFixtureCoverage` before `runDriver` | Each ecosystem owes the shared routine read and stress laws. `requiredLoadLaws` supplies independent requirements, and `loadCoverageGaps` names omitted scenarios. Existing native extensions, floor checks, and verdicts remain. |
 

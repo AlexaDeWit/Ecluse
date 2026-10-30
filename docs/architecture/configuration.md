@@ -251,6 +251,14 @@ them can hold more than it pays for. Écluse treats such documents as rare. Two 
 excess. The sampler measures it as live data outside the charges after the next major collection,
 and the ceiling the budget may reach, set out below, falls as that remainder grows.
 
+One such shape is a document of many tiny entries, whose map nodes, keys and typed values outweigh
+the source bytes they come from. An npm or PyPI full read therefore pays at least 256 bytes for each
+entry it retains, through its workspace, after each piece it parses: npm versions, timestamps and
+dist-tags, and PyPI files and dropped version entries. Timestamps, dist-tags and files whose names
+project no release are entries no count bounds. Realistic listings carry enough bytes per entry
+that the floor adds nothing. The floor is the condition for later dropping the version count from
+listing reads, where it still caps the entries a dense document retains.
+
 A listing's response pays per byte of its output basis. The basis is the larger of two estimates,
 one anchored on the largest document the listing merges and one on the base document, whose
 top-level fields the response keeps. Each adds the other document's bytes in proportion to the
@@ -293,8 +301,15 @@ halves the budget, at most once a second, while the collector takes more than ha
 charges act the moment work starts and the measurement arrives later, so neither alone holds the
 line.
 
-The structural hostile-input counts (`maxVersionCount`, `maxArtifactCount`, `maxNestingDepth`) stay
-pinned policy. They bound document shape, not bytes, and do not scale with RAM. Resolution remains
+Écluse keeps a structural count only where no byte, memory or deadline bound already covers the
+work. `maxNestingDepth` is the only bound on recursion and tar link chains. `maxVersionCount` bounds
+the inventory the Dredger gathers across store listing pages, which has no deadline and no byte
+bound across pages, the versions a mirror-state record holds, and the entries a dense npm or PyPI
+listing retains. On every listing it counts source entry positions, and a read refuses at the first
+entry past it. Both stay pinned policy: they bound document shape, not bytes, and do not scale with
+RAM. Work that bytes and per-entry charges already bound has no key: tar and ZIP entries, gzip and
+bzip2 members, Marshal and YAML nodes, multipart parts, and mirror-state files each keep a fixed
+ceiling in code, as the RubyGems directory keeps its gem-name ceiling. Resolution remains
 role-agnostic across proxy, Pilot, and Dredger. The body bounds name their operations separately:
 
 | Bound | Consumers | Source |
