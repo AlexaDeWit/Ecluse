@@ -3,7 +3,7 @@
 -- SPDX-License-Identifier: MIT
 
 -- | A scoped inflater over the existing streaming-commons ABI, with deterministic release on every exit.
-module Ecluse.Core.Registry.Archive.Inflate (InflateFormat (..), withInflatedChunks, inflateBounded, splitArchiveCharge) where
+module Ecluse.Core.Registry.Archive.Inflate (InflateFormat (..), withInflatedChunks, inflateBounded) where
 
 import Data.ByteString qualified as BS
 import Data.Streaming.Zlib.Lowlevel qualified as Z
@@ -13,7 +13,6 @@ import Foreign.Ptr (castPtr)
 import UnliftIO.Exception (bracket, mask_, throwIO)
 
 import Ecluse.Core.Registry (ParseError (..), parseRefusal)
-import Ecluse.Core.Server.Admission.Meter (newChargePair)
 import Ecluse.Core.Zlib (ZlibFault (InvalidZlibState, ZlibAllocationFailed), advanceStream, initialiseInflate, openStream, releaseInflate)
 
 -- | Raw deflate, one zlib stream, or a bounded sequence of gzip members.
@@ -112,7 +111,3 @@ step native input output =
         (status, consumed, written) <- advanceStream Z.c_call_inflate_noflush native (BS.take chunkBytes input) destination chunkBytes
         bytes <- BS.packCStringLen (castPtr destination, written)
         pure (status, consumed, bytes)
-
--- | 'newChargePair' under the name the Cargo and RubyGems archive readers import.
-splitArchiveCharge :: (Int -> IO ()) -> IO (Int -> IO (), Int -> IO ())
-splitArchiveCharge = newChargePair
