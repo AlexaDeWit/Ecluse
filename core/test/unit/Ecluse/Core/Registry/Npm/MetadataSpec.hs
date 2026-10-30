@@ -50,6 +50,7 @@ import Ecluse.Core.Registry.Json.Walk (Steps, Walked (..))
 import Ecluse.Core.Registry.Json.Writer (Pick (..), Writer, decodePicked, decodeWhole, discard, newWriter, replacedMember, sealValue)
 import Ecluse.Core.Registry.JsonStream (StreamResult (streamValue))
 import Ecluse.Core.Registry.Metadata (
+    Manifest (manifestInfo),
     MetadataError (MetadataBoundExceeded, MetadataNameMismatch, MetadataUndecodable),
     VersionDoc (vdRaw),
     VersionRead (vrBodyBytes, vrUpstreamLatest, vrVersion),
@@ -58,7 +59,7 @@ import Ecluse.Core.Registry.Metadata.Projection (projectionResult, streamError, 
 import Ecluse.Core.Registry.Npm.DependencySource (installableFieldName)
 import Ecluse.Core.Registry.Npm.Document (PackedPackument (..), tarballHole, tarballUrl)
 import Ecluse.Core.Registry.Npm.Filter (assembleMergedDocument, serialiseMergedDocument)
-import Ecluse.Core.Registry.Npm.Metadata (npmPackumentWalk, projectNpmPacked, projectNpmStream, selectNpmVersionDoc)
+import Ecluse.Core.Registry.Npm.Metadata (npmPackumentWalk, npmRead, projectNpmPacked, projectNpmStream, selectNpmVersionDoc)
 import Ecluse.Core.Registry.Npm.Project (projectName, projectVersionEntryResult)
 import Ecluse.Core.Registry.Npm.Reader (PackumentRead (WholePackument), npmWalk, releaseUniqueFields)
 import Ecluse.Core.Registry.Npm.Request (packageUrl)
@@ -85,6 +86,7 @@ import Ecluse.Test.Json (fieldAt, isObject, withKeys)
 import Ecluse.Test.Package (unscopedNpm, validSha1, validSha512Sri)
 import Ecluse.Test.Registry.JsonBytes (damaged, genChunks, genPackumentBytes, genServablePackumentBytes)
 import Ecluse.Test.Registry.JsonStream (byteChunks, testTable, walkJsonChunks, walkWritingChunks)
+import Ecluse.Test.Registry.Metadata.Fetch (heldManifest, heldVersion)
 import Ecluse.Test.Registry.Npm.Metadata (npmFullTestWalk, projectNpmManifest, projectNpmVersion)
 import Ecluse.Test.Registry.Packed (walkedLength)
 import Ecluse.Test.Snapshot (digestOf, readDetails)
@@ -796,11 +798,12 @@ baseFinishPacked limits requested authorPointer table (BasePackedRead acc heldRe
             , packumentVersions = KeyMap.fromMap (Map.fromDistinctAscList [(Key.fromText key, release) | (key, release) <- sortBy (comparing fst) heldReleases])
             }
 
+-- | The production full and selected reads, from the registry that serves the fixture's tarballs.
 projectionDriver :: ProjectionDriver
 projectionDriver =
     ProjectionDriver
-        { projectFull = \limits bytes -> pure (fst <$> projectNpmManifest limits (unscopedNpm "is-odd") bytes)
-        , projectSelected = \limits version bytes -> pure (selectedDetails limits (unscopedNpm "is-odd") (mkVersion Npm version) bytes)
+        { projectFull = \limits bytes -> fmap manifestInfo <$> heldManifest npmRead limits fixtureRegistry (unscopedNpm "is-odd") [bytes]
+        , projectSelected = \limits version bytes -> fmap readDetails <$> heldVersion npmRead limits fixtureRegistry (unscopedNpm "is-odd") (mkVersion Npm version) [bytes]
         , projectionFraming = SingleDocument
         , projectionDocument = richPackumentBytes
         , projectionPackageName = "is-odd"
@@ -808,3 +811,7 @@ projectionDriver =
         , projectionVersions = ["1.0.0", "2.0.0"]
         , projectionMissingName = BL.toStrict (encode (object ["versions" .= object []]))
         }
+
+-- | The authority of every tarball URL in 'richVersionObject'.
+fixtureRegistry :: Text
+fixtureRegistry = "https://example.test"
