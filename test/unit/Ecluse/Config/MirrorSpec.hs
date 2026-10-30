@@ -60,7 +60,7 @@ spec = describe "native mirror declarations" $ do
             it ("accepts the native upload path " <> path) $ do
                 config <- expectConfig (codeArtifactEnv (codeArtifactHost <> path)) Nothing
                 let target = regMirrorTarget . mountRegistries =<< Map.lookup PyPI (configMounts config)
-                fmap mtUsername target `shouldBe` Just (Just "aws")
+                fmap mtUsername target `shouldBe` Just Nothing
                 fmap (registryUrlText . mtUploadUrl) target `shouldBe` Just (toText (codeArtifactHost <> path))
         for_
             [ ("repository root", codeArtifactHost <> "/pypi/other/")

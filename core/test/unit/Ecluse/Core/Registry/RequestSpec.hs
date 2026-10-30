@@ -108,11 +108,12 @@ credentialMappingSpec = describe "a credential mapping carries one ecosystem's p
 
 servicePresentationSpec :: Spec
 servicePresentationSpec = describe "a store-declared service presentation" $ do
-    it "renders each mechanism, Basic over the credential's own username" $ do
-        let named = ClientCredential (Just "aws") (mkSecret "tok-abc")
+    it "renders each mechanism, Basic over the username the mechanism carries" $ do
+        let named = ClientCredential (Just "publisher") (mkSecret "tok-abc")
         renderAuthMechanism AuthBearer named `shouldBe` "Bearer tok-abc"
-        renderAuthMechanism AuthBasic named `shouldBe` "Basic YXdzOnRvay1hYmM="
-        renderAuthMechanism AuthBasic (bareCredential (mkSecret "tok-abc")) `shouldBe` "Basic OnRvay1hYmM="
+        renderAuthMechanism (AuthBasic "aws") named `shouldBe` "Basic YXdzOnRvay1hYmM="
+        renderAuthMechanism (AuthBasic "aws") (bareCredential (mkSecret "tok-abc")) `shouldBe` "Basic YXdzOnRvay1hYmM="
+        renderAuthMechanism (AuthBasic "") (bareCredential (mkSecret "tok-abc")) `shouldBe` "Basic OnRvay1hYmM="
         renderAuthMechanism AuthRawKey named `shouldBe` "tok-abc"
 
     it "keeps the ecosystem's own mapping for an operation the store declares nothing for" $ do

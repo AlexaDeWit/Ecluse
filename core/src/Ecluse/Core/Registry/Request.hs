@@ -62,7 +62,7 @@ import Network.HTTP.Types.Header (
 import Text.Show (showsPrec)
 
 import Ecluse.Core.BuildIdentity (identifyRequest)
-import Ecluse.Core.Credential (ClientCredential (credSecret, credUsername), bareCredential, mkSecret, unSecret)
+import Ecluse.Core.Credential (ClientCredential (credSecret), bareCredential, mkSecret, unSecret)
 import Ecluse.Core.Registry (UrlFormationError (EmptyBaseUrl, UnparseableUrl))
 import Ecluse.Core.Security.Egress (RegistryUrl, registryUrlText)
 import Ecluse.Core.Text (isAsciiAlphaNum, joinUrlPath)
@@ -144,8 +144,8 @@ bareAuthorization headers = case [value | (name, value) <- headers, name == hAut
 data AuthMechanism
     = -- | @Bearer@ followed by the secret.
       AuthBearer
-    | -- | HTTP Basic over the credential's own username, empty when it has none, and the secret.
-      AuthBasic
+    | -- | HTTP Basic over this username and the secret.
+      AuthBasic Text
     | -- | The secret alone, with no scheme.
       AuthRawKey
     deriving stock (Eq, Show)
@@ -154,7 +154,7 @@ data AuthMechanism
 renderAuthMechanism :: AuthMechanism -> ClientCredential -> ByteString
 renderAuthMechanism mechanism credential = case mechanism of
     AuthBearer -> "Bearer " <> encodeUtf8 secret
-    AuthBasic -> "Basic " <> convertToBase Base64 (encodeUtf8 (fromMaybe "" (credUsername credential) <> ":" <> secret) :: ByteString)
+    AuthBasic username -> "Basic " <> convertToBase Base64 (encodeUtf8 (username <> ":" <> secret) :: ByteString)
     AuthRawKey -> encodeUtf8 secret
   where
     secret = unSecret (credSecret credential)

@@ -13,8 +13,8 @@ module Ecluse.Test.Credential (
 import Ecluse.Core.Credential.Refresh (noCredentialReporters)
 import Ecluse.Core.Registry.Request (AuthMechanism (AuthBasic, AuthBearer), ServicePresentation, StoreOperation (StoreRead, StoreWrite), declaredPresentation)
 
--- | A store that asks for Basic on reads and Bearer on writes.
+-- | A store that asks for Basic under @aws@ on reads and Bearer on writes.
 basicReadsBearerWrites :: ServicePresentation
 basicReadsBearerWrites = declaredPresentation $ \case
-    StoreRead -> AuthBasic
+    StoreRead -> AuthBasic "aws"
     StoreWrite -> AuthBearer
