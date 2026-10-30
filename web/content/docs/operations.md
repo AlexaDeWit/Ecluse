@@ -659,10 +659,12 @@ it uses it, against one budget:
 | A first-party publication, once its upload is read | Its archive inspection for Cargo and RubyGems, and for Cargo a full metadata read of the target registry's `config.json` |
 
 An npm or PyPI full read also pays at least 256 bytes for each entry it retains: each npm version,
-timestamp and dist-tag, and each PyPI file and dropped version entry. After each 32 KiB it parses,
-the read raises its charge to that floor, less what its source bytes already paid. A document of
-many tiny entries pays for them as it reads. Realistic listings carry enough bytes per entry that
-the floor adds nothing.
+timestamp and dist-tag, and each PyPI file, dropped version entry, and `alternate-locations` and
+`meta.tracks` item. After each 32 KiB it parses, the read raises its charge to that floor, less what
+its source bytes already paid. A document of many tiny versions, timestamps, dist-tags or files pays
+for them as it reads. A PyPI read counts `alternate-locations` and `meta.tracks` items when their
+array closes, so the floor reaches them from the next 32 KiB it parses. Realistic listings carry
+enough bytes per entry that the floor adds nothing.
 
 A listing's output basis is the larger of two estimates. One starts from the largest document the
 listing merges. The other starts from the base document, whose top-level fields the response
