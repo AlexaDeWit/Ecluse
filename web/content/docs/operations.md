@@ -532,10 +532,10 @@ The request counters use `result=hit|miss|collapsed`:
 
 | Metric | What it counts |
 |---|---|
-| `ecluse.metadata_cache.requests` | Full-document store requests |
+| `ecluse.metadata_cache.requests` | Full-document store requests, and public RubyGems directory requests with `store=directory` |
 | `ecluse.metadata_cache.version.requests` | Selected-version store requests |
 | `ecluse.metadata_cache.assembled.requests` | Assembled-response store requests |
-| `ecluse.metadata_cache.refused` | Capacity refusals and backend failures, by `store=full|version|assembled` |
+| `ecluse.metadata_cache.refused` | Capacity refusals and backend failures, by `store=full|version|assembled|directory` |
 
 A `hit` uses a retained value. A `miss` leads a fetch or render. A `collapsed` request joins
 an existing leader and shares its result, including a failure. A follower that retries after
@@ -551,11 +551,14 @@ through the generic cache.
 
 The `ecluse.metadata_cache.resident_bytes`, `ecluse.metadata_cache.version.resident_bytes`,
 and `ecluse.metadata_cache.assembled.resident_bytes` gauges report accounted bytes after insertion,
-eviction, and expiry removal. `ecluse.metadata_cache.entries` reports the full store's entry count.
+eviction, and expiry removal. `ecluse.metadata_cache.resident_bytes` with `store=directory` reports
+the directory store. Points without a `store` label belong to the full store, so filter out
+`store=directory` when you sum full-store requests or bytes.
+`ecluse.metadata_cache.entries` reports the full store's entry count.
 The shipped local backend never retains full metadata. Full-store entries and resident bytes stay
 zero, and local full reads report misses or collapsed active work without capacity refusals.
 Selected-version, assembled, and public RubyGems directory stores share `cache.ttl`, one byte bound
-and one entry bound, with no reserved shares. No gauge reports the directory store's bytes.
+and one entry bound, with no reserved shares.
 A full listing followed by a selected-version read can fetch upstream twice, because no store keeps
 the full document. No external cache service is required.
 Boot and `check-config` output report these local capabilities. `cache.maxBytes` applies only to

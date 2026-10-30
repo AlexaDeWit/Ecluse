@@ -210,7 +210,7 @@ and one entry bound. No store reserves a static share. Under pressure, the inser
 least-recently used entries until the aggregate fits or its eviction floor stops it. The shipped
 floors are zero. One store cannot evict another store's live entries. Reads and retaining inserts
 reclaim expired entries across every store, so TTL bounds this unfairness to one TTL window during
-active use. No gauge reports the directory store's bytes.
+active use. The directory store reports its bytes on the full-store gauge under `store=directory`.
 Per-store recency and expiry indexes change with the entries and aggregate accounting in one
 transaction. Recency updates add work to cache hits but avoid sorting a whole store during eviction.
 
