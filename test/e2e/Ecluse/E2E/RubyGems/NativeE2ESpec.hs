@@ -63,8 +63,8 @@ rubyNativeContract = DeclaredGroup (fixtureMetadata rubyNativeFixture) $ \record
                 for_ native $ \row -> do
                     release <- rubyRelease releases rubyRoot (rowVersion row) (rowPlatform row)
                     rowFields row `shouldSatisfy` elem ("checksum", releaseChecksum release)
-        it (label "platforms" "retains the Ruby, Java, Linux musl and Darwin variants in a native lockfile") $ \plane ->
-            withObservedNativeProxy defaultE2EConfig plane $ \observed -> rubyConsumer (observedProxy observed) currentBundler $ \project -> do
+        it (label "platforms" "retains the Ruby, Java, Linux musl and Darwin variants in a native lockfile") $ \plane -> for_ [minimumBundler, currentBundler] $ \client ->
+            withObservedNativeProxy defaultE2EConfig plane $ \observed -> rubyConsumer (observedProxy observed) client $ \project -> do
                 releases <- filter ((== "ecluse-fixture-platform") . releaseName) <$> loadRubyReleases
                 rubyDependency project "ecluse-fixture-platform" "= 1.0.0"
                 (status, body) <- proxyGet (observedProxy observed) "/rubygems/info/ecluse-fixture-platform"
@@ -91,16 +91,16 @@ rubyNativeContract = DeclaredGroup (fixtureMetadata rubyNativeFixture) $ \record
                     nativeClientRequests interval `shouldSatisfy` any (\request -> nativeRequestPath request == "/rubygems/info/ecluse-fixture-root" && nativeRequestStatus request == 200)
                     tree <- rubyInstalledTree project
                     Map.keys tree `shouldSatisfy` (not . any (T.isSuffixOf "ecluse_fixture_root.rb" . toText))
-        it (label "prerelease" "installs an explicitly requested native prerelease") $ \plane ->
-            withObservedNativeProxy defaultE2EConfig plane $ \observed -> rubyConsumer (observedProxy observed) currentBundler $ \project -> do
+        it (label "prerelease" "installs an explicitly requested native prerelease") $ \plane -> for_ [minimumBundler, currentBundler] $ \client ->
+            withObservedNativeProxy defaultE2EConfig plane $ \observed -> rubyConsumer (observedProxy observed) client $ \project -> do
                 rubyDependency project rubyLeaf "= 2.1.0.pre.1"
                 void (rubyInstall project False >>= shouldSucceed)
                 result <- rubyEvaluate project "require 'ecluse_fixture_leaf'; puts EcluseFixtureLeaf::VALUE" >>= shouldSucceed
                 T.strip (crStdout result) `shouldBe` "ecluse-fixture-leaf-2.1.0.pre.1-ruby"
-        it (label "ruby-requirement" "refuses a gem requiring Ruby 99 while an ordinary sibling installs") $ \plane ->
+        it (label "ruby-requirement" "refuses a gem requiring Ruby 99 while an ordinary sibling installs") $ \plane -> for_ [minimumBundler, currentBundler] $ \client ->
             withObservedNativeProxy defaultE2EConfig plane $ \observed -> do
-                rubyConsumer (observedProxy observed) currentBundler $ \control -> void (rubyInstall control False >>= shouldSucceed)
-                rubyConsumer (observedProxy observed) currentBundler $ \project -> do
+                rubyConsumer (observedProxy observed) client $ \control -> void (rubyInstall control False >>= shouldSucceed)
+                rubyConsumer (observedProxy observed) client $ \project -> do
                     rubyDependency project "ecluse-fixture-future" "= 1.0.0"
                     result <- rubyInstall project False >>= shouldFail
                     (crStdout result <> crStderr result) `shouldSatisfy` T.isInfixOf "99.0"
@@ -174,7 +174,7 @@ rubyNativeContract = DeclaredGroup (fixtureMetadata rubyNativeFixture) $ \record
                 let requests = nativeUpstreamRequests interval
                 requests `shouldSatisfy` (not . null)
                 map nativeRequestPath requests `shouldSatisfy` all (\path -> path == "/versions" || T.isPrefixOf "/info/" path)
-        it (label "private-authority" "keeps authorised private names available while refusing anonymous and wrong callers") $ \plane ->
+        it (label "private-authority" "keeps authorised private names available while refusing anonymous and wrong callers") $ \plane -> for_ [minimumBundler, currentBundler] $ \client ->
             withRubyRegistry $ \registry -> do
                 releases <- loadRubyReleases
                 selected <- traverse (\name -> rubyRelease releases name rubyVersion "ruby") [rubyRoot, rubyLeaf]
@@ -184,12 +184,12 @@ rubyNativeContract = DeclaredGroup (fixtureMetadata rubyNativeFixture) $ \record
                 withStubFault plane (RubyGemsBackend (rubyRegistryPort registry) False) $
                     withObservedNativeProxy config plane $ \observed -> do
                         let proxy = observedProxy observed
-                        withRubyProject currentBundler proxy (e2eBaseUrl proxy <> "/rubygems/") (Just "ruby:read") $ \project -> do
+                        withRubyProject client proxy (e2eBaseUrl proxy <> "/rubygems/") (Just "ruby:read") $ \project -> do
                             void (rubyInstall project False >>= shouldSucceed)
                             assertRubyContents project "ecluse-fixture-leaf-1.0.0-ruby|root-1.0.0"
                         before <- nativeTraffic observed
                         forM_ [Nothing, Just "ruby:wrong"] $ \credentials ->
-                            withRubyProject currentBundler proxy (e2eBaseUrl proxy <> "/rubygems/") credentials $ \project -> do
+                            withRubyProject client proxy (e2eBaseUrl proxy <> "/rubygems/") credentials $ \project -> do
                                 void (rubyInstall project False >>= shouldFail)
                                 rubyInstalledTree project `shouldReturn` mempty
                         after <- nativeTraffic observed
@@ -221,7 +221,7 @@ assertRubyPlatformInstall observed releases project = do
     before <- nativeTraffic observed
     rubyLockfile project `shouldReturn` Nothing
     void (rubyInstall project False >>= shouldSucceed)
-    -- Bundler 4.0.23 materialises checksums before applying platforms in the same command.
+    -- Bundler 4.0.23 materialises checksums before applying platforms in one command, so each client adds platforms first.
     void (runBundler project ["lock", "--add-platform", "ruby", "java", "x86_64-linux-musl", "arm64-darwin"] >>= shouldSucceed)
     void (rubyLock project >>= shouldSucceed)
     lock <- rubyLockfile project >>= maybe (fail "platform resolution did not create a lockfile") pure
