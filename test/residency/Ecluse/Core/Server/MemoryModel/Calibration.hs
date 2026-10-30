@@ -24,6 +24,11 @@ module Ecluse.Core.Server.MemoryModel.Calibration (
     rubyGemsFigures,
     SyntheticListingFigures (..),
     rubyGemsSyntheticFigures,
+
+    -- * The entry floor
+    EntryFigures (..),
+    entryFloor,
+    denseFigures,
 ) where
 
 import Data.Map.Strict qualified as Map
@@ -373,3 +378,27 @@ rubyGemsSyntheticFigures =
             , syntheticSingleOutput = 6554160 % 2315422
             , syntheticMergedOutputs = Map.fromList [(Identical, 8371680 % 2315422), (Overlapping, 6627408 % 2315417), (Disjoint, 5757712 % 2315426), (PublishOrder, 6654600 % 2315422)]
             }
+
+-- | A dense listing's live bytes per retained entry: through its read, and once the read completes.
+data EntryFigures = EntryFigures
+    { entryReadPeak :: Rational
+    , entryHeld :: Rational
+    }
+
+-- | Cover the largest dense figure with a 25% margin, rounded up to 64 bytes.
+entryFloor :: Map Text EntryFigures -> Integer
+entryFloor figures = 64 * ceiling (foldl' max 0 [figure | dense <- Map.elems figures, figure <- [entryReadPeak dense, entryHeld dense]] * 5 / 256)
+
+-- | Dense listing figures by ecosystem and entry kind, each bytes over retained entries.
+denseFigures :: Map Text EntryFigures
+denseFigures =
+    -- Measured on amd64 with GHC 9.10.3 and Cabal -O1, where the read peaks of two runs differed by under 0.01%.
+    Map.fromList
+        [ ("npm/versions", EntryFigures (5244360 % 10000) (3379688 % 10000))
+        , ("npm/timestamps", EntryFigures (3593680 % 10001) (1448 % 10001))
+        , ("npm/dist-tags", EntryFigures (3513408 % 10001) (2961448 % 10001))
+        , ("pypi/files", EntryFigures (2769456 % 10001) (2565608 % 10001))
+        , ("pypi/versions", EntryFigures (1765608 % 10001) (1765608 % 10001))
+        , ("pypi/alternate-locations", EntryFigures (746192 % 10001) (697000 % 10001))
+        , ("pypi/tracks", EntryFigures (745520 % 10001) (696984 % 10001))
+        ]
