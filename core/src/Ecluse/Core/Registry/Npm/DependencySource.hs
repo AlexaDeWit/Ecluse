@@ -14,7 +14,6 @@ module Ecluse.Core.Registry.Npm.DependencySource (
 
     -- * A release's installable dependencies
     InstallableField (..),
-    installableField,
     installableFieldName,
     ExternalDependency (..),
     externalDependencyOf,
@@ -28,6 +27,9 @@ import Data.Aeson.KeyMap (KeyMap)
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.Char (isAsciiLower, isAsciiUpper, isDigit, isSpace)
 import Data.Text qualified as T
+import Data.Universe.Class (Universe (..))
+import Data.Universe.Class qualified as Universe
+import Data.Universe.Generic (universeGeneric)
 
 -- | Where a client fetches a dependency from instead of the registry.
 data ExternalSource
@@ -42,15 +44,9 @@ data InstallableField
     = Dependencies
     | OptionalDependencies
     | PeerDependencies
-    deriving stock (Bounded, Enum, Eq, Ord, Show)
+    deriving stock (Eq, Generic, Ord, Show)
 
--- | The field a release member names, or 'Nothing' for any other member, @devDependencies@ included.
-installableField :: Text -> Maybe InstallableField
-installableField = \case
-    "dependencies" -> Just Dependencies
-    "optionalDependencies" -> Just OptionalDependencies
-    "peerDependencies" -> Just PeerDependencies
-    _ -> Nothing
+instance Universe InstallableField where universe = universeGeneric
 
 -- | The member name of the field in a release object.
 installableFieldName :: InstallableField -> Text
@@ -80,7 +76,7 @@ externalSource spec
 -- npm-package-arg's POSIX grammar, on the spec as written. Windows also reads a leading backslash
 -- as a path, but elsewhere hosted-git-info resolves \x@github.com:acme/left-pad to GitHub.
 aliasOrLocal :: Text -> Bool
-aliasOrLocal spec = hasPrefixFolded "npm:" spec || hasPrefixFolded "file:" spec || pathLike
+aliasOrLocal spec = maybe False (`elem` ["npm", "file"]) (scheme spec) || pathLike
   where
     pathLike = case T.unpack (T.take 2 spec) of
         '.' : _ -> True
@@ -151,9 +147,6 @@ userAtGitHost spec = any startsAtGitHost (drop 1 (T.splitOn "@" (T.toLower spec)
 gitHosts :: [Text]
 gitHosts = ["github.com", "gist.github.com", "gitlab.com", "bitbucket.org", "git.sr.ht"]
 
-hasPrefixFolded :: Text -> Text -> Bool
-hasPrefixFolded prefix spec = T.toLower (T.take (T.length prefix) spec) == prefix
-
 isAsciiLetter :: Char -> Bool
 isAsciiLetter c = isAsciiLower c || isAsciiUpper c
 
@@ -161,7 +154,7 @@ isAsciiLetter c = isAsciiLower c || isAsciiUpper c
 strings. Several pick the first field, then the smallest name, so every read form reports one.
 -}
 externalDependencyOf :: KeyMap Value -> Maybe ExternalDependency
-externalDependencyOf release = asum (map inField [minBound .. maxBound])
+externalDependencyOf release = asum (map inField Universe.universe)
   where
     inField field = case KeyMap.lookup (Key.fromText (installableFieldName field)) release of
         Just (Object specs) -> asum [ExternalDependency field (Key.toText name) <$> externalSource spec | (name, String spec) <- KeyMap.toAscList specs]
