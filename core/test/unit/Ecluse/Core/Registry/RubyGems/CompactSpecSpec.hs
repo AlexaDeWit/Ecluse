@@ -76,15 +76,15 @@ spec = describe "native compact specifications" $ do
                 Just (toJSON (specificationMetadata specification)) `shouldBe` (KeyMap.lookup "decoded_metadata" fields <&> \case Null -> Object mempty; other -> other)
                 legacyRuntime <$> KeyMap.lookup "dependencies" fields `shouldBe` Just [(name, T.intercalate ", " clauses) | (name, clauses) <- runtimeOf specification]
             _ -> fail "legacy manifest contains an invalid layout"
-    it "refuses each Marshal class and instance variable outside the specification allowlist" $
-        for_
+    it "refuses each Marshal class and instance variable outside the specification allowlist"
+        $ for_
             [ (marshal (userDefined "Evil" "x"), "unsupported Marshal user-defined class")
             , (specificationOf ("[\x06U" <> symbol "Evil" <> "0"), "unsupported Marshal user-marshal class")
             , (specificationOf ("[\x06o" <> symbol "Evil" <> "\x00"), "unsupported Marshal object class")
             , (specificationOf ("[\x06I\x22\x06x\x06" <> symbol "@evil" <> "\x22\x06y"), "unsupported Marshal instance variable")
             , (specificationOf ("[\x06I\x22\x06x\x06" <> symbol "E" <> "o" <> symbol "Evil" <> "\x00"), "unsupported Marshal object class")
             ]
-            $ \(bytes, reason) -> decodeGemSpecification defaultLimits bytes `shouldBe` Left (ParseError reason)
+        $ \(bytes, reason) -> decodeGemSpecification defaultLimits bytes `shouldBe` Left (ParseError reason)
     it "rejects trailing compressed or Marshal bytes and checks body/depth bounds" $ do
         bytes <- readFileBS "test/fixtures/rubygems/quick/Marshal.4.8/ecluse-fixture-root-1.0.0.gemspec.rz"
         for_ [bytes <> "junk", BS.take (BS.length bytes - 1) bytes, BSL.toStrict (Zlib.compress "\x04\x08\x30")] $ \malformed -> do

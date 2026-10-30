@@ -27,12 +27,12 @@ import Ecluse.E2E.Harness.Client (shouldSucceed)
 import Ecluse.E2E.Harness.CodeArtifact (CodeArtifactFixture (cafPort), codeArtifactDeleteRequests, creditCodeArtifactDeletes, withCodeArtifactDeleteAudit)
 import Ecluse.E2E.Harness.Docker (RoleRun (..), awaitContainerLog, containerLogs, runRoleOnce, sharedMirrorQueue, withDataPlane, withMirrorRole)
 import Ecluse.E2E.Harness.Lifecycle (timedFixtureWith)
+import Ecluse.E2E.Harness.NativeEdge (observedProxy)
 import Ecluse.E2E.Harness.Proxy (awaitProxyLog)
 import Ecluse.E2E.Harness.RubyGems (RubyProject)
 import Ecluse.E2E.Harness.RubyGemsCodeArtifact qualified as Native
 import Ecluse.E2E.Harness.RubyGemsCodeArtifact.Client (rubySweepClientOps)
 import Ecluse.E2E.Harness.RubyGemsCodeArtifact.Fixtures
-import Ecluse.E2E.Harness.NativeEdge (observedProxy)
 import Ecluse.E2E.Harness.RubyGemsRegistry (awaitRubyRegistry, removeRubyRegistryVersion, rubyRegistryFiles, seedRubyRegistry)
 import Ecluse.E2E.Harness.Sweep
 import Ecluse.E2E.Harness.Types (E2E (e2eManager), GlobalDataPlane, Topology (..))
