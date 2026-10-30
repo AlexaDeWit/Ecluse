@@ -52,11 +52,12 @@ import Ecluse.Core.Registry.Json.Walk (Steps, Walked (..))
 import Ecluse.Core.Registry.Json.Writer (Pick (..), Writer, decodePicked, decodeWhole, discard, newWriter, replacedMember, sealValue)
 import Ecluse.Core.Registry.JsonStream (StreamResult (streamValue))
 import Ecluse.Core.Registry.Metadata (
+    Manifest (manifestRetainedEntries),
     MetadataError (MetadataBoundExceeded, MetadataNameMismatch, MetadataUndecodable),
     VersionDoc (vdRaw),
     VersionRead (vrBodyBytes, vrUpstreamLatest, vrVersion),
  )
-import Ecluse.Core.Registry.Metadata.EntryFloor (entryFloorBytes)
+import Ecluse.Core.Registry.Metadata.EntryFloor (entryFloorBytes, entryFloorCharge)
 import Ecluse.Core.Registry.Metadata.Projection (projectionResult, streamError, validateReportedName)
 import Ecluse.Core.Registry.Npm.Adapter (npmAdapter)
 import Ecluse.Core.Registry.Npm.DependencySource (installableFieldName)
@@ -81,19 +82,19 @@ import Ecluse.Core.Security (
     defaultLimits,
  )
 import Ecluse.Core.Server.Admission.Budget (scaleCharge)
-import Ecluse.Core.Server.Admission.Types (ChargeFactors (cfFullReadPermille))
+import Ecluse.Core.Server.Admission.Types (ChargeFactors (cfFullReadPermille, cfKeptPermille))
 import Ecluse.Core.Server.Conditional (Conditional (..), ETag, evaluateETag, renderETag)
 import Ecluse.Core.Server.Pipeline.Packument.Representation (packumentETag)
 import Ecluse.Core.Snapshot (Snapshot (Snapshot))
 import Ecluse.Core.Strict (strictElements)
 import Ecluse.Core.Version (Version, mkVersion)
 import Ecluse.Test.Contract.Metadata.Projection (MetadataFraming (SingleDocument), ProjectionDriver (..), metadataProjectionContract)
-import Ecluse.Test.Corpus (CorpusPackage (cpPath), corpusPackages, cpName)
+import Ecluse.Test.Corpus (CorpusPackage (cpPackage, cpPath), corpusPackages, cpName)
 import Ecluse.Test.Json (fieldAt, isObject, withKeys)
 import Ecluse.Test.Package (unscopedNpm, validSha1, validSha512Sri)
 import Ecluse.Test.Registry.JsonBytes (damaged, genChunks, genPackumentBytes, genServablePackumentBytes)
 import Ecluse.Test.Registry.JsonStream (byteChunks, testTable, walkJsonChunks, walkWritingChunks)
-import Ecluse.Test.Registry.Metadata.Fetch (heldWorkspacePeak)
+import Ecluse.Test.Registry.Metadata.Fetch (captureChunks, heldWorkspacePeak)
 import Ecluse.Test.Registry.Npm (densePackument)
 import Ecluse.Test.Registry.Npm.Metadata (npmFullTestWalk, projectNpmManifest, projectNpmVersion)
 import Ecluse.Test.Registry.Packed (walkedLength)
@@ -130,6 +131,13 @@ entryFloorSpec = describe "the full-read entry floor" $ do
         (result, peak) <- heldWorkspacePeak (pcTargetRead (npmPublishCodec nativePresentation)) captureRegistry (unscopedNpm "thing") [denseBody]
         void result `shouldSatisfy` isRight
         peak `shouldBe` denseShortfall
+
+    forM_ corpusPackages $ \package ->
+        it ("keeps only the per-byte kept charge once it reads the capture " <> cpPath package) $ do
+            bytes <- readFileBS (cpPath package)
+            (result, _) <- heldWorkspacePeak adapterRead captureRegistry (cpPackage package) (captureChunks bytes)
+            manifest <- expectRight result
+            entryFloorCharge (manifestRetainedEntries manifest) `shouldSatisfy` (<= scaleCharge (cfKeptPermille npmChargeFactors) (BS.length bytes))
   where
     adapterRead = metadataRead (adapterMetadata npmAdapter)
     entries = 300
