@@ -11,7 +11,7 @@ import Data.ByteString.Lazy qualified as LBS
 import Network.HTTP.Client (brRead, responseBody, responseStatus)
 import Network.HTTP.Types (statusCode)
 import Network.Wai (Request, ResponseReceived)
-import UnliftIO (evaluate)
+import UnliftIO (evaluate, withRunInIO)
 
 import Ecluse.Core.Credential (ClientCredential)
 import Ecluse.Core.Package (PackageName)
@@ -23,7 +23,7 @@ import Ecluse.Core.Registry.JsonStream (StreamResult (streamValue), readStepsWit
 import Ecluse.Core.Registry.Metadata (MetadataError (..), metadataResponse)
 import Ecluse.Core.Registry.Metadata.RecordStream (finishRecordSteps)
 import Ecluse.Core.Registry.Public (ReadControl (..))
-import Ecluse.Core.Registry.Request (BaseRequest, sealRequest)
+import Ecluse.Core.Registry.Request (BaseRequest, baseRequestUrl, sealRequest)
 import Ecluse.Core.Registry.RubyGems.Directory
 import Ecluse.Core.Registry.RubyGems.Document (GemDocument (..), GemRow (..))
 import Ecluse.Core.Registry.RubyGems.Handlers.Budget (newNativeDocumentBudget, newNativeReadBudget, withNativeRequest)
@@ -32,14 +32,17 @@ import Ecluse.Core.Registry.RubyGems.Route.Response (RubyResponse, rubyReplies)
 import Ecluse.Core.Registry.RubyGems.Serving (serialiseRubyGemsDocument)
 import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), LimitError (BodyTooLarge), Limits (..))
 import Ecluse.Core.Security.Egress (registryUrlText)
-import Ecluse.Core.Server.Admission.Meter (MemoryTicket, awaitingFlight, charge, chargePart, newChargePart, newChargeRegion, servingPart, stepDown)
+import Ecluse.Core.Server.Admission.Meter (ChargePart, MemoryTicket, awaitingFlight, charge, chargePart, newChargePart, newChargeRegion, servingPart, stepDown)
 import Ecluse.Core.Server.Admission.Types (FlightKey (FlightKey))
 import Ecluse.Core.Server.Cache (resolveDirectory)
 import Ecluse.Core.Server.Context
+import Ecluse.Core.Server.Metadata (recordedFetch)
+import Ecluse.Core.Server.Pipeline.Diagnostics (logDirectoryInvalidEntries)
 import Ecluse.Core.Server.Pipeline.Packument (PackumentReplies (..), answerDigestedMetadataBytes, mapPackumentReplies, withObservedAdmittedDocument)
 import Ecluse.Core.Server.Pipeline.Shared (forwardedCredential, withListingAdmission)
 import Ecluse.Core.Server.Response (mkRefusal)
 import Ecluse.Core.Telemetry.Metrics (CacheStore (FullStore))
+import Ecluse.Core.Telemetry.Metrics qualified as Metric
 import Ecluse.Core.Telemetry.Upstream (PublicReadKind (Listing))
 
 -- | Share admission and a whole-request deadline across discovery and response assembly.
@@ -50,50 +53,71 @@ serveDirectory request respond =
         request
         (liftIO . respond)
         (const (directoryFailure (MetadataHttpFailure 503)))
-        ( \ticket deps -> do
-            runtime <- asks ctxRuntime
-            mount <- asks ctxMount
-            privateRead <- liftIO (newChargePart ticket)
-            publicRead <- liftIO (newChargePart ticket)
-            let credential = forwardedCredential mount request
-                limits = pdLimits deps
-                publicKey = registryUrlText (pdPublicBaseUrl deps) <> "\0" <> show (maxMetadataBytes limits)
-                flight = FlightKey FullStore (toShort ("rubygems-directory:" <> encodeUtf8 publicKey))
-                -- Once the body exists nothing reaches the released reads' views, so their charges go back before it is sent.
-                answerBody released body = do
-                    bytes <- evaluate body
-                    liftIO (traverse_ (`stepDown` 0) released)
-                    answerCompact deps ticket request bytes
-            private <- case pdPrivateBase deps of
-                Nothing -> pure (Right Nothing)
-                Just base -> fmap Just <$> liftIO (fetchDirectory (chargePart privateRead) limits Uncontrolled (srPrivateClient runtime) base credential)
-            case private of
-                Left fault -> pure (directoryFailure fault)
-                Right privateView -> do
-                    public <-
-                        if pdReadSourceSelection deps == PrivateOnly
-                            then pure (Right (GemDirectory ""))
-                            else
-                                liftIO $
-                                    awaitingFlight ticket flight $
-                                        resolveDirectory
-                                            (srMetadataCache runtime)
-                                            publicKey
-                                            (fetchDirectory (chargePart (servingPart flight publicRead)) limits (Controlled (srPublicControl runtime) Listing) (srPublicClient runtime) (pdPublicBase deps) Nothing)
-                    case public of
-                        Left fault -> case privateView of
-                            Nothing -> pure (directoryFailure fault)
-                            Just own -> answerBody [publicRead] ("---\n" <> directoryBytes own)
-                        Right shared -> do
-                            let privateBytes = maybe 0 (BS.length . directoryBytes) privateView
-                            if BS.length (directoryBytes shared) + privateBytes + 4 > maxMetadataBytes limits
-                                then pure (directoryFailure (MetadataBoundExceeded (BodyTooLarge (MetadataBodyLimit (maxMetadataBytes limits)))))
-                                else do
-                                    liftIO (charge ticket (2 * (directoryWeight shared + privateBytes) + maybe 0 (directoryMergeWorkspace shared) privateView + 4096))
-                                    let merged = maybe shared (mergeDirectories shared) privateView
-                                    answerBody [privateRead, publicRead] ("---\n" <> directoryBytes merged)
-        )
+        (answerDirectory request)
         (liftIO . respond)
+
+-- A private fault answers before any public read. A public fault keeps the private rows unless it breached a bound.
+answerDirectory :: Request -> MemoryTicket -> PackumentDeps -> Handler RubyResponse
+answerDirectory request ticket deps = do
+    privateRead <- liftIO (newChargePart ticket)
+    publicRead <- liftIO (newChargePart ticket)
+    private <- readPrivateDirectory request deps privateRead
+    case private of
+        Left fault -> pure (directoryFailure fault)
+        Right privateView -> do
+            public <- readPublicDirectory ticket deps publicRead
+            case (public, privateView) of
+                (Left fault, Just own) | not (boundBreach fault) && not (BS.null (directoryBytes own)) -> answerBody [publicRead] ("---\n" <> directoryBytes own)
+                (Left fault, _) -> pure (directoryFailure fault)
+                (Right shared, _) -> do
+                    let privateBytes = maybe 0 (BS.length . directoryBytes) privateView
+                    if BS.length (directoryBytes shared) + privateBytes + 4 > maxMetadataBytes limits
+                        then pure (directoryFailure (MetadataBoundExceeded (BodyTooLarge (MetadataBodyLimit (maxMetadataBytes limits)))))
+                        else do
+                            liftIO (charge ticket (2 * (directoryWeight shared + privateBytes) + maybe 0 (directoryMergeWorkspace shared) privateView + 4096))
+                            let merged = maybe shared (mergeDirectories shared) privateView
+                            answerBody [privateRead, publicRead] ("---\n" <> directoryBytes merged)
+  where
+    limits = pdLimits deps
+    -- Once the body exists nothing reaches the released reads' views, so their charges go back before it is sent.
+    answerBody released body = do
+        bytes <- evaluate body
+        liftIO (traverse_ (`stepDown` 0) released)
+        answerCompact deps ticket request bytes
+
+-- The caller's credential reads private discovery on every request, outside shared retention.
+readPrivateDirectory :: Request -> PackumentDeps -> ChargePart -> Handler (Either MetadataError (Maybe GemDirectory))
+readPrivateDirectory request deps privateRead = case pdPrivateBase deps of
+    Nothing -> pure (Right Nothing)
+    Just base -> do
+        runtime <- asks ctxRuntime
+        mount <- asks ctxMount
+        let source = DirectorySource (srPrivateClient runtime) Uncontrolled base (forwardedCredential mount request)
+        withRunInIO $ \runInIO -> fmap Just <$> fetchDirectory runInIO (chargePart privateRead) (pdLimits deps) source
+
+-- Only the flight leader fetches, records the fetch and logs dropped rows. Followers and retained snapshots do neither.
+readPublicDirectory :: MemoryTicket -> PackumentDeps -> ChargePart -> Handler (Either MetadataError GemDirectory)
+readPublicDirectory ticket deps publicRead
+    | pdReadSourceSelection deps == PrivateOnly = pure (Right (GemDirectory ""))
+    | otherwise = do
+        runtime <- asks ctxRuntime
+        let source = DirectorySource (srPublicClient runtime) (Controlled (srPublicControl runtime) Listing) (pdPublicBase deps) Nothing
+        withRunInIO $ \runInIO ->
+            awaitingFlight ticket flight $
+                resolveDirectory (srMetadataCache runtime) key $
+                    recordedFetch (srMetrics runtime) Metric.Public $
+                        fetchDirectory runInIO (chargePart (servingPart flight publicRead)) limits source
+  where
+    limits = pdLimits deps
+    key = registryUrlText (pdPublicBaseUrl deps) <> "\0" <> show (maxMetadataBytes limits)
+    flight = FlightKey FullStore (toShort ("rubygems-directory:" <> encodeUtf8 key))
+
+-- A public directory past its byte bound or name ceiling refuses the request, as an exceeded npm input bound does.
+boundBreach :: MetadataError -> Bool
+boundBreach = \case
+    MetadataBoundExceeded _ -> True
+    MetadataFetch (FetchBoundExceeded _) -> True
+    _ -> False
 
 -- | Per-gem admission preserves exact winning installation rows and archive checksums.
 serveInfo :: PackageName -> Request -> (RubyResponse -> IO ResponseReceived) -> Handler ResponseReceived
@@ -132,8 +156,12 @@ serveInfo name request respond =
         )
         (liftIO . respond)
 
-fetchDirectory :: (Int -> IO ()) -> Limits -> ReadControl -> ExchangeClient -> BaseRequest -> Maybe ClientCredential -> IO (Either MetadataError GemDirectory)
-fetchDirectory pay limits control client base credential = do
+-- One directory source: its transport, read control, base and the caller's credential, if any.
+data DirectorySource = DirectorySource ExchangeClient ReadControl BaseRequest (Maybe ClientCredential)
+
+-- Read one directory and log the rows it dropped under the source's authority.
+fetchDirectory :: (Handler () -> IO ()) -> (Int -> IO ()) -> Limits -> DirectorySource -> IO (Either MetadataError GemDirectory)
+fetchDirectory runInIO pay limits (DirectorySource client control base credential) = do
     workspace <- newChargeRegion pay
     result <-
         metadataResponse
@@ -145,7 +173,9 @@ fetchDirectory pay limits control client base credential = do
                         else pure (Right (UnreadStatus (statusCode (responseStatus response))))
                 )
                 (sealRequest <$> gemDirectoryRequestUnder base credential)
-    pure (result >>= first (const MetadataUndecodable) . streamValue)
+    let parsed = result >>= first (const MetadataUndecodable) . streamValue
+    for_ parsed $ \directory -> unless (null (readDropped directory)) (runInIO (logDirectoryInvalidEntries (registryUrlText (baseRequestUrl base)) (readDropped directory)))
+    pure (readDirectory <$> parsed)
 
 answerCompact :: PackumentDeps -> MemoryTicket -> Request -> ByteString -> Handler RubyResponse
 answerCompact deps ticket request bytes
