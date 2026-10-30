@@ -5,9 +5,12 @@
 -- | Live capture helpers retain native version spelling and propagate cancellation.
 module Ecluse.Test.RegistryCaptureSpec (spec) where
 
+import Prelude hiding (universe)
+
 import Control.Exception (AsyncException (ThreadKilled))
 import Control.Exception qualified as Exception
 import Data.Map.Strict qualified as Map
+import Data.Universe.Class (Universe (universe))
 import Network.HTTP.Client (ManagerSettings (managerModifyRequest), defaultManagerSettings, newManager, parseUrlThrow)
 import Network.HTTP.Types.Status (status200)
 import Test.Hspec
@@ -88,9 +91,8 @@ spec = do
         it "loads with non-empty curated names for every ecosystem and non-empty bench pins" $ do
             cat <- loadCatalogue
             let names = catSmokeNames cat
-            Map.lookup Npm names `shouldSatisfy` maybe False (not . null)
-            Map.lookup PyPI names `shouldSatisfy` maybe False (not . null)
-            Map.lookup RubyGems names `shouldSatisfy` maybe False (not . null)
+            for_ universe $ \ecosystem ->
+                (ecosystem, Map.lookup ecosystem names) `shouldSatisfy` maybe False (not . null) . snd
             (elem "typescript" <$> Map.lookup Npm names) `shouldBe` Just True
             Map.member "lodash" (catBenchPins cat) `shouldBe` True
 
