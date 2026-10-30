@@ -14,6 +14,7 @@ module Ecluse.Core.Registry.JsonStream (
     readSteps,
     readStepsWithEnd,
     readJsonStream,
+    maxChunkBytes,
 
     -- * Retained values
     retainedValue,
@@ -177,5 +178,6 @@ foldRetained = fmap finish . J.foldI collect Missing
 retainedScalar :: J.Parser Value
 retainedScalar = (String <$> J.string) <|> (Number <$> J.number) <|> (Bool <$> J.bool) <|> (Null <$ J.jNull)
 
+-- | The largest piece of a chunk a read feeds its consumer at once.
 maxChunkBytes :: Int
 maxChunkBytes = 32768
