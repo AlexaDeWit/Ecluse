@@ -2,8 +2,9 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | Shared HTTP requests with typed URL failures and ecosystem-specific credential presentation.
-Requests parsed here refuse redirects, including after credentials attach.
+{- | Shared HTTP requests with typed URL failures, ecosystem-specific credential presentation, and
+the mechanisms a store can declare for service credentials. Requests parsed here refuse redirects,
+including after credentials attach.
 -}
 module Ecluse.Core.Registry.Request (
     -- * Request finalisation
@@ -17,6 +18,10 @@ module Ecluse.Core.Registry.Request (
     attachCredential,
     authorizationUnder,
     bareAuthorization,
+
+    -- * Service credential presentation
+    AuthMechanism (..),
+    renderAuthMechanism,
 
     -- * Request building
     metadataGet,
@@ -34,6 +39,7 @@ module Ecluse.Core.Registry.Request (
     requestAt,
 ) where
 
+import Data.ByteArray.Encoding (Base (Base64), convertToBase)
 import Data.ByteString qualified as BS
 import Data.Char (isHexDigit)
 import Data.Text qualified as T
@@ -50,7 +56,7 @@ import Network.HTTP.Types.Header (
 import Text.Show (showsPrec)
 
 import Ecluse.Core.BuildIdentity (identifyRequest)
-import Ecluse.Core.Credential (ClientCredential, bareCredential, mkSecret)
+import Ecluse.Core.Credential (ClientCredential (credSecret, credUsername), bareCredential, mkSecret, unSecret)
 import Ecluse.Core.Registry (UrlFormationError (EmptyBaseUrl, UnparseableUrl))
 import Ecluse.Core.Security.Egress (RegistryUrl, registryUrlText)
 import Ecluse.Core.Text (isAsciiAlphaNum, joinUrlPath)
@@ -127,6 +133,25 @@ bareAuthorization headers = case [value | (name, value) <- headers, name == hAut
     _ -> Nothing
   where
     fieldByte byte = byte == 0x09 || (byte >= 0x20 && byte <= 0x7E)
+
+-- | How a secret travels on @Authorization@, named without reference to an ecosystem or a store.
+data AuthMechanism
+    = -- | @Bearer@ followed by the secret.
+      AuthBearer
+    | -- | HTTP Basic over the credential's own username, empty when it has none, and the secret.
+      AuthBasic
+    | -- | The secret alone, with no scheme.
+      AuthRawKey
+    deriving stock (Bounded, Enum, Eq, Show)
+
+-- | The @Authorization@ value a credential renders to under a mechanism.
+renderAuthMechanism :: AuthMechanism -> ClientCredential -> ByteString
+renderAuthMechanism mechanism credential = case mechanism of
+    AuthBearer -> "Bearer " <> encodeUtf8 secret
+    AuthBasic -> "Basic " <> convertToBase Base64 (encodeUtf8 (fromMaybe "" (credUsername credential) <> ":" <> secret) :: ByteString)
+    AuthRawKey -> encodeUtf8 secret
+  where
+    secret = unSecret (credSecret credential)
 
 -- | Negotiate compressed metadata under the ecosystem's media type and credential presentation.
 metadataGet :: CredentialMapping -> Maybe ClientCredential -> ByteString -> Request -> Request
