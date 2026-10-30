@@ -26,6 +26,7 @@ module Ecluse.Core.Registry.Npm.StreamingProjection (
     emptyPackedRead,
     keepsPackedRelease,
     packedStep,
+    retainedEntries,
     finishPacked,
 ) where
 
@@ -253,6 +254,10 @@ packedStep writer limits name (PackedRead acc served) field next = case field of
     asRead original = \case
         Object fields -> Object (maybe (KeyMap.delete "author") (KeyMap.insert "author") original fields)
         other -> other
+
+-- | The releases, timestamps and tags the packed read holds.
+retainedEntries :: PackedRead -> Int
+retainedEntries (PackedRead acc _) = Map.size (projectedVersions acc) + Map.size (projectedTimes acc) + Map.size (projectedTags acc)
 
 -- Keep the diagnostic field selection to preserve decoder refusal priority. Dependency maps never refuse.
 typedMembers :: Pick

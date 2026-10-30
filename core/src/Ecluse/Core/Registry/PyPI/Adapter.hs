@@ -40,7 +40,7 @@ import Ecluse.Core.Registry.Origin (OriginClient (ocToken), originBaseUrl)
 import Ecluse.Core.Registry.Publish (relayPublishRequest)
 import Ecluse.Core.Registry.PyPI.Credential (pypiCredential)
 import Ecluse.Core.Registry.PyPI.Filter (assembleSimpleDocument, serialiseSimpleDocument)
-import Ecluse.Core.Registry.PyPI.Metadata (pypiChargeFactors, pypiMirrorRead, pypiRead)
+import Ecluse.Core.Registry.PyPI.Metadata (preparePyPIRead, pypiChargeFactors, pypiMirrorRead)
 import Ecluse.Core.Registry.PyPI.Mirror (pypiMirrorDocuments)
 import Ecluse.Core.Registry.PyPI.Project (projectName, pypiNameLeadChars)
 import Ecluse.Core.Registry.PyPI.Publish (pypiPublishCodec)
@@ -69,7 +69,7 @@ pypiAdapter =
                 }
         , adapterMetadata =
             AdapterMetadata
-                { metadataRead = staticRead pypiRead
+                { metadataRead = preparePyPIRead
                 , metadataAssemble = assembleSimpleDocument
                 , metadataSerialise = serialiseSimpleDocument
                 , metadataChargeFactors = pypiChargeFactors
