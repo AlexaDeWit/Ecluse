@@ -101,6 +101,9 @@ spec = do
         it "a below-floor refusal is a 403 (an admission-policy denial)" $
             artifactStatus (Reject (Rejection BelowIntegrityFloor "too weak"))
                 `shouldBe` Forbidden
+        it "an invalid upstream reply renders as 502 Bad Gateway" $
+            codeAndReason (artifactHttpStatus (artifactStatus (Reject (Rejection UpstreamInvalid "redirected"))))
+                `shouldBe` (502, "Bad Gateway")
 
     describe "artifactHttpStatus -- code and reason phrase" $ do
         it "Ok is 200 OK" $ codeAndReason (artifactHttpStatus Ok) `shouldBe` (200, "OK")

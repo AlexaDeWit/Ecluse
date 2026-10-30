@@ -13,7 +13,7 @@ import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Data.Time (UTCTime (UTCTime), fromGregorian)
 import Katip (LogEnv)
-import Network.HTTP.Types (Header, Method, Status, status200, status206, status304, status400, status401, status403, status404, status406, status500, status502, status503)
+import Network.HTTP.Types (Header, Method, Status, status200, status206, status302, status304, status400, status401, status403, status404, status405, status406, status410, status429, status500, status502, status503)
 import Network.Wai (Request (..), defaultRequest, pathInfo, responseLBS)
 import Network.Wai.Handler.Warp (testWithApplication)
 import Network.Wai.Test (SRequest (SRequest), SResponse (..), runSession, setPath, srequest)
@@ -172,11 +172,13 @@ spec = do
                     simpleStatus response `shouldBe` status403
                     lookup "WWW-Authenticate" (simpleHeaders response) `shouldBe` Nothing
                     map fst <$> readIORef hits `shouldReturn` [["private", "versions"]]
-        for_ [status500, status503] $ \failed ->
-            it ("refuses discovery with 503 after private directory " <> show failed <> ", without reading the public directory") $
+        for_ [(status429, status503, Just "30"), (status500, status503, Just "30"), (status503, status503, Just "30"), (status405, status502, Nothing), (status410, status502, Nothing)] $ \(failed, expected, retry) ->
+            it ("refuses discovery with " <> show expected <> " after private directory " <> show failed <> ", keeping its Retry-After only on a 503, without reading the public directory") $
                 withDirectorySources $ \runtime binding hits privateStatus -> do
                     writeIORef privateStatus failed
-                    simpleStatus <$> capture runtime binding "GET" "/versions" [] `shouldReturn` status503
+                    response <- capture runtime binding "GET" "/versions" []
+                    simpleStatus response `shouldBe` expected
+                    lookup "Retry-After" (simpleHeaders response) `shouldBe` retry
                     map fst <$> readIORef hits `shouldReturn` [["private", "versions"]]
         it "fails private discovery on a malformed private row before any public read" $
             withDirectoryBodies "---\npublic-gem 1.0 \n" "---\nprivate-gem 1.0 \nbroken\n" $ \runtime binding hits _ -> do
@@ -209,6 +211,12 @@ spec = do
                 simpleStatus response `shouldBe` status403
                 lookup "WWW-Authenticate" (simpleHeaders response) `shouldBe` Nothing
                 readIORef hits >>= (`shouldSatisfy` elem ["private", "quick", "Marshal.4.8", "acme-1-1.0.gemspec.rz"])
+        for_ [(status302, status502), (status410, status502), (status429, status503), (status500, status503)] $ \(failed, expected) ->
+            it ("answers a private compact specification " <> show failed <> " with " <> show expected) $
+                withCoordinateSources (PrivateCompactSource failed) $ \runtime binding hits _ -> do
+                    response <- capture runtime binding "GET" "/quick/Marshal.4.8/acme-1-1.0.gemspec.rz" []
+                    simpleStatus response `shouldBe` expected
+                    readIORef hits >>= (`shouldSatisfy` elem ["private", "quick", "Marshal.4.8", "acme-1-1.0.gemspec.rz"])
 
     describe "public directory faults" $ do
         for_ [status500, status503] $ \outage ->
@@ -688,14 +696,15 @@ withDirectoryFaults publicBody privateBody use = do
     hits <- newIORef []
     privateStatus <- newIORef status200
     publicStatus <- newIORef status200
-    let answer variable body = do
+    let answer variable body hinted = do
             status <- readIORef variable
-            pure (responseLBS status [] body)
+            pure (responseLBS status [("Retry-After", "30") | hinted && status /= status200] body)
         upstream request respond = do
             modifyIORef' hits (<> [(pathInfo request, requestHeaders request)])
             case pathInfo request of
-                ["private", "versions"] -> answer privateStatus privateBody >>= respond
-                ["public", "versions"] -> answer publicStatus publicBody >>= respond
+                -- Only a private failure carries a delay. A public one would start the public cooldown.
+                ["private", "versions"] -> answer privateStatus privateBody True >>= respond
+                ["public", "versions"] -> answer publicStatus publicBody False >>= respond
                 _ -> respond (responseLBS status404 [] "")
     testWithApplication (pure upstream) $ \port -> do
         let base = "http://localhost:" <> show port
