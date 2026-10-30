@@ -10,7 +10,7 @@ import Test.Hspec
 
 import Ecluse.Composition.BootError (BootError (StoreTagConflict))
 import Ecluse.Composition.Endpoints (vetEndpoints)
-import Ecluse.Composition.Support (codeArtifactDomain, expectConfig, npmMountDoc, pubUrlEnv)
+import Ecluse.Composition.Support (codeArtifactDomain, expectConfig, mountDocFor, npmMountDoc, pubUrlEnv)
 import Ecluse.Composition.Types (RegistryRole (MirrorPruner, MirrorWriter))
 import Ecluse.Composition.Vet (runVet)
 import Ecluse.Config (
@@ -129,9 +129,6 @@ admissionSpec = describe "the tags and keys each endpoint admits" $ do
             loadsWith [decl "publicationTarget" "codeArtifact" [url codeArtifactInternal, field "token" "t"]]
             loadsWith [decl "publicationTarget" "verdaccio" [url verdaccioUrl, field "token" "t"]]
 
-        it "admits a separate approved publication API base" $
-            loadsWith [decl "publicationTarget" "registry" [url publishUrl, field "uploadUrl" (publishUrl <> "/api-base")]]
-
         it "requires the url and admits neither a mint lifetime nor a consent flag" $ do
             refuses [decl "publicationTarget" "codeArtifact" []] "publicationTarget.codeArtifact.url is required"
             refuses
@@ -140,6 +137,37 @@ admissionSpec = describe "the tags and keys each endpoint admits" $ do
             refuses
                 [decl "publicationTarget" "verdaccio" [url verdaccioUrl, permitDeletion]]
                 "unexpected publicationTarget.verdaccio key(s): \"permitDeletion\""
+
+    -- url is where Écluse reads and uploadUrl where it writes, so only a protocol that writes elsewhere takes one.
+    describe "uploadUrl" $ do
+        for_ [("npm", "npm"), ("rubygems", "ruby")] $ \(eco, format) ->
+            it ("refuses uploadUrl under every tag of both " <> toString eco <> " write targets") $
+                for_ (writeTargets format) $ \target@(key, tag, _, _) -> do
+                    let outcome = loadFor eco (withUploadUrl target)
+                    outcome `shouldSatisfy` refusalMentions ("mounts." <> eco <> "." <> key <> "." <> tag <> ".uploadUrl")
+                    outcome `shouldSatisfy` refusalMentions (eco <> " derives its write address from url")
+
+        for_ [("pypi", "pypi"), ("cargo", "cargo")] $ \(eco, format) ->
+            it ("admits uploadUrl under every tag of both " <> toString eco <> " write targets") $
+                for_ (writeTargets format) $ \target ->
+                    void (expectConfig pubUrlEnv (Just (mountDocFor eco (withUploadUrl target))))
+
+        it "names the refused key in both spellings and the remedy" $
+            renderedRefusals (loadFor "rubygems" [decl "publicationTarget" "registry" [url publishUrl, field "uploadUrl" publishUrl]])
+                `shouldBe` [ "mounts.rubygems.publicationTarget.registry.uploadUrl (ECLUSE_MOUNTS__RUBYGEMS__PUBLICATION_TARGET__REGISTRY__UPLOAD_URL) is set, but rubygems derives its write address from url: remove uploadUrl and keep the registry address in url"
+                           ]
+
+        it "reports every refused uploadUrl across mounts in one load" $ do
+            let refusals =
+                    renderedRefusals . flip loadConfig Nothing $
+                        pubUrlEnv
+                            <> [ ("ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET__REGISTRY__URL", toString publishUrl)
+                               , ("ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET__REGISTRY__UPLOAD_URL", toString publishUrl)
+                               , ("ECLUSE_MOUNTS__RUBYGEMS__PUBLICATION_TARGET__REGISTRY__URL", toString publishUrl)
+                               , ("ECLUSE_MOUNTS__RUBYGEMS__PUBLICATION_TARGET__REGISTRY__UPLOAD_URL", toString publishUrl)
+                               ]
+            refusals `shouldSatisfy` any (T.isInfixOf "mounts.npm.publicationTarget.registry.uploadUrl")
+            refusals `shouldSatisfy` any (T.isInfixOf "mounts.rubygems.publicationTarget.registry.uploadUrl")
 
 {- A layer fills keys under a tag, it never switches one, because 'deepMerge' unions the two
 objects rather than replacing the document's. -}
@@ -217,13 +245,13 @@ hostValidationSpec = describe "the URL a tag admits" $ do
         outcome `shouldNotSatisfy` refusalMentions "mirrorTarget"
 
     it "resolves a Ruby CodeArtifact mirror endpoint" $ do
-        config <- expectConfig pubUrlEnv (Just (rubygemsDoc (codeArtifactDomain <> "/ruby/mirror/")))
+        config <- expectConfig pubUrlEnv (Just (mountDocFor "rubygems" (rubygemsMirror (codeArtifactDomain <> "/ruby/mirror/"))))
         let target = regMirrorTarget . mountRegistries =<< Map.lookup RubyGems (configMounts config)
         (sbTag . mtBackend <$> target) `shouldBe` Just TagCodeArtifact
 
     for_ [("missing repository", "/ruby/"), ("wrong format", "/npm/mirror/")] $ \(description, path) ->
         it ("refuses a Ruby CodeArtifact mirror endpoint with " <> description) $ do
-            let outcome = loadConfig pubUrlEnv (Just (rubygemsDoc (codeArtifactDomain <> path)))
+            let outcome = loadFor "rubygems" (rubygemsMirror (codeArtifactDomain <> path))
             outcome `shouldSatisfy` refusalMentions "its path must be /ruby/{repository}/"
             outcome `shouldSatisfy` refusalMentions "mounts.rubygems.mirrorTarget.codeArtifact.url"
 
@@ -368,19 +396,30 @@ twoTagged =
     decl' "mirrorTarget" $
         "{\"codeArtifact\":{" <> url codeArtifactMirror <> "},\"verdaccio\":{" <> url verdaccioUrl <> "}}"
 
-rubygemsDoc :: Text -> ByteString
-rubygemsDoc targetUrl =
-    encodeUtf8 $
-        "{\"mounts\":{\"rubygems\":{"
-            <> T.intercalate
-                ","
-                [ decl "privateUpstream" "registry" [url privateUrl]
-                , decl "mirrorTarget" "codeArtifact" [url targetUrl]
-                ]
-            <> "}}}"
+rubygemsMirror :: Text -> [Text]
+rubygemsMirror targetUrl = mirrored [decl "mirrorTarget" "codeArtifact" [url targetUrl]]
+
+{- Every tag of both write targets, each with the url and keys it needs to load. A CodeArtifact
+path addresses the repository under the mount's own format token. -}
+writeTargets :: Text -> [(Text, Text, Text, [Text])]
+writeTargets format =
+    [ ("mirrorTarget", "registry", mirrorUrl, [field "token" "t"])
+    , ("mirrorTarget", "codeArtifact", codeArtifactDomain <> "/" <> format <> "/mirror/", [])
+    , ("mirrorTarget", "verdaccio", verdaccioUrl, [field "token" "t"])
+    , ("publicationTarget", "registry", publishUrl, [])
+    , ("publicationTarget", "codeArtifact", codeArtifactDomain <> "/" <> format <> "/first-party/", [])
+    , ("publicationTarget", "verdaccio", verdaccioUrl, [])
+    ]
+
+-- One write target writing where it reads, beside the private upstream a mirror target needs.
+withUploadUrl :: (Text, Text, Text, [Text]) -> [Text]
+withUploadUrl (key, tag, target, keys) = mirrored [decl key tag (url target : field "uploadUrl" target : keys)]
+
+loadFor :: Text -> [Text] -> Either [ConfigError] Config
+loadFor eco endpoints = loadConfig pubUrlEnv (Just (mountDocFor eco endpoints))
 
 loadMount :: [Text] -> Either [ConfigError] Config
-loadMount endpoints = loadConfig pubUrlEnv (Just (npmMountDoc endpoints))
+loadMount = loadFor "npm"
 
 loadsWith :: [Text] -> Expectation
 loadsWith endpoints = case loadMount endpoints of
@@ -394,6 +433,9 @@ refusalMentions :: Text -> Either [ConfigError] a -> Bool
 refusalMentions phrase = \case
     Left errs -> any (T.isInfixOf phrase . renderConfigError) errs
     Right _ -> False
+
+renderedRefusals :: Either [ConfigError] a -> [Text]
+renderedRefusals = either (map renderConfigError) (const [])
 
 -- The npm mount's resolved mirror-write backend, failing the test on anything else.
 backendFor :: [Text] -> IO StoreBackend

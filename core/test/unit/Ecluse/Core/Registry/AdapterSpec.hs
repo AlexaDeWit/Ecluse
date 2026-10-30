@@ -9,8 +9,12 @@ import Data.Map.Strict qualified as Map
 import Test.Hspec
 
 import Ecluse.Core.Ecosystem (Ecosystem (Cargo, Npm, PyPI, RubyGems))
-import Ecluse.Core.Registry.Adapter (adapterEcosystem, adapterFor, adapterMetadata, adapterRuleBlocks)
-import Ecluse.Core.Registry.Adapter.Capability (AdapterMetadata (metadataChargeFactors))
+import Ecluse.Core.Registry.Adapter (adapterEcosystem, adapterFor, adapterMetadata, adapterPublish, adapterRuleBlocks)
+import Ecluse.Core.Registry.Adapter.Capability (
+    AdapterMetadata (metadataChargeFactors),
+    AdapterPublish (publishUploadEndpoint),
+    UploadEndpointRequirement (ExplicitUploadEndpoint, ReadRootUpload),
+ )
 import Ecluse.Core.Registry.Cargo.Metadata (cargoChargeFactors)
 import Ecluse.Core.Registry.RubyGems.Metadata (rubyGemsChargeFactors)
 
@@ -55,6 +59,10 @@ spec = describe "adapterFor (the ecosystem adapter registry)" $ do
     it "resolves RubyGems with its initial measured native charge factors" $ do
         (adapterEcosystem <$> adapterFor RubyGems) `shouldBe` Just RubyGems
         (metadataChargeFactors . adapterMetadata <$> adapterFor RubyGems) `shouldBe` Just rubyGemsChargeFactors
+
+    it "declares separate read and write endpoints for exactly PyPI and Cargo" $
+        map (\eco -> publishUploadEndpoint <$> (adapterPublish =<< adapterFor eco)) [Npm, PyPI, RubyGems, Cargo]
+            `shouldBe` [Just ReadRootUpload, Just ExplicitUploadEndpoint, Just ReadRootUpload, Just ExplicitUploadEndpoint]
 
     it "blocks exactly RubyGems' install, deprecation and scope types with their reasons" $
         (adapterRuleBlocks <$> adapterFor RubyGems)
