@@ -558,8 +558,8 @@ the full document. No external cache service is required.
 Boot and `check-config` output report these local capabilities. `cache.maxBytes` applies only to
 eligible local retention. Increasing it cannot enable full retention.
 Each store evicts its own least-recently used entries under shared pressure. It cannot evict another
-store's live entries. The shipped eviction floors are zero. If the other store holds the capacity,
-the request serves without retention until expiry releases room.
+store's live entries. The shipped eviction floors are zero. If other stores hold the capacity, the
+request serves without retention until expiry releases room.
 One selected provider owns every metadata retention capability. Unsupported capabilities stay
 uncached. A failed backend read fetches metadata from its origin or rerenders an assembled response
 from authorised inputs. A failed write skips retention. Neither failure uses a retained local fallback.
