@@ -419,9 +419,8 @@ error, not a silent skip:
 - On `mirrorTarget` and `publicationTarget`, `url` is where Écluse reads and `uploadUrl` is where
   it writes. Where the protocol derives its write address from `url` (npm, RubyGems), the load
   refuses `uploadUrl`, because the key could only send uploads to another address. Where the
-  protocol uploads to a separate endpoint (PyPI, Cargo), a role that writes through the target
-  refuses to boot without `uploadUrl`, so a `url` that still names the upload endpoint never
-  becomes a read root unnoticed.
+  protocol uploads to a separate endpoint (PyPI, Cargo), the load requires `uploadUrl` on both
+  targets in every role, because the write address cannot be derived from `url`.
 - A static publish credential requires a verifiable edge. A `token` under a `publicationTarget`
   tag without `ECLUSE_SERVER__AUTH_TOKEN` is refused as
   `PublishStaticCredentialNeedsEdge`. That pairing would let any unauthenticated client publish
