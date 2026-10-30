@@ -35,11 +35,13 @@ import Ecluse.Core.Registry.Adapter.Capability (
     WorkerMetadataRead (..),
  )
 import Ecluse.Core.Registry.Adapter.Types (AdapterServe (..), RegistryAdapter (..))
+import Ecluse.Core.Registry.FirstParty (FirstPartyDeclaration (FirstPartyDeclaration))
 import Ecluse.Core.Registry.Maintenance.NameSpace (mkNameAlphabet)
 import Ecluse.Core.Registry.Origin (OriginClient (ocToken), originBaseUrl)
 import Ecluse.Core.Registry.Publish (relayPublishRequest)
 import Ecluse.Core.Registry.PyPI.Credential (pypiCredential)
 import Ecluse.Core.Registry.PyPI.Filter (assembleSimpleDocument, serialiseSimpleDocument)
+import Ecluse.Core.Registry.PyPI.FirstParty (pypiFirstPartyNames)
 import Ecluse.Core.Registry.PyPI.Metadata (pypiChargeFactors, pypiMirrorRead, pypiRead)
 import Ecluse.Core.Registry.PyPI.Mirror (pypiMirrorDocuments, pypiStateFormat)
 import Ecluse.Core.Registry.PyPI.Project (projectName, pypiNameLeadChars)
@@ -83,6 +85,7 @@ pypiAdapter =
                 , artifactPrivateAddressing = IndexedArtifactLocation
                 }
         , adapterProjectName = rightToMaybe . projectName
+        , adapterFirstParty = FirstPartyDeclaration pypiFirstPartyNames
         , adapterPublish = Just pypiPublish
         , adapterMaintenance =
             AdapterMaintenance

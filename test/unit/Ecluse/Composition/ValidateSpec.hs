@@ -79,7 +79,7 @@ import Ecluse.Composition.Vet (runVet)
 import Ecluse.Config (
     AppConfig (cfgMirrorState, cfgMounts),
     Config (configApp),
-    FirstParty (FirstPartyNpmScopes),
+    FirstParty (FirstParty),
     MirrorEndpoint (meUsername),
     MountConfig (mntMirrorTarget, mntPublicationTarget),
     PublicationEndpoint (peUsername),
@@ -91,6 +91,7 @@ import Ecluse.Core.Ecosystem (Ecosystem (Cargo, Npm, PyPI, RubyGems))
 import Ecluse.Core.Package (mkScope)
 import Ecluse.Core.Registry.Adapter (RegistryAdapter (adapterPublish), adapterFor)
 import Ecluse.Core.Registry.Adapter.Capability (AdapterPublish (publishCodec))
+import Ecluse.Core.Registry.Npm.Adapter (npmFirstPartyNames)
 import Ecluse.Core.Registry.Publish (MirrorCompanion, PublishCodec (pcMirrorCompanion))
 import Ecluse.Core.Registry.RubyGems.Mirror (rubyMirrorCompanion)
 import Ecluse.Core.Registry.Sweep.Types (minimumChunkPause)
@@ -496,7 +497,7 @@ clearedSpec = describe "vetBoot -- what a cleared configuration reifies" $ do
             Just publication -> do
                 registryUrlText (publicationTargetUrl (vpubTarget publication))
                     `shouldBe` "https://publish.example.test"
-                vpubFirstParty publication `shouldBe` FirstPartyNpmScopes (pure (mkScope "acme"))
+                vpubFirstParty publication `shouldBe` FirstParty npmFirstPartyNames (pure (mkScope "acme"))
                 fmap (unSecret . credSecret) (vpubStaticCredential publication) `shouldBe` Just "publish-write-token"
 
     it "clears no publication for a mount that declares no target, so PUT stays a 405" $ do

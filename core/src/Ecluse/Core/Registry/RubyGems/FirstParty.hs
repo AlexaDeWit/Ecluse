@@ -7,11 +7,12 @@ module Ecluse.Core.Registry.RubyGems.FirstParty (
     RubyGemsFirstParty,
     projectFirstPartyEntry,
     rubyGemsFirstPartyName,
+    rubyGemsFirstPartyNames,
 ) where
 
 import Ecluse.Core.Package (PackageName, renderPackageName)
 import Ecluse.Core.Registry (ParseError)
-import Ecluse.Core.Registry.FirstParty (FirstPartyEntry, FirstPartyGrammar (..), ownsFirstPartyName, parseFirstPartyEntry)
+import Ecluse.Core.Registry.FirstParty (FirstPartyEntry, FirstPartyGrammar (..), FirstPartyNames (..), ownsFirstPartyName, parseFirstPartyEntry)
 import Ecluse.Core.Registry.RubyGems.Project (projectName, unscopedRubyGems)
 
 -- | The tag that keeps RubyGems entries apart from another ecosystem's.
@@ -37,3 +38,13 @@ projectFirstPartyEntry = parseFirstPartyEntry rubyGemsFirstPartyGrammar
 -- | Match exact native identities, excluding foreign ecosystems and npm scopes.
 rubyGemsFirstPartyName :: NonEmpty RubyGemsFirstParty -> PackageName -> Bool
 rubyGemsFirstPartyName = ownsFirstPartyName rubyGemsFirstPartyGrammar
+
+-- | Names and prefixes the mount's @firstParty@ entries declare.
+rubyGemsFirstPartyNames :: FirstPartyNames RubyGemsFirstParty
+rubyGemsFirstPartyNames =
+    FirstPartyNames
+        { namesEntry = projectFirstPartyEntry
+        , namesOwn = rubyGemsFirstPartyName
+        , namesEntryNoun = "RubyGems entry"
+        , namesListNoun = "gem or prefix"
+        }

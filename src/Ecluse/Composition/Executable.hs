@@ -26,7 +26,6 @@ import Ecluse.Composition (
     PublishBudget (PublishBudget, pbBodyBudget, pbMaxRequestBytes),
     ResolveAdapter,
     WiringPorts (WiringPorts, wpBuildCredentials, wpClock, wpReporters, wpResolveAdapter, wpRuleDeps),
-    firstPartyName,
     resolveBootWiring,
  )
 import Ecluse.Composition.BootError (
@@ -68,6 +67,7 @@ import Ecluse.Core.Package (PackageName)
 import Ecluse.Core.Queue (MirrorQueue, noMirrorQueue)
 import Ecluse.Core.Registry.Adapter (adapterProjectName)
 import Ecluse.Core.Registry.Adapter.Capability (ProjectName)
+import Ecluse.Core.Registry.FirstParty (firstPartyName)
 import Ecluse.Core.Registry.Maintenance (StoreFacts (factBackend), StoreObservation (obFacts, obProbeUpstream))
 import Ecluse.Core.Registry.Maintenance.Budget (BudgetPort, QuotaScope, RequestGate, newBudgetMeter)
 import Ecluse.Core.Registry.Sweep.Pacing (nominalPackagePace)

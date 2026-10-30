@@ -14,12 +14,14 @@ import Ecluse.Core.Registry (UrlFormationError (UnparseableUrl))
 import Ecluse.Core.Registry.Adapter.Capability (AdapterArtifact (..), AdapterMaintenance (..), AdapterMetadata (..), PrivateArtifactAddressing (AdmittedIndexedArtifactLocation))
 import Ecluse.Core.Registry.Adapter.Types (AdapterServe (..), RegistryAdapter (..))
 import Ecluse.Core.Registry.Cargo.Credential (cargoCredential)
+import Ecluse.Core.Registry.Cargo.FirstParty (cargoFirstPartyNames)
 import Ecluse.Core.Registry.Cargo.Metadata (prepareCargoRead)
 import Ecluse.Core.Registry.Cargo.Project (cargoNameChars, projectName)
 import Ecluse.Core.Registry.Cargo.Publish (cargoPublish)
 import Ecluse.Core.Registry.Cargo.Request (cargoArtifactHosts, cargoArtifactRequest)
 import Ecluse.Core.Registry.Cargo.Route (cargoRouteSpecs, cargoRouter)
 import Ecluse.Core.Registry.Cargo.Serving (assembleCargoDocument, serialiseCargoDocument)
+import Ecluse.Core.Registry.FirstParty (FirstPartyDeclaration (FirstPartyDeclaration))
 import Ecluse.Core.Registry.Maintenance.NameSpace (mkNameAlphabet)
 import Ecluse.Core.Rules.Types (RuleType (AllowScopeType, DenyExternalDependenciesType, DenyIfDeprecatedType, DenyInstallTimeExecutionType))
 import Ecluse.Core.Server.Admission.Types (ChargeFactors)
@@ -57,6 +59,7 @@ cargoAdapter factors =
                 , artifactPrivateAddressing = AdmittedIndexedArtifactLocation
                 }
         , adapterProjectName = rightToMaybe . projectName
+        , adapterFirstParty = FirstPartyDeclaration cargoFirstPartyNames
         , adapterPublish = Just (cargoPublish factors)
         , adapterMaintenance =
             AdapterMaintenance

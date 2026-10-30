@@ -83,12 +83,9 @@ import Ecluse.Core.Credential (Secret)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm), ecosystemName)
 import Ecluse.Core.Osv.Provenance (SourcePathRecording)
 import Ecluse.Core.Osv.Publication (Percent)
-import Ecluse.Core.Package (Scope)
 import Ecluse.Core.Package.Integrity (MinIntegrity, MinTrustedIntegrity)
-import Ecluse.Core.Registry.Cargo.FirstParty (CargoFirstParty)
+import Ecluse.Core.Registry.FirstParty (FirstParty (..))
 import Ecluse.Core.Registry.Maintenance.Budget (QuotaDimension, RequestKind)
-import Ecluse.Core.Registry.PyPI.FirstParty (PyPIFirstParty)
-import Ecluse.Core.Registry.RubyGems.FirstParty (RubyGemsFirstParty)
 import Ecluse.Core.Rules.Types (PrecededRule)
 import Ecluse.Core.Security (hostPortAddress, refuseCredentialMaterial)
 import Ecluse.Core.Security.Egress (RegistryUrl)
@@ -273,18 +270,6 @@ sbControl = \case
     BackendRegistry{} -> ControlNone
     BackendCodeArtifact _ store -> ControlCodeArtifact store
     BackendVerdaccio token consent -> ControlProtocol token consent
-
--- | The namespaces a mount's deployment owns, in its registry's naming shape. Every consumer of the privilege derives from this value.
-data FirstParty
-    = -- | The npm scopes the deployment owns, at least one.
-      FirstPartyNpmScopes (NonEmpty Scope)
-    | -- | The PyPI distributions and name prefixes the deployment owns, at least one.
-      FirstPartyPyPI (NonEmpty PyPIFirstParty)
-    | -- | The Cargo names and separator-delimited prefixes the deployment owns.
-      FirstPartyCargo (NonEmpty CargoFirstParty)
-    | -- | The exact RubyGems names and separator-delimited prefixes the deployment owns.
-      FirstPartyRubyGems (NonEmpty RubyGemsFirstParty)
-    deriving stock (Eq, Show)
 
 -- | A mount's refinements of the global @integrity@ group, under its own @integrity@ key. Each is 'Nothing' at the global setting.
 newtype MountIntegrity = MountIntegrity

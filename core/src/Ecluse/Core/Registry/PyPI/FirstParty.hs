@@ -15,6 +15,7 @@ module Ecluse.Core.Registry.PyPI.FirstParty (
     PyPIFirstParty (..),
     projectFirstPartyEntry,
     pypiFirstPartyName,
+    pypiFirstPartyNames,
 ) where
 
 import Data.Char (isAlphaNum, isAscii)
@@ -25,6 +26,7 @@ import Data.Text.Short qualified as TS
 import Ecluse.Core.Ecosystem (Ecosystem (PyPI))
 import Ecluse.Core.Package (PackageName, canonicalise, pkgCanonical, pkgEcosystem)
 import Ecluse.Core.Registry (ParseError (..))
+import Ecluse.Core.Registry.FirstParty (FirstPartyNames (..))
 import Ecluse.Core.Registry.PyPI.Project (isNameSeparator, projectName)
 import Ecluse.Core.Registry.WireSupport (parseNameComponent)
 
@@ -77,6 +79,16 @@ endsAtSeparator prefix = maybe False (isNameSeparator . snd) (T.unsnoc prefix)
 -- | Match an exact canonical name or a declared prefix. Deny by default.
 pypiFirstPartyName :: NonEmpty PyPIFirstParty -> PackageName -> Bool
 pypiFirstPartyName entries name = any (`owns` name) entries
+
+-- | Distributions and prefixes the mount's @firstParty@ entries declare.
+pypiFirstPartyNames :: FirstPartyNames PyPIFirstParty
+pypiFirstPartyNames =
+    FirstPartyNames
+        { namesEntry = projectFirstPartyEntry
+        , namesOwn = pypiFirstPartyName
+        , namesEntryNoun = "entry"
+        , namesListNoun = "distribution or prefix"
+        }
 
 owns :: PyPIFirstParty -> PackageName -> Bool
 owns = \case
