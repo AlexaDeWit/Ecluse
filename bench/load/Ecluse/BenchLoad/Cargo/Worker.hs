@@ -1,7 +1,6 @@
 -- SPDX-FileCopyrightText: 2026 Alexandra de Wit
 --
 -- SPDX-License-Identifier: MIT
-{-# LANGUAGE ImportQualifiedPost #-}
 
 -- | Cargo whole-version worker throughput includes native metadata, archives, uploads, and durable completion.
 module Ecluse.BenchLoad.Cargo.Worker (cargoWorkerScenario) where

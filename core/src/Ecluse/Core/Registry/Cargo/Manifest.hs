@@ -1,7 +1,6 @@
 -- SPDX-FileCopyrightText: 2026 Alexandra de Wit
 --
 -- SPDX-License-Identifier: MIT
-{-# LANGUAGE ImportQualifiedPost #-}
 {-# LANGUAGE TupleSections #-}
 
 -- | Native packaged Cargo manifests and publication metadata, without executing package code.

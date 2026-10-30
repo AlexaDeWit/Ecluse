@@ -1,7 +1,6 @@
 -- SPDX-FileCopyrightText: 2026 Alexandra de Wit
 --
 -- SPDX-License-Identifier: MIT
-{-# LANGUAGE ImportQualifiedPost #-}
 
 -- | Ruby native formats share admission, mirroring and backend role contracts.
 module Ecluse.Core.Registry.RubyGems.Adapter (rubyGemsAdapter) where
