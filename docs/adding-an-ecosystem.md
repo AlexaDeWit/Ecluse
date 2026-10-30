@@ -146,6 +146,9 @@ Do not add a dormant codec or publish helper without an active caller.
 
 Declare `AdapterPublish.publishMirrorRequirements`, `publishUploadEndpoint` and `publishIdentity` in [Adapter.Capability](../core/src/Ecluse/Core/Registry/Adapter/Capability.hs).
 `MirrorRequirements` selects cached or charged worker reads and native or durable version state.
+Durable version state carries the format's [MirrorDocuments](../core/src/Ecluse/Core/Mirror/Documents.hs): the restore, ordering, entry rekeying and listing assembly of managed documents, and which files need a retained companion.
+Composition binds them to the mount's mirror view, which names no ecosystem.
+Boot refuses a mirror target whose codec prepares native companions where the declaration requires none, or omits them where it requires them.
 `UploadEndpointRequirement` declares whether both write targets upload at the read root or at a separate `uploadUrl`.
 `UploadIdentityRequirement` declares token-only or named identity for static credentials.
 Composition uses these declarations for worker wiring and boot checks, without switching on ecosystem names.
@@ -156,7 +159,7 @@ Use `relayPublishRequest` in [Publish](../core/src/Ecluse/Core/Registry/Publish/
 | Mirror input | Complete version inventory and verified file identities | Retained read data and required upload metadata |
 | Copying and retries | Worker orchestration and existing authority limits | Native target reads and upload outcomes |
 | Completion | Expected membership and complete-view checks | Document which target facts prove every file exists |
-| Restart and outage | Existing [mirror state](../core/src/Ecluse/Core/Mirror/State.hs) where required | Preserve the source fields needed for later native reads |
+| Restart and outage | Existing [mirror state](../core/src/Ecluse/Core/Mirror/State.hs) where required | Preserve the source fields needed for later native reads, and declare how retained documents restore |
 | First-party publish | [Publish pipeline](../core/src/Ecluse/Core/Server/Pipeline/Publish.hs), bounded body, identity guard | Body framing, identity claims, content type, allowed methods, reply semantics |
 | Dredger | [Store maintenance interface](../core/src/Ecluse/Core/Registry/Maintenance.hs), policy, consent, deletion cap | Supported inventory and deletion operations from protocol or backend |
 | Telemetry | Existing spans and observations around the shared paths | Native outcomes through the same observations |
