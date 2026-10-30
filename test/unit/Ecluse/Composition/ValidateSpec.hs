@@ -310,7 +310,7 @@ ruleBlocksSpec = describe "vetBoot -- ecosystem rule blocks" $ do
             map vmEcosystem (vpMounts plan) `shouldBe` ecosystems
             for_ (vpMounts plan) $ \mount ->
                 map (ruleName . prRule) (mountPolicy (vmMount mount))
-                    `shouldMatchList` (["AllowIfOlderThan"] <> ["DenyInstallTimeExecution" | vmEcosystem mount == Npm])
+                    `shouldMatchList` (["AllowIfOlderThan"] <> concat [["DenyExternalDependencies", "DenyInstallTimeExecution"] | vmEcosystem mount == Npm])
 
     for_ [MirrorWriter, MirrorPruner, MirrorPreviewer] $ \role -> describe (show role) $ do
         it "refuses a shared install-code deny" $
