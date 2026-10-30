@@ -1314,6 +1314,7 @@ test-suite ecluse-core-unit
     Ecluse.Core.Registry.SweepSpec
     Ecluse.Core.Registry.MetadataSpec
     Ecluse.Core.Registry.Metadata.FetchSpec
+    Ecluse.Core.Registry.Metadata.Fetch.PreparationSpec
     Ecluse.Core.Registry.Metadata.ProjectionSpec
     Ecluse.Core.RegistrySpec
     Ecluse.Core.Registry.Npm.CredentialSpec
@@ -1827,6 +1828,7 @@ test-suite ecluse-runtime-unit
     Ecluse.Runtime.Mirror.State.S3.InternalSpec
     Ecluse.Runtime.Pilot.ExportSpec
     Ecluse.Runtime.Credential.CodeArtifactSpec
+    Ecluse.Runtime.Credential.CodeArtifact.PresentationSpec
     Ecluse.Runtime.Cve.SyncSpec
     Ecluse.Runtime.Cve.Sync.InternalSpec
     Ecluse.Runtime.Cve.Sync.S3Spec

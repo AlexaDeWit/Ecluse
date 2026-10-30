@@ -41,7 +41,7 @@ import Ecluse.Composition.Executable (
 import Ecluse.Composition.Maintenance (StoreBuilds (StoreBuilds, sbDeleting, sbObserving, sbProbing), StorePorts (spCredential))
 import Ecluse.Composition.Maintenance.Plan (ClearedBackend (cbUrl))
 import Ecluse.Composition.Plan (BootPlan (bpRole))
-import Ecluse.Composition.Support (NoCredentials (NoCredentials), clearedUrl, codeArtifactEnvVars, codeArtifactMirrorUrl, codeArtifactPypiCacheUrl, codeArtifactPypiMirrorUrl, expectConfig, expectPlanFor, noCeiling, overrideEnv, privateUpstreamUrl, pypiMirrorEnv, staticEnvVars, twoStoreEnv, withObservablePrivate)
+import Ecluse.Composition.Support (NoCredentials (NoCredentials), clearedUrl, codeArtifactEnvVars, codeArtifactMirrorUrl, codeArtifactPypiCacheUrl, codeArtifactPypiMirrorUrl, expectConfig, expectPlanFor, noCeiling, overrideEnv, privateUpstreamUrl, pypiMirrorEnv, slotCredentials, staticEnvVars, twoStoreEnv, withObservablePrivate)
 import Ecluse.Composition.Types (
     BootRole (BootMirrorPipeline, BootStorePreview, BootStorePruner, BootWithoutPipeline),
     MirrorRole (MirrorOnly, ServeAndMirror, ServeOnly),
@@ -505,11 +505,6 @@ npmAndPypiMirrorTargets =
     [ ((Npm, MirrorCredential), BackendRegistry (mkSecret "mirror-write-token"))
     , ((PyPI, MirrorCredential), BackendRegistry (mkSecret "fixture-token"))
     ]
-
--- Mints each slot a static token that spells the slot, so a store's ports show which credential reached it.
-slotCredentials :: BuildCredentials
-slotCredentials reportersFor targets =
-    initTargetCredentialProviders reportersFor [(slot, BackendRegistry (mkSecret (show slot))) | (slot, _) <- targets]
 
 -- Store builds that record each store's URL beside the token its ports carry, then build as the given ones do.
 recordingStoreTokens :: StoreBuilds -> IO (StoreBuilds, IO [(Text, Maybe Text)])

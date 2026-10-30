@@ -27,7 +27,7 @@ import Ecluse.Core.Registry.Metadata (VersionDoc (..))
 import Ecluse.Core.Registry.MirrorUpload (inventoryFiles, inventoryPackage, inventoryVersion, verifyMirrorBytes)
 import Ecluse.Core.Registry.Publish (MirrorPublish (..), MirrorTransport (..), PublishCodec (..), PublishPlan (..), newMirrorPublish, pmvInventory, pmvPrepareUpload, publishPrepared)
 import Ecluse.Core.Registry.PyPI.Publish (classifyPublish, pypiPublishCodec)
-import Ecluse.Core.Registry.Request (nativePresentation)
+import Ecluse.Core.Registry.Request (AuthMechanism (AuthBearer), declaredPresentation, nativePresentation)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Core.Security.Limits (defaultLimits)
 import Ecluse.Test.Deadline (withExchangeClient, withSweeper)
@@ -35,7 +35,8 @@ import Ecluse.Test.Osv (osvZipOf)
 import Ecluse.Test.Package (pypiVersion, unscopedPyPI)
 import Ecluse.Test.Port (passthroughTracingPort)
 import Ecluse.Test.Registry.PyPI.Metadata (projectPyPIIndex)
-import Ecluse.Test.Stub (capBody, capMethod, capPath, headerValue, lastCaptured, stubBaseUrl, withStub)
+import Ecluse.Test.Registry.Publish (publishOnlyFile)
+import Ecluse.Test.Stub (allCaptured, capBody, capMethod, capPath, headerValue, lastCaptured, stubBaseUrl, withStub)
 import Ecluse.Test.Support (expectRight)
 
 spec :: Spec
@@ -43,7 +44,7 @@ spec = do
     describe "PyPI mirror HTTP upload" $
         it "posts exact verified bytes, native fields, and the supplied Basic pair to the declared endpoint" $
             withStub status200 "ok" $ \stub -> do
-                bytes <- BSL.toStrict <$> osvZipOf [("example-1.dist-info/METADATA", "Metadata-Version: 2.4\nName: example\nVersion: 1\nRequires-Dist: dependency>=2; extra == 'test'\nProvides-Extra: test\n\nA description.\n")]
+                bytes <- exampleWheel
                 snapshot <- sourceSnapshot bytes
                 withExchangeClient (newManager defaultManagerSettings) $ \exchanges -> do
                     let target = loopbackRegistryUrl (stubBaseUrl stub <> "/custom-upload")
@@ -73,6 +74,19 @@ spec = do
                     lookup "sha256_digest" fields `shouldBe` Just (encodeUtf8 (sha256 bytes))
                     lookup "requires_dist" fields `shouldBe` Just "dependency>=2; extra == 'test'"
                     map (BSL.toStrict . Wai.fileContent . snd) files `shouldBe` [bytes]
+    describe "PyPI store-declared presentation" $
+        it "renders a store-declared mechanism on the target read and the upload" $
+            withStub status200 "ok" $ \stub -> do
+                bytes <- exampleWheel
+                snapshot <- sourceSnapshot bytes
+                withExchangeClient (newManager defaultManagerSettings) $ \exchanges -> do
+                    let transport = MirrorTransport exchanges (pure (Just (ClientCredential (Just "publisher") (mkSecret "password")))) defaultLimits passthroughTracingPort
+                        writer = newMirrorPublish transport (loopbackRegistryUrl (stubBaseUrl stub)) (loopbackRegistryUrl (stubBaseUrl stub <> "/custom-upload")) (pypiPublishCodec (declaredPresentation (const AuthBearer)))
+                    _ <- mpProbeInventory writer (const pass) (unscopedPyPI "example")
+                    publishOnlyFile writer snapshot (PublishPlan (pypiVersion "1")) bytes `shouldReturn` Right ()
+                    captured <- allCaptured stub
+                    map capMethod captured `shouldBe` ["GET", "POST"]
+                    map (headerValue "Authorization") captured `shouldBe` [Just "Bearer password", Just "Bearer password"]
     describe "PyPI upload preparation" $
         for_ ["example-1-py3-none-any.whl", "example-1.zip"] $ \filename ->
             it ("refuses verified malformed archive bytes for " <> toString filename) $ do
@@ -93,6 +107,10 @@ spec = do
             classifyPublish 400 "Invalid metadata" `shouldSatisfy` isLeft
             classifyPublish 403 "File already exists." `shouldSatisfy` isLeft
             classifyPublish 500 "File already exists." `shouldSatisfy` isLeft
+
+-- One wheel whose metadata carries a conditional dependency and its extra.
+exampleWheel :: IO ByteString
+exampleWheel = BSL.toStrict <$> osvZipOf [("example-1.dist-info/METADATA", "Metadata-Version: 2.4\nName: example\nVersion: 1\nRequires-Dist: dependency>=2; extra == 'test'\nProvides-Extra: test\n\nA description.\n")]
 
 sourceSnapshot :: ByteString -> IO VersionDoc
 sourceSnapshot = sourceSnapshotFor "example-1-py3-none-any.whl"

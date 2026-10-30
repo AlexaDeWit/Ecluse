@@ -4,8 +4,10 @@
 
 module Ecluse.CompositionSpec (spec) where
 
+import Data.List (lookup)
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
+import Network.HTTP.Client qualified as Client
 import Network.HTTP.Types (hAuthorization, hContentType, methodPost, status200)
 import Network.Wai (Request (requestHeaders, requestMethod), defaultRequest)
 import Network.Wai.Test (SRequest (SRequest), runSession, setPath, simpleStatus, srequest)
@@ -14,13 +16,15 @@ import Test.Hspec
 import Ecluse.Composition (
     BootWiring (bwBindings),
     PublishBudget (..),
+    PublishTarget (ptPresentation),
     WiringPorts (WiringPorts, wpBuildCredentials, wpClock, wpReporters, wpResolveAdapter, wpRuleDeps),
     firstPartyName,
     planMounts,
+    planPublishTargets,
     resolveBootWiring,
  )
 import Ecluse.Composition.BootError (BootError (..), renderBootError)
-import Ecluse.Composition.Credential (initTargetCredentialProviders)
+import Ecluse.Composition.Credential (initCredentialProviders, initTargetCredentialProviders)
 import Ecluse.Composition.MirrorRole (MirrorMintPlan (MintMirrorWrite, SkipMirrorWrite))
 import Ecluse.Composition.Support (
     cargoMirrorEnv,
@@ -33,15 +37,17 @@ import Ecluse.Composition.Support (
     fixedNow,
     overrideEnv,
     pubUrlEnv,
+    rubyGemsMirrorEnv,
     rubyInstallRefusal,
     scopedName,
+    slotCredentials,
     staticEnvVars,
     testLimits,
     withRubyInstallBlock,
     withoutMirrorTargetUrl,
  )
 import Ecluse.Composition.Types (RegistryRole (MirrorWriter))
-import Ecluse.Composition.Validate (vetBoot)
+import Ecluse.Composition.Validate (ValidatedPlan (vpMounts), VettedMount (vmMount), vetBoot)
 import Ecluse.Composition.Vet (runVet)
 import Ecluse.Config (
     Config (configMounts),
@@ -53,7 +59,7 @@ import Ecluse.Config (
     loadConfig,
     renderConfigError,
  )
-import Ecluse.Core.Credential (unSecret)
+import Ecluse.Core.Credential (ClientCredential (ClientCredential), mkSecret, unSecret)
 import Ecluse.Core.Deadline (newDeadlines)
 import Ecluse.Core.Ecosystem (Ecosystem (..))
 import Ecluse.Core.Package (HashAlg (SHA1, SHA512), mkPackageName, mkScope)
@@ -63,6 +69,8 @@ import Ecluse.Core.Package.Integrity (
  )
 import Ecluse.Core.Registry.FirstParty (FirstPartyEntry (OwnedName))
 import Ecluse.Core.Registry.PyPI.FirstParty (PyPIFirstParty (PyPIOwnedName))
+import Ecluse.Core.Registry.Request (StoreOperation (StoreRead, StoreWrite), attachCredential, nativePresentation, presentedMapping)
+import Ecluse.Core.Registry.RubyGems.Credential (rubyPublishCredential, rubyReadCredential)
 import Ecluse.Core.Rules (PreparedRule (prepName), bootOrder, renderBootOrder)
 import Ecluse.Core.Rules.Types (EvalContext (EvalContext), identityEvidence)
 import Ecluse.Core.Security (Limits (maxMetadataBytes, maxNestingDepth, maxVersionCount), defaultLimits)
@@ -92,6 +100,7 @@ import Ecluse.Test.Deadline (withSweeper)
 import Ecluse.Test.Package (defaultMinIntegrity, defaultMinTrustedIntegrity, pypiVersion, thingName, unscopedPyPI, v1_0_0)
 import Ecluse.Test.Rules (blockedBy, evalRules, inertRuleDeps)
 import Ecluse.Test.Stub (allCaptured, headerValue, stubBaseUrl, withRoutedStub)
+import Ecluse.Test.Support (parseRequestOrFail)
 
 -- | The composition root's boot wiring: every problem is an aggregated boot error, with no IO beyond the injected clock and resolver.
 spec :: Spec
@@ -99,6 +108,7 @@ spec = do
     planMountsSpec
     bootErrorSpec
     publishWiringSpec
+    mirrorTargetSpec
     firstPartySpec
 
 expectDoc :: ByteString -> IO ByteString
@@ -527,6 +537,37 @@ mirrorTargetText :: MirrorServePlan -> Maybe Text
 mirrorTargetText = \case
     MirrorOnAdmit url -> Just (registryUrlText url)
     NoMirrorWrite -> Nothing
+
+-- | The mirror worker's write targets carry the presentation their declared store asks for.
+mirrorTargetSpec :: Spec
+mirrorTargetSpec = describe "planPublishTargets (the mirror worker's write targets)" $ do
+    it "plans a CodeArtifact mirror target with its store's declared presentation" $ do
+        target <- plannedMirrorTarget rubyGemsCodeArtifactMirrorEnv
+        request <- parseRequestOrFail (codeArtifactDomain <> "/ruby/mirror/api/v1/gems")
+        let token = Just (ClientCredential (Just "aws") (mkSecret "key"))
+            authorization mapping = lookup "Authorization" (Client.requestHeaders (attachCredential mapping token request))
+        authorization (presentedMapping (ptPresentation target) StoreWrite rubyPublishCredential) `shouldBe` Just "Bearer key"
+        authorization (presentedMapping (ptPresentation target) StoreRead rubyReadCredential) `shouldBe` Just "Basic YXdzOmtleQ=="
+
+    it "plans a registry mirror target with the protocol's own presentation" $ do
+        target <- plannedMirrorTarget rubyGemsMirrorEnv
+        ptPresentation target `shouldBe` nativePresentation
+
+-- The one mirror target a writing role plans for a single-mount fixture, its providers minted per slot.
+plannedMirrorTarget :: [(String, String)] -> IO PublishTarget
+plannedMirrorTarget env = do
+    plan <- expectConfig env Nothing >>= expectValidated
+    providers <- initCredentialProviders slotCredentials (const (const noCredentialReporters)) (map vmMount (vpMounts plan)) >>= either (\errs -> fail ("provider init failed: " <> show errs)) pure
+    case planPublishTargets MintMirrorWrite providers plan of
+        Right [target] -> pure target
+        Right targets -> fail ("expected one mirror target, got " <> show (length targets))
+        Left errs -> fail ("mirror target planning refused: " <> show errs)
+
+-- 'rubyGemsMirrorEnv' mirroring to a CodeArtifact repository, which mints its own write token.
+rubyGemsCodeArtifactMirrorEnv :: [(String, String)]
+rubyGemsCodeArtifactMirrorEnv =
+    ("ECLUSE_MOUNTS__RUBYGEMS__MIRROR_TARGET__CODE_ARTIFACT__URL", codeArtifactDomain <> "/ruby/mirror/")
+        : filter (not . ("ECLUSE_MOUNTS__RUBYGEMS__MIRROR_TARGET__REGISTRY__" `isPrefixOf`) . fst) rubyGemsMirrorEnv
 
 -- | The first-party predicate every consumer reads, pinned per ecosystem: a disagreement would be dependency confusion.
 firstPartySpec :: Spec

@@ -4,8 +4,13 @@
 
 module Ecluse.Config.TargetSpec (spec) where
 
+import Prelude hiding (universe)
+
+import Data.List (lookup)
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
+import Data.Universe.Class (universe)
+import Network.HTTP.Client qualified as Client
 import Test.Hspec
 
 import Ecluse.Composition.BootError (BootError (StoreTagConflict))
@@ -34,9 +39,12 @@ import Ecluse.Config (
     sbMint,
     sbTag,
  )
-import Ecluse.Config.Target (parseCodeArtifactHost, resolvePrivateBackend)
-import Ecluse.Core.Credential (mkSecret)
+import Ecluse.Config.Target (parseCodeArtifactHost, resolvePrivateBackend, storePresentation)
+import Ecluse.Core.Credential (ClientCredential (ClientCredential), mkSecret)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, RubyGems))
+import Ecluse.Core.Registry.Request (StoreOperation (StoreRead, StoreWrite), attachCredential, nativePresentation, presentedMapping)
+import Ecluse.Core.Registry.RubyGems.Credential (rubyPublishCredential, rubyReadCredential)
+import Ecluse.Test.Support (parseRequestOrFail)
 import Ecluse.Runtime.Credential.CodeArtifact (CodeArtifactConfig (..))
 import Ecluse.Runtime.Maintenance.CodeArtifact.Decide (CodeArtifactStore (..), formatToken)
 
@@ -49,6 +57,7 @@ spec = do
     privateBackendSpec
     tagCollisionSpec
     parseCodeArtifactHostSpec
+    storePresentationSpec
 
 {- Every cell of the store admission matrix: which tags an endpoint admits, and which keys each
 tag admits there. A shape outside its cell refuses at load, naming the key path. -}
@@ -478,3 +487,17 @@ codeArtifactMirror = codeArtifactDomain <> "/npm/mirror/"
 codeArtifactInternal = codeArtifactDomain <> "/npm/internal/"
 codeArtifactPyPI = codeArtifactDomain <> "/pypi/mirror/"
 codeArtifactBare = codeArtifactDomain <> "/npm/"
+
+storePresentationSpec :: Spec
+storePresentationSpec = describe "storePresentation" $ do
+    it "keeps the protocol's own presentation on registry and verdaccio stores, for every ecosystem" $
+        for_ (universe :: [Ecosystem]) $ \eco ->
+            map (`storePresentation` eco) [TagRegistry, TagVerdaccio] `shouldBe` [nativePresentation, nativePresentation]
+
+    it "renders a CodeArtifact RubyGems token as Basic aws on reads and Bearer on writes" $ do
+        request <- parseRequestOrFail "https://acme-111122223333.d.codeartifact.eu-west-1.amazonaws.com/ruby/internal/api/v1/gems"
+        let presentation = storePresentation TagCodeArtifact RubyGems
+            token = Just (ClientCredential (Just "aws") (mkSecret "key"))
+            authorization mapping = lookup "Authorization" (Client.requestHeaders (attachCredential mapping token request))
+        authorization (presentedMapping presentation StoreRead rubyReadCredential) `shouldBe` Just "Basic YXdzOmtleQ=="
+        authorization (presentedMapping presentation StoreWrite rubyPublishCredential) `shouldBe` Just "Bearer key"

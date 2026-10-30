@@ -35,7 +35,7 @@ import Ecluse.Core.Registry.Publish (
     PublishPlan (PublishPlan, ppLatest),
     newMirrorPublish,
  )
-import Ecluse.Core.Registry.Request (baseRequestUrl, nativePresentation)
+import Ecluse.Core.Registry.Request (AuthMechanism (AuthRawKey), baseRequestUrl, declaredPresentation, nativePresentation)
 import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), LimitError (BodyTooLarge), Limits (maxMetadataBytes), defaultLimits)
 import Ecluse.Core.Security.Egress (registryUrlText)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
@@ -47,7 +47,7 @@ import Ecluse.Test.Registry (isBoundExceededPublish, isTransportFetch, isUrlUnfo
 import Ecluse.Test.Registry.Npm (dummyArtifact, isOdd, isOddVersionDoc, mirrorVersionDoc)
 import Ecluse.Test.Registry.Publish (anonymousPublishAt, publishOnlyFile)
 import Ecluse.Test.Stub (
-    Captured (capPath),
+    Captured (capMethod, capPath),
     Stub,
     allCaptured,
     headerValue,
@@ -157,6 +157,20 @@ spec = do
                 Right request -> do
                     Client.redirectCount request `shouldBe` 0
                     lookup "Authorization" (Client.requestHeaders request) `shouldBe` Just "Bearer tok"
+
+        it "renders a store-declared mechanism on the probe, the target read and the upload" $
+            withStub status200 "{}" $ \stub -> withSweeper $ \deadlines -> do
+                exchanges <- untracedClient <$> Client.newManager Client.defaultManagerSettings <*> pure deadlines
+                let codec = npmPublishCodec (declaredPresentation (const AuthRawKey))
+                    transport = MirrorTransport{ptClient = exchanges, ptMintCredential = pure (Just (bareCredential (mkSecret "minted-token"))), ptLimits = defaultLimits, ptTracing = passthroughTracingPort}
+                    publish = newMirrorPublish transport (loopbackRegistryUrl (stubBaseUrl stub)) (loopbackRegistryUrl (stubBaseUrl stub)) codec
+                probe <- either (fail . show) pure (pcProbeRequest codec "https://mirror.test" (Just (bareCredential (mkSecret "tok"))) isOdd)
+                lookup "Authorization" (Client.requestHeaders probe) `shouldBe` Just "tok"
+                _ <- mpProbeInventory publish (const pass) isOdd
+                _ <- publishFixture publish
+                captured <- allCaptured stub
+                map capMethod captured `shouldBe` ["GET", "PUT"]
+                map (headerValue "Authorization") captured `shouldBe` [Just "minted-token", Just "minted-token"]
 
         it "the publish request attaches the bearer with redirects disabled" $
             case npmPublishCodec nativePresentation of

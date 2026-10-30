@@ -20,7 +20,7 @@ import Ecluse.Core.Registry.Origin (OriginClient (ocChargeFullRead, ocToken))
 import Ecluse.Core.Registry.Publish (PublishCodec (pcPrepareTarget, pcTargetReadPermille))
 import Ecluse.Core.Registry.RubyGems.Credential (rubyOtpHeaders, rubyPublishCredential, rubyPublishExtras, rubyReadCredential)
 import Ecluse.Core.Registry.RubyGems.Route (rubyGemsRouter)
-import Ecluse.Core.Registry.Request (nativePresentation)
+import Ecluse.Core.Registry.Request (AuthMechanism (AuthBasic, AuthBearer), ServicePresentation, StoreOperation (StoreRead, StoreWrite), declaredPresentation, nativePresentation)
 import Ecluse.Core.Security (defaultLimits)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Core.Server.Admission (newServeAdmissionTuned, withServeAdmission)
@@ -60,6 +60,19 @@ spec = do
                 response <- send [("Authorization", "edge-key")]
                 simpleStatus response `shouldBe` status201
                 readIORef observed `shouldReturn` [(Just (bareCredential (mkSecret "Bearer target-key")), [], "unchanged-native-body")]
+    describe "store-declared presentation at a protected mount" $ do
+        it "presents a static credential as the target store declares" $ do
+            seen <- newIORef []
+            withPresentedFixture (recordingPresentation seen) (Just (bareCredential (mkSecret "target-key"))) bearerWrites $ \send observed -> do
+                simpleStatus <$> send [("Authorization", "edge-key")] `shouldReturn` status201
+                readIORef observed `shouldReturn` [(Just (bareCredential (mkSecret "target-key")), [], "unchanged-native-body")]
+            readIORef seen `shouldReturn` [bearerWrites]
+        it "keeps a caller credential's own presentation where the store declares one" $ do
+            seen <- newIORef []
+            withPresentedFixture (recordingPresentation seen) Nothing bearerWrites $ \send observed -> do
+                simpleStatus <$> send [("Authorization", "edge-key")] `shouldReturn` status201
+                readIORef observed `shouldReturn` [(Just (bareCredential (mkSecret "edge-key")), [], "unchanged-native-body")]
+            readIORef seen `shouldReturn` [nativePresentation]
     describe "target discovery at a protected mount" $
         it "holds the sum of its full-read chunks, not only the largest" $ do
             held <- newIORef Nothing
@@ -106,10 +119,14 @@ type Relayed = (Maybe ClientCredential, RequestHeaders, ByteString)
 
 -- A mount whose admission never binds, for the credential and discovery cases.
 withCodecFixture :: (ServeRuntime -> AdapterPublish -> AdapterPublish) -> Maybe ClientCredential -> ((RequestHeaders -> IO SResponse) -> IORef [Relayed] -> IO a) -> IO a
-withCodecFixture adjust static use = withSweeper $ \deadlines -> do
+withCodecFixture adjust static = withPresentedFixture adjust static nativePresentation
+
+-- 'withCodecFixture' whose target store asks for the static credential under @presentation@.
+withPresentedFixture :: (ServeRuntime -> AdapterPublish -> AdapterPublish) -> Maybe ClientCredential -> ServicePresentation -> ((RequestHeaders -> IO SResponse) -> IORef [Relayed] -> IO a) -> IO a
+withPresentedFixture adjust static presentation use = withSweeper $ \deadlines -> do
     runtime <- testServeRuntime deadlines noopMetricsPort
     budget <- newByteAdmission deadlines (1024 * 1024)
-    withMount runtime budget adjust static $ \run ->
+    withMount runtime budget adjust static presentation $ \run ->
         use (\headers -> run (srequest (SRequest (setPath defaultRequest{requestMethod = "POST", requestHeaders = headers} "/api/v1/gems") "unchanged-native-body")))
 
 -- One serve slot and a body budget of one chunked upload, neither with a waiting room, so a held gate refuses at once.
@@ -118,11 +135,11 @@ withGatedFixture adjust use = withSweeper $ \deadlines -> do
     admission <- newServeAdmissionTuned deadlines 1 0 0
     runtime <- testServeRuntimeWith deadlines admission noopMetricsPort
     budget <- newByteAdmissionTuned deadlines 1024 0 0
-    withMount runtime budget adjust Nothing (use runtime budget)
+    withMount runtime budget adjust Nothing nativePresentation (use runtime budget)
 
 -- A RubyGems publish mount over stub inspection and relay. The relay records what it sends and answers 201.
-withMount :: ServeRuntime -> ByteAdmission -> (ServeRuntime -> AdapterPublish -> AdapterPublish) -> Maybe ClientCredential -> ((Session SResponse -> IO SResponse) -> IORef [Relayed] -> IO a) -> IO a
-withMount runtime budget adjust static use = do
+withMount :: ServeRuntime -> ByteAdmission -> (ServeRuntime -> AdapterPublish -> AdapterPublish) -> Maybe ClientCredential -> ServicePresentation -> ((Session SResponse -> IO SResponse) -> IORef [Relayed] -> IO a) -> IO a
+withMount runtime budget adjust static presentation use = do
     logEnv <- newTestLogEnv
     observed <- newIORef []
     let publish =
@@ -142,7 +159,7 @@ withMount runtime budget adjust static use = do
                 , pubTargetUrl = loopbackRegistryUrl "http://localhost:1"
                 , pubAllowed = const True
                 , pubStaticCredential = static
-                , pubStaticPresentation = nativePresentation
+                , pubStaticPresentation = presentation
                 , pubInboundToken = Just (mkSecret "edge-key")
                 , pubMaxRequestBytes = 1024
                 , pubLimits = defaultLimits
@@ -186,6 +203,17 @@ probingGates held runtime publish =
         slotTaken <- isLeft <$> withServeAdmission noopMetricsPort (srAdmission runtime) pass
         charged <- (> 0) . snChargedBytes <$> meterSnapshot (srMemoryMeter runtime)
         modifyIORef' held (<> [(slotTaken, charged)])
+
+-- Record the presentation each relay receives before relaying.
+recordingPresentation :: IORef [ServicePresentation] -> ServeRuntime -> AdapterPublish -> AdapterPublish
+recordingPresentation seen _ publish =
+    publish{publishRelay = \presentation origin name body -> modifyIORef' seen (<> [presentation]) >> publishRelay publish presentation origin name body}
+
+-- A store that asks for Basic on reads and Bearer on writes.
+bearerWrites :: ServicePresentation
+bearerWrites = declaredPresentation $ \case
+    StoreRead -> AuthBasic
+    StoreWrite -> AuthBearer
 
 -- Pay three equal chunks, each large enough that one chunk and the entry step stay under their sum.
 discoveryPaying :: IORef (Maybe Int) -> ServeRuntime -> AdapterPublish -> AdapterPublish
