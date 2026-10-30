@@ -80,6 +80,7 @@ import Ecluse.Core.Server.Response (
  )
 import Ecluse.Core.Server.Stream (RelayResponder (..), UpstreamBody (StreamBody), UpstreamResult, withUpstreamResult)
 import Ecluse.Core.Telemetry.Metrics (AdvisorySyncResult (AdvisoryFetchFailed, AdvisoryRefused))
+import Ecluse.Core.Telemetry.Span (TracingPort (spanDirectoryDecode, spanDirectoryFetch))
 import Ecluse.Core.Version (Version, mkVersion)
 import Ecluse.Runtime.Telemetry.Escape (withEscapeHandler)
 import Ecluse.Runtime.Telemetry.Internal (
@@ -93,6 +94,7 @@ import Ecluse.Runtime.Telemetry.Tracing.Internal (
     ruleVerdictFields,
     telemetryWaiMiddleware,
     tracedExchange,
+    tracingPortOf,
     withAdvisorySyncSpan,
     withMirrorEnqueueSpan,
     withMirrorJobSpan,
@@ -114,6 +116,7 @@ spec = do
     gatingSpec
     scrubSpec
     advisorySyncSpanSpec
+    directorySpanSpec
     escapedExceptionSpec
     dataPlaneFaultSpec
     clientSpanExitSpec
@@ -299,6 +302,19 @@ advisorySyncSpanSpec = describe "advisory sync span" $
             ecluseAttributeCount attributes `shouldBe` 2
             textAttribute attributes "ecluse.ecosystem" `shouldBe` Just "npm"
             textAttribute attributes "ecluse.advisory.sync.result" `shouldBe` Just "refused"
+
+-- A registry-wide directory read has no package, so its metadata spans carry no ecluse. attribute.
+directorySpanSpec :: Spec
+directorySpanSpec = describe "directory metadata spans" $
+    it "opens directory fetch and decode spans with no ecluse attribute" $
+        withTelemetrySpans (\telemetry -> let port = tracingPortOf telemetry in spanDirectoryFetch port (spanDirectoryDecode port pass)) $ \ref -> do
+            spans <- readIORef ref
+            names <- traverse (fmap hotName . readIORef . spanHot) spans
+            sort names `shouldBe` ["ecluse.metadata.decode", "ecluse.metadata.fetch"]
+            for_ ["ecluse.metadata.fetch", "ecluse.metadata.decode"] $ \name -> do
+                opened <- findSpan ref name
+                attributes <- hotAttributes <$> readIORef (spanHot opened)
+                ecluseAttributeCount attributes `shouldBe` 0
 
 {- An exception escaping a span is recorded by its typed cause when its own rendering would print a
 request. Every capture here runs the production 'withEscapeHandler', as 'withSpanCapture' does. -}

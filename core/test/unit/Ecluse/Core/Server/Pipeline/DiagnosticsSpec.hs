@@ -21,6 +21,7 @@ import Ecluse.Core.Registry (UrlFormationError (EmptyBaseUrl, UnparseableUrl))
 import Ecluse.Core.Registry.Metadata (MetadataError (MetadataAbsent, MetadataAuthorisationFailure, MetadataHttpFailure))
 import Ecluse.Core.Server.Pipeline.Diagnostics (
     logDecodeFailure,
+    logDirectoryFailure,
     logDirectoryInvalidEntries,
     logInvalidEntries,
     logMetadataFailure,
@@ -37,6 +38,7 @@ spec = do
     upstreamWarningSpec
     invalidEntriesSpec
     directoryInvalidEntriesSpec
+    directoryFailureSpec
 
 upstreamWarningSpec :: Spec
 upstreamWarningSpec = do
@@ -155,6 +157,16 @@ directoryInvalidEntriesSpec = describe "logDirectoryInvalidEntries" $
         logged `shouldSatisfy` T.isInfixOf "\"module\":\"Ecluse.Server.Pipeline\""
         logged `shouldSatisfy` T.isInfixOf "\"upstream\":\"index.rubygems.org:443\""
         logged `shouldSatisfy` T.isInfixOf "\"droppedByKind\":{\"version-listing\":1}"
+        logged `shouldSatisfy` (not . T.isInfixOf "\"package\"")
+
+directoryFailureSpec :: Spec
+directoryFailureSpec = describe "logDirectoryFailure" $
+    it "logs a directory refusal with its upstream and status and no package field" $ do
+        logged <- runJsonLog (logDirectoryFailure "https://index.rubygems.org" (MetadataHttpFailure 503))
+        logged `shouldSatisfy` T.isInfixOf "\"sev\":\"Error\""
+        logged `shouldSatisfy` T.isInfixOf "\"module\":\"Ecluse.Server.Pipeline\""
+        logged `shouldSatisfy` T.isInfixOf "\"upstream\":\"index.rubygems.org:443\""
+        logged `shouldSatisfy` T.isInfixOf "\"status\":503"
         logged `shouldSatisfy` (not . T.isInfixOf "\"package\"")
 
 upstream :: Text

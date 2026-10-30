@@ -42,16 +42,17 @@ import Ecluse.Core.Server.Admission.Types (ChargeFactors (ChargeFactors), MeterS
 import Ecluse.Core.Server.Cache (Source (Source), newMetadataCacheWithProvider)
 import Ecluse.Core.Server.Cache.Backend (BackendStorage (ExternalStorage))
 import Ecluse.Core.Server.Cache.Provider (cacheProvider)
-import Ecluse.Core.Server.Context (MountBinding (..), PackumentDeps (..), ReadSourceSelection (MergePrivateAndPublic, PrivateOnly), RequestCtx (RequestCtx), ResponseAction (..), RouteAction (RouteAction), ServeRuntime (srMemoryMeter, srMetadataCache, srMetrics), pdPublicBaseUrl, runHandler)
+import Ecluse.Core.Server.Context (MountBinding (..), PackumentDeps (..), ReadSourceSelection (MergePrivateAndPublic, PrivateOnly), RequestCtx (RequestCtx), ResponseAction (..), RouteAction (RouteAction), ServeRuntime (srMemoryMeter, srMetadataCache, srMetrics, srTracing), pdPublicBaseUrl, runHandler)
 import Ecluse.Core.Server.Contract (responseToWai)
 import Ecluse.Core.Server.Encoding (MetadataCompression (GzipWhenAccepted))
 import Ecluse.Core.Server.Upstream (MirrorServePlan (NoMirrorWrite))
 import Ecluse.Core.Telemetry.Metrics qualified as Metric
-import Ecluse.Core.Telemetry.Record (MetricsPort (mpRuleDenial, mpUpstreamFetch, mpUpstreamFetchError))
+import Ecluse.Core.Telemetry.Record (MetricsPort (mpDirectoryCacheRequest, mpRuleDenial, mpUpstreamFetch, mpUpstreamFetchError))
+import Ecluse.Core.Telemetry.Span (TracingPort (spanDirectoryDecode, spanDirectoryFetch))
 import Ecluse.Core.Version (renderVersion)
 import Ecluse.Test.Deadline (withSweeper)
 import Ecluse.Test.Log (captureJsonLog, lineMessage, newTestLogEnv)
-import Ecluse.Test.Port (noopMetricsPort)
+import Ecluse.Test.Port (noopMetricsPort, passthroughTracingPort, recordingMetricsPort)
 import Ecluse.Test.Registry.RubyGems.Fixtures (RubyRelease (..), loadRubyReleasesFrom, rubyRelease)
 import Ecluse.Test.Rules (atDefaultPrecedence, inertRuleDeps)
 import Ecluse.Test.Server.Cache (cachedMetadata, externalOperations)
@@ -251,6 +252,56 @@ spec = do
                 (runtime, fetches) <- recordingFetches original
                 replicateM_ 2 (capture runtime binding "GET" "/versions" [])
                 fetches Metric.Public `shouldReturn` [Right Metric.Status2xx]
+
+    describe "directory observability" $ do
+        it "records one serve decision for each directory reply" $ do
+            let decided bodies status adjust serve = do
+                    (port, decisions) <- recordingMetricsPort
+                    uncurry withDirectoryFaults bodies $ \original binding _ privateStatus publicStatus -> do
+                        let runtime = original{srMetrics = port}
+                        adjust privateStatus publicStatus
+                        serve runtime binding `shouldReturn` status
+                    decisions
+                served runtime binding = do
+                    initial <- capture runtime binding "GET" "/versions" []
+                    validator <- maybe (expectationFailure "missing directory ETag" >> fail "missing directory ETag") pure (lookup "ETag" (simpleHeaders initial))
+                    simpleStatus <$> capture runtime binding "GET" "/versions" [("If-None-Match", validator)]
+                once runtime binding = simpleStatus <$> capture runtime binding "GET" "/versions" []
+                rows = ("---\npublic-gem 1.0 \n", "---\nprivate-gem 1.0 \n")
+            decided rows status304 (\_ _ -> pass) served `shouldReturn` [Metric.Admit, Metric.Admit]
+            decided rows status403 (\private _ -> writeIORef private status403) once `shouldReturn` [Metric.Deny]
+            decided ("---\npublic-gem 1.0 \n", "---\n") status503 (\_ public -> writeIORef public status503) once `shouldReturn` [Metric.Unavailable]
+            decided (oversizedPublicDirectory, "---\nprivate-gem 1.0 \n") status502 (\_ _ -> pass) (\runtime -> once runtime . metadataByteCap 40) `shouldReturn` [Metric.Unavailable]
+        it "brackets each directory read in the metadata fetch and decode spans" $ do
+            withDirectorySources $ \original binding _ _ -> do
+                (runtime, spans) <- recordingDirectorySpans original
+                _ <- capture runtime binding "GET" "/versions" []
+                spans `shouldReturn` ["fetch", "decode", "fetch", "decode"]
+                _ <- capture runtime binding "GET" "/versions" []
+                spans `shouldReturn` ["fetch", "decode"]
+            withDirectoryFaults "---\npublic-gem 1.0 \n" "---\nprivate-gem 1.0 \n" $ \original binding _ _ publicStatus -> do
+                (runtime, spans) <- recordingDirectorySpans original
+                writeIORef publicStatus status503
+                _ <- capture runtime binding "GET" "/versions" []
+                spans `shouldReturn` ["fetch", "decode", "fetch"]
+        it "logs a public directory fault once per fetch" $
+            withDirectoryFaults "---\npublic-gem 1.0 \n" "---\nprivate-gem 1.0 \n" $ \runtime binding _ _ publicStatus -> do
+                writeIORef publicStatus status503
+                (response, logged) <- captureJsonLog (\logEnv -> captureWithLog logEnv runtime binding "GET" "/versions" [])
+                simpleStatus response `shouldBe` status200
+                let authority = authorityLabel (registryUrlText (pdPublicBaseUrl (bindingPackumentDeps binding)))
+                case filter (T.isInfixOf "\"status\":503") (T.lines logged) of
+                    [line] -> do
+                        line `shouldSatisfy` T.isInfixOf "\"sev\":\"Error\""
+                        line `shouldSatisfy` T.isInfixOf ("\"upstream\":\"" <> authority <> "\"")
+                        line `shouldSatisfy` (not . T.isInfixOf "\"package\"")
+                    other -> expectationFailure ("expected one directory failure line, got " <> show other)
+        it "reports directory cache outcomes under the directory store" $
+            withDirectorySources $ \original binding _ _ -> do
+                outcomes <- newIORef []
+                let runtime = original{srMetrics = (srMetrics original){mpDirectoryCacheRequest = \result -> modifyIORef' outcomes (<> [result])}}
+                replicateM_ 2 (capture runtime binding "GET" "/versions" [])
+                readIORef outcomes `shouldReturn` [Metric.Miss, Metric.Hit]
 
     describe "examined per-gem source documents" $ do
         for_ [False, True] $ \warm ->
@@ -630,6 +681,15 @@ withDirectoryFaults publicBody privateBody use = do
 -- A public directory longer than the 40-byte cap its specs set, beside a private directory under it.
 oversizedPublicDirectory :: LByteString
 oversizedPublicDirectory = "---\n" <> mconcat (replicate 8 "public-gem 1.0 \n")
+
+-- Record each directory fetch and decode span as it opens. Reading the record clears it.
+recordingDirectorySpans :: ServeRuntime -> IO (ServeRuntime, IO [Text])
+recordingDirectorySpans runtime = do
+    seen <- newIORef []
+    let opened :: Text -> IO a -> IO a
+        opened name action = atomicModifyIORef' seen (\names -> (names <> [name], ())) *> action
+        tracing = passthroughTracingPort{spanDirectoryFetch = opened "fetch", spanDirectoryDecode = opened "decode"}
+    pure (runtime{srTracing = tracing}, atomicModifyIORef' seen ([],))
 
 -- Record each upstream metadata fetch as its error cause or success status class, by upstream.
 recordingFetches :: ServeRuntime -> IO (ServeRuntime, Metric.Upstream -> IO [Either Metric.Cause Metric.StatusClass])
