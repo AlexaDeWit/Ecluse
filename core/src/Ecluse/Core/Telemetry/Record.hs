@@ -103,6 +103,8 @@ data MetricsPort = MetricsPort
     -- ^ Selected-version requests (@ecluse.metadata_cache.version.requests@).
     , mpAssembledCacheRequest :: CacheResult -> IO ()
     -- ^ Assembled-response requests (@ecluse.metadata_cache.assembled.requests@).
+    , mpDirectoryCacheRequest :: CacheResult -> IO ()
+    -- ^ Public RubyGems directory requests (@ecluse.metadata_cache.requests@ with @store=directory@).
     , mpCacheRefused :: CacheStore -> IO ()
     -- ^ Capacity refusals and backend failures (@ecluse.metadata_cache.refused@).
     , mpCacheEntries :: Int -> IO ()
@@ -113,6 +115,8 @@ data MetricsPort = MetricsPort
     -- ^ The single-version cache's bytes (@ecluse.metadata_cache.version.resident_bytes@).
     , mpAssembledCacheResidentBytes :: Int -> IO ()
     -- ^ The assembled store's bytes (@ecluse.metadata_cache.assembled.resident_bytes@).
+    , mpDirectoryCacheResidentBytes :: Int -> IO ()
+    -- ^ The directory store's bytes (@ecluse.metadata_cache.resident_bytes@ with @store=directory@).
     , mpPublicRelayAnomaly :: RelayAnomaly -> IO ()
     {- ^ Record one public artifact relay that did not carry the admitted artifact
     (@ecluse.serve.relay.anomalies@). Steady state is zero.

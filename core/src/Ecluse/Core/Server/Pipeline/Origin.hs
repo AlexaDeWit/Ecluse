@@ -21,6 +21,7 @@ module Ecluse.Core.Server.Pipeline.Origin (
 
     -- * One origin's coordinates
     mountOrigin,
+    publicSource,
 ) where
 
 import Katip (Severity (DebugS), logFM, ls)
@@ -251,6 +252,7 @@ privateOrigin rt deps = perCallerOrigin (pdLimits deps) (srPrivateClient rt)
 publicOrigin :: ServeRuntime -> PackumentDeps -> OriginFor Public
 publicOrigin rt deps = controlPublicOrigin (srPublicControl rt) Nothing (anonymousOrigin (pdLimits deps) (srPublicClient rt) (pdPublicBase deps))
 
+-- | The public origin's cache source, keyed by its base URL.
 publicSource :: PackumentDeps -> Source
 publicSource deps = Source (registryUrlText (pdPublicBaseUrl deps))
 
