@@ -187,6 +187,7 @@ environmentSpec = describe "proxyEnvironment" $ do
             ]
         environmentFor shape = proxyEnvironment settings shape 3 "/tmp/proxy" (8080, 8081, 8082) 9001 (Just 9002) base
         podEnvironment = environmentFor (Limited 2 (512 * 1024 * 1024))
+        registryKey ecosystem leg field = "ECLUSE_MOUNTS__" <> toString (T.toUpper (ecosystemName ecosystem)) <> "__" <> leg <> "__REGISTRY__" <> field
     it "keeps the harness environment with only the RTS statistics flag and without its own configuration" $ do
         lookup "PATH" podEnvironment `shouldBe` Just "/bin"
         filter ((== "GHCRTS") . fst) podEnvironment `shouldBe` [("GHCRTS", "-T")]
@@ -215,9 +216,8 @@ environmentSpec = describe "proxyEnvironment" $ do
     it "boots every ecosystem's ordinary proxy on the same upstream hosts, without durable state or a mirror target" $
         for_ [Npm, PyPI, Cargo, RubyGems] $ \ecosystem -> do
             let environment = proxyEnvironment (proxySettings ecosystem 60) Unlimited 3 "/tmp/proxy" (8080, 8081, 8082) 9001 (Just 9002) []
-                upstreamKey leg = "ECLUSE_MOUNTS__" <> toString (T.toUpper (ecosystemName ecosystem)) <> "__" <> leg <> "__REGISTRY__URL"
-            lookup (upstreamKey "PUBLIC_UPSTREAM") environment `shouldBe` Just "https://localhost:9001"
-            lookup (upstreamKey "PRIVATE_UPSTREAM") environment `shouldBe` Just "https://localhost:9002"
+            lookup (registryKey ecosystem "PUBLIC_UPSTREAM" "URL") environment `shouldBe` Just "https://localhost:9001"
+            lookup (registryKey ecosystem "PRIVATE_UPSTREAM" "URL") environment `shouldBe` Just "https://localhost:9002"
             lookup "ECLUSE_MIRROR_STATE__URL" environment `shouldBe` Nothing
             filter (("__MIRROR_TARGET__" `isInfixOf`) . fst) environment `shouldBe` []
     it "overrides only the public hostname with or without durable state" $
@@ -248,9 +248,8 @@ environmentSpec = describe "proxyEnvironment" $ do
         for_ [Npm, RubyGems] $ \ecosystem -> do
             let managed = (proxySettings ecosystem 3600){psMirrorStatePort = Just 9003}
                 environment = proxyEnvironment managed Unlimited 3 "/tmp/proxy" (8080, 8081, 8082) 9001 (Just 9002) []
-                mirrorKey key = "ECLUSE_MOUNTS__" <> toString (T.toUpper (ecosystemName ecosystem)) <> "__MIRROR_TARGET__REGISTRY__" <> key
-            lookup (mirrorKey "URL") environment `shouldSatisfy` isJust
-            lookup (mirrorKey "UPLOAD_URL") environment `shouldBe` Nothing
+            lookup (registryKey ecosystem "MIRROR_TARGET" "URL") environment `shouldSatisfy` isJust
+            lookup (registryKey ecosystem "MIRROR_TARGET" "UPLOAD_URL") environment `shouldBe` Nothing
             whenLeft_ (loadConfig environment Nothing) (expectationFailure . toString . unlines . map renderConfigError)
     it "derives GHC capabilities from the cgroup under a limited shape, and overrides the count when unlimited" $ do
         lookup "ECLUSE_RUNTIME__CORES" podEnvironment `shouldBe` Nothing
