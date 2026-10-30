@@ -41,7 +41,7 @@ import Ecluse.Runtime.Env (Env (envMemoryMeter))
 import Ecluse.Server.Pipeline.ServingDriver (cargoServingDriver)
 import Ecluse.Server.Pipeline.TestSupport (getPath, getPathWith, newTestEnvWithQueue, proxyApplication, requestAt)
 import Ecluse.Test.Contract.Catalogue (caseLabel)
-import Ecluse.Test.Contract.Serving (ServingDriver (servingLayout), ServingLayout (CombinedRegistry), servingContract)
+import Ecluse.Test.Contract.Serving (servingContract)
 import Ecluse.Test.Deadline (withSweeper)
 import Ecluse.Test.Mirror.State (mirrorViewWith)
 import Ecluse.Test.Package (hexSha256Of)
@@ -55,8 +55,7 @@ import Ecluse.Test.Support (expectRight)
 
 spec :: Spec
 spec = do
-    it (caseLabel "integration/cargo/source-layout" "serves one merged registry and leaves the removed private prefix unrouted") $ do
-        servingLayout cargoServingDriver `shouldBe` CombinedRegistry
+    it (caseLabel "integration/cargo/source-layout" "serves one merged registry and leaves the removed private prefix unrouted") $
         withCargoProxy defaultReply defaultReply $ \proxy -> do
             response <- getPathWith [("Authorization", "caller")] "/cargo/config.json" (proxyApp proxy)
             simpleStatus response `shouldBe` status200

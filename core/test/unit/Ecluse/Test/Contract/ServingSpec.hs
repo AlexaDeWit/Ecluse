@@ -45,12 +45,7 @@ observedDriver changeDigest changeBytes =
                 ServingSession
                     { requestMetadata = \_ _ -> pure response
                     , requestArtifact = \_ _ _ -> pure response{responseBody = changeBytes (responseBody response)}
-                    , requestPrivateMetadata = \_ _ -> pure response
-                    , requestPrivateArtifact = \_ _ _ -> pure response
-                    , publicSourceIdentity = "observed"
-                    , privateSourceIdentity = "observed"
                     }
-        , servingLayout = CombinedRegistry
         , servingIdentity = ("thing@" <>)
         , servingDigest = decodeUtf8
         }

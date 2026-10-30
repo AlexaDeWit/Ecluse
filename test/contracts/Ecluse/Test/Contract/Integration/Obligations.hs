@@ -110,10 +110,9 @@ integrationObligations =
         "integration/rubygems"
         "serving"
         ["metadata-read", "artifact-read", "serving"]
-        ( "integration/rubygems/source-layout"
-            : map
-                ("integration.serving.rubygems." <>)
-                ["default-denial", "identity-precedence", "authorised-union", "quarantine-private-authority", "private-divergence", "public-integrity", "trusted-integrity", "artifact-integrity", "artifact-head", "conditional-coherence", "metadata-gzip", "metadata-gzip-validators", "metadata-gzip-refusal", "metadata-gzip-opt-out", "metadata-gzip-policy", "artifact-uncoded"]
+        ( map
+            ("integration.serving.rubygems." <>)
+            ["default-denial", "identity-precedence", "authorised-union", "quarantine-private-authority", "private-divergence", "public-integrity", "trusted-integrity", "artifact-integrity", "artifact-head", "conditional-coherence", "metadata-gzip", "metadata-gzip-validators", "metadata-gzip-refusal", "metadata-gzip-opt-out", "metadata-gzip-policy", "artifact-uncoded"]
         )
     , required
         "integration/cargo"
