@@ -27,7 +27,7 @@ import Network.HTTP.Client (responseBody)
 import Network.HTTP.Types (status200)
 import UnliftIO.Temporary (withSystemTempDirectory)
 
-import Ecluse.BenchLoad.AdvisoryStore (AdvisoryObject (AdvisoryObject), advisoryStoreReply)
+import Ecluse.BenchLoad.AdvisoryStore (advisoryStoreReply)
 import Ecluse.BenchLoad.Error (benchFail)
 import Ecluse.BenchLoad.Fixture (fetchChecked)
 import Ecluse.BenchLoad.Harness (LoadKnobs (lkAdvisories), Scenario (..), Target (targetProxy))
@@ -130,7 +130,7 @@ advisoryVariantWith compile ecosystem suffix note rules s =
         , scenarioBoot = \knobs k ->
             if scenarioInProcess s
                 then benchFail (name <> ": an in-process scenario boots no proxy to sync an advisory database")
-                else withAdvisoryStore compile ecosystem (\(port, artifact) -> scenarioBoot s knobs{lkAdvisories = Just (AdvisoryFeed port rules artifact)} k)
+                else withAdvisoryStore compile ecosystem (\port -> scenarioBoot s knobs{lkAdvisories = Just (AdvisoryFeed port rules)} k)
         }
   where
     name = scenarioName s <> "-" <> suffix
@@ -155,9 +155,9 @@ threshold d = maybe (show d) show (wholeNumber d)
     wholeNumber x = let n = truncate x :: Int in if fromIntegral n == x then Just n else Nothing
 
 -- Compile the ecosystem's corpus advisories and serve the artifact on a loopback port for the action.
-withAdvisoryStore :: (Ecosystem -> FilePath -> IO FilePath) -> Ecosystem -> ((Int, AdvisoryObject) -> IO a) -> IO a
+withAdvisoryStore :: (Ecosystem -> FilePath -> IO FilePath) -> Ecosystem -> (Int -> IO a) -> IO a
 withAdvisoryStore compile ecosystem use =
     withSystemTempDirectory "ecluse-bench-advisories" $ \dir -> do
         artifact <- readFileLBS =<< compile ecosystem dir
         publishedAt <- getCurrentTime
-        withRoutedStub (advisoryStoreReply ecosystem publishedAt artifact) (\stub -> use (stubPort stub, AdvisoryObject ecosystem publishedAt artifact))
+        withRoutedStub (advisoryStoreReply ecosystem publishedAt artifact) (use . stubPort)
