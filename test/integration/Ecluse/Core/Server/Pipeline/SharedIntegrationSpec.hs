@@ -5,7 +5,7 @@
 -- | Shared pipeline refusal behaviour under upstream faults and malformed responses.
 module Ecluse.Core.Server.Pipeline.SharedIntegrationSpec (spec) where
 
-import Data.Aeson (Value (Object, String), object, (.=))
+import Data.Aeson (Value (Object, String), decodeStrict', object, (.=))
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.Text qualified as T
 import Data.Time (getCurrentTime)
@@ -25,6 +25,7 @@ import Ecluse.Core.Rules.Types (FailureAlignment (..), Reason (FixesNoAdvisory),
 import Ecluse.Core.Security (Limits (..), defaultLimits)
 import Ecluse.Core.Server.Context (PackumentDeps (..))
 import Ecluse.Runtime.Log (DdContext (DdContext), LogFormat (JsonLog), LogLevel (InfoLevel), newLogEnv)
+import Ecluse.Test.Json (textAtPath)
 import Ecluse.Test.Log (captureStdout)
 import Ecluse.Test.Queue (newTestMemoryQueue)
 import Ecluse.Test.Rules (packageRule, remediation, revocation)
@@ -280,7 +281,13 @@ boundsLogSpec = describe "serve-path warnings are logged before degrading" $ do
 
     it (caseLabel "integration/pipeline-faults/native-018" "tags every serve-path log line with the emitting module") $ do
         logged <- captureBreachLog versionFloodPackument
-        logged `shouldSatisfy` T.isInfixOf "\"module\":\"Ecluse.Server.Pipeline\""
+        let entries = map (decodeStrict' . encodeUtf8) (lines logged) :: [Maybe Value]
+            moduleOf entry = textAtPath ["data", "module"] =<< entry
+            moduleWhere path value = moduleOf =<< find ((== Just value) . (textAtPath path =<<)) entries
+        -- Two log sites fire here: the private version-count breach and the public HTTP 500.
+        moduleWhere ["data", "bound"] "version-count" `shouldBe` Just "Ecluse.Server.Pipeline"
+        moduleWhere ["message"] "the upstream refused the metadata read" `shouldBe` Just "Ecluse.Server.Pipeline"
+        [line | (line, entry) <- zip (lines logged) entries, isNothing (moduleOf entry)] `shouldBe` []
 
 perimeterSpec :: Spec
 perimeterSpec = describe "the typed request perimeter (an escaped pre-commit fault)" $
