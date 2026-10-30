@@ -13,6 +13,8 @@ module Ecluse.Core.Registry.Cargo.Manifest (
     checkPublicationIndex,
     checkUploadAgreement,
     checkDependencyRegistries,
+    acceptedRegistries,
+    namesOtherRegistry,
     parseRustRelease,
     publishMetadataValue,
     cratesIoIndex,
@@ -158,23 +160,30 @@ proxy's own. A null or absent source is the publication registry, which the call
 -}
 checkDependencyRegistries :: [Text] -> Value -> Either ParseError ()
 checkDependencyRegistries own (Object metadata) = do
-    accepted <- Set.fromList . map sourceComparisonKey <$> traverse parseSource (cratesIoIndex : own)
+    accepted <- acceptedRegistries own
     dependencies <- requiredJson "deps" metadata >>= array
     for_ dependencies $ \case
         Object fields -> do
             name <- requiredJson "name" fields >>= jsonString
-            declared <- consumerRegistry fields >>= traverse parseSource
-            for_ declared $ \source ->
-                unless (Set.member (sourceComparisonKey source) accepted) $
-                    parseRefusal ("Cargo dependency '" <> name <> "' comes from a registry other than crates.io or this proxy: publish it through this proxy first, then depend on this proxy's copy")
+            other <- namesOtherRegistry accepted fields
+            when other $
+                parseRefusal ("Cargo dependency '" <> name <> "' comes from a registry other than crates.io or this proxy: publish it through this proxy first, then depend on this proxy's copy")
         _ -> parseRefusal "Cargo upload dependency is not an object"
 checkDependencyRegistries _ _ = parseRefusal "Cargo upload metadata is not an object"
 
--- | The registry a dependency names, unless it is a dev-dependency, which no consumer resolves, as with npm's @devDependencies@.
-consumerRegistry :: KeyMap.KeyMap Value -> Either ParseError (Maybe Text)
-consumerRegistry fields = do
+-- | The comparison keys of crates.io and the given registries, the sources a consumed dependency may name.
+acceptedRegistries :: [Text] -> Either ParseError (Set Text)
+acceptedRegistries own = Set.fromList . map sourceComparisonKey <$> traverse parseSource (cratesIoIndex : own)
+
+{- | Whether a dependency names a registry outside @accepted@. A null or absent registry is the current
+one, and a dev-dependency never counts, because no consumer resolves it, as with npm's @devDependencies@.
+-}
+namesOtherRegistry :: Set Text -> KeyMap.KeyMap Value -> Either ParseError Bool
+namesOtherRegistry accepted fields = do
     kind <- nullableString "kind" fields
-    if kind == Just "dev" then Right Nothing else nullableString "registry" fields
+    declared <- if kind == Just "dev" then Right Nothing else nullableString "registry" fields >>= traverse parseSource
+    pure (any ((`Set.notMember` accepted) . sourceComparisonKey) declared)
+{-# INLINE namesOtherRegistry #-}
 
 uploadDependency :: CargoSource -> Value -> Either ParseError Value
 uploadDependency registry (Object fields) = do
