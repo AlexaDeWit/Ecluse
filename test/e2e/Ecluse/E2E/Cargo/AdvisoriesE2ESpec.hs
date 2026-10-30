@@ -43,7 +43,7 @@ releaseDriver proxy version = do
             { advisoryExpectedArtifact = archive
             , advisoryAdvertisedArtifacts = artifacts
             , advisoryInstall = cargoConsumer proxy currentCargo $ \project -> do
-                cargoSelectDependency CargoReplacement "ecluse-e2e-advisory" version project
+                cargoSelectDependency "ecluse-e2e-advisory" version project
                 result <- runCargo project ["build"]
                 installed <- doesFileExist (cargoDirectory project </> "target/debug/ecluse-e2e-consumer")
                 pure (result, installed)

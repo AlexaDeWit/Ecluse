@@ -33,11 +33,11 @@ cargoSweepClientOps =
         }
 
 withProject :: CargoSweepStore -> (CargoProject -> IO a) -> IO a
-withProject store = withCargoProject currentCargo CargoReplacement (observedProxy (cssObserved store)) ("sparse+" <> cssReadUrl store) (Just cargoRegistryToken)
+withProject store = withCargoProject currentCargo CargoConsumer (observedProxy (cssObserved store)) ("sparse+" <> cssUrl store) (Just cargoRegistryToken)
 
 installIn :: CargoProject -> Text -> Maybe Text -> IO ClientResult
 installIn project name version = do
-    cargoSelectRequirement CargoReplacement name (maybe "*" ("=" <>) version) project
+    cargoSelectRequirement name (maybe "*" ("=" <>) version) project
     runCargo project ["build"]
 
 installedVersion :: CargoProject -> Text -> IO (Maybe Text)
@@ -49,7 +49,7 @@ installedVersion project name = do
         _ -> fail "Cargo retained multiple selected versions of the native leaf fixture"
 
 fetchStorePath :: CargoSweepStore -> Text -> IO (Int, LByteString)
-fetchStorePath store path = fetchPath store (cssReadUrl store <> path) "GET" Nothing
+fetchStorePath store path = fetchPath store (cssUrl store <> path) "GET" Nothing
 
 fetchPath :: CargoSweepStore -> Text -> ByteString -> Maybe ByteString -> IO (Int, LByteString)
 fetchPath store path method body = do
@@ -70,7 +70,7 @@ publish store name version = do
         maybe (fail "the native publication coordinate is absent from the owned corpus") pure $
             find (\candidate -> crateName (releaseCrate candidate) == name && crateVersion (releaseCrate candidate) == version) (cspReleases (cssPlane store))
     bytes <- either (fail . toString) pure (cargoUpload release)
-    (status, body) <- fetchPath store (cssPublishUrl store <> "api/v1/crates/new") "PUT" (Just bytes)
+    (status, body) <- fetchPath store (cssUrl store <> "api/v1/crates/new") "PUT" (Just bytes)
     pure
         ClientResult
             { crCommand = "native Cargo framed PUT"

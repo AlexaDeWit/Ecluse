@@ -205,7 +205,7 @@ obligations =
         "cargo/native"
         Supported
         ["read", "mirror", "publication", "client-install"]
-        (map ("cargo/native/" <>) ["current-client", "floor-client", "asset-routing", "metadata-no-archives", "denial-control", "features", "targets", "lock-checksums", "msrv", "discovery-views", "private-no-public", "raw-auth", "private-auth-required", "public-token-control", "private-anonymous", "publication-framing", "foreign-registry"])
+        (map ("cargo/native/" <>) ["current-client", "floor-client", "asset-routing", "metadata-no-archives", "denial-control", "features", "targets", "lock-checksums", "msrv", "local-discovery", "merged-private", "raw-auth", "private-auth-required", "public-token-control", "placeholder-token", "publication-framing", "dependency-sources", "publisher-configuration"])
     , Obligation
         "cargo/mirror-proof"
         "cargo/write"
