@@ -25,7 +25,7 @@ import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Data.Time (UTCTime (UTCTime), fromGregorian)
 import Network.HTTP.Client (defaultManagerSettings, newManager)
-import Network.HTTP.Types (Method, RequestHeaders, hContentLength, methodHead, status200, status204, status205, status304, status404, statusCode, statusIsInformational)
+import Network.HTTP.Types (Method, RequestHeaders, hContentLength, methodHead, mkStatus, status200, status204, status205, status304, status404, statusCode, statusIsInformational)
 import Network.Wai (rawPathInfo, responseLBS)
 import Network.Wai qualified as Wai
 import Network.Wai.Handler.Warp (testWithApplication)
@@ -55,7 +55,8 @@ import Ecluse.Core.Server.MirrorView (MirrorView)
 import Ecluse.Core.Server.Upstream (MirrorServePlan (NoMirrorWrite))
 import Ecluse.Core.Version (mkVersion)
 import Ecluse.Server.Pipeline.TestSupport (newTestEnvWithQueue, packument, proxyApplication, publishedDaysAgo, requestAt)
-import Ecluse.Test.Contract.Serving (ServingDriver (..), ServingRelease (..), ServingResponse (..), ServingSession (..))
+import Ecluse.Core.Rules.Types (Rule)
+import Ecluse.Test.Contract.Serving (OriginFault (..), ServingDriver (..), ServingFaults (..), ServingRelease (..), ServingResponse (..), ServingSession (..))
 import Ecluse.Test.Deadline (untracedClient, withSweeper)
 import Ecluse.Test.Json (fieldAt, textAtPath)
 import Ecluse.Test.Mirror.State (mirrorViewWith)
@@ -68,7 +69,7 @@ import Ecluse.Test.Registry.Npm (VersionSpec (..), versionSpec, versionValue)
 import Ecluse.Test.Rules (atDefaultPrecedence, inertRuleDeps)
 import Ecluse.Test.Server.Mount (serveDepsFor)
 import Ecluse.Test.Support (expectRight)
-import Ecluse.Test.Wai (decodedBody, localhost, selfBaseUrl)
+import Ecluse.Test.Wai (closedResponse, decodedBody, localhost, selfBaseUrl)
 
 -- | npm's native JSON and tarball paths.
 npmServingDriver :: ServingDriver
@@ -99,10 +100,18 @@ data NativeObservation = NativeObservation
 nativeByteDriver :: Ecosystem -> IO RegistryAdapter -> ByteString -> ByteString -> ByteString -> (Text -> ByteString) -> (Text -> [ServingRelease] -> ByteString) -> NativeObservation -> (ByteString -> Text) -> ServingDriver
 nativeByteDriver ecosystem acquireAdapter mount clientMetadataPath upstreamMetadataPath artifactPath document observe digest =
     ServingDriver
-        { withServing = \compression rules privateReleases publicReleases action -> do
+        { withServing = \compression -> serving compression (ServingFaults Nothing Nothing)
+        , withFaultedServing = serving GzipWhenAccepted
+        , servingIdentity = ("thing@" <>)
+        , servingDigest = digest
+        }
+  where
+    now = UTCTime (fromGregorian 2026 6 20) 0
+    serving :: MetadataCompression -> ServingFaults -> [Rule] -> [ServingRelease] -> [ServingRelease] -> (ServingSession -> IO a) -> IO a
+    serving compression faults rules privateReleases publicReleases action = do
             adapter <- acquireAdapter
-            testWithApplication (pure (upstream privateReleases)) $ \privatePort ->
-                testWithApplication (pure (upstream publicReleases)) $ \publicPort -> withSweeper $ \deadlines -> do
+            testWithApplication (pure (faulted (privateFault faults) (upstream privateReleases))) $ \privatePort ->
+                testWithApplication (pure (faulted (publicFault faults) (upstream publicReleases))) $ \publicPort -> withSweeper $ \deadlines -> do
                     queue <- newTestMemoryQueue
                     manager <- newManager defaultManagerSettings
                     env <- newTestEnvWithQueue deadlines queue manager
@@ -123,17 +132,19 @@ nativeByteDriver ecosystem acquireAdapter mount clientMetadataPath upstreamMetad
                             { requestMetadata = metadata
                             , requestArtifact = artifactRequest
                             }
-        , servingIdentity = ("thing@" <>)
-        , servingDigest = digest
-        }
-  where
-    now = UTCTime (fromGregorian 2026 6 20) 0
     upstream releases request respond
         | BS.dropWhileEnd (== 47) (rawPathInfo request) == upstreamMetadataPath =
             respond (responseLBS status200 [] (toLazy (document (selfBaseUrl request) releases)))
         | Just release <- find ((== rawPathInfo request) . artifactPath . releaseVersion) releases =
             respond (artifactResponse (Wai.requestHeaders request) (releaseBytes release))
         | otherwise = respond (responseLBS status404 [] "")
+
+-- Answer every request with the fault, or leave the origin as it is.
+faulted :: Maybe OriginFault -> Wai.Application -> Wai.Application
+faulted fault app = case fault of
+    Nothing -> app
+    Just (FaultStatus code) -> \_ respond -> respond (responseLBS (mkStatus code "") [] "")
+    Just FaultClosed -> \_ respond -> respond closedResponse
 
 -- A CDN can gzip archive responses. HEAD needs an explicit length because Warp cannot infer it.
 artifactResponse :: RequestHeaders -> ByteString -> Wai.Response
@@ -253,9 +264,17 @@ responseBytes method response
 cargoDriver :: ServingDriver
 cargoDriver =
     ServingDriver
-        { withServing = \compression rules privateReleases publicReleases action ->
-            testWithApplication (pure (cargoUpstream privateReleases)) $ \privatePort ->
-                testWithApplication (pure (cargoUpstream publicReleases)) $ \publicPort -> withSweeper $ \deadlines -> do
+        { withServing = \compression -> serving compression (ServingFaults Nothing Nothing)
+        , withFaultedServing = serving GzipWhenAccepted
+        , servingIdentity = ("thing@" <>)
+        , servingDigest = hexSha256Of
+        }
+  where
+    now = UTCTime (fromGregorian 2026 6 20) 0
+    serving :: MetadataCompression -> ServingFaults -> [Rule] -> [ServingRelease] -> [ServingRelease] -> (ServingSession -> IO a) -> IO a
+    serving compression faults rules privateReleases publicReleases action =
+            testWithApplication (pure (faulted (privateFault faults) (cargoUpstream privateReleases))) $ \privatePort ->
+                testWithApplication (pure (faulted (publicFault faults) (cargoUpstream publicReleases))) $ \publicPort -> withSweeper $ \deadlines -> do
                     adapter <- requiredCargoAdapter
                     queue <- newTestMemoryQueue
                     manager <- newManager defaultManagerSettings
@@ -281,11 +300,6 @@ cargoDriver =
                             { requestMetadata = metadata
                             , requestArtifact = artifact
                             }
-        , servingIdentity = ("thing@" <>)
-        , servingDigest = hexSha256Of
-        }
-  where
-    now = UTCTime (fromGregorian 2026 6 20) 0
 
 cargoUpstream :: [ServingRelease] -> Wai.Application
 cargoUpstream releases request respond
