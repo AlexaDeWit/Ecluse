@@ -106,7 +106,7 @@ nameCapture = Capture "gem" "The native gem name." consume (\file -> [unFilename
         _ -> Nothing
 
 nativeCapture :: Capture Filename
-nativeCapture = Capture "coordinate" "The native package, raw version and platform filename stem." consume (\file -> maybeToList (gemFileStem (unFilename file)))
+nativeCapture = Capture "coordinate" "The native package, raw version and platform filename stem." consume (maybeToList . gemFileStem . unFilename)
   where
     consume = \case
         stem : rest -> (,rest) <$> mkFilename (stem <> ".gem")
