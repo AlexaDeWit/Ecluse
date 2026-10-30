@@ -100,7 +100,7 @@ import UnliftIO (bracket, bracketOnError, finally, mask, onException, try, tryAn
 import UnliftIO.Async (Async, async, cancel, link, poll)
 import UnliftIO.Temporary (withSystemTempDirectory)
 
-import Ecluse.BenchLoad.AdvisoryStore (AdvisoryObject, advisoryBucket)
+import Ecluse.BenchLoad.AdvisoryStore (advisoryBucket)
 import Ecluse.BenchLoad.BootLines (bootMessages, logMessages, metadataCompression, renderMetadataCompression, ruleMessages)
 import Ecluse.BenchLoad.Error (benchFail)
 import Ecluse.BenchLoad.Exposition (Sample, advisoryDatabaseInstalled, parseExposition)
@@ -181,7 +181,6 @@ proxySettings ecosystem ttl =
 data AdvisoryFeed = AdvisoryFeed
     { afStorePort :: Int
     , afRules :: [Pair]
-    , afObject :: AdvisoryObject
     }
     deriving stock (Eq, Show)
 

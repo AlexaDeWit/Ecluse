@@ -15,12 +15,11 @@ import Network.HTTP.Client (defaultManagerSettings, newManager, parseRequest)
 import Network.Wai (Application, rawPathInfo)
 import Network.Wai.Handler.Warp (testWithApplication)
 
-import Ecluse.BenchLoad.AdvisoryStore (advisoryStoreApplication)
 import Ecluse.BenchLoad.Error (benchFail)
 import Ecluse.BenchLoad.Fixture (ProxyConfigure)
-import Ecluse.BenchLoad.Harness (LoadKnobs (lkAdvisories, lkUpstreamLatencyMicros))
+import Ecluse.BenchLoad.Harness (LoadKnobs (lkUpstreamLatencyMicros))
 import Ecluse.BenchLoad.ObjectStore (conditionalObjectRead, objectRevision)
-import Ecluse.BenchLoad.ProxyProcess (AdvisoryFeed (afObject), ProxySettings (..), mirrorStateBucket)
+import Ecluse.BenchLoad.ProxyProcess (ProxySettings (..), mirrorStateBucket)
 import Ecluse.Core.Ecosystem (Ecosystem (Cargo))
 import Ecluse.Core.Mirror.State (encodeProjectRecord, extendProjectRecord, stateTarget)
 import Ecluse.Core.Mirror.State.Internal (projectKey, retainVerifiedIdentity)
@@ -45,8 +44,7 @@ import Ecluse.Test.Registry.Metadata.Fetch (captureManifest, fetchTestBody)
 withCopyState :: LoadKnobs -> (ProxyConfigure -> IO a) -> IO a
 withCopyState knobs use = do
     records <- newIORef Map.empty
-    let native request respond = readIORef records >>= \current -> copyStateApplication (lkUpstreamLatencyMicros knobs) current request respond
-        application = maybe native ((`advisoryStoreApplication` native) . afObject) (lkAdvisories knobs)
+    let application request respond = readIORef records >>= \current -> copyStateApplication (lkUpstreamLatencyMicros knobs) current request respond
     testWithApplication (pure application) $ \statePort ->
         use $ \privatePort publicPort -> do
             writeIORef records =<< prepareRecords privatePort publicPort
