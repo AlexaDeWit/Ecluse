@@ -36,6 +36,8 @@ mounts:
 
 Replace the domain, account, and region values with your repository endpoints. Keep the mirror, private read repository, and publication repository distinct if you plan to use cleanup.
 
+An npm or RubyGems mirror target takes `url` alone, because Écluse derives the upload address from it. PyPI and Cargo also need the `uploadUrl` their sections below describe.
+
 ## Choose where the worker runs {#worker}
 
 `proxy` includes a mirror worker. For separate services, run `proxy --no-worker` and `mirror` against the same durable SQS queue.

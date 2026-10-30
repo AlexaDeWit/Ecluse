@@ -384,6 +384,10 @@ mounts:
   # tags are refused too, because one store has one backend.
   # Every url must be an https:// URL carrying a dialable host, and none may carry
   # userinfo, a query, or a fragment: a credential belongs in its own key.
+  # On mirrorTarget and publicationTarget, url is where Écluse reads and uploadUrl is
+  # where it writes. pypi and cargo upload to a separate endpoint, so a role that writes
+  # through either target refuses to boot without its uploadUrl. npm and rubygems derive
+  # the write address from url, so the load refuses uploadUrl on them.
   npm:
     # DenyIfYanked: npm reports no yank flag. Removed releases disappear from its metadata.
     publicUpstream:
@@ -509,12 +513,14 @@ mounts:
     #     uploadUrl: https://mirror.internal/legacy/
     #     username: publisher
     #     token:
-    # Client publication uses this exact native endpoint and preserves multipart framing.
+    # Client publication posts to uploadUrl and preserves multipart framing. url is the
+    # repository's read root, and the CodeArtifact paths above apply here too.
     # A static token requires server.authToken and an explicit generic username.
     # Without a static token, the complete caller Basic pair passes through unchanged.
     # publicationTarget:
     #   registry:
-    #     url: https://first-party.internal/legacy/
+    #     url: https://first-party.internal/
+    #     uploadUrl: https://first-party.internal/legacy/
     #     username: publisher
     #     token:
     # pypi blocks these rule types at boot, even through shared rules:
