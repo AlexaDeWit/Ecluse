@@ -19,7 +19,7 @@ import Ecluse.Core.Registry (ParseError (..))
 import Ecluse.Core.Registry.Cargo.Manifest
 import Ecluse.Core.Security.Limits (Limits (..), defaultLimits)
 import Ecluse.Core.Version.Cargo (renderCargo)
-import Ecluse.Test.Registry.Cargo.Publish (cargoResolverAgreements, cargoResolverContradictions, cargoResolverManifest, cargoResolverMetadata)
+import Ecluse.Test.Registry.Cargo.Publish (cargoForeignRegistryManifest, cargoForeignRegistryMetadata, cargoForeignRegistryRefusal, cargoResolverAgreements, cargoResolverContradictions, cargoResolverManifest, cargoResolverMetadata)
 import Ecluse.Test.Support (expectRight)
 
 spec :: Spec
@@ -334,6 +334,24 @@ spec = do
                 let dependency = object ["name" .= ("dependency" :: Text), "version_req" .= uploaded, "features" .= ([] :: [Text]), "optional" .= False, "default_features" .= True, "registry" .= cratesIoIndex]
                 checkUploadAgreement defaultLimits selectedRegistry manifest (object ["deps" .= [dependency], "features" .= object []]) `shouldBe` Right ()
 
+    describe "checkDependencyRegistries" $ do
+        it "refuses a dependency of every kind from a registry other than crates.io or this proxy, naming its package" $
+            for_ ["normal", "dev", "build"] $ \kind ->
+                for_ ["sparse+https://foreign.test/index/", "https://foreign.test/index", "sparse+https://proxy.test/other/", "sparse+https://proxy.test/cargo/private/extra/", "sparse+http://proxy.test/cargo/", "https://proxy.test/cargo/private"] $ \source ->
+                    checkDependencyRegistries ecluseRegistries (registryUpload kind (String source)) `shouldBe` Left (ParseError cargoForeignRegistryRefusal)
+        it "accepts crates.io in either spelling, each of this proxy's indexes, and a null or absent source" $
+            for_ ["normal", "dev", "build"] $ \kind -> do
+                for_ [String cratesIoIndex, String "https://github.com/rust-lang/crates.io-index.git", String "sparse+https://index.crates.io/", String "sparse+https://proxy.test/cargo/private", String "sparse+https://proxy.test/cargo/", Null] $ \source ->
+                    checkDependencyRegistries ecluseRegistries (registryUpload kind source) `shouldBe` Right ()
+                checkDependencyRegistries ecluseRegistries (object ["deps" .= [object ["name" .= ("original" :: Text), "kind" .= kind]]]) `shouldBe` Right ()
+        it "refuses a source that agreement accepts because the archived manifest declares it too" $ do
+            manifest <- expectRight (decodeManifest defaultLimits "fixture" "1.0.0" cargoForeignRegistryManifest)
+            checkUploadAgreement defaultLimits selectedRegistry manifest cargoForeignRegistryMetadata `shouldBe` Right ()
+            checkDependencyRegistries ecluseRegistries cargoForeignRegistryMetadata `shouldBe` Left (ParseError cargoForeignRegistryRefusal)
+        it "refuses non-object uploads and dependency entries" $ do
+            checkDependencyRegistries ecluseRegistries Null `shouldBe` Left (ParseError "Cargo upload metadata is not an object")
+            checkDependencyRegistries ecluseRegistries (object ["deps" .= [Null]]) `shouldBe` Left (ParseError "Cargo upload dependency is not an object")
+
     describe "parseRustRelease" $ do
         it "fills omitted numeric components with zeroes" $
             for_ [("1", "1.0.0"), ("1.74", "1.74.0"), ("1.74.1", "1.74.1")] $ \(raw, expected) ->
@@ -344,6 +362,13 @@ spec = do
 
 selectedRegistry :: Text
 selectedRegistry = "sparse+https://proxy.test/cargo/private/"
+
+-- The private publication view and the crates.io replacement above it.
+ecluseRegistries :: [Text]
+ecluseRegistries = [selectedRegistry, "sparse+https://proxy.test/cargo/"]
+
+registryUpload :: Text -> Value -> Value
+registryUpload kind source = object ["deps" .= [object ["name" .= ("original" :: Text), "explicit_name_in_toml" .= ("renamed" :: Text), "kind" .= kind, "registry" .= source]]]
 
 basic :: ByteString
 basic = "[package]\nname='example'\nversion='1.2.3'\n"
