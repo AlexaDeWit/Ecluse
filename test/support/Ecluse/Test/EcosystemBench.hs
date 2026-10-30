@@ -11,6 +11,7 @@ module Ecluse.Test.EcosystemBench (
     ecosystemBenchFor,
     benchmarkEcosystems,
     checkBenchmarkCoverage,
+    checkCoverageAgainst,
 ) where
 
 import Prelude hiding (universe)
@@ -89,11 +90,13 @@ benchmarkEcosystems = map (ebEcosystem . fst) benchmarkRegistrations
 
 -- | Compare providers with both reviewed obligations and the production adapter registry.
 checkBenchmarkCoverage :: [Ecosystem] -> Either Text ()
-checkBenchmarkCoverage actual = do
+checkBenchmarkCoverage = checkCoverageAgainst (filter (isJust . adapterFor) universe)
+
+-- | 'checkBenchmarkCoverage' against the given production ecosystems, so a missing adapter is testable.
+checkCoverageAgainst :: [Ecosystem] -> [Ecosystem] -> Either Text ()
+checkCoverageAgainst production actual = do
     checkProviderCoverage actual
     unless (sort actual == sort production) (Left ("measurement providers differ from production adapters: " <> show production))
-  where
-    production = filter (isJust . adapterFor) universe
 
 checkProviderCoverage :: [Ecosystem] -> Either Text ()
 checkProviderCoverage actual =
@@ -138,6 +141,7 @@ npmBench =
         , ebTreeDocument = (fst npmCached <$>) . snd npmCached
         , ebKeepVersions = const keepNpmVersions
         , ebHeavyBase = heavyNpmBase
+        , ebFraming = JsonFraming
         , ebSynthetic = syntheticPackumentBytes
         , ebSyntheticName = benchPackageName
         , ebDecode = \_ -> first show . fmap (map renderVersion) . parseVersionBytes
@@ -172,6 +176,7 @@ pypiBench =
         , ebTreeDocument = (fst pypiSimpleCached <$>) . snd pypiSimpleCached
         , ebKeepVersions = keepPyPIVersions
         , ebHeavyBase = heavyPyPIBase
+        , ebFraming = JsonFraming
         , ebSynthetic = syntheticIndexBytes
         , ebSyntheticName = benchProject
         , ebDecode = \name raw -> pypiReleaseKeys name . siFiles <$> first toText (eitherDecodeStrict raw)
@@ -213,6 +218,7 @@ cargoBench =
         , ebTreeDocument = (fst cargoCached <$>) . snd cargoCached
         , ebKeepVersions = const keepCargoVersions
         , ebHeavyBase = heavyCargoBase
+        , ebFraming = NativeFraming Cargo.decodeCargoValues Cargo.encodeCargoValues
         , ebSynthetic = Cargo.syntheticIndexBytes
         , ebSyntheticName = Cargo.benchCrate
         , ebDecode = const Cargo.cargoVersionKeys
@@ -251,6 +257,7 @@ rubyGemsBench =
         , ebTreeDocument = (fst rubyGemsCached <$>) . snd rubyGemsCached
         , ebKeepVersions = const RubyGems.keepRubyGemsVersions
         , ebHeavyBase = RubyGems.heavyRubyGemsBase
+        , ebFraming = NativeFraming RubyGems.decodeRubyGemsValues RubyGems.encodeRubyGemsValues
         , ebSynthetic = RubyGems.syntheticInfoBytes
         , ebSyntheticName = RubyGems.benchGem
         , ebDecode = const RubyGems.rubyGemsVersionKeys

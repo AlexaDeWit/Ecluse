@@ -15,23 +15,21 @@ module Ecluse.BenchLoad.Cargo.WorkerFixture (
     fixtureTrigger,
 ) where
 
-import Codec.Compression.GZip qualified as GZip
 import Data.Aeson (Value (Object), object)
 import Data.ByteString.Lazy qualified as LBS
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
-import Network.HTTP.Types (hContentType, status200, status400, status404, status503)
+import Network.HTTP.Types (hContentType, status200, status400, status404)
 import Network.Wai (Application, pathInfo, requestMethod, responseLBS, strictRequestBody)
 
 import Ecluse.BenchLoad.Fixture (artifactBytes, delayUpstream)
-import Ecluse.BenchLoad.WorkerState (stateAppFor)
+import Ecluse.BenchLoad.WorkerState (WorkerTarget (..), acceptUpload, countRequest, newWorkerTarget, resetWorkerTarget, targetStateApp)
 import Ecluse.Core.Ecosystem (Ecosystem (Cargo))
 import Ecluse.Core.Package (PackageName, mkPackageName)
 import Ecluse.Core.Registry.Cargo.Discovery (renderCargoDiscovery)
 import Ecluse.Core.Version (Version, mkVersion)
 import Ecluse.Test.Package (hexSha256Of)
-import Ecluse.Test.Registry.Archive (tarBytes)
-import Ecluse.Test.Registry.Cargo.Fixtures (CargoCrate (..), CargoRelease (..), cargoIndex, cargoShard, cargoUploadMetadata)
+import Ecluse.Test.Registry.Cargo.Fixtures (CargoCrate (..), CargoRelease (..), cargoCrateArchive, cargoIndex, cargoShard, cargoUploadMetadata)
 import Ecluse.Test.Registry.Cargo.Reference (UploadFrame (..), referenceUpload)
 import Ecluse.Test.Wai (selfBaseUrl)
 
@@ -39,26 +37,24 @@ import Ecluse.Test.Wai (selfBaseUrl)
 data WorkerFixture = WorkerFixture
     { wfFiles :: Map Text ByteString
     , wfRelease :: CargoRelease
-    , wfTarget :: IORef (Map Text ByteString)
-    , wfObjects :: IORef (Map ByteString (ByteString, ByteString))
-    , wfCounts :: IORef (Map Text Int)
-    , wfReject :: IORef Bool
+    , wfState :: WorkerTarget
     }
 
 -- | Package owned source bytes without executing the crate or a toolchain.
 newWorkerFixture :: Int -> IO WorkerFixture
 newWorkerFixture payloadBytes = do
     archive <-
-        LBS.toStrict . GZip.compress
-            <$> tarBytes
-                [ ("example-1.0.0/Cargo.toml", encodeUtf8 manifest)
-                , ("example-1.0.0/README.md", readme)
-                , ("example-1.0.0/src/lib.rs", "pub fn marker() {}\n")
-                , ("example-1.0.0/data", LBS.toStrict (artifactBytes payloadBytes))
-                ]
+        cargoCrateArchive
+            "example"
+            "1.0.0"
+            [ ("Cargo.toml", encodeUtf8 manifest)
+            , ("README.md", readme)
+            , ("src/lib.rs", "pub fn marker() {}\n")
+            , ("data", LBS.toStrict (artifactBytes payloadBytes))
+            ]
     let spec = CargoCrate "example" "1.0.0" "unused" [] (object []) (object []) []
         release = CargoRelease spec archive (hexSha256Of archive) (decodeUtf8 readme)
-    WorkerFixture (Map.singleton fixtureTrigger archive) release <$> newIORef mempty <*> newIORef mempty <*> newIORef mempty <*> newIORef False
+    WorkerFixture (Map.singleton fixtureTrigger archive) release <$> newWorkerTarget
   where
     readme = "Owned Cargo worker load fixture\n"
     manifest =
@@ -76,10 +72,7 @@ newWorkerFixture payloadBytes = do
 
 -- | Remove the archive and state together before each measured complete copy.
 resetWorkerFixture :: WorkerFixture -> IO ()
-resetWorkerFixture fixture = do
-    writeIORef (wfTarget fixture) mempty
-    writeIORef (wfObjects fixture) mempty
-    writeIORef (wfCounts fixture) mempty
+resetWorkerFixture = resetWorkerTarget . wfState
 
 -- | The single native archive identifies the version trigger.
 fixtureTrigger :: Text
@@ -99,13 +92,13 @@ sourceApp latency fixture request respond = do
     delayUpstream latency
     case filter (not . T.null) (pathInfo request) of
         ["config.json"] -> do
-            count fixture "source-discovery"
+            countRequest (wfState fixture) "source-discovery"
             respond (responseLBS status200 [(hContentType, "application/json")] (fromStrict (renderCargoDiscovery (selfBaseUrl request <> "/crates/{crate}/{crate}-{version}.crate") Nothing False)))
         segments | segments == T.splitOn "/" (cargoShard "example") -> do
-            count fixture "source-index"
+            countRequest (wfState fixture) "source-index"
             respond (responseLBS status200 [(hContentType, "text/plain")] (fromStrict (cargoIndex [wfRelease fixture])))
         ["crates", "example", filename] | Just bytes <- Map.lookup filename (wfFiles fixture) -> do
-            count fixture "source-file"
+            countRequest (wfState fixture) "source-file"
             respond (responseLBS status200 [(hContentType, "application/octet-stream")] (fromStrict bytes))
         _ -> respond (responseLBS status404 [] "missing")
 
@@ -115,40 +108,26 @@ targetApp latency fixture request respond = do
     delayUpstream latency
     case (requestMethod request, filter (not . T.null) (pathInfo request)) of
         ("GET", ["config.json"]) -> do
-            count fixture "target-discovery"
+            countRequest (wfState fixture) "target-discovery"
             respond (responseLBS status200 [(hContentType, "application/json")] (fromStrict (renderCargoDiscovery (selfBaseUrl request <> "/crates/{crate}/{crate}-{version}.crate") (Just (selfBaseUrl request)) False)))
         ("GET", segments) | segments == T.splitOn "/" (cargoShard "example") -> do
-            count fixture "target-index"
-            files <- readIORef (wfTarget fixture)
+            countRequest (wfState fixture) "target-index"
+            files <- readIORef (wtFiles (wfState fixture))
             respond (responseLBS status200 [(hContentType, "text/plain")] (fromStrict (cargoIndex [wfRelease fixture | files == wfFiles fixture])))
         ("GET", ["crates", "example", filename]) -> do
-            files <- readIORef (wfTarget fixture)
+            files <- readIORef (wtFiles (wfState fixture))
             respond $ maybe (responseLBS status404 [] "missing") (responseLBS status200 [] . fromStrict) (Map.lookup filename files)
         ("PUT", ["api", "v1", "crates", "new"]) -> do
             bytes <- LBS.toStrict <$> strictRequestBody request
-            reject <- readIORef (wfReject fixture)
             case referenceUpload bytes of
                 Right uploaded
                     | Object expected <- cargoUploadMetadata (wfRelease fixture)
                     , uploadMetadata uploaded == expected
-                    , uploadArchive uploaded == releaseArchive (wfRelease fixture) -> do
-                        count fixture "upload-attempt"
-                        if reject
-                            then respond (responseLBS status503 [] "injected upload rejection")
-                            else do
-                                objects <- readIORef (wfObjects fixture)
-                                if Map.null objects
-                                    then respond (responseLBS status400 [] "upload preceded durable inventory")
-                                    else do
-                                        modifyIORef' (wfTarget fixture) (Map.insert fixtureTrigger (uploadArchive uploaded))
-                                        count fixture "upload"
-                                        respond (responseLBS status200 [(hContentType, "application/json")] "{\"ok\":true}")
+                    , uploadArchive uploaded == releaseArchive (wfRelease fixture) ->
+                        acceptUpload (wfState fixture) fixtureTrigger (uploadArchive uploaded) (responseLBS status200 [(hContentType, "application/json")] "{\"ok\":true}") >>= respond
                 _ -> respond (responseLBS status400 [] "Cargo upload fields or archive differ from the independent native fixture")
         _ -> respond (responseLBS status404 [] "missing")
 
--- | Reuse the same conditional object fixture as the existing PyPI worker row.
+-- | Serve the run's durable objects through the shared conditional object fixture.
 stateApp :: Int -> WorkerFixture -> Application
-stateApp latency fixture = stateAppFor (wfObjects fixture) (wfCounts fixture) latency
-
-count :: WorkerFixture -> Text -> IO ()
-count fixture name = atomicModifyIORef' (wfCounts fixture) (\counts -> (Map.insertWith (+) name 1 counts, ()))
+stateApp latency = targetStateApp latency . wfState

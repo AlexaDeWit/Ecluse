@@ -1,7 +1,7 @@
 # Adding an ecosystem
 
 Use this guide to take a package ecosystem from a protocol assessment to complete support in Écluse.
-npm, PyPI, and Cargo are the shipped examples. Their shared machinery covers more than metadata reads.
+npm, PyPI, Cargo, and RubyGems are the shipped examples. Their shared machinery covers more than metadata reads.
 The [Cargo integration map](cargo-readiness.md) links its native contract and implementation responsibilities.
 
 | Need | Authoritative reference |
@@ -129,6 +129,7 @@ Do not branch on ecosystem names inside the rule engine.
 Declare a typed `adapterRuleBlocks` entry when a rule has no suitable native meaning or its fact is inherently unavailable.
 Give the reason. Boot rejects that rule in an active mount's resolved policy.
 Keep temporary missing evidence distinct from a permanent rule block.
+Declare `adapterInstallEvidence` when archive inspection resolves install-time execution. Composition binds that provider for serving, the mirror worker and the Dredger without switching on ecosystem names.
 The [rule policy](../web/content/docs/configuration.md#rule-policy) owns the operator remedies.
 
 Add the ecosystem's external advisory spelling in [Osv.Ecosystem](../core/src/Ecluse/Core/Osv/Ecosystem.hs).
@@ -189,8 +190,8 @@ The [fixed E2E reference](test-contracts.md#fixed-e2e-entrypoints) owns the deta
 | Part | Existing entry points | What the new ecosystem supplies |
 |---|---|---|
 | Common assertions | [Shared contracts](../test/contracts/Ecluse/Test/Contract/) | Native operations and observations for existing business laws |
-| Native E2E drivers | [Drivers/Npm.hs](../test/e2e/Ecluse/E2E/Drivers/Npm.hs), [Drivers/PyPI.hs](../test/e2e/Ecluse/E2E/Drivers/PyPI.hs), [Drivers/Cargo.hs](../test/e2e/Ecluse/E2E/Drivers/Cargo.hs) | A concrete driver binding every required family to its native provider |
-| Fixed subjects | [Suites/Npm.hs](../test/e2e/Ecluse/E2E/Suites/Npm.hs), [Suites/PyPI.hs](../test/e2e/Ecluse/E2E/Suites/PyPI.hs), [Suites/Cargo.hs](../test/e2e/Ecluse/E2E/Suites/Cargo.hs), [Suites/SharedSystem.hs](../test/e2e/Ecluse/E2E/Suites/SharedSystem.hs) | Direct contract declarations, a Cabal subject, and applicable mixed-client coverage |
+| Native E2E drivers | [Drivers/Npm.hs](../test/e2e/Ecluse/E2E/Drivers/Npm.hs), [Drivers/PyPI.hs](../test/e2e/Ecluse/E2E/Drivers/PyPI.hs), [Drivers/Cargo.hs](../test/e2e/Ecluse/E2E/Drivers/Cargo.hs), [Drivers/RubyGems.hs](../test/e2e/Ecluse/E2E/Drivers/RubyGems.hs) | A concrete driver binding every required family to its native provider |
+| Fixed subjects | [Suites/Npm.hs](../test/e2e/Ecluse/E2E/Suites/Npm.hs), [Suites/PyPI.hs](../test/e2e/Ecluse/E2E/Suites/PyPI.hs), [Suites/Cargo.hs](../test/e2e/Ecluse/E2E/Suites/Cargo.hs), [Suites/RubyGems.hs](../test/e2e/Ecluse/E2E/Suites/RubyGems.hs), [Suites/SharedSystem.hs](../test/e2e/Ecluse/E2E/Suites/SharedSystem.hs) | Direct contract declarations, a Cabal subject, and applicable mixed-client coverage |
 | Fixture resources | [Fixtures/Contracts.hs](../test/e2e/Ecluse/E2E/Fixtures/Contracts.hs), [Harness.hs](../test/e2e/Ecluse/E2E/Harness.hs), [Harness/](../test/e2e/Ecluse/E2E/Harness/) | Native clients, upstreams, stores, resource acquisition, teardown, and declared isolation |
 | Independent requirements and scheduling | [Requirements.hs](../test/e2e/Ecluse/E2E/Requirements.hs), [Catalogue.hs](../test/e2e/Ecluse/E2E/Catalogue.hs) | Required families, stable case IDs, profiles, prerequisites, and lifecycle groups |
 | Plans, execution reports, and audits | [Reproduction procedure](test-contracts.md#reproduction), [Taskfile.yml](../Taskfile.yml), [CI](../.github/workflows/ci.yml) | Registration in the existing manifest, fixed subject tasks, and completion audits |
@@ -245,6 +246,7 @@ Native providers retain parsing, version canonicalisation, route construction, a
 The [npm provider](../bench/load/Ecluse/BenchLoad/Npm.hs) supplies selected replay from native pins.
 The [PyPI provider](../bench/load/Ecluse/BenchLoad/PyPI.hs) keeps selected pattern replay unsupported and selects warm-read artifacts separately.
 The [Cargo provider](../bench/load/Ecluse/BenchLoad/Cargo.hs) supplies sparse discovery and selected replay from native workload pins.
+The [RubyGems provider](../bench/load/Ecluse/BenchLoad/RubyGems.hs) supplies per-gem `/info` replay and selected replay from native pins, without directory discovery.
 
 Keep allocation, heap retention, native memory, complete-request throughput, and latency claims distinct.
 The [metadata reference](ecosystem-metadata.md#lessons-from-earlier-changes) records lessons from earlier work.
@@ -252,7 +254,7 @@ The testing guide remains the authority for measurement duties and supported cla
 
 ## 8. Establish completion
 
-Call `fullEcosystemContract` with the concrete driver, as npm, PyPI, and Cargo do.
+Call `fullEcosystemContract` with the concrete driver, as npm, PyPI, Cargo, and RubyGems do.
 Its required families include proxying, installation, policy, advisories, mirroring, publication, Dredger, and telemetry.
 A partial provider cannot reduce that requirement or describe missing work as a pass.
 An intermediate read-only implementation remains incomplete ecosystem support.

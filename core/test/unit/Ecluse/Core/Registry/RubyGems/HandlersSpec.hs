@@ -1,7 +1,6 @@
 -- SPDX-FileCopyrightText: 2026 Alexandra de Wit
 --
 -- SPDX-License-Identifier: MIT
-{-# LANGUAGE ImportQualifiedPost #-}
 
 -- | Native info and coordinate requests exercise admission and response contracts.
 module Ecluse.Core.Registry.RubyGems.HandlersSpec (spec) where
@@ -26,6 +25,7 @@ import Ecluse.Core.Package (HashAlg (SHA512))
 import Ecluse.Core.Package.Integrity (mkMinIntegrity, mkMinTrustedIntegrity)
 import Ecluse.Core.Registry.RubyGems.Adapter (rubyGemsAdapter)
 import Ecluse.Core.Registry.RubyGems.Credential (rubyReadCredential)
+import Ecluse.Core.Registry.RubyGems.Directory (GemDirectory (GemDirectory), directoryWeight)
 import Ecluse.Core.Registry.RubyGems.FirstParty (projectFirstPartyEntry, rubyGemsFirstPartyName)
 import Ecluse.Core.Registry.RubyGems.Project (projectName)
 import Ecluse.Core.Registry.RubyGems.Route (rubyGemsRouter)
@@ -35,11 +35,12 @@ import Ecluse.Core.Security (Limits (..))
 import Ecluse.Core.Security.Egress (RegistryUrl, registryUrlText)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Core.Server.Admission (newServeAdmissionTuned)
-import Ecluse.Core.Server.Admission.Types (ChargeFactors (ChargeFactors))
+import Ecluse.Core.Server.Admission.Meter (MeterSettings (..), meterSnapshot, newMemoryMeter)
+import Ecluse.Core.Server.Admission.Types (ChargeFactors (ChargeFactors), MeterSnapshot (snChargedBytes))
 import Ecluse.Core.Server.Cache (Source (Source), newMetadataCacheWithProvider)
 import Ecluse.Core.Server.Cache.Backend (BackendStorage (ExternalStorage))
 import Ecluse.Core.Server.Cache.Provider (cacheProvider)
-import Ecluse.Core.Server.Context (MountBinding (..), PackumentDeps (..), ReadSourceSelection (MergePrivateAndPublic, PrivateOnly), RequestCtx (RequestCtx), ResponseAction (..), RouteAction (RouteAction), ServeRuntime (srMetadataCache, srMetrics), pdPublicBaseUrl, runHandler)
+import Ecluse.Core.Server.Context (MountBinding (..), PackumentDeps (..), ReadSourceSelection (MergePrivateAndPublic, PrivateOnly), RequestCtx (RequestCtx), ResponseAction (..), RouteAction (RouteAction), ServeRuntime (srMemoryMeter, srMetadataCache, srMetrics), pdPublicBaseUrl, runHandler)
 import Ecluse.Core.Server.Contract (responseToWai)
 import Ecluse.Core.Server.Encoding (MetadataCompression (GzipWhenAccepted))
 import Ecluse.Core.Server.Upstream (MirrorServePlan (NoMirrorWrite))
@@ -129,6 +130,22 @@ spec = do
                 simpleBody replacement `shouldBe` simpleBody original
                 lookup "Content-Range" (simpleHeaders replacement) `shouldBe` Nothing
                 lookup "Repr-Digest" (simpleHeaders replacement) `shouldBe` Just "sha-256=\"xaNf1tjTCVlsE8k7j2wsswDnodbM0L3OP3+Q1vuN02c=\""
+        it "gives back its directory read charges before it writes the merged body" $
+            withDirectorySources $ \runtime binding _ _ -> do
+                (held, response) <- chargedAtResponse runtime binding "/versions"
+                simpleStatus response `shouldBe` status200
+                -- The merge charge over the packed public and private views, which share no name.
+                held `shouldBe` 2 * (directoryWeight (GemDirectory "public-gem 1.0 \n") + BS.length "private-gem 1.0 \n") + 4096
+        it "refuses a merged directory one byte over the metadata bound" $
+            withDirectorySources $ \runtime binding _ _ -> do
+                -- The header and the packed public and private rows take 37 bytes.
+                simpleStatus <$> capture runtime (metadataByteCap 37 binding) "GET" "/versions" [] `shouldReturn` status200
+                simpleStatus <$> capture runtime (metadataByteCap 36 binding) "GET" "/versions" [] `shouldReturn` status502
+        it "refuses colliding directories over the metadata bound before they merge" $
+            withDirectoryBodies "---\na 1.0 \n" "---\na 2.0 \n" $ \runtime binding _ _ -> do
+                -- The header and packed rows take 18 bytes before the merge and 15 after it, so only the pre-merge check refuses 17.
+                simpleStatus <$> capture runtime (metadataByteCap 18 binding) "GET" "/versions" [] `shouldReturn` status200
+                simpleStatus <$> capture runtime (metadataByteCap 17 binding) "GET" "/versions" [] `shouldReturn` status502
         it "keeps a native400 directory limit failure at the capability boundary" $
             withDirectorySources $ \runtime binding hits privateStatus -> do
                 writeIORef privateStatus status400
@@ -161,7 +178,7 @@ spec = do
                                 private = BS.drop (BS.length coordinateBudgetHeader) paddedPrivate
                                 oneNameBytes = BS.length denied + BS.length private
                                 cap = oneNameBytes - if exact then 0 else 1
-                                binding = coordinateByteCap cap original
+                                binding = metadataByteCap cap original
                                 deps = bindingPackumentDeps binding
                                 public = binding{bindingPackumentDeps = withPrivateBaseUrl Nothing deps}
                             runtime <- if warm then warmPublicDocuments uncached public hits [("acme-1", status403)] else pure uncached
@@ -186,7 +203,7 @@ spec = do
                         writeIORef hits []
                         writeIORef privateStatus refused
                         let cap = BS.length (fst (coordinateListings coordinateBudgetHeader release)) - 1
-                        denied <- capture runtime (coordinateByteCap cap binding) method "/info/acme-1" []
+                        denied <- capture runtime (metadataByteCap cap binding) method "/info/acme-1" []
                         simpleStatus denied `shouldBe` refused
                         readIORef hits `shouldReturn` [["private", "info", "acme-1"]]
         for_ ["GET", "HEAD"] $ \method ->
@@ -200,7 +217,7 @@ spec = do
                         binding = original{bindingPackumentDeps = deps{pdFirstParty = rubyGemsFirstPartyName (owned :| [])}}
                     writeIORef privateStatus status404
                     let cap = BS.length (fst (coordinateListings coordinateBudgetHeader release)) - 1
-                    response <- capture runtime (coordinateByteCap cap binding) method "/info/acme" []
+                    response <- capture runtime (metadataByteCap cap binding) method "/info/acme" []
                     simpleStatus response `shouldBe` status404
                     readIORef hits `shouldReturn` [["private", "info", "acme"]]
 
@@ -251,7 +268,7 @@ spec = do
                 for_ [False, True] $ \warm ->
                     it ("retains denial for the actual recent coordinate for " <> show (warm, method, path)) $
                         withCoordinateSources PublicCandidateSource $ \uncached original hits _ -> do
-                            let binding = coordinateByteCap 200 original
+                            let binding = metadataByteCap 200 original
                             runtime <- if warm then warmCoordinateCache uncached binding hits else pure uncached
                             response <- capture runtime binding method path []
                             simpleStatus response `shouldBe` status403
@@ -376,7 +393,7 @@ spec = do
             for_ ["/gems/acme-1-1.0.gem", "/quick/Marshal.4.8/acme-1-1.0.gemspec.rz"] $ \path -> do
                 it ("counts warm denied source bytes for " <> show method <> " " <> show path) $
                     withCoordinateSources PublicCandidateSource $ \uncached original hits release -> do
-                        let binding = coordinateByteCap 200 original
+                        let binding = metadataByteCap 200 original
                             (recent, admitted) = coordinateListings "" release
                         map BS.length [recent, admitted] `shouldSatisfy` all (<= 200)
                         BS.length recent + BS.length admitted `shouldSatisfy` (> 200)
@@ -389,7 +406,7 @@ spec = do
                         withCoordinateSourceHeader coordinateBudgetHeader PublicCandidateSource $ \uncached original hits release -> do
                             let (recent, admitted) = coordinateListings coordinateBudgetHeader release
                                 cap = BS.length recent + BS.length admitted - 1
-                                binding = coordinateByteCap cap original
+                                binding = metadataByteCap cap original
                             map BS.length [recent, admitted] `shouldSatisfy` all (<= cap)
                             runtime <- if warm then warmCoordinateCache uncached binding hits else pure uncached
                             response <- capture runtime binding method path []
@@ -405,7 +422,7 @@ spec = do
                                 body = if compact then releaseCompact release else releaseArchive release
                                 sourceTotal = BS.length recent + BS.length admitted
                                 cap = sourceTotal + if compact && not warm then BS.length body else 0
-                                binding = coordinateByteCap cap original
+                                binding = metadataByteCap cap original
                             runtime <- if warm then warmCoordinateCache uncached binding hits else pure uncached
                             response <- capture runtime binding method path []
                             checkCoordinateResponse method path body response
@@ -421,7 +438,7 @@ spec = do
                     let (recent, admitted) = coordinateListings coordinateBudgetHeader release
                         sourceTotal = BS.length recent + BS.length admitted
                         cap = sourceTotal + BS.length (releaseCompact release) - 1
-                        binding = coordinateByteCap cap original
+                        binding = metadataByteCap cap original
                     sourceTotal `shouldSatisfy` (<= cap)
                     response <- capture runtime binding method "/quick/Marshal.4.8/acme-1-1.0.gemspec.rz" []
                     simpleStatus response `shouldBe` status502
@@ -480,6 +497,8 @@ spec = do
                 readIORef hits `shouldReturn` []
                 missing <- capture runtime binding "GET" "/quick/Marshal.4.8/ecluse-fixture-root-99.0.0.gemspec.rz" wildcard
                 simpleStatus missing `shouldBe` status404
+                bounded <- capture runtime (metadataByteCap 16 binding) "GET" "/versions" wildcard
+                simpleStatus bounded `shouldBe` status502
 
 metadataPaths :: [ByteString]
 metadataPaths =
@@ -495,7 +514,11 @@ responseTag :: SResponse -> IO ByteString
 responseTag response = maybe (expectationFailure "the admitted metadata response omitted its ETag" >> pure "") pure (lookup "ETag" (simpleHeaders response))
 
 withDirectorySources :: (ServeRuntime -> MountBinding -> IORef [([Text], [Header])] -> IORef Status -> IO a) -> IO a
-withDirectorySources use = do
+withDirectorySources = withDirectoryBodies "---\npublic-gem 1.0 \n" "---\nprivate-gem 1.0 \n"
+
+-- | Serve the given public and private @/versions@ bodies to a merging mount.
+withDirectoryBodies :: LByteString -> LByteString -> (ServeRuntime -> MountBinding -> IORef [([Text], [Header])] -> IORef Status -> IO a) -> IO a
+withDirectoryBodies publicBody privateBody use = do
     hits <- newIORef []
     privateStatus <- newIORef status200
     let upstream request respond = do
@@ -503,8 +526,8 @@ withDirectorySources use = do
             case pathInfo request of
                 ["private", "versions"] -> do
                     status <- readIORef privateStatus
-                    respond (responseLBS status [] "---\nprivate-gem 1.0 \n")
-                ["public", "versions"] -> respond (responseLBS status200 [] "---\npublic-gem 1.0 \n")
+                    respond (responseLBS status [] privateBody)
+                ["public", "versions"] -> respond (responseLBS status200 [] publicBody)
                 _ -> respond (responseLBS status404 [] "")
     testWithApplication (pure upstream) $ \port -> do
         let base = "http://localhost:" <> show port
@@ -644,8 +667,8 @@ missingDatabaseForVersion version rule = case prepEval rule of
     PerPackage _ -> rule
     PerInstallEvidence _ -> rule
 
-coordinateByteCap :: Int -> MountBinding -> MountBinding
-coordinateByteCap cap binding =
+metadataByteCap :: Int -> MountBinding -> MountBinding
+metadataByteCap cap binding =
     let deps = bindingPackumentDeps binding
      in binding{bindingPackumentDeps = deps{pdLimits = (pdLimits deps){maxMetadataBytes = cap}}}
 
@@ -656,7 +679,7 @@ warmPublicDocuments :: ServeRuntime -> MountBinding -> IORef [[Text]] -> [(Text,
 warmPublicDocuments uncached binding hits documents = do
     values <- newIORef Map.empty
     let full = externalOperations (\_ key -> Map.lookup key <$> readIORef values) (\key value -> atomicModifyIORef' values (\stored -> (Map.insert key value stored, ())))
-    cache <- newMetadataCacheWithProvider (cacheProvider (ExternalStorage 100000) (Just full) Nothing Nothing)
+    cache <- newMetadataCacheWithProvider (cacheProvider (ExternalStorage 100000) Nothing (Just full) Nothing Nothing)
     let runtime = uncached{srMetadataCache = cache}
         source = Source (registryUrlText (pdPublicBaseUrl (bindingPackumentDeps binding)))
         listing name = capture runtime binding "GET" ("/info/" <> encodeUtf8 name) []
@@ -676,6 +699,20 @@ warmPublicDocuments uncached binding hits documents = do
         simpleBody repeated `shouldBe` simpleBody original
     readIORef hits `shouldReturn` []
     pure runtime
+
+-- What the request holds when its response starts, under a meter that charges each byte.
+chargedAtResponse :: ServeRuntime -> MountBinding -> ByteString -> IO (Int, SResponse)
+chargedAtResponse runtime binding path = withSweeper $ \deadlines -> do
+    meter <- newMemoryMeter deadlines MeterSettings{msBudgetBytes = maxBound `div` 2, msStepBytes = 1, msEntryRoom = 1000, msEntryWaitMicros = 0}
+    held <- newIORef 0
+    logEnv <- newTestLogEnv
+    let metered = runtime{srMemoryMeter = meter}
+        observe = meterSnapshot meter >>= writeIORef held . snChargedBytes
+    response <- runSession (srequest (SRequest (setPath defaultRequest path) "")) $ \incoming respond ->
+        case rubyGemsRouter (requestMethod incoming) (requestHeaders incoming) (pathInfo incoming) of
+            RouteAction contract (RunPipeline _ run) -> runHandler logEnv mempty (RequestCtx metered binding) (run incoming (\reply -> observe >> respond (responseToWai contract reply)))
+            _ -> fail "expected a pipeline route"
+    (,response) <$> readIORef held
 
 capture :: ServeRuntime -> MountBinding -> Method -> ByteString -> [Header] -> IO SResponse
 capture runtime binding method path headers = do

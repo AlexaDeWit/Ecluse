@@ -1,7 +1,6 @@
 -- SPDX-FileCopyrightText: 2026 Alexandra de Wit
 --
 -- SPDX-License-Identifier: MIT
-{-# LANGUAGE ImportQualifiedPost #-}
 
 -- | BZIP2 decoding with one resource scope per compressed member.
 module Ecluse.Core.Registry.PyPI.Archive.BZip (withBzipChunks) where
@@ -15,7 +14,7 @@ import System.IO.Error (ioeGetErrorString, isUserError)
 import UnliftIO.Exception (bracket, tryJust)
 
 import Ecluse.Core.Registry (ParseError (..))
-import Ecluse.Core.Registry.PyPI.Archive.Tar (TarDecode)
+import Ecluse.Core.Registry.Archive.Tar (TarDecode)
 
 -- | Charge each validated block-size declaration before native allocation. Refusal closes every registered resource.
 withBzipChunks :: Int -> (Int -> IO ()) -> ByteString -> (ConduitT () ByteString TarDecode () -> IO a) -> IO a

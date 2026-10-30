@@ -22,6 +22,7 @@ import Data.Scientific (toBoundedInteger)
 import Ecluse.Core.Registry.JsonStream (isJsonSpace)
 import Ecluse.Core.Registry.ServedDocument (stringField)
 import Ecluse.Core.Security (LimitError (TooDeeplyNested))
+import Ecluse.Core.Server.MemoryModel (saturatingCharge)
 import Ecluse.Core.Version.Cargo (cargoUniquenessKey, parseCargo)
 
 -- | Malformed rows drop individually. Resource refusals stop the whole source read.
@@ -40,7 +41,7 @@ decodeCargoRecord depth bytes = do
 
 -- | Reserve bounded native parser trees and comparison structures before retaining them.
 cargoTreeCharge :: Integer -> Int
-cargoTreeCharge bytes = fromInteger (min (toInteger (maxBound :: Int)) (65536 + 64 * max 0 bytes))
+cargoTreeCharge bytes = saturatingCharge (65536 + 64 * max 0 bytes)
 
 -- | A syntactically native version claims uniqueness even when another record field is invalid.
 recordIdentity :: Value -> Maybe Text
@@ -105,21 +106,17 @@ withinDepth depth value
 checkDepthBeforeDecode :: Int -> ByteString -> Either LimitError ()
 checkDepthBeforeDecode limit bytes = go 0 0 False False
   where
-    go !at !depth quoted escaped
-        | at >= BS.length bytes = Right ()
-        | quoted =
-            if escaped
-                then next depth True False
-                else case BS.index bytes at of
-                    92 -> next depth True True
-                    34 -> next depth False False
-                    _ -> next depth True False
-        | otherwise = case BS.index bytes at of
-            34 -> next depth True False
-            byte
-                | byte == 91 || byte == 123 ->
-                    if depth >= limit then Left (TooDeeplyNested limit) else next (depth + 1) False False
-            byte | byte == 93 || byte == 125 -> next (max 0 (depth - 1)) False False
-            _ -> next depth False False
+    go !at !depth quoted escaped = case BS.indexMaybe bytes at of
+        Nothing -> Right ()
+        Just byte
+            | quoted && escaped -> next depth True False
+            | quoted -> case byte of
+                92 -> next depth True True
+                34 -> next depth False False
+                _ -> next depth True False
+            | byte == 34 -> next depth True False
+            | byte == 91 || byte == 123 -> if depth >= limit then Left (TooDeeplyNested limit) else next (depth + 1) False False
+            | byte == 93 || byte == 125 -> next (max 0 (depth - 1)) False False
+            | otherwise -> next depth False False
       where
         next = go (at + 1)

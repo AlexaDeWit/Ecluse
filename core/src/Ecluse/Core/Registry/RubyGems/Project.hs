@@ -5,6 +5,10 @@
 -- | Native RubyGems identities preserve published versions and platform spellings.
 module Ecluse.Core.Registry.RubyGems.Project (
     projectName,
+    rubyGemsNameChar,
+    rubyGemsNameChars,
+    unscopedRubyGems,
+    gemFileStem,
     projectVersion,
     GemPlatform,
     mkGemPlatform,
@@ -34,9 +38,23 @@ import Ecluse.Core.Version.Gem (parseGem)
 
 -- | Parse names without rewriting legacy registry punctuation or case.
 projectName :: Text -> Either ParseError PackageName
-projectName raw = mkPackageName RubyGems Nothing <$> nameComponentWith "RubyGems package name" (T.all nameChar) raw
-  where
-    nameChar c = isAsciiAlphaNum c || c `elem` ['.', '-', '_']
+projectName raw = mkPackageName RubyGems Nothing <$> nameComponentWith "RubyGems package name" (T.all rubyGemsNameChar) raw
+
+-- | A character of a native name or platform label.
+rubyGemsNameChar :: Char -> Bool
+rubyGemsNameChar c = isAsciiAlphaNum c || c `elem` ['.', '-', '_']
+
+-- | Every 'rubyGemsNameChar', in the maintenance bucket order.
+rubyGemsNameChars :: [Char]
+rubyGemsNameChars = ['A' .. 'Z'] <> ['a' .. 'z'] <> ['0' .. '9'] <> "._-"
+
+-- | A RubyGems name, which never carries a namespace.
+unscopedRubyGems :: PackageName -> Bool
+unscopedRubyGems name = pkgEcosystem name == RubyGems && isNothing (pkgNamespace name)
+
+-- | A native archive filename without its @.gem@ extension.
+gemFileStem :: Text -> Maybe Text
+gemFileStem = T.stripSuffix ".gem"
 
 -- | Parse a digit-leading native version and retain its exact source spelling.
 projectVersion :: Text -> Either ParseError Version
@@ -51,13 +69,12 @@ newtype GemPlatform = GemPlatform Text
 -- | Parse a platform label without normalising OS, architecture or ABI spelling.
 mkGemPlatform :: Text -> Either ParseError GemPlatform
 mkGemPlatform raw = do
-    checked <- nameComponentWith "RubyGems platform" (T.all platformChar) raw
+    checked <- nameComponentWith "RubyGems platform" (T.all rubyGemsNameChar) raw
     let (_, separated) = T.breakOn "-" checked
         os = if T.null separated then checked else T.drop 1 separated
     unless (checked == "ruby" || knownOs checked || knownOs os) (Left (ParseError "unsupported RubyGems platform"))
     pure (GemPlatform (T.copy checked))
   where
-    platformChar c = isAsciiAlphaNum c || c `elem` ['.', '-', '_']
     knownOs value = any (family value) ["aix", "cygwin", "darwin", "macruby", "freebsd", "java", "jruby", "dalvik", "dotnet", "linux", "mingw32", "mingw", "mswin32", "mswin64", "netbsdelf", "openbsd", "solaris", "wasi"]
     family value prefix = case T.stripPrefix prefix value of
         Just rest -> T.null rest || maybe False (\(c, _) -> c == '-' || c == '_' || isDigit c) (T.uncons rest)
@@ -79,7 +96,7 @@ data GemCoordinate = GemCoordinate
 -- | Bind a raw version and platform to one unscoped RubyGems package.
 mkCoordinate :: PackageName -> Version -> GemPlatform -> Either ParseError GemCoordinate
 mkCoordinate name version platform = do
-    unless (pkgEcosystem name == RubyGems && isNothing (pkgNamespace name)) (Left (ParseError "not an unscoped RubyGems package"))
+    unless (unscopedRubyGems name) (Left (ParseError "not an unscoped RubyGems package"))
     checkedName <- projectName (renderPackageName name)
     checkedVersion <- projectVersion (renderVersion version)
     let raw = renderVersion checkedVersion
@@ -88,16 +105,18 @@ mkCoordinate name version platform = do
     file <- maybeToRight (ParseError "invalid RubyGems artifact filename") (mkFilename filename)
     pure (GemCoordinate checkedName checkedVersion platform file)
 
--- | Return the native filename without its @.gem@ extension for quick specifications.
+{- | Return the native filename without its @.gem@ extension for quick specifications.
+'mkCoordinate' always appends the extension, so the fallback never applies.
+-}
 coordinateStem :: GemCoordinate -> Text
-coordinateStem = T.dropEnd 4 . unFilename . coordinateFilename
+coordinateStem coordinate = let raw = unFilename (coordinateFilename coordinate) in fromMaybe raw (gemFileStem raw)
 
 -- | Enumerate bounded native capture candidates before checking admitted artifact inventory.
 candidateCoordinates :: Int -> Filename -> Either ParseError [GemCoordinate]
 candidateCoordinates cap filename = do
     let raw = unFilename filename
     when (BS.length (encodeUtf8 raw) > cap) (Left (ParseError "RubyGems coordinate capture exceeds its bound"))
-    stem <- maybeToRight (ParseError "RubyGems artifact capture has no .gem extension") (T.stripSuffix ".gem" raw)
+    stem <- maybeToRight (ParseError "RubyGems artifact capture has no .gem extension") (gemFileStem raw)
     when (T.count "-" stem > 100) (Left (ParseError "RubyGems coordinate capture has too many separators"))
     when (toInteger (BS.length (encodeUtf8 raw)) * (1 + toInteger (T.count "-" stem)) > toInteger cap) (Left (ParseError "RubyGems coordinate work exceeds its bound"))
     let candidates = take 101 (concatMap splitVersion (splits stem))

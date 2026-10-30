@@ -1,7 +1,6 @@
 -- SPDX-FileCopyrightText: 2026 Alexandra de Wit
 --
 -- SPDX-License-Identifier: MIT
-{-# LANGUAGE ImportQualifiedPost #-}
 
 -- | Cargo whole-version worker throughput includes native metadata, archives, uploads, and durable completion.
 module Ecluse.BenchLoad.Cargo.Worker (cargoWorkerScenario) where
@@ -13,6 +12,7 @@ import Ecluse.BenchLoad.Error (benchFail)
 import Ecluse.BenchLoad.Fixture (benchNow)
 import Ecluse.BenchLoad.Harness (LoadKnobs (..), Scenario (..), Target, scenario)
 import Ecluse.BenchLoad.Worker (NativeWorker (..), WorkerEnvironment (..), bootNativeWorker)
+import Ecluse.BenchLoad.WorkerState (WorkerTarget (..))
 import Ecluse.Core.Ecosystem (Ecosystem (Cargo))
 import Ecluse.Core.Queue (MirrorJob (..))
 import Ecluse.Core.Registry.Adapter (adapterFor)
@@ -21,14 +21,13 @@ import Ecluse.Core.Registry.Adapter.Types (RegistryAdapter (adapterArtifact, ada
 import Ecluse.Core.Registry.Cargo.Execution (newCargoInstallEvidence)
 import Ecluse.Core.Registry.Cargo.Metadata (prepareCargoRead)
 import Ecluse.Core.Registry.Cargo.Publish (cargoPublishCodec)
+import Ecluse.Core.Registry.Exchange.Types (ExchangeClient (ecDeadlines))
 import Ecluse.Core.Registry.Metadata (versionEvaluation)
 import Ecluse.Core.Registry.Metadata.Fetch.Preparation (prepareVersion)
-import Ecluse.Core.Registry.Origin (OriginClient (ocChargeFullRead, ocChargeSelectedRead))
+import Ecluse.Core.Registry.Origin (chargingNativeReads, originClientOf)
 import Ecluse.Core.Registry.Publish (MirrorTransport (..), newMirrorPublish)
 import Ecluse.Core.Security (defaultLimits)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
-import Ecluse.Core.Server.Admission.Budget (scaleCharge)
-import Ecluse.Core.Server.Admission.Types (ChargeFactors (cfFullReadPermille))
 import Ecluse.Core.Worker (WorkerPolicy (..))
 import Ecluse.Test.Package (defaultMinIntegrity, unsafeFilename)
 import Ecluse.Test.Port (passthroughTracingPort)
@@ -54,9 +53,9 @@ boot knobs use = do
                 , nwJob = MirrorJob fixturePackage fixtureVersion (Just (unsafeFilename fixtureTrigger)) Nothing
                 , nwExpectedFiles = 1
                 , nwReset = resetWorkerFixture fixture
-                , nwRejectUpload = writeIORef (wfReject fixture)
-                , nwUploadAttempts = Map.findWithDefault 0 "upload-attempt" <$> readIORef (wfCounts fixture)
-                , nwRemoveTrigger = modifyIORef' (wfTarget fixture) (Map.delete fixtureTrigger)
+                , nwRejectUpload = writeIORef (wtReject (wfState fixture))
+                , nwUploadAttempts = Map.findWithDefault 0 "upload-attempt" <$> readIORef (wtCounts (wfState fixture))
+                , nwRemoveTrigger = modifyIORef' (wtFiles (wfState fixture)) (Map.delete fixtureTrigger)
                 , nwMissingArtifact = "crate"
                 , nwVerifyCopy = verifyCopy fixture
                 }
@@ -64,15 +63,14 @@ boot knobs use = do
 
 cargoPolicy :: RegistryAdapter -> WorkerEnvironment -> IO WorkerPolicy
 cargoPolicy adapter environment = do
-    evidence <- newCargoInstallEvidence defaultLimits
+    evidence <- newCargoInstallEvidence (ecDeadlines (weClient environment)) defaultLimits
     let factors = metadataChargeFactors (adapterMetadata adapter)
         targetReadRoot = weTargetReadRoot environment
         publish = newMirrorPublish (MirrorTransport (weClient environment) (pure Nothing) defaultLimits passthroughTracingPort) targetReadRoot targetReadRoot (cargoPublishCodec factors)
-        sourceOrigin = weSourceOrigin environment
     pure
         WorkerPolicy
             { wpFirstParty = const False
-            , wpResolveVersion = \pay name version -> versionEvaluation <$> prepareVersion prepareCargoRead passthroughTracingPort sourceOrigin{ocChargeFullRead = pay . scaleCharge (cfFullReadPermille factors), ocChargeSelectedRead = pay} name version
+            , wpResolveVersion = \pay name version -> chargingNativeReads factors pay (weSourceOrigin environment) >>= \origin -> versionEvaluation <$> prepareVersion prepareCargoRead passthroughTracingPort (originClientOf origin) name version
             , wpInstallEvidence = Just evidence
             , wpRules = weRules environment
             , wpMinIntegrity = defaultMinIntegrity
@@ -87,8 +85,8 @@ cargoPolicy adapter environment = do
 
 verifyCopy :: WorkerFixture -> Int -> Int -> IO ()
 verifyCopy fixture published acked = do
-    target <- readIORef (wfTarget fixture)
-    counts <- readIORef (wfCounts fixture)
+    target <- readIORef (wtFiles (wfState fixture))
+    counts <- readIORef (wtCounts (wfState fixture))
     let count name = Map.findWithDefault 0 name counts
         files = Map.size (wfFiles fixture)
     unless (published == 1 && acked == 1 && target == wfFiles fixture && count "source-discovery" == 1 && count "source-index" == 1 && count "source-file" == files && count "upload" == files && count "target-discovery" > 0 && count "target-index" == 2 && count "state-write" > 0) $

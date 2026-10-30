@@ -25,12 +25,12 @@ import Ecluse.E2E.Harness.Advisories (advisoryStoreEnv, publishAdvisoryExport)
 import Ecluse.E2E.Harness.Cargo (CargoProject)
 import Ecluse.E2E.Harness.CargoDredger qualified as Native
 import Ecluse.E2E.Harness.CargoDredger.Client (cargoSweepClientOps)
-import Ecluse.E2E.Harness.CargoGateway (observedProxy)
 import Ecluse.E2E.Harness.CargoRegistry (awaitCargoRegistry)
 import Ecluse.E2E.Harness.Client (shouldSucceed)
 import Ecluse.E2E.Harness.CodeArtifact (codeArtifactDeleteRequests, creditCodeArtifactDeletes, withCodeArtifactDeleteAudit)
 import Ecluse.E2E.Harness.Docker (RoleRun (..), awaitContainerLog, containerLogs, runRoleOnce, sharedMirrorQueue, withDataPlane, withMirrorRole)
 import Ecluse.E2E.Harness.Lifecycle (timedFixtureWith)
+import Ecluse.E2E.Harness.NativeEdge (observedProxy)
 import Ecluse.E2E.Harness.Proxy (awaitProxyLog)
 import Ecluse.E2E.Harness.Sweep
 import Ecluse.E2E.Harness.Types (GlobalDataPlane, Topology (..))
@@ -298,7 +298,7 @@ safetyCases recorder = aroundAll acquire $ do
         requests <- codeArtifactDeleteRequests (Native.cspControl plane)
         run <- Native.withUnsafeMirror plane (runNativeSweep plane [] Apply (FullIdentity (packageName deniedPackage)))
         sweepExit run `shouldNotBe` ExitSuccess
-        T.toLower (sweepOutput run) `shouldSatisfy` T.isInfixOf "upstream"
+        sweepOutput run `shouldSatisfy` T.isInfixOf "refills itself, so a delete changes nothing: the repository has an upstream (cache)"
         ((,) <$> Native.storeInventory mirror <*> Native.storeInventory cache) `shouldReturn` previousInventory
         codeArtifactDeleteRequests (Native.cspControl plane) `shouldReturn` requests
     it (caseLabel "cargo/dredger-native-safety/native-yank-not-deletion" "keeps yank separate from physical removal and observes CodeArtifact deleting the native archive") $ \(plane, mirror, _) -> do

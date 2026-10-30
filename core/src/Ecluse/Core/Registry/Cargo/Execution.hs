@@ -13,8 +13,9 @@ import Data.Text.Encoding qualified as TE
 import GHC.Clock (getMonotonicTimeNSec)
 import UnliftIO.Exception (evaluate, finally, try)
 import UnliftIO.MVar (withMVar)
-import UnliftIO.Timeout (timeout)
 
+import Ecluse.Core.Deadline (Deadlines)
+import Ecluse.Core.Deadline qualified as Deadline
 import Ecluse.Core.Ecosystem (Ecosystem (Cargo))
 import Ecluse.Core.Fault (boundedDetail)
 import Ecluse.Core.Package
@@ -30,12 +31,12 @@ import Ecluse.Core.Server.Cache.Store (newSingleFlightWithBackend, resolveSingle
 import Ecluse.Core.Server.Cache.Types (StoreBudget (StoreBudget))
 import Ecluse.Core.Server.Cache.VersionWeight.Fields (detailsFieldsWeight)
 import Ecluse.Core.Server.Framing (frameComponents)
-import Ecluse.Core.Server.MemoryModel (bufferedChunkCharge, expandWireBytesInteger)
+import Ecluse.Core.Server.MemoryModel (bufferedChunkCharge, expandWireBytesInteger, saturatingCharge)
 import Ecluse.Core.Version (renderVersion)
 
 -- | Retain compact verified public signals for five minutes. Private store evidence never enters this cache.
-newCargoInstallEvidence :: Limits -> IO InstallEvidenceProvider
-newCargoInstallEvidence limits = do
+newCargoInstallEvidence :: Deadlines -> Limits -> IO InstallEvidenceProvider
+newCargoInstallEvidence deadlines limits = do
     pool <- newLocalPool (min 4096 (maxVersionCount limits)) (min (1024 * 1024) (maxMetadataBytes limits))
     retention <- newPooledRetention pool 300 (StoreBudget 0 0) (\(key, _) -> bufferedChunkCharge (BS.length key))
     flights <- newSingleFlightWithBackend (Just (retentionBackend LocalStorage retention))
@@ -63,7 +64,7 @@ newCargoInstallEvidence limits = do
                 try $
                     if remaining <= 0
                         then pure (Left deadlineFault)
-                        else fromMaybe (Left deadlineFault) <$> timeout (fromInteger remaining) readSubject
+                        else fromMaybe (Left deadlineFault) <$> Deadline.timeout deadlines (fromInteger remaining) readSubject
             let result = either (\InstallEvidenceBudgetExceeded -> Left (permanent "Cargo execution evidence exceeds its reserved memory envelope")) id attempted
             case result of
                 Left fault -> ieDiagnostic context fault $> InstallReadFailed fault
@@ -71,12 +72,11 @@ newCargoInstallEvidence limits = do
 
 withSubjectBudget :: InstallEvidenceContext -> PackageDetails -> (InstallEvidenceContext -> IO (Either ReadFault a)) -> IO (Either ReadFault a)
 withSubjectBudget context details use = do
-    let saturate = fromInteger . min (toInteger (maxBound :: Int))
-        keyCharge = saturate (expandWireBytesInteger (detailsFieldsWeight details))
+    let keyCharge = saturatingCharge (expandWireBytesInteger (detailsFieldsWeight details))
     result <- withInstallEvidenceBudget (ieBudget context) $ \bytes inspection ->
         ( do
             bytes keyCharge
-            let subjectBudget = InstallEvidenceBudget (\action -> Just <$> action (\cost -> bytes (saturate (toInteger keyCharge + toInteger cost))) inspection)
+            let subjectBudget = InstallEvidenceBudget (\action -> Just <$> action (\cost -> bytes (saturatingCharge (toInteger keyCharge + toInteger cost))) inspection)
             use context{ieBudget = subjectBudget}
         )
             `finally` (inspection 0 >> bytes 0)
@@ -123,7 +123,7 @@ inspectSubject context allowance details artifact checksum = do
         ieReadArtifact context limits artifact bytesCharge >>= \case
             Left fault -> pure (Left fault)
             Right bytes -> do
-                inspected <- inspectCargoArchive limits inspectCharge (renderPackageName (pkgName details)) (renderVersion (pkgVersion details)) checksum bytes
+                inspected <- inspectCargoArchive limits inspectCharge (renderPackageName (pkgName details)) (renderVersion (pkgVersion details)) (Just checksum) bytes
                 case inspected of
                     Left fault -> pure (Left (permanent (parseErrorMessage fault)))
                     Right metadata -> case cargoArchiveExecution metadata of

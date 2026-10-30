@@ -12,7 +12,7 @@ module Ecluse.BenchLoad.PyPI (
     wheelStubWith,
 ) where
 
-import Data.Aeson (Value, eitherDecode, encode, object, (.:), (.=))
+import Data.Aeson (Value, eitherDecode, encode, object, (.=))
 import Data.Aeson.Types (Pair)
 import Data.ByteString.Lazy qualified as LBS
 import Data.List (dropWhileEnd)
@@ -26,7 +26,7 @@ import Network.Wai (Application, Request, pathInfo, rawPathInfo, responseLBS)
 import Ecluse.BenchLoad.CapturedArtifact (SelectedArtifact (saProxyPath), selectedArtifact)
 import Ecluse.BenchLoad.Contract.Driver (LoadReadDriver (..), readLoadContract)
 import Ecluse.BenchLoad.Error (benchFail)
-import Ecluse.BenchLoad.Fixture (artifactBytes, delayUpstream, fetchChecked, httpTarget, longCacheTtl, selfHosted, weightedMix, withProxyOverStubs)
+import Ecluse.BenchLoad.Fixture (absentUpstream, artifactBytes, delayUpstream, fetchChecked, httpTarget, longCacheTtl, selectPinnedArtifacts, selfHosted, weightedMix, withProxyOverStubs)
 import Ecluse.BenchLoad.Harness (Driver (DriveBurst, DriveRamp), LoadKnobs (..), Scenario (..), UpstreamFixture, proxied, scenario, urlLoad)
 import Ecluse.BenchLoad.Listing (ListingSetup (..), cacheEvictsLoad, cacheFitsLoad, listingLoad, listingWorkingSet, revalidateLoad, slowReaderScenario, withListingStubs)
 import Ecluse.BenchLoad.ManagedMirror (managedMirrorScenarios)
@@ -42,7 +42,7 @@ import Ecluse.Core.Registry.PyPI.Route (distributionPath)
 import Ecluse.Core.Registry.PyPI.Wire (IndexFile (..), SimpleIndex (..), simpleIndexMediaType)
 import Ecluse.Core.Security (defaultLimits)
 import Ecluse.Core.Version (canonicalPep440, renderVersion)
-import Ecluse.Test.Corpus (CorpusPackage (cpPackage, cpWeight), cpName, pypiCorpusPackages, readCorpusPins)
+import Ecluse.Test.Corpus (CorpusPackage (cpPackage, cpWeight), cpName, pypiCorpusPackages)
 import Ecluse.Test.Corpus.Subset (newestPyPIShare)
 import Ecluse.Test.Json (withKeys)
 import Ecluse.Test.Package (hexSha256Of)
@@ -165,8 +165,8 @@ wheelScenario source =
         let bytes = artifactBytes (lkPayloadBytes knobs)
             latency = lkUpstreamLatencyMicros knobs
             (privateApp, publicApp, ttl) = case source of
-                PrivateWheel -> (wheelStub latency bytes, missingStub latency, longCacheTtl)
-                PublicOnboarding -> (missingStub latency, wheelStub latency bytes, 0)
+                PrivateWheel -> (wheelStub latency bytes, absentUpstream latency, longCacheTtl)
+                PublicOnboarding -> (absentUpstream latency, wheelStub latency bytes, 0)
         withProxyOverStubs PyPI knobs ttl Nothing privateApp publicApp wheelMix $ \proxy urls -> do
             for_ (zip pypiCorpusPackages urls) $ \(package, url) -> checkWheel bytes (cpName package) url
             httpTarget k proxy urls
@@ -230,17 +230,11 @@ warmUnderColdScenario =
 
 -- | Resolve warm selected reads from captured PyPI pins through the production projection.
 selectWarmArtifacts :: [CorpusPackage] -> Map Text LByteString -> IO (Map Text SelectedArtifact)
-selectWarmArtifacts packages captures = do
-    pins <- readCorpusPins (.: "pypiPins") >>= either (benchFail . toText) pure
-    fmap Map.fromList $ forM packages $ \package -> either benchFail pure $ do
-        let name = cpName package
-        version <- maybe (Left ("missing captured PyPI pin: " <> name)) Right (Map.lookup name pins)
-        canonical <- maybe (Left ("invalid captured PyPI pin: " <> version)) (Right . renderVersion) (canonicalPep440 version)
-        bytes <- maybe (Left ("missing captured PyPI body: " <> name)) Right (Map.lookup name captures)
-        (info, _) <- first show (projectPyPIIndex defaultLimits (cpPackage package) (LBS.toStrict bytes))
-        let route = maybe (Left "captured artifact filename has no PyPI route") Right . distributionPath (cpPackage package)
-        artifact <- selectedArtifact canonical ("captured PyPI version is absent: " <> version) route info
-        pure (name, artifact)
+selectWarmArtifacts = selectPinnedArtifacts "pypiPins" $ \package version bytes -> pure $ do
+    canonical <- maybe (Left ("invalid captured PyPI pin: " <> version)) (Right . renderVersion) (canonicalPep440 version)
+    (info, _) <- first show (projectPyPIIndex defaultLimits (cpPackage package) bytes)
+    let route = maybe (Left "captured artifact filename has no PyPI route") Right . distributionPath (cpPackage package)
+    selectedArtifact canonical ("captured PyPI version is absent: " <> version) route info
 
 rampScenario :: Scenario
 rampScenario =
@@ -319,11 +313,6 @@ wheelStubWith extraFields latency bytes request respond =
   where
     digest = hexSha256Of (LBS.toStrict bytes)
     size = fromIntegral (LBS.length bytes)
-
-missingStub :: Int -> Application
-missingStub latency _ respond = do
-    delayUpstream latency
-    respond (responseLBS status404 [] "")
 
 requestPath :: Request -> [Text]
 requestPath = dropWhileEnd T.null . pathInfo

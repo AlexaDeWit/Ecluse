@@ -48,8 +48,8 @@ spec = describe "RubyGems packed discovery" $ do
         directoryMergeWorkspace public (GemDirectory "b 1 \n") `shouldBe` 0
         BS.length (directoryBytes (mergeDirectories public private)) `shouldSatisfy` (> BS.length row)
     it "retains only packed bytes after parsing" $ do
-        result <- expectRight . streamValue =<< expectRight =<< parse defaultLimits ["---\na 1.0,2.0 \n"]
-        directoryWeight result `shouldBe` BS.length (directoryBytes result) + 256
+        result <- expectRight . streamValue =<< expectRight =<< parse defaultLimits ["created_at: 2026-01-01T00:00:00Z\n", "---\na 1.0,2.0 ", "0123456789abcdef0123456789abcdef\n"]
+        directoryBytes result `shouldBe` "a 1.0,2.0 \n"
   where
     parse limits chunks = do
         next <- heldChunks chunks

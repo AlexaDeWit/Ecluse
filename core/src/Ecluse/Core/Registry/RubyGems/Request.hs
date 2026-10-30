@@ -9,17 +9,18 @@ module Ecluse.Core.Registry.RubyGems.Request (
     gemInfoUrl,
     gemArtifactUrl,
     gemCompactSpecUrl,
+    gemPath,
+    compactSpecPath,
 ) where
 
 import Network.HTTP.Client (Request)
 
 import Ecluse.Core.Credential (ClientCredential)
-import Ecluse.Core.Ecosystem (Ecosystem (RubyGems))
-import Ecluse.Core.Package (PackageName, pkgEcosystem, pkgNamespace, renderPackageName)
+import Ecluse.Core.Package (PackageName, renderPackageName)
 import Ecluse.Core.Registry (UrlFormationError (UnparseableUrl))
 import Ecluse.Core.Registry.Request (BaseRequest, joinPath, metadataGet, requestAt)
 import Ecluse.Core.Registry.RubyGems.Credential (rubyReadCredential)
-import Ecluse.Core.Registry.RubyGems.Project (GemCoordinate, coordinateFilename, coordinateStem, projectName)
+import Ecluse.Core.Registry.RubyGems.Project (GemCoordinate, coordinateFilename, coordinateStem, projectName, unscopedRubyGems)
 import Ecluse.Core.Server.Path (encodeComponent, unFilename)
 
 -- | Fetch the named compact-index document under caller-selected credentials.
@@ -37,17 +38,25 @@ infoPath name = ("info/" <>) . encodeComponent <$> nativeName name
 
 nativeName :: PackageName -> Either UrlFormationError Text
 nativeName name = do
-    unless (pkgEcosystem name == RubyGems && isNothing (pkgNamespace name)) (Left (UnparseableUrl "not an unscoped RubyGems package"))
+    unless (unscopedRubyGems name) (Left (UnparseableUrl "not an unscoped RubyGems package"))
     checked <- first (const (UnparseableUrl "invalid RubyGems package name")) (projectName (renderPackageName name))
     pure (renderPackageName checked)
 
 -- | Address an artifact by its exact checked native filename.
 gemArtifactUrl :: Text -> GemCoordinate -> Either UrlFormationError Text
-gemArtifactUrl base coordinate = joinPath base ("gems/" <> encodeComponent (unFilename (coordinateFilename coordinate)))
+gemArtifactUrl base coordinate = joinPath base (gemPath (unFilename (coordinateFilename coordinate)))
+
+-- | The path of an archive by its native filename, under the registry root.
+gemPath :: Text -> Text
+gemPath filename = "gems/" <> encodeComponent filename
 
 -- | Address the original zlib-compressed compact specification for one checked artifact.
 gemCompactSpecUrl :: Text -> GemCoordinate -> Either UrlFormationError Text
-gemCompactSpecUrl base coordinate = joinPath base ("quick/Marshal.4.8/" <> encodeComponent (coordinateStem coordinate) <> ".gemspec.rz")
+gemCompactSpecUrl base coordinate = joinPath base (compactSpecPath (coordinateStem coordinate))
+
+-- | The path of a compact specification by its archive's filename stem, under the registry root.
+compactSpecPath :: Text -> Text
+compactSpecPath stem = "quick/Marshal.4.8/" <> encodeComponent stem <> ".gemspec.rz"
 
 -- | Directory reads retain the selected caller or anonymous public authority.
 gemDirectoryRequestUnder :: BaseRequest -> Maybe ClientCredential -> Either UrlFormationError Request

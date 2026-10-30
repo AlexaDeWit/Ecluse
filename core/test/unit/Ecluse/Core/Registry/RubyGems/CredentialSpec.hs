@@ -1,7 +1,6 @@
 -- SPDX-FileCopyrightText: 2026 Alexandra de Wit
 --
 -- SPDX-License-Identifier: MIT
-{-# LANGUAGE ImportQualifiedPost #-}
 
 module Ecluse.Core.Registry.RubyGems.CredentialSpec (spec) where
 
@@ -32,10 +31,15 @@ spec = do
         it "rejects duplicate publication credentials" $
             credentialRecover rubyPublishCredential [("Authorization", "first"), ("Authorization", "second")]
                 `shouldBe` Nothing
+        it "recovers a publication key with a tab whole and refuses control or non-ASCII bytes" $ do
+            credentialRecover rubyPublishCredential [("Authorization", "native\tkey")]
+                `shouldBe` Just (bareCredential (mkSecret "native\tkey"))
+            for_ ["native\x01key", "native\xC3\xA9\&key"] $ \value ->
+                credentialRecover rubyPublishCredential [("Authorization", value)] `shouldBe` Nothing
         it "uses declared CodeArtifact service presentations and pins redirects" $ do
             request <- parseRequestOrFail "https://registry.test/ruby/repository"
             let key = Just (bareCredential (mkSecret "secret"))
-                reading = attachCredential rubyCodeArtifactReadCredential key request
+                reading = attachCredential rubyReadCredential (Just (ClientCredential (Just "aws") (mkSecret "secret"))) request
                 writing = attachCredential rubyCodeArtifactPublishCredential key request
             lookup "Authorization" (Client.requestHeaders reading) `shouldBe` Just "Basic YXdzOnNlY3JldA=="
             lookup "Authorization" (Client.requestHeaders writing) `shouldBe` Just "Bearer secret"
@@ -49,7 +53,7 @@ spec = do
             fmap rubyOtpHeaders (rubyPublishExtras [("OTP", "123456"), ("X-Secret", "ignored")])
                 `shouldBe` Right [("OTP", "123456")]
         it "keeps OTP values redacted" $
-            show (RubyPublishOtp (mkSecret "123456")) `shouldSatisfy` (not . T.isInfixOf "123456")
+            show (PublishOneTimePassword (mkSecret "123456")) `shouldSatisfy` (not . T.isInfixOf "123456")
         it "refuses duplicate, empty, control and oversized values" $
             for_ [[("OTP", "a"), ("OTP", "b")], [("OTP", "")], [("OTP", "a\r\nb")], [("OTP", " ")], [("OTP", encodeUtf8 (T.replicate 1025 "a"))]] $ \headers ->
                 rubyPublishExtras headers `shouldSatisfy` isLeft

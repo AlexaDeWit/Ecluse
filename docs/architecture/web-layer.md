@@ -18,20 +18,22 @@ One Écluse process serves one or more ecosystems from one listener. It mounts e
 path prefix on a shared base URL:
 
 ```
-https://registry.internal.example.com/npm    → npm mount
-https://registry.internal.example.com/pypi   → PyPI mount
-https://registry.internal.example.com/cargo  → Cargo mount
+https://registry.internal.example.com/npm      → npm mount
+https://registry.internal.example.com/pypi     → PyPI mount
+https://registry.internal.example.com/cargo    → Cargo mount
+https://registry.internal.example.com/rubygems → RubyGems mount
 ```
 
 Each ecosystem gets one mount, and Écluse derives that mount's prefix from the ecosystem
-(npm → `/npm`, PyPI → `/pypi`, Cargo → `/cargo`). Nobody configures a prefix, so no two prefixes can collide and
-nobody can mistype one. No mount sits at `/`, so adding an ecosystem never changes an existing
-consumer's URLs. Each mount also carries an optional per-ecosystem
+(npm → `/npm`, PyPI → `/pypi`, Cargo → `/cargo`, RubyGems → `/rubygems`). Nobody configures a
+prefix, so no two prefixes can collide and nobody can mistype one. No mount sits at `/`, so adding
+an ecosystem never changes an existing consumer's URLs. Each mount also carries an optional per-ecosystem
 [rule refinement](configuration.md#rule-policy) merged over the shared policy. A single-npm setup is
 the single-mount case, under its own derived prefix.
 
 A mount carries its ecosystem's credential presentation.
 npm uses `Authorization: Bearer`. PyPI uses HTTP Basic under any username. Cargo uses a raw `Authorization` token.
+RubyGems reads keep the complete HTTP Basic pair, and RubyGems publication uses the raw API-key value of `Authorization`.
 Écluse forwards the recovered credential upstream in that same form.
 The web layer compares its secret against the configured edge token in constant time and refuses a mismatch.
 
@@ -68,7 +70,7 @@ body, while a `POST` over those paths takes the deny-by-default `404`.
 
 ## OpenAPI spec
 
-Écluse speaks npm, PyPI, and Cargo read and publication protocols rather than a bespoke HTTP API.
+Écluse speaks npm, PyPI, Cargo, and RubyGems read and publication protocols rather than a bespoke HTTP API.
 Package clients use those protocols rather than an API description, so the
 published OpenAPI spec is not a client-integration contract. It states which protocols this
 server speaks, and what each ecosystem does and does not support. That stops being self-evident as mounts multiply.
@@ -105,7 +107,7 @@ version collision before assembly.
 
 ## Streaming and resource lifetime
 
-For npm, PyPI, and Cargo, the proxy pulls from upstream only as fast as the client drains.
+For npm, PyPI, Cargo, and RubyGems, the proxy pulls from upstream only as fast as the client drains.
 These streamed bodies use constant memory regardless of artifact size. Only the time spent waiting on upstream counts toward the
 progress floor (`limits.progressWindow`, `limits.minProgressBytes`), so a slow client never trips it.
 An upstream that falls below it aborts the stream, and the client sees an incomplete download.
@@ -119,8 +121,10 @@ checks every deadline in the process every 100 ms, so each one ends about 100 ms
 plus the sweep and scheduling. Arming a deadline adds it to a list for the arming thread's core, so
 request threads never wait on each other to arm one, as they would on GHC's process-wide timer
 queue. Amazonka's S3 calls and the OSV and EPSS fetches keep their own clients' timers.
+The mirror worker has no serve-path cap, so it bounds Cargo and RubyGems archive preparation and
+RubyGems companion validation at the 60-second request timeout, on the same sweeper.
 
-The npm, PyPI, and Cargo adapters stream artifact responses without hashing their bodies. Integrity on this path depends
+The npm, PyPI, Cargo, and RubyGems adapters stream artifact responses without hashing their bodies. Integrity on this path depends
 on the client checking the preserved metadata hashes. The proxy therefore asks the upstream for
 every artifact and Core Metadata companion in identity coding. A registry CDN gzips a companion
 when the request permits it, and gzip bytes miss the advertised digest. npm documents integrity
@@ -153,8 +157,8 @@ then completion removes the flight registration. This path does not weigh, encod
 full entries. A subsequent full read fetches again, so an earlier listing does not make a later
 selected-version read an upstream-free operation.
 
-One selected provider owns all three retention capabilities: full metadata, selected versions,
-and assembled responses. Its constructor assigns one storage class to every capability.
+One selected provider owns all four retention capabilities: full metadata, selected versions,
+assembled responses, and the public RubyGems directory. Its constructor assigns one storage class to every capability.
 The composition root chooses the shipped local provider without an external dependency.
 Local full retention is absent even if an adapter supplies full operations. Unsupported capabilities
 stay uncached, and a failed provider never falls back to a retained local copy.
@@ -201,11 +205,12 @@ The view owns revision bytes and charges their length and cache key before reten
 PyPI fragment structure has its own allowance. Other fragment shapes retain the selected-entry allowance.
 Work reservations for decoding, updates, workers and encoding remain independent of this cache charge.
 
-Selected-version and assembled stores share one byte bound and one entry bound. Neither store
-reserves a static share. Under pressure, the inserting store evicts its least-recently used entries
-until the aggregate fits or its eviction floor stops it. The shipped floors are zero.
-One store cannot evict another store's live entries. Reads and retaining inserts reclaim expired
-entries across both stores, so TTL bounds this unfairness to one TTL window during active use.
+The selected-version, assembled, and public RubyGems directory stores share one TTL, one byte bound
+and one entry bound. No store reserves a static share. Under pressure, the inserting store evicts its
+least-recently used entries until the aggregate fits or its eviction floor stops it. The shipped
+floors are zero. One store cannot evict another store's live entries. Reads and retaining inserts
+reclaim expired entries across every store, so TTL bounds this unfairness to one TTL window during
+active use. No gauge reports the directory store's bytes.
 Per-store recency and expiry indexes change with the entries and aggregate accounting in one
 transaction. Recency updates add work to cache hits but avoid sorting a whole store during eviction.
 
@@ -236,9 +241,9 @@ may not be allowed to install. `server.metadataGzip` is on by default, and
 After admission, `Accept-Encoding` selects gzip, identity, or a `406` when neither is permitted.
 Input-derived validators return `304` before rendering or compression. Otherwise the proxy
 reads or renders identity bytes, then compresses only when gzip was selected.
-RubyGems first builds the bounded Dependencies API batch after every named package passes admission.
-Its validator hashes the ordered Marshal bytes. Validated compact gemspec bytes use the same conditional and coding rules.
-The empty Dependencies API reply is an empty metadata listing, including for coding and validators.
+RubyGems Compact Index `/versions` and `/info` replies and compact specifications instead hash the
+rendered identity bytes, after current authorisation and admission. A matching `304` therefore skips
+compression but still pays the fetch, merge, or serialisation.
 
 - **Only admitted listings.** Artifacts, sidecars, probes, refusals and publish replies are never
   compressed by Écluse. RubyGems compact gemspecs are admitted native metadata.
@@ -270,11 +275,14 @@ Once admitted, a listing pays for its full reads chunk by chunk and for its resp
 builds it. A completed read keeps less than it held while parsing, so its charge steps down to what
 it keeps. Once the body exists, nothing reaches the reads' documents, so their charges go back
 before the body is sent. A request that joins another's public fetch or render pays nothing for it,
-and an assembled hit or a conditional `304` pays for its reads alone. A gzip response also pays for
-its compression, hit or miss. A public artifact decision reads one selected release, so its entry
-step is its whole charge. A started request that runs out of budget
-pauses at its next charge, keeping its CPU slot. A pause during an upstream read ends at the
-serve-path cap, and a pause before a render at the request timeout. Both gates stay held through
+and an assembled hit or a conditional `304` pays for its reads alone. A RubyGems `/info` or
+`/versions` `304` also pays for its serialisation or merge, because its validator hashes the rendered
+bytes. A gzip response also pays for its compression, hit or miss. An npm, PyPI or Cargo public
+artifact decision reads one selected release, so its entry step is its whole charge. A RubyGems gem
+or compact specification request first resolves its coordinate from each candidate gem name's full
+`/info` document, and pays those full-read and response charges. A started request that runs out
+of budget pauses at its next charge, keeping its CPU slot. A pause during an upstream read ends at
+the serve-path cap, and a pause before a render at the request timeout. Both gates stay held through
 metadata evaluation and while the listing response is built. A listing then gives up its CPU slot
 and keeps its memory charge while Écluse writes the body, so a slow client holds memory but no CPU
 slot. Public artifact requests release both after the metadata decision, before streaming the
@@ -299,9 +307,11 @@ An expired wait sheds with `503` and `Retry-After: 1`. A full overflow refuses a
 same headers and permits normal connection reuse. An ingress or sidecar can pool its connections
 to the pod. Closing those connections adds accepts and pool reconnections without requiring the
 end client to slow down. Overflow bounds held admission state, but does not impose a per-client
-request rate. Health probes, cheap local routes and trusted private artifact hits bypass both
-gates. The mirror worker runs outside them. A slow artifact client therefore holds no serve
-metadata slot while its download drains.
+request rate. A private artifact hit that needs an admitted indexed location (Cargo, RubyGems) or
+a mirror-state check passes both gates for its decision, then releases them before streaming.
+Health probes, cheap local routes and other trusted private artifact hits bypass both gates. The
+mirror worker runs outside the gates. A slow artifact client therefore holds no serve metadata slot while its
+download drains.
 
 The public and private connection pools take independent settings. The private pool takes the larger
 share, because a trusted tarball hit streams outside admission, which makes its demand the

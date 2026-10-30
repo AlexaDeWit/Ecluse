@@ -34,7 +34,7 @@ import Network.HTTP.Types.Method (StdMethod (DELETE, GET, HEAD, POST, PUT), rend
 import Test.Hspec
 
 import Ecluse.Core.BuildIdentity (productVersion)
-import Ecluse.Core.Ecosystem (Ecosystem (Cargo, Npm, PyPI), ecosystemName, prefixFor)
+import Ecluse.Core.Ecosystem (Ecosystem (Cargo, Npm, PyPI, RubyGems), ecosystemName, prefixFor)
 import Ecluse.Core.Registry.Adapter (adapterFor)
 import Ecluse.Core.Registry.Adapter.Types (AdapterServe (serveRoutes), RegistryAdapter (adapterServe))
 import Ecluse.Core.Registry.Npm.Route.Internal (npmRoutes)
@@ -55,7 +55,7 @@ spec :: Spec
 spec = do
     describe "buildOpenApi (canonical ecosystem mounts)" $ do
         it "includes exactly the shipped ecosystems in canonical order" $
-            manifestEcosystems canonicalManifestSource `shouldBe` Npm :| [PyPI, Cargo]
+            manifestEcosystems canonicalManifestSource `shouldBe` Npm :| [PyPI, Cargo, RubyGems]
 
         it "renders required OpenAPI fields and the product release identity" $
             case decode (renderManifest doc) :: Maybe Value of
@@ -142,6 +142,11 @@ spec = do
             putOp "/cargo/private/api/v1/crates/new" `shouldSatisfy` isJust
             putOp "/cargo/api/v1/crates/new" `shouldSatisfy` isNothing
             (InsOrdSet.member "cargo" . _operationTags <$> getOp "/cargo/{indexPath}") `shouldBe` Just True
+
+        it "documents the RubyGems Compact Index reads and publication" $ do
+            for_ ["/rubygems/versions", "/rubygems/info/{gem}"] $ \path ->
+                (InsOrdSet.member "rubygems" . _operationTags <$> getOp path) `shouldBe` Just True
+            postOp "/rubygems/api/v1/gems" `shouldSatisfy` isJust
   where
     doc :: OpenApi
     doc = buildOpenApi canonicalManifestSource
@@ -154,6 +159,9 @@ spec = do
 
     putOp :: FilePath -> Maybe Operation
     putOp p = InsOrd.lookup p (_openApiPaths doc) >>= _pathItemPut
+
+    postOp :: FilePath -> Maybe Operation
+    postOp p = InsOrd.lookup p (_openApiPaths doc) >>= _pathItemPost
 
     deleteOp :: FilePath -> Maybe Operation
     deleteOp p = InsOrd.lookup p (_openApiPaths doc) >>= _pathItemDelete

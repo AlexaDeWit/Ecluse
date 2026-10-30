@@ -1,7 +1,6 @@
 -- SPDX-FileCopyrightText: 2026 Alexandra de Wit
 --
 -- SPDX-License-Identifier: MIT
-{-# LANGUAGE ImportQualifiedPost #-}
 {-# LANGUAGE RankNTypes #-}
 
 -- | Complete PAX-aware tar traversal with bounded inventory and selected payload retention.
@@ -26,7 +25,7 @@ import Data.Set qualified as Set
 import Data.Text qualified as T
 import Data.Text.Encoding qualified as TE
 
-import Ecluse.Core.Registry (ParseError (..))
+import Ecluse.Core.Registry (ParseError (..), parseRefusal)
 import Ecluse.Core.Registry.Archive.Path (checkPath, resolveArchivePath)
 import Ecluse.Core.Security.Limits (Limits (..))
 
@@ -104,7 +103,7 @@ walkTar limits charge select tarState = do
 readHeader :: ByteString -> Either ParseError Tar.Entry
 readHeader header = case Tar.read (BSL.fromStrict header) of
     Tar.Next entry _ -> Right entry
-    _ -> bad "malformed tar header"
+    _ -> parseRefusal "malformed tar header"
 
 takeBytes :: Int -> ConduitT ByteString o TarDecode ByteString
 takeBytes size = takeCE size .| foldC
@@ -201,7 +200,7 @@ memberOf path attrs header = \case
     Tar.Directory -> Right Directory
     Tar.SymbolicLink{} -> Link <$> linkTarget True
     Tar.HardLink{} -> Link <$> linkTarget False
-    _ -> bad "unsupported tar device or framing extension"
+    _ -> parseRefusal "unsupported tar device or framing extension"
   where
     linkTarget relative = do
         value <- utf8 (Map.findWithDefault (BS.takeWhile (/= 0) (BS.take 100 (BS.drop 157 header))) "linkpath" attrs)
@@ -212,13 +211,13 @@ payloadSize attrs header content = do
     original <- case content of
         Tar.NormalFile _ size -> Right (toInteger size)
         Tar.OtherEntryType _ _ size -> Right (toInteger size)
-        _ -> if zeroSize (BS.take 12 (BS.drop 124 header)) then Right 0 else bad "non-file tar entry carries a payload"
+        _ -> if zeroSize (BS.take 12 (BS.drop 124 header)) then Right 0 else parseRefusal "non-file tar entry carries a payload"
     size <- maybe (Right original) decimal (Map.lookup "size" attrs)
-    when (size < 0) (bad "negative tar payload size")
+    when (size < 0) (parseRefusal "negative tar payload size")
     case content of
         Tar.NormalFile{} -> Right size
         _ | size == 0 -> Right 0
-        _ -> bad "non-file tar entry carries a payload"
+        _ -> parseRefusal "non-file tar entry carries a payload"
 
 zeroSize :: ByteString -> Bool
 zeroSize bytes = BS.all (`elem` [0, 32, 48]) bytes || bytes == BS.cons 128 (BS.replicate 11 0)
@@ -237,31 +236,31 @@ parsePax = go Map.empty
         | otherwise = do
             let (digits, separated) = BS.break (== 32) bytes
             size <- decimal digits
-            when (size <= toInteger (BS.length digits + 3) || size > toInteger (BS.length bytes) || BS.null separated) (bad "truncated pax record")
+            when (size <= toInteger (BS.length digits + 3) || size > toInteger (BS.length bytes) || BS.null separated) (parseRefusal "truncated pax record")
             let record = BS.take (fromInteger size - BS.length digits - 1) (BS.drop 1 separated)
                 (key, value) = BS.break (== 61) record
                 payload = BS.take (BS.length value - 2) (BS.drop 1 value)
-            unless (BS.isSuffixOf "\n" record && not (BS.null key) && not (BS.null value) && not (BS.any (\c -> c <= 32 || c == 127) key)) (bad "malformed pax record")
-            when (any (`BS.isPrefixOf` key) ["GNU.sparse", "SCHILY.realsize", "SCHILY.filetype"]) (bad "unsupported pax framing extension")
-            when (key == "hdrcharset" && payload /= "UTF-8" && not (BS.null payload)) (bad "unsupported pax header charset")
+            unless (BS.isSuffixOf "\n" record && not (BS.null key) && not (BS.null value) && not (BS.any (\c -> c <= 32 || c == 127) key)) (parseRefusal "malformed pax record")
+            when (any (`BS.isPrefixOf` key) ["GNU.sparse", "SCHILY.realsize", "SCHILY.filetype"]) (parseRefusal "unsupported pax framing extension")
+            when (key == "hdrcharset" && payload /= "UTF-8" && not (BS.null payload)) (parseRefusal "unsupported pax header charset")
             next <-
                 if key `elem` ["path", "linkpath", "size"]
                     then do
-                        when (Map.member key fields) (bad "duplicate pax framing attribute")
+                        when (Map.member key fields) (parseRefusal "duplicate pax framing attribute")
                         pure (Map.insert key (BS.copy payload) fields)
                     else Right fields
             go next (BS.drop (fromInteger size) bytes)
 
 decimal :: ByteString -> Either ParseError Integer
 decimal bytes
-    | BS.null bytes || BS.length bytes > 20 || not (BS.all (\c -> c >= 48 && c <= 57) bytes) = bad "malformed pax decimal"
+    | BS.null bytes || BS.length bytes > 20 || not (BS.all (\c -> c >= 48 && c <= 57) bytes) = parseRefusal "malformed pax decimal"
     | otherwise = Right (BS.foldl' (\n c -> n * 10 + fromIntegral c - 48) 0 bytes)
 
 validateMembers :: Limits -> TarScan -> Either ParseError ()
 validateMembers limits tarState =
     for_ (Map.toList (tsMembers tarState)) $ \(path, member) -> do
         for_ (prefixes path) $ \prefix -> case Map.lookup prefix (tsMembers tarState) of
-            Just Link{} -> bad "archive member traverses a link"
+            Just Link{} -> parseRefusal "archive member traverses a link"
             _ -> Right ()
         case member of
             Link _ -> void (resolveTarMember limits tarState path)
@@ -269,12 +268,12 @@ validateMembers limits tarState =
 
 resolveMember :: Limits -> Map Text TarMember -> Set Text -> Text -> Either ParseError Text
 resolveMember limits members seen path
-    | Set.member path seen = bad "cyclic tar link"
-    | Set.size seen >= maxNestingDepth limits = bad "tar link chain exceeds its bound"
+    | Set.member path seen = parseRefusal "cyclic tar link"
+    | Set.size seen >= maxNestingDepth limits = parseRefusal "tar link chain exceeds its bound"
     | otherwise = case Map.lookup path members of
         Nothing -> case Map.lookupGE (path <> "/") members of
             Just (child, _) | (path <> "/") `T.isPrefixOf` child -> Right path
-            _ -> bad "tar link target is absent"
+            _ -> parseRefusal "tar link target is absent"
         Just (Link target) -> resolveMember limits members (Set.insert path seen) target
         Just _ -> Right path
 
@@ -289,9 +288,6 @@ checked = either (lift . throwError) pure
 
 refuse :: Text -> ConduitT i o TarDecode a
 refuse = lift . throwError . ParseError
-
-bad :: Text -> Either ParseError a
-bad = Left . ParseError
 
 -- | Convert a scoped decoder pull action without hiding synchronous failures or cancellation.
 sourceReader :: IO (Either ParseError ByteString) -> ConduitT () ByteString TarDecode ()

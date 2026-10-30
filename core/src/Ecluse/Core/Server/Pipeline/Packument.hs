@@ -11,6 +11,7 @@ module Ecluse.Core.Server.Pipeline.Packument (
     headPackument,
     withObservedAdmittedDocument,
     answerMetadataBytes,
+    answerDigestedMetadataBytes,
     mapPackumentReplies,
 
     -- * The first-party private miss (exported for its unit spec)
@@ -21,7 +22,7 @@ module Ecluse.Core.Server.Pipeline.Packument (
     noSurvivors,
 ) where
 
-import Crypto.Hash (hash)
+import Crypto.Hash (Digest, SHA256, hash)
 import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as LBS
 import Data.Map.Strict qualified as Map
@@ -559,8 +560,12 @@ answerPackumentConditional serving sources plan =
 
 -- | Finalise bounded native bytes only after current authorisation, admission and validation.
 answerMetadataBytes :: PackumentReplies response -> PackumentDeps -> MemoryTicket -> Request -> ByteString -> Handler response
-answerMetadataBytes replies deps ticket request bytes =
-    answerMetadataConditional replies deps ticket request mode (mkStrongETag (hash bytes)) (pure bytes)
+answerMetadataBytes replies deps ticket request bytes = answerDigestedMetadataBytes replies deps ticket request (hash bytes) bytes
+
+-- | 'answerMetadataBytes' with the caller's SHA-256 of the same bytes, so a caller that also sends it hashes once.
+answerDigestedMetadataBytes :: PackumentReplies response -> PackumentDeps -> MemoryTicket -> Request -> Digest SHA256 -> ByteString -> Handler response
+answerDigestedMetadataBytes replies deps ticket request digest bytes =
+    answerMetadataConditional replies deps ticket request mode (mkStrongETag digest) (pure bytes)
   where
     mode = if isHead (requestMethod request) then PackumentHead else PackumentFull
 

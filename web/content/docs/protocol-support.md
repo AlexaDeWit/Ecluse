@@ -151,8 +151,7 @@ Boot performs no registry discovery. Private discovery stays local to the reques
 Local `auth-required` combines the edge requirement and the selected trusted origin's declaration.
 Without a trusted origin, public discovery answers locally.
 It never contacts crates.io merely to construct that local response.
-An anonymous native `401` returns a Cargo challenge so the credential provider can retry.
-A trusted origin's `403` remains a refusal.
+The [private access policy](@/docs/configuration.md#first-party-namespaces) gives Cargo's `401` challenge and `403` refusal.
 Discovery failure stays explicit. A new client can fail to bootstrap while its configured trusted registry is unavailable.
 
 The index reader retains admitted native records, their order, raw versions, checksums, and additive fields.
@@ -176,11 +175,11 @@ Required unavailable evidence produces structured inability. Écluse never runs 
 Cargo mirrors retain the original admitted index row, source identity, and checksum-verified archive using durable version state.
 Native-library `links` declarations must agree. Cargo defines omitted index `links` as null.
 Target publication can reset time or yank and omit fields, so an archive alone cannot prove faithful source reads.
-Missing, corrupt, or unrecorded state cannot supply a managed original-source copy during public outage.
+Missing, corrupt, or unrecorded state cannot supply a managed original-source copy during a public outage.
 Ordinary compatible private reads remain available through the alternate view.
 Retained fields reflect first admission. Écluse does not continuously synchronise later yanks or mutate the target's yank state.
 
-Native publication checks length framing, archive root, manifest identity, version, and digest before discovery or writes.
+Native publication checks length framing, archive root, manifest identity, and version before discovery or writes.
 Dependency inventories, aliases, kinds, targets, registry sources, version requirements, and dependency features must agree with the effective archived manifest.
 Package feature graphs, native-library `links` declarations, and the optional minimum Rust version must also agree, allowing native normalisation.
 Target comparison parses native cfg expressions under the configured nesting limit, including final commas in `all` and `any` lists.

@@ -27,12 +27,12 @@ import Ecluse.E2E.Harness.Client (shouldSucceed)
 import Ecluse.E2E.Harness.CodeArtifact (CodeArtifactFixture (cafPort), codeArtifactDeleteRequests, creditCodeArtifactDeletes, withCodeArtifactDeleteAudit)
 import Ecluse.E2E.Harness.Docker (RoleRun (..), awaitContainerLog, containerLogs, runRoleOnce, sharedMirrorQueue, withDataPlane, withMirrorRole)
 import Ecluse.E2E.Harness.Lifecycle (timedFixtureWith)
+import Ecluse.E2E.Harness.NativeEdge (observedProxy)
 import Ecluse.E2E.Harness.Proxy (awaitProxyLog)
 import Ecluse.E2E.Harness.RubyGems (RubyProject)
 import Ecluse.E2E.Harness.RubyGemsCodeArtifact qualified as Native
 import Ecluse.E2E.Harness.RubyGemsCodeArtifact.Client (rubySweepClientOps)
 import Ecluse.E2E.Harness.RubyGemsCodeArtifact.Fixtures
-import Ecluse.E2E.Harness.RubyGemsGateway (rubyProxy)
 import Ecluse.E2E.Harness.RubyGemsRegistry (awaitRubyRegistry, removeRubyRegistryVersion, rubyRegistryFiles, seedRubyRegistry)
 import Ecluse.E2E.Harness.Sweep
 import Ecluse.E2E.Harness.Types (E2E (e2eManager), GlobalDataPlane, Topology (..))
@@ -209,7 +209,7 @@ advisoryOps :: AdvisoryOps Native.RubySweepPlane Native.RubySweepStore
 advisoryOps =
     AdvisoryOps
         { publishNextGeneration = \plane -> observeRun <$> compileGeneration plane CorpusV2
-        , awaitGenerationSwap = \store -> awaitProxyLog (rubyProxy (Native.rssObserved store)) ((> 1) . length . T.breakOnAll "advisory database swapped in") 240
+        , awaitGenerationSwap = \store -> awaitProxyLog (observedProxy (Native.rssObserved store)) ((> 1) . length . T.breakOnAll "advisory database swapped in") 240
         }
 
 compileGeneration :: Native.RubySweepPlane -> CorpusVersion -> IO RoleRun
@@ -279,7 +279,7 @@ safetyCases recorder = aroundAll acquire $ do
         requests <- codeArtifactDeleteRequests (Native.rspControl plane)
         run <- Native.withUnsafeMirror plane (runNativeSweep plane [] Apply (FullIdentity (packageName deniedPackage)))
         sweepExit run `shouldNotBe` ExitSuccess
-        T.toLower (sweepOutput run) `shouldSatisfy` T.isInfixOf "upstream"
+        sweepOutput run `shouldSatisfy` T.isInfixOf "refills itself, so a delete changes nothing: the repository has an upstream (cache)"
         ((,) <$> Native.storeInventory mirror <*> Native.storeInventory cache) `shouldReturn` initialState
         codeArtifactDeleteRequests (Native.rspControl plane) `shouldReturn` requests
     it (caseLabel "rubygems/dredger-native-safety/native-yank-not-deletion" "distinguishes a native yank refusal from actual CodeArtifact archive removal") $ \(plane, mirror, _) -> do
@@ -301,7 +301,7 @@ safetyCases recorder = aroundAll acquire $ do
         initialState <- (,) <$> Native.storeInventory mirror <*> Native.storeInventory cache
         release <- rubyRelease (Native.rspReleases plane) (packageName keptPackage) "1.0.0" "ruby"
         let base = "http://127.0.0.1:" <> show (cafPort (Native.rspControl plane))
-            manager = e2eManager (rubyProxy (Native.rssObserved mirror))
+            manager = e2eManager (observedProxy (Native.rssObserved mirror))
         unauthorised manager (base <> "/ruby/mirror/info/" <> packageName keptPackage) "GET" "" `shouldReturn` 401
         unauthorised manager (base <> "/ruby/mirror/api/v1/gems") "POST" (releaseArchive release) `shouldReturn` 401
         unauthorised manager (base <> "/v1/package/versions/delete") "POST" "{}" `shouldReturn` 403

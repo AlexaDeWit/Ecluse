@@ -19,7 +19,7 @@ import Ecluse.Composition.Endpoints (
     publicationTargetUrl,
     vetEndpoints,
  )
-import Ecluse.Composition.Support (expectConfig, overrideEnv, staticEnvVars)
+import Ecluse.Composition.Support (expectConfig, overrideEnv, pypiMirrorEnv, staticEnvVars)
 import Ecluse.Composition.Types (RegistryRole (MirrorPreviewer, MirrorPruner, MirrorWriter))
 import Ecluse.Composition.Vet (runVet)
 import Ecluse.Config (AppConfig (cfgMounts), Config (configApp), MirrorEndpoint (meUploadUrl), MountConfig (..), PublicationEndpoint (peUploadUrl))
@@ -61,6 +61,12 @@ uploadCoordinateSpec = describe "configured Cargo read and upload coordinates" $
             (overrideEnv "ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET__REGISTRY__UPLOAD_URL" "https://pypi-private.example.test" (withPyPI publishingEnv))
             `shouldReturn` [PublicationTargetOnMountEndpoint Npm PyPI "privateUpstream" "https://pypi-private.example.test"]
 
+    it "refuses loaded publication and mirror APIs on their own mount's public-upstream host" $ do
+        refusalsFor MirrorWriter (overrideEnv "ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET__REGISTRY__UPLOAD_URL" "https://public.example.test/api" publishingEnv)
+            `shouldReturn` [PublicationTargetOnPublicUpstream Npm Npm "https://public.example.test/api"]
+        refusalsFor MirrorWriter (overrideEnv "ECLUSE_MOUNTS__PYPI__MIRROR_TARGET__REGISTRY__UPLOAD_URL" "https://pypi.org/legacy/" pypiMirrorEnv)
+            `shouldReturn` [MirrorTargetOnPublicUpstream PyPI PyPI "https://pypi.org/legacy/"]
+
     it "compares publication APIs when both mounts have distinct read roots" $ do
         mounts <- cargoMounts
         let shared = "https://shared-api.example.test/registry"
@@ -83,6 +89,13 @@ uploadCoordinateSpec = describe "configured Cargo read and upload coordinates" $
         for_ endpointRoles $ \role -> do
             refusalsIn role (withPublicationUpload Cargo url mounts) `shouldBe` [PublicationTargetOnPublicUpstream Cargo PyPI url]
             refusalsIn role (withMirrorUpload Cargo url mounts) `shouldBe` [MirrorTargetOnPublicUpstream Cargo PyPI url]
+
+    it "refuses publication and mirror APIs on their own mount's public host, whatever the port" $ do
+        mounts <- cargoMounts
+        let url = "https://public.example.test:8443/api"
+        for_ endpointRoles $ \role -> do
+            refusalsIn role (withPublicationUpload Cargo url mounts) `shouldBe` [PublicationTargetOnPublicUpstream Cargo Cargo url]
+            refusalsIn role (withMirrorUpload Cargo url mounts) `shouldBe` [MirrorTargetOnPublicUpstream Cargo Cargo url]
 
     it "keeps the mirror API's private-store collapse advisory specific to the writing role" $ do
         mounts <- cargoMounts

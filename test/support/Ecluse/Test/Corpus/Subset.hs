@@ -32,7 +32,8 @@ import Data.Set qualified as Set
 import Data.Text qualified as T
 
 import Ecluse.Core.Package (Artifact (artFilename), PackageDetails (pkgArtifacts, pkgPublishedAt), PackageInfo (infoVersions), PackageName)
-import Ecluse.Core.Security (defaultLimits)
+import Ecluse.Core.Registry.Metadata (MetadataError)
+import Ecluse.Core.Security (Limits, defaultLimits)
 import Ecluse.Core.Version (canonicalPep440, renderVersion)
 import Ecluse.Test.Corpus.Cargo (decodeCargoValues, projectCargoTree)
 import Ecluse.Test.Corpus.RubyGems (decodeRubyGemsValues, keepRubyGemsVersions, projectRubyGemsTree)
@@ -89,16 +90,24 @@ keepPyPIVersions info kept = onFields $ \field value -> case (field, value) of
 
 -- | The newest share of an npm capture's versions by publish time, cut as 'keepNpmVersions' cuts.
 newestNpmShare :: Rational -> PackageName -> ByteString -> Either String Value
-newestNpmShare = newestShare (\name bytes -> fst <$> first show (projectNpmManifest defaultLimits name bytes)) (const keepNpmVersions)
+newestNpmShare = newestShare projectNpmManifest eitherDecodeStrict (const keepNpmVersions)
 
 -- | The newest share of a PyPI capture's versions by upload time, cut as 'keepPyPIVersions' cuts.
 newestPyPIShare :: Rational -> PackageName -> ByteString -> Either String Value
-newestPyPIShare = newestShare (\name bytes -> fst <$> first show (projectPyPIIndex defaultLimits name bytes)) keepPyPIVersions
+newestPyPIShare = newestShare projectPyPIIndex eitherDecodeStrict keepPyPIVersions
 
-newestShare :: (PackageName -> ByteString -> Either String PackageInfo) -> (PackageInfo -> Set Text -> Value -> Value) -> Rational -> PackageName -> ByteString -> Either String Value
-newestShare project keep share name bytes = do
-    info <- project name bytes
-    keep info (newestVersions share info) <$> eitherDecodeStrict bytes
+-- | Choose versions from the capture's projection, then cut the capture as its decoder reads it.
+newestShare ::
+    (Limits -> PackageName -> ByteString -> Either MetadataError (PackageInfo, b)) ->
+    (ByteString -> Either String Value) ->
+    (PackageInfo -> Set Text -> Value -> Value) ->
+    Rational ->
+    PackageName ->
+    ByteString ->
+    Either String Value
+newestShare project decode keep share name bytes = do
+    (info, _) <- first show (project defaultLimits name bytes)
+    keep info (newestVersions share info) <$> decode bytes
 
 onFields :: (Text -> Value -> Value) -> Value -> Value
 onFields change = \case
@@ -149,12 +158,8 @@ heavyCargoBase size = \case
 
 -- | Cut native captures by their recorded publication times and keep a native array internally.
 newestCargoShare :: Rational -> PackageName -> ByteString -> Either String Value
-newestCargoShare share name bytes = do
-    (info, _) <- first show (projectCargoTree defaultLimits name bytes)
-    keepCargoVersions (newestVersions share info) <$> first toString (decodeCargoValues bytes)
+newestCargoShare = newestShare projectCargoTree (first toString . decodeCargoValues) (const keepCargoVersions)
 
 -- | Cut complete native platform groups by their captured registry publication times.
 newestRubyGemsShare :: Rational -> PackageName -> ByteString -> Either String Value
-newestRubyGemsShare share name bytes = do
-    (info, _) <- first show (projectRubyGemsTree defaultLimits name bytes)
-    keepRubyGemsVersions (newestVersions share info) <$> first toString (decodeRubyGemsValues bytes)
+newestRubyGemsShare = newestShare projectRubyGemsTree (first toString . decodeRubyGemsValues) (const keepRubyGemsVersions)

@@ -24,8 +24,8 @@ import Ecluse.E2E.Fixtures.Contracts (ConcreteFixture (..))
 import Ecluse.E2E.Fixtures.RubyGems
 import Ecluse.E2E.Harness
 import Ecluse.E2E.Harness.MirrorState (mirrorRetryAttempts, mutateMirrorStateObject, readMirrorStateObject, updateMirrorStateObject)
+import Ecluse.E2E.Harness.NativeEdge
 import Ecluse.E2E.Harness.RubyGems
-import Ecluse.E2E.Harness.RubyGemsGateway
 import Ecluse.E2E.Harness.RubyGemsRegistry
 import Ecluse.E2E.RubyGems.InstallE2ESpec (rubyConsumer)
 import Ecluse.E2E.RubyGems.MirrorInstallE2ESpec
@@ -84,31 +84,31 @@ trigger proxy releases = do
     proxyStatus proxy (rubyArchiveRoute release) `shouldReturn` 200
 
 drain :: GlobalDataPlane -> RubyRegistry -> [RubyRelease] -> E2EConfig -> IO ()
-drain plane registry releases config = withObservedRubyProxy config plane $ \observed -> do
+drain plane registry releases config = withObservedNativeProxy config plane $ \observed -> do
     awaitRubyRegistry registry "rubygems-mirror" releases `shouldReturn` True
     queue <- maybe (fail "native mirror fixture has no durable queue") pure (ecQueueUrl config)
-    awaitProxyLog (rubyProxy observed) (rubyMirrorComplete "ecluse-fixture-platform" "1.0.0") (mirrorRetryAttempts queue) `shouldReturn` True
+    awaitProxyLog (observedProxy observed) (rubyMirrorComplete "ecluse-fixture-platform" "1.0.0") (mirrorRetryAttempts queue) `shouldReturn` True
 
 complete :: GlobalDataPlane -> RubyRegistry -> [RubyRelease] -> E2EConfig -> IO ()
 complete plane registry releases config = do
-    withObservedRubyProxy config{ecArgs = ["proxy", "--no-worker"]} plane $ \observed -> trigger (rubyProxy observed) releases
+    withObservedNativeProxy config{ecArgs = ["proxy", "--no-worker"]} plane $ \observed -> trigger (observedProxy observed) releases
     drain plane registry releases config
 
 roundtrip :: GlobalDataPlane -> IO ()
 roundtrip plane = withPlatform plane $ \registry releases config -> do
-    before <- withObservedRubyProxy config{ecArgs = ["proxy", "--no-worker"]} plane $ \observed -> do
-        trigger (rubyProxy observed) releases
-        proxyGet (rubyProxy observed) infoPath
+    before <- withObservedNativeProxy config{ecArgs = ["proxy", "--no-worker"]} plane $ \observed -> do
+        trigger (observedProxy observed) releases
+        proxyGet (observedProxy observed) infoPath
     fst before `shouldBe` 200
     drain plane registry releases config
     control <- rubyRelease releases "ecluse-fixture-platform" "1.0.0" "arm64-darwin"
     setRubyRegistryFault registry "rubygems-mirror" (RubyRegistryCompactBytes (releaseCompactPath control) "invalid target compact specification")
     let aged = config{ecArgs = ["proxy", "--no-worker"], ecExtraEnv = ecExtraEnv config <> [("ECLUSE_MOUNTS__RUBYGEMS__RULES", "{\"min-age\":{\"ageSeconds\":604800},\"remediation-fast-track\":{\"enabled\":false}}")]}
     withStubFault plane (RubyGemsBackend (rubyRegistryPort registry) True) $
-        withObservedRubyProxy aged plane $ \observed -> do
-            rubyPublicReachable (rubyProxy observed) `shouldReturn` False
-            proxyGet (rubyProxy observed) infoPath `shouldReturn` before
-            for_ releases $ \release -> proxyGet (rubyProxy observed) ("/rubygems/" <> toText (releaseCompactPath release)) `shouldReturn` (200, LBS.fromStrict (releaseCompact release))
+        withObservedNativeProxy aged plane $ \observed -> do
+            rubyPublicReachable (observedProxy observed) `shouldReturn` False
+            proxyGet (observedProxy observed) infoPath `shouldReturn` before
+            for_ releases $ \release -> proxyGet (observedProxy observed) ("/rubygems/" <> toText (releaseCompactPath release)) `shouldReturn` (200, LBS.fromStrict (releaseCompact release))
             platformClient observed releases
 
 lostReply :: GlobalDataPlane -> IO ()
@@ -121,61 +121,61 @@ lostReply plane = withPlatform plane $ \registry releases config -> do
     map fst lost `shouldBe` ["rubygems-mirror"]
     for_ lost $ \(_, filename) -> map releaseFilename releases `shouldSatisfy` elem filename
     withStubFault plane (RubyGemsBackend (rubyRegistryPort registry) True) $
-        withObservedRubyProxy config{ecArgs = ["proxy", "--no-worker"]} plane $
+        withObservedNativeProxy config{ecArgs = ["proxy", "--no-worker"]} plane $
             \observed -> platformClient observed releases
 
 interrupted :: GlobalDataPlane -> IO ()
 interrupted plane = withPlatform plane $ \registry releases config -> do
     setRubyRegistryFault registry "rubygems-mirror" RubyRegistryStopAfterOne
     preserved <- flip finally (releaseBlockedRubyUpload registry) $
-        withObservedRubyProxy config plane $ \observed -> do
-            trigger (rubyProxy observed) releases
+        withObservedNativeProxy config plane $ \observed -> do
+            trigger (observedProxy observed) releases
             blocked <- awaitBlockedRubyUpload registry
             stored <- rubyRegistryFiles registry "rubygems-mirror"
             length stored `shouldBe` 1
             length stored `shouldSatisfy` (< length releases)
             map releaseFilename stored `shouldSatisfy` notElem blocked
-            runProcess_ (proc "docker" ["kill", "--signal=KILL", e2eProxyContainer (rubyProxy observed)])
+            runProcess_ (proc "docker" ["kill", "--signal=KILL", e2eProxyContainer (observedProxy observed)])
             pure stored
     rubyRegistryFiles registry "rubygems-mirror" `shouldReturn` preserved
     withStubFault plane (RubyGemsBackend (rubyRegistryPort registry) True) $
-        withObservedRubyProxy config{ecArgs = ["proxy", "--no-worker"]} plane $ \observed ->
-            proxyStatus (rubyProxy observed) infoPath `shouldReturn` 503
+        withObservedNativeProxy config{ecArgs = ["proxy", "--no-worker"]} plane $ \observed ->
+            proxyStatus (observedProxy observed) infoPath `shouldReturn` 503
     setRubyRegistryFault registry "rubygems-mirror" RubyRegistryHealthy
     withStubFault plane (RubyGemsBackend (rubyRegistryPort registry) False) $
         drain plane registry releases config
     withStubFault plane (RubyGemsBackend (rubyRegistryPort registry) True) $
-        withObservedRubyProxy config{ecArgs = ["proxy", "--no-worker"]} plane $
+        withObservedNativeProxy config{ecArgs = ["proxy", "--no-worker"]} plane $
             \observed -> platformClient observed releases
 
 removed :: GlobalDataPlane -> IO ()
 removed plane = withPlatform plane $ \registry releases config -> do
     complete plane registry releases config
     removeRubyRegistryVersion registry "rubygems-upstream" "ecluse-fixture-platform" "1.0.0"
-    withObservedRubyProxy config{ecArgs = ["proxy", "--no-worker"]} plane $ \observed -> platformClient observed releases
+    withObservedNativeProxy config{ecArgs = ["proxy", "--no-worker"]} plane $ \observed -> platformClient observed releases
 
 absentProject :: GlobalDataPlane -> IO ()
 absentProject plane = withPlatform plane $ \registry releases config -> do
     complete plane registry releases config
     mutateState plane "DELETE" ""
     withStubFault plane (RubyGemsBackend (rubyRegistryPort registry) True) $
-        withObservedRubyProxy config{ecArgs = ["proxy", "--no-worker"]} plane $ \observed -> do
-            rubyPublicReachable (rubyProxy observed) `shouldReturn` False
-            proxyStatus (rubyProxy observed) infoPath `shouldReturn` 200
+        withObservedNativeProxy config{ecArgs = ["proxy", "--no-worker"]} plane $ \observed -> do
+            rubyPublicReachable (observedProxy observed) `shouldReturn` False
+            proxyStatus (observedProxy observed) infoPath `shouldReturn` 200
             platformClient observed releases
 
 missingCompact :: GlobalDataPlane -> IO ()
 missingCompact plane = withPlatform plane $ \registry releases config -> do
     complete plane registry releases config
-    before <- withObservedRubyProxy config{ecArgs = ["proxy", "--no-worker"]} plane $ \observed -> do
-        response <- proxyGet (rubyProxy observed) infoPath
+    before <- withObservedNativeProxy config{ecArgs = ["proxy", "--no-worker"]} plane $ \observed -> do
+        response <- proxyGet (observedProxy observed) infoPath
         fst response `shouldBe` 200
         pure response
     release <- rubyRelease releases "ecluse-fixture-platform" "1.0.0" "ruby"
     deleteCompactState plane release
     withStubFault plane (RubyGemsBackend (rubyRegistryPort registry) True) $
-        withObservedRubyProxy config{ecArgs = ["proxy", "--no-worker"]} plane $ \observed -> do
-            let proxy = rubyProxy observed
+        withObservedNativeProxy config{ecArgs = ["proxy", "--no-worker"]} plane $ \observed -> do
+            let proxy = observedProxy observed
             rubyPublicReachable proxy `shouldReturn` False
             proxyStatus proxy ("/rubygems/" <> toText (releaseCompactPath release)) `shouldReturn` 503
             proxyGet proxy infoPath `shouldReturn` before
@@ -190,7 +190,7 @@ data MirrorFault = MissingArchive | ChangedChecksum | MissingState | CorruptStat
 faultCase :: MirrorFault -> GlobalDataPlane -> IO ()
 faultCase fault plane = withPlatform plane $ \registry releases config -> do
     complete plane registry releases config
-    withObservedRubyProxy config{ecArgs = ["proxy", "--no-worker"]} plane $ \observed -> platformClient observed releases
+    withObservedNativeProxy config{ecArgs = ["proxy", "--no-worker"]} plane $ \observed -> platformClient observed releases
     release <- rubyRelease releases "ecluse-fixture-platform" "1.0.0" "ruby"
     case fault of
         MissingArchive -> setRubyRegistryFault registry "rubygems-mirror" (RubyRegistryMissingArchive (releaseFilename release))
@@ -199,15 +199,15 @@ faultCase fault plane = withPlatform plane $ \registry releases config -> do
         CorruptState -> mutateState plane "PUT" "{invalid retained RubyGems state"
         PrivateAuthorisation -> setRubyRegistryFault registry "rubygems-mirror" RubyRegistryRequireRead
     withStubFault plane (RubyGemsBackend (rubyRegistryPort registry) True) $
-        withObservedRubyProxy config{ecArgs = ["proxy", "--no-worker"]} plane $ \observed -> do
+        withObservedNativeProxy config{ecArgs = ["proxy", "--no-worker"]} plane $ \observed -> do
             let expected = case fault of
                     PrivateAuthorisation -> 401
                     _ -> 503
                 path = case fault of
                     MissingArchive -> rubyArchiveRoute release
                     _ -> infoPath
-            proxyStatus (rubyProxy observed) path `shouldReturn` expected
-            rubyConsumer (rubyProxy observed) currentBundler $ \project -> do
+            proxyStatus (observedProxy observed) path `shouldReturn` expected
+            rubyConsumer (observedProxy observed) currentBundler $ \project -> do
                 rubyDependency project "ecluse-fixture-platform" "= 1.0.0"
                 void (rubyInstall project False >>= shouldFail)
             case fault of
@@ -267,11 +267,11 @@ replaceCompanion release replacement = changeAt ["versions", "companions"] $ \ca
         | fieldAt "filename" current == Just (String (releaseFilename release)) = replacement
         | otherwise = current
 
-platformClient :: ObservedRubyProxy -> [RubyRelease] -> IO ()
+platformClient :: ObservedNativeProxy -> [RubyRelease] -> IO ()
 platformClient = platformClientWith Nothing
 
-platformClientWith :: Maybe Text -> ObservedRubyProxy -> [RubyRelease] -> IO ()
-platformClientWith credentials observed releases = withRubyProject currentBundler (rubyProxy observed) (e2eBaseUrl (rubyProxy observed) <> "/rubygems/") credentials $ \project -> do
+platformClientWith :: Maybe Text -> ObservedNativeProxy -> [RubyRelease] -> IO ()
+platformClientWith credentials observed releases = withRubyProject currentBundler (observedProxy observed) (e2eBaseUrl (observedProxy observed) <> "/rubygems/") credentials $ \project -> do
     rubyDependency project "ecluse-fixture-platform" "= 1.0.0"
     assertRubyPlatformInstall observed releases project
 

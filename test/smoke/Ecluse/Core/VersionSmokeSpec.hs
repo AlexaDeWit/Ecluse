@@ -157,7 +157,7 @@ gemish :: Gen Text
 gemish = Gen.choice [V.genGem, messy]
 
 cargoish :: Gen Text
-cargoish = Gen.choice [V.genNpm, messy, Gen.element ["18446744073709551615.0.0", "18446744073709551616.0.0", "1.2.3+build.1", "1.2.3+build.2"]]
+cargoish = Gen.choice [V.genCargo, messy]
 
 -- Near misses broaden smoke inputs without deciding parser-acceptance equivalence.
 messy :: Gen Text

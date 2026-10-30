@@ -11,7 +11,7 @@ import Test.Hspec
 import Ecluse.Composition (
     BootWiring (bwBindings),
     PublishBudget (..),
-    WiringPorts (WiringPorts, wpBuildCredentials, wpClock, wpReporters, wpResolveAdapter, wpRuleDeps),
+    WiringPorts (WiringPorts, wpBuildCredentials, wpClock, wpDeadlines, wpReporters, wpResolveAdapter, wpRuleDeps),
     firstPartyName,
     planMounts,
     resolveBootWiring,
@@ -48,15 +48,15 @@ import Ecluse.Config (
     renderConfigError,
  )
 import Ecluse.Core.Credential (unSecret)
-import Ecluse.Core.Deadline (newDeadlines)
+import Ecluse.Core.Deadline (Deadlines, newDeadlines)
 import Ecluse.Core.Ecosystem (Ecosystem (..))
 import Ecluse.Core.Package (HashAlg (SHA1, SHA512), mkPackageName, mkScope)
 import Ecluse.Core.Package.Integrity (
     mkMinIntegrity,
     mkMinTrustedIntegrity,
  )
+import Ecluse.Core.Registry.FirstParty (FirstPartyEntry (OwnedName))
 import Ecluse.Core.Registry.PyPI.FirstParty (PyPIFirstParty (PyPIOwnedName))
-import Ecluse.Core.Registry.RubyGems.FirstParty (RubyGemsFirstParty (RubyGemsOwnedName))
 import Ecluse.Core.Rules (PreparedRule (prepName), bootOrder, renderBootOrder)
 import Ecluse.Core.Rules.Types (EvalContext (EvalContext), identityEvidence)
 import Ecluse.Core.Security (Limits (maxMetadataBytes, maxNestingDepth, maxVersionCount), defaultLimits)
@@ -94,15 +94,16 @@ expectDoc :: ByteString -> IO ByteString
 expectDoc = pure
 
 {- The ports a unit test injects into the environment-dependent tier: the real adapter resolver,
-a fixed clock, inert rule deps, and reporters that record nothing. -}
-testWiringPorts :: WiringPorts
-testWiringPorts =
+a fixed clock, inert rule deps, reporters that record nothing, and the caller's deadlines. -}
+testWiringPorts :: Deadlines -> WiringPorts
+testWiringPorts deadlines =
     WiringPorts
         { wpReporters = const (const noCredentialReporters)
         , wpBuildCredentials = initTargetCredentialProviders
         , wpResolveAdapter = mountBindingFor
         , wpClock = pure fixedNow
         , wpRuleDeps = const inertRuleDeps
+        , wpDeadlines = deadlines
         }
 
 -- Build the served bindings from an env + optional document through the boot's own pure pass
@@ -132,9 +133,10 @@ planFromWith mintPlan limits envVars mDocBytes = do
             Right plan -> do
                 -- The root always pairs a publishing mount with a body budget. A
                 -- generous test budget keeps these specs about the wiring.
-                bodyBudget <- newDeadlines >>= \deadlines -> newByteAdmission deadlines (128 * 1024 * 1024)
+                deadlines <- newDeadlines
+                bodyBudget <- newByteAdmission deadlines (128 * 1024 * 1024)
                 let publishBudget = PublishBudget{pbBodyBudget = bodyBudget, pbMaxRequestBytes = 26214400}
-                fmap bwBindings <$> resolveBootWiring testWiringPorts mintPlan limits (Just publishBudget) plan
+                fmap bwBindings <$> resolveBootWiring (testWiringPorts deadlines) mintPlan limits (Just publishBudget) plan
 
 planMountsSpec :: Spec
 planMountsSpec = describe "resolveBootWiring (config-driven serving)" $ do
@@ -204,7 +206,8 @@ planMountsSpec = describe "resolveBootWiring (config-driven serving)" $ do
         config <- expectConfig (("ECLUSE_SERVER__AUTH_TOKEN", "edge-secret") : ("ECLUSE_SERVER__HELP_MESSAGE", "ask #platform") : staticEnvVars) Nothing
         providers <- expectProviders config
         plan <- expectValidated config
-        planMounts mountBindingFor (pure fixedNow) (const inertRuleDeps) MintMirrorWrite providers testLimits Nothing plan >>= \case
+        deadlines <- newDeadlines
+        planMounts mountBindingFor (pure fixedNow) (const inertRuleDeps) MintMirrorWrite providers deadlines testLimits Nothing plan >>= \case
             Right [binding] -> do
                 let deps = bindingPackumentDeps binding
                 fmap unSecret (pdInboundToken deps) `shouldBe` Just "edge-secret"
@@ -484,7 +487,7 @@ firstPartySpec = describe "firstPartyName (the derived first-party predicate)" $
     it "dispatches RubyGems ownership without changing native identity" $
         let owned = mkPackageName RubyGems Nothing "Acme_Tools"
          in map
-                (firstPartyName (FirstPartyRubyGems (RubyGemsOwnedName owned :| [])))
+                (firstPartyName (FirstPartyRubyGems (OwnedName owned :| [])))
                 [owned, mkPackageName RubyGems Nothing "acme-tools", mkPackageName Npm Nothing "Acme_Tools"]
                 `shouldBe` [True, False, False]
 

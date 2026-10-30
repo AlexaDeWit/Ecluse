@@ -50,13 +50,14 @@ providerAssembled = cpAssembled
 -- | Classify every operation together. Local storage cannot opt into full retention.
 cacheProvider ::
     BackendStorage ->
+    Maybe (RetentionOperations Text (GemDirectory, Int)) ->
     Maybe (RetentionOperations CacheKey CacheEntry) ->
     Maybe (RetentionOperations CacheKey VersionRead) ->
     Maybe (RetentionOperations CacheKey ByteString) ->
     CacheProvider
-cacheProvider storage full version assembled =
+cacheProvider storage directory full version assembled =
     CacheProvider
-        { cpDirectory = Nothing
+        { cpDirectory = retentionBackend storage <$> directory
         , cpFull = (retentionBackend storage <$> full) <* guard (supportsFullRetention storage)
         , cpVersion = retentionBackend storage <$> version
         , cpAssembled = retentionBackend storage <$> assembled
@@ -68,7 +69,7 @@ localCacheProviderWithPool pool config = do
     version <- newPooledRetention pool (cacheTtl config) (cacheVersionBudget config) weighVersion
     assembled <- newPooledRetention pool (cacheTtl config) (cacheAssembledBudget config) weighAssembled
     directory <- newPooledRetention pool (cacheTtl config) (StoreBudget 0 0) (\(value, keyBytes) -> directoryWeight value + keyBytes)
-    pure ((cacheProvider LocalStorage Nothing (Just version) (Just assembled)){cpDirectory = Just (retentionBackend LocalStorage directory)})
+    pure (cacheProvider LocalStorage (Just directory) Nothing (Just version) (Just assembled))
 
 weighAssembled :: ByteString -> Int
 weighAssembled bytes = BS.length bytes + 256

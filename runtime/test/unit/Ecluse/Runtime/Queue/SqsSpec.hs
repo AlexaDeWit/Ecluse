@@ -11,7 +11,7 @@ import Network.Wai (Application, responseLBS)
 import Network.Wai.Handler.Warp (testWithApplication)
 import Test.Hspec
 
-import Ecluse.Core.Ecosystem (Ecosystem (Cargo, Npm, PyPI))
+import Ecluse.Core.Ecosystem (Ecosystem (Cargo, Npm, PyPI, RubyGems))
 import Ecluse.Core.Fault (TransportFault (tfDetail))
 import Ecluse.Core.Package (mkPackageName, mkScope)
 import Ecluse.Core.Queue (
@@ -141,9 +141,6 @@ spec = do
             -- The same spelling npm refuses, kept because no PyPI grammar rejects it.
             decodeJob mirrorJobPackage mkRegistryUrl (jobBodyFor "pypi" "a b") `shouldSatisfy` isRight
 
-        it "takes a RubyGems name as given: RubyGems has no scope grammar either" $
-            decodeJob mirrorJobPackage mkRegistryUrl (jobBodyFor "rubygems" "a b") `shouldSatisfy` isRight
-
     describe "Cargo identity at the queue boundary" $ do
         it "keeps published case, separators and raw prerelease versions" $
             decodeJob mirrorJobPackage mkRegistryUrl (encodeJob cargoJob) `shouldBe` Right cargoJob
@@ -152,6 +149,16 @@ spec = do
                 decodeJob mirrorJobPackage mkRegistryUrl (jobBodyFor "cargo" raw) `shouldSatisfy` isLeft
         it "refuses whitespace namespaces instead of discarding them" $
             mirrorJobPackage Cargo (Just " ") "crate" `shouldSatisfy` isLeft
+
+    describe "RubyGems identity at the queue boundary" $ do
+        it "keeps a published name with dots, dashes and underscores" $
+            fmap jobPackage (decodeJob mirrorJobPackage mkRegistryUrl (jobBodyFor "rubygems" "Published.Name_1-x"))
+                `shouldBe` Right (mkPackageName RubyGems Nothing "Published.Name_1-x")
+        it "refuses RubyGems namespaces and malformed native names" $
+            for_ ["scope/gem", "a b", "bad!name", "caf\233"] $ \raw ->
+                decodeJob mirrorJobPackage mkRegistryUrl (jobBodyFor "rubygems" raw) `shouldSatisfy` isLeft
+        it "refuses whitespace namespaces instead of discarding them" $
+            mirrorJobPackage RubyGems (Just " ") "gem" `shouldSatisfy` isLeft
 
     describe "defaultSqsConfig" $
         it "carries the queue URL and region through, and ships every other knob defaulted" $ do

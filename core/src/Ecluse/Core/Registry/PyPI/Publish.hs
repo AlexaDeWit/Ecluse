@@ -1,7 +1,6 @@
 -- SPDX-FileCopyrightText: 2026 Alexandra de Wit
 --
 -- SPDX-License-Identifier: MIT
-{-# LANGUAGE ImportQualifiedPost #-}
 
 -- | PyPI mirror uploads bind archive metadata to the same verified distribution bytes.
 module Ecluse.Core.Registry.PyPI.Publish (
@@ -42,7 +41,7 @@ pypiPublishCodec =
             source <- maybeToRight (PublishSourceUnavailable "PyPI snapshot has no paired source metadata") (vdRaw doc >>= snd pypiSimpleCached)
             inventory <- checkedMirrorInventory package version doc (PyPIMirrorRead source)
             pure (inventory, ())
-        , pcPrepareUpload = \limits charge inventory () file bytes -> do
+        , pcPrepareUpload = \_ limits charge inventory () file bytes -> do
             extracted <- archiveMetadata limits charge (inventoryPackage inventory) (inventoryVersion inventory) (artFilename (expectedArtifact file)) (verifiedBytes bytes)
             case first (PublishSourceUnavailable . parseErrorMessage) extracted of
                 Left fault -> pure (Left fault)
@@ -59,7 +58,7 @@ pypiPublishCodec =
         , pcTargetReadPermille = cfFullReadPermille pypiChargeFactors
         , pcProbeRequest = simpleIndexRequest
         , pcVersionListWalk = Nothing
-        , pcPrepareTarget = \_ _ target -> pure (Right target)
+        , pcPrepareTarget = \_ target -> pure (Right target)
         , pcPublishRequest = \target credential _ -> publishRequest target credential
         , pcPublishOutcome = classifyPublish
         }

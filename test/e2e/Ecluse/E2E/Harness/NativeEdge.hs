@@ -2,11 +2,14 @@
 --
 -- SPDX-License-Identifier: MIT
 
--- | Observe native TLS traffic and its actual exchanges with the product image.
-module Ecluse.E2E.Harness.CargoGateway (
-    ObservedCargoProxy (..),
-    withObservedCargoProxy,
-    cargoTraffic,
+-- | A recording TLS edge in front of the product listener, shared by every native-client contract.
+module Ecluse.E2E.Harness.NativeEdge (
+    ObservedNativeProxy (..),
+    withObservedNativeProxy,
+    NativeRequest (..),
+    NativeTraffic (..),
+    nativeTraffic,
+    nativeTrafficSince,
 ) where
 
 import Data.Text qualified as T
@@ -21,7 +24,6 @@ import System.Directory (createDirectoryIfMissing)
 import System.FilePath ((</>))
 
 import Ecluse.Core.Security.Limits (BodyLimit (PublishRequestBodyLimit), boundedRead)
-import Ecluse.E2E.Harness.Cargo
 import Ecluse.E2E.Harness.Container
 import Ecluse.E2E.Harness.Docker (stubReadsNow, withE2EWith)
 import Ecluse.E2E.Harness.Stub (StubRead (..), startedWorkers, stubUrl)
@@ -30,24 +32,42 @@ import Ecluse.Test.Container.Image (nginxImage)
 import Ecluse.Test.Containers (dockerLabelArgs)
 import Ecluse.Test.Poll (pollUntil)
 
+-- | One answered request with its scheme, authority, method, full path and status.
+data NativeRequest = NativeRequest
+    { nativeRequestScheme :: Text
+    , nativeRequestHost :: Text
+    , nativeRequestMethod :: Text
+    , nativeRequestPath :: Text
+    , nativeRequestStatus :: Int
+    }
+    deriving stock (Eq, Show)
+
+-- | Client, product-forward and upstream inventories, each observed independently.
+data NativeTraffic = NativeTraffic
+    { nativeClientRequests :: [NativeRequest]
+    , nativeProxyRequests :: [NativeRequest]
+    , nativeUpstreamRequests :: [NativeRequest]
+    }
+    deriving stock (Eq, Show)
+
 -- | TLS access logs and product exchanges keep independent request inventories.
-data ObservedCargoProxy = ObservedCargoProxy
+data ObservedNativeProxy = ObservedNativeProxy
     { observedProxy :: E2E
     , observedEdge :: String
-    , observedForwards :: TVar [CargoRequest]
+    , observedForwards :: TVar [NativeRequest]
     , observedUploads :: TVar [ByteString]
     }
 
--- | The operator TLS edge advertises HTTPS and retains the ordinary product forwarding path.
-withObservedCargoProxy :: E2EConfig -> GlobalDataPlane -> (ObservedCargoProxy -> IO a) -> IO a
-withObservedCargoProxy config plane action = do
+-- | The edge advertises HTTPS to native clients and forwards over the ordinary product listener.
+withObservedNativeProxy :: E2EConfig -> GlobalDataPlane -> (ObservedNativeProxy -> IO a) -> IO a
+withObservedNativeProxy config plane action = do
     destination <- newTVarIO Nothing
     forwarded <- newTVarIO []
     uploads <- newTVarIO []
     manager <- Http.newManager Http.defaultManagerSettings
     withBridgeApplication (gateway manager destination forwarded uploads) $ \port ->
-        withCargoTlsEdge plane port $ \edge base -> do
-            trusted <- cargoTlsManager plane
+        withTlsEdge plane port $ \edge base -> do
+            trusted <- edgeTlsManager plane
             let configured = config{ecExtraEnv = ecExtraEnv config <> [("ECLUSE_SERVER__PUBLIC_URL", base)]}
             withE2EWith
                 configured
@@ -55,19 +75,40 @@ withObservedCargoProxy config plane action = do
                     atomically (writeTVar destination (Just (e2eBaseUrl proxy)))
                     endpoints <- traverse (maybe (fail "the client endpoint does not belong to the product listener") (pure . (base <>)) . T.stripPrefix (e2eBaseUrl proxy)) (e2eClientEndpoints proxy)
                     let clientProxy = proxy{e2eBaseUrl = base, e2eClientEndpoints = endpoints, e2eManager = trusted}
-                    action (ObservedCargoProxy clientProxy edge forwarded uploads)
+                    action (ObservedNativeProxy clientProxy edge forwarded uploads)
                 )
                 plane
 
-withCargoTlsEdge :: GlobalDataPlane -> Int -> (String -> Text -> IO a) -> IO a
-withCargoTlsEdge plane port action = do
+-- | Collect the edge's access log beside the product forwards and the stub's upstream reads.
+nativeTraffic :: ObservedNativeProxy -> IO NativeTraffic
+nativeTraffic proxy = do
+    forwards <- readTVarIO (observedForwards proxy)
+    clients <- pollUntil 40 25000 ((>= length forwards) . length) (edgeRequests <$> containerLogs (observedEdge proxy))
+    unless (length clients == length forwards) (fail "native TLS access logs do not match the product request inventory")
+    upstream <- stubReadsNow (e2ePlane (observedProxy proxy))
+    pure (NativeTraffic clients forwards [NativeRequest "https" (T.dropWhileEnd (== '/') (T.drop 8 (stubUrl (srRoute request)))) (srMethod request) (srPath request) (srStatus request) | request <- upstream])
+
+-- | The requests one interval added, failing if any append-only inventory shrank.
+nativeTrafficSince :: NativeTraffic -> NativeTraffic -> IO NativeTraffic
+nativeTrafficSince before after = do
+    client <- delta (nativeClientRequests before) (nativeClientRequests after)
+    proxy <- delta (nativeProxyRequests before) (nativeProxyRequests after)
+    upstream <- delta (nativeUpstreamRequests before) (nativeUpstreamRequests after)
+    pure (NativeTraffic client proxy upstream)
+  where
+    delta previous current = do
+        unless (length current >= length previous) (fail "native request inventory reset during an observed interval")
+        pure (drop (length previous) current)
+
+withTlsEdge :: GlobalDataPlane -> Int -> (String -> Text -> IO a) -> IO a
+withTlsEdge plane port action = do
     suffix <- uniqueSuffix
     labels <- dockerLabelArgs "e2e"
     image <- pinnedExternal nginxImage
-    let name = "ecluse-e2e-cargo-edge-" <> suffix
+    let name = "ecluse-e2e-native-edge-" <> suffix
         directory = gdpWorkDir plane </> name
     createDirectoryIfMissing True directory
-    writeFileText (directory </> "nginx.conf") (cargoEdgeConfig port)
+    writeFileText (directory </> "nginx.conf") (edgeConfig port)
     let container =
             (dockerRun name (gdpNet plane) image)
                 { drPorts = ["127.0.0.1:0:443"]
@@ -75,19 +116,19 @@ withCargoTlsEdge plane port action = do
                 }
     withDockerContainer labels container $ \_ -> do
         ready <- awaitContainerLog name ((> 0) . startedWorkers) 40
-        unless ready (fail "the Cargo TLS edge did not start within the timeout")
+        unless ready (fail "the native TLS edge did not start within the timeout")
         published <- publishedPort name "443/tcp"
         action name ("https://localhost:" <> show published)
 
-cargoEdgeConfig :: Int -> Text
-cargoEdgeConfig port =
+edgeConfig :: Int -> Text
+edgeConfig port =
     T.unlines
-        [ "log_format cargo_client 'cargo-client $scheme $http_host $request_method $status $request_uri';"
+        [ "log_format native_client 'native-client $scheme $http_host $request_method $status $request_uri';"
         , "server {"
         , "    listen 443 ssl;"
         , "    ssl_certificate /certs/server.crt;"
         , "    ssl_certificate_key /certs/server.key;"
-        , "    access_log /dev/stdout cargo_client;"
+        , "    access_log /dev/stdout native_client;"
         , "    client_max_body_size 16m;"
         , "    location / {"
         , "        proxy_set_header Host $http_host;"
@@ -100,30 +141,21 @@ cargoEdgeConfig port =
         , "}"
         ]
 
-cargoTlsManager :: GlobalDataPlane -> IO Http.Manager
-cargoTlsManager plane = do
-    store <- readCertificateStore (gdpWorkDir plane </> "certs/bundle.pem") >>= maybe (fail "the Cargo fixture CA bundle is unreadable") pure
+edgeTlsManager :: GlobalDataPlane -> IO Http.Manager
+edgeTlsManager plane = do
+    store <- readCertificateStore (gdpWorkDir plane </> "certs/bundle.pem") >>= maybe (fail "the native edge CA bundle is unreadable") pure
     let parameters = TLS.defaultParamsClient "localhost" ""
         trusted = parameters{TLS.clientShared = (TLS.clientShared parameters){TLS.sharedCAStore = store}}
     Http.newManager (mkManagerSettings (TLSSettings trusted) Nothing)
 
--- | Collect TLS access logs beside product forwards and actual upstream access logs.
-cargoTraffic :: ObservedCargoProxy -> IO CargoTraffic
-cargoTraffic proxy = do
-    forwards <- readTVarIO (observedForwards proxy)
-    clients <- pollUntil 40 25000 ((>= length forwards) . length) (edgeRequests <$> containerLogs (observedEdge proxy))
-    unless (length clients == length forwards) (fail "Cargo TLS access logs do not match the product request inventory")
-    upstream <- stubReadsNow (e2ePlane (observedProxy proxy))
-    pure (CargoTraffic clients forwards [CargoRequest "https" (T.dropWhileEnd (== '/') (T.drop 8 (stubUrl (srRoute request)))) (srMethod request) (srPath request) (srStatus request) | request <- upstream])
-
-edgeRequests :: Text -> [CargoRequest]
+edgeRequests :: Text -> [NativeRequest]
 edgeRequests = mapMaybe (request . words) . lines
   where
     request = \case
-        ["cargo-client", scheme, host, method, status, path] -> CargoRequest scheme host method path <$> readMaybe (toString status)
+        ["native-client", scheme, host, method, status, path] -> NativeRequest scheme host method path <$> readMaybe (toString status)
         _ -> Nothing
 
-gateway :: Http.Manager -> TVar (Maybe Text) -> TVar [CargoRequest] -> TVar [ByteString] -> Wai.Application
+gateway :: Http.Manager -> TVar (Maybe Text) -> TVar [NativeRequest] -> TVar [ByteString] -> Wai.Application
 gateway manager destination forwarded uploads request respond = do
     target <- readTVarIO destination
     case target of
@@ -145,6 +177,6 @@ gateway manager destination forwarded uploads request respond = do
                     response <- Http.httpLbs outgoing manager
                     let status = statusCode (Http.responseStatus response)
                         path = decodeUtf8 (Wai.rawPathInfo request <> Wai.rawQueryString request)
-                        sent = CargoRequest (if Http.secure outgoing then "https" else "http") (decodeUtf8 (Http.host outgoing)) (decodeUtf8 (Http.method outgoing)) path status
+                        sent = NativeRequest (if Http.secure outgoing then "https" else "http") (decodeUtf8 (Http.host outgoing)) (decodeUtf8 (Http.method outgoing)) path status
                     atomically (modifyTVar' forwarded (<> [sent]))
                     respond (Wai.responseLBS (Http.responseStatus response) (filter ((/= "Transfer-Encoding") . fst) (Http.responseHeaders response)) (Http.responseBody response))

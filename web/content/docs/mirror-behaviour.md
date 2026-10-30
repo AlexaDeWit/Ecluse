@@ -44,13 +44,10 @@ Existing copies are not rewritten automatically after a metadata improvement. Co
 ## Cargo retains original-source metadata {#cargo}
 
 Cargo completion pairs the retained admitted index row and source identity with a checksum-verified target archive.
-Target publication can reset time or yank and omit fields. The target's native metadata cannot replace those retained facts.
-Retained fields reflect first admission, without continuous yank synchronisation or target-yank mutation.
+The target's native metadata cannot replace those retained facts.
+The [Cargo protocol reference](@/docs/protocol-support.md#cargo) explains why, and what a public outage needs from the retained state.
 
 The crates.io replacement excludes unrecorded target versions from listings and direct archives.
-Missing or corrupt state cannot provide an original-source managed read during public outage.
-Ordinary private reads remain available through the separate alternate registry.
 Current target authorisation and discovery supply archive addresses. Retained source records grant no new credential or host authority.
 
-Boot performs no remote discovery. A new client's discovery can still fail while its configured trusted registry is unavailable.
-Do not assume that a new client and an already configured client have identical outage behaviour.
+A new client and an already configured client can behave differently during an outage, because a new client must complete [Cargo discovery](@/docs/protocol-support.md#cargo) first.

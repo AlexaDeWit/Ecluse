@@ -21,8 +21,8 @@ import Ecluse.E2E.Fixtures.Cargo
 import Ecluse.E2E.Fixtures.Contracts (concreteFamily)
 import Ecluse.E2E.Harness
 import Ecluse.E2E.Harness.Cargo
-import Ecluse.E2E.Harness.CargoGateway
 import Ecluse.E2E.Harness.CargoRegistry
+import Ecluse.E2E.Harness.NativeEdge
 import Ecluse.Test.Contract.Ecosystem (FamilyFixture)
 import Ecluse.Test.Contract.Phase (timedFixture)
 import Ecluse.Test.Contract.Publication
@@ -53,7 +53,7 @@ cargoPublicationFamily :: FamilyFixture PublicationFixture
 cargoPublicationFamily = concreteFamily (cargoWriteFixture "publish" ["read", "publication", "client-install"]) $ \recorder action plane ->
     timedFixture recorder withCargoRegistry $ \registry ->
         withStubFault plane (CargoBackend (registryPort registry) False) $
-            withObservedCargoProxy cargoPublicationConfig plane $ \observed ->
+            withObservedNativeProxy cargoPublicationConfig plane $ \observed ->
                 action
                     ( PublicationFixture
                         cargoVersion
@@ -62,12 +62,12 @@ cargoPublicationFamily = concreteFamily (cargoWriteFixture "publish" ["read", "p
                         (yankDriver observed registry)
                     )
 
-publicationDriver :: ObservedCargoProxy -> CargoRegistry -> Text -> PublicationDriver
+publicationDriver :: ObservedNativeProxy -> CargoRegistry -> Text -> PublicationDriver
 publicationDriver observed registry name =
     PublicationDriver
         { publicationRun = cargoPublishFixture proxy currentCargo name
         , publicationInstall = cargoPrivateConsumer proxy currentCargo name cargoVersion $ \project -> do
-            invocation <- observeCargo (cargoTraffic observed) project ["build"]
+            invocation <- observeCargo (nativeTraffic observed) project ["build"]
             when (crExit (cargoInvocationClient invocation) == ExitSuccess) $ do
                 assertCargoViewRouting "/cargo/private" "cargo-private" (cargoInvocationTraffic invocation)
                 assertCargoAssets project (cargoInvocationTraffic invocation)
@@ -79,7 +79,7 @@ publicationDriver observed registry name =
   where
     proxy = observedProxy observed
 
-yankDriver :: ObservedCargoProxy -> CargoRegistry -> NonUploadDriver
+yankDriver :: ObservedNativeProxy -> CargoRegistry -> NonUploadDriver
 yankDriver observed registry =
     NonUploadDriver
         { nonUploadRelease = cargoPublishFixture proxy currentCargo cargoRetainedName
@@ -88,7 +88,10 @@ yankDriver observed registry =
         , nonUploadRefusal = ["404"]
         , nonUploadDestination = do
             files <- cargoRegistryFiles registry
-            pure [host <> "/" <> name <> "/" <> version <> " " <> hexSha256Of (storedArchive stored) | ((host, name, version), stored) <- Map.toList files]
+            requests <- readTVarIO (registryRequests registry)
+            pure $
+                [host <> "/" <> name <> "/" <> version <> " " <> hexSha256Of (storedArchive stored) | ((host, name, version), stored) <- Map.toList files]
+                    <> ["write received " <> nativeRequestMethod request <> " " <> nativeRequestHost request <> nativeRequestPath request | request <- requests, nativeRequestMethod request `notElem` ["GET", "HEAD"]]
         , nonUploadSettle = pass
         }
   where

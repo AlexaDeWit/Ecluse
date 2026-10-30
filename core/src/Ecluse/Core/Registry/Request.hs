@@ -16,12 +16,14 @@ module Ecluse.Core.Registry.Request (
     credentialRecover,
     attachCredential,
     authorizationUnder,
+    bareAuthorization,
 
     -- * Request building
     metadataGet,
     artifactRequestByUrl,
     artifactGet,
     joinPath,
+    apiEndpoint,
     sidecarUrl,
     parseRequestEither,
 
@@ -32,8 +34,10 @@ module Ecluse.Core.Registry.Request (
     requestAt,
 ) where
 
+import Data.ByteString qualified as BS
 import Data.Char (isHexDigit)
 import Data.Text qualified as T
+import Data.Text.Encoding qualified as TE
 import Network.HTTP.Client (Request (decompress, redirectCount, requestHeaders), parseRequest)
 import Network.HTTP.Client qualified as Client
 import Network.HTTP.Types.Header (
@@ -46,7 +50,7 @@ import Network.HTTP.Types.Header (
 import Text.Show (showsPrec)
 
 import Ecluse.Core.BuildIdentity (identifyRequest)
-import Ecluse.Core.Credential (ClientCredential)
+import Ecluse.Core.Credential (ClientCredential, bareCredential, mkSecret)
 import Ecluse.Core.Registry (UrlFormationError (EmptyBaseUrl, UnparseableUrl))
 import Ecluse.Core.Security.Egress (RegistryUrl, registryUrlText)
 import Ecluse.Core.Text (isAsciiAlphaNum, joinUrlPath)
@@ -114,6 +118,16 @@ authorizationUnder scheme headers = do
     guard (T.toLower presented == T.toLower scheme)
     pure (T.dropWhile (== ' ') rest)
 
+{- | A scheme-less credential from exactly one non-empty @Authorization@ line whose bytes are all
+in RFC 9110's field-value set: visible ASCII, space and tab. Any other presentation yields 'Nothing'.
+-}
+bareAuthorization :: RequestHeaders -> Maybe ClientCredential
+bareAuthorization headers = case [value | (name, value) <- headers, name == hAuthorization] of
+    [value] | not (BS.null value), BS.all fieldByte value -> bareCredential . mkSecret <$> rightToMaybe (TE.decodeUtf8' value)
+    _ -> Nothing
+  where
+    fieldByte byte = byte == 0x09 || (byte >= 0x20 && byte <= 0x7E)
+
 -- | Negotiate compressed metadata under the ecosystem's media type and credential presentation.
 metadataGet :: CredentialMapping -> Maybe ClientCredential -> ByteString -> Request -> Request
 metadataGet mapping credential mediaType base =
@@ -157,11 +171,23 @@ parseRequestEither url =
         Just request -> Right (sealRequest request)
         Nothing -> Left (UnparseableUrl url)
 
+{- | Parse an already-encoded API path under a configured root. A root with a query or a fragment
+is refused with @refusal@, because the joined path would land inside it.
+-}
+apiEndpoint :: UrlFormationError -> Text -> Text -> Either UrlFormationError Request
+apiEndpoint refusal root path = do
+    when (T.any queryOrFragment root) (Left refusal)
+    joinPath root path >>= parseRequestEither
+
 -- | Append the companion suffix to the path while preserving query and fragment text.
 sidecarUrl :: Text -> Text
 sidecarUrl url = path <> ".metadata" <> suffix
   where
-    (path, suffix) = T.break (\character -> character == '?' || character == '#') url
+    (path, suffix) = T.break queryOrFragment url
+
+-- The characters that end a URL's path.
+queryOrFragment :: Char -> Bool
+queryOrFragment c = c == '?' || c == '#'
 
 {- | An upstream base URL and its one parse, so a request under it appends its path rather than
 parsing the joined URL again. 'mkBaseRequest' is the only builder.
@@ -183,7 +209,7 @@ mkBaseRequest url = BaseRequest url directory
   where
     text = registryUrlText url
     directory
-        | T.any (\c -> c == '?' || c == '#') text = Nothing
+        | T.any queryOrFragment text = Nothing
         | otherwise = rightToMaybe (joinPath text "" >>= parseRequestEither)
 
 -- | The URL the base was parsed from.

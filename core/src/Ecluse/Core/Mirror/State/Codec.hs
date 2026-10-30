@@ -10,7 +10,6 @@ module Ecluse.Core.Mirror.State.Codec (
     chargedDecodeProjectRecord,
     chargedEncodeProjectRecord,
     stateExchangeCharge,
-    saturatingStateCharge,
     mirrorInventoryWeight,
 ) where
 
@@ -28,7 +27,7 @@ import Ecluse.Core.Ecosystem (ecosystemName, parseEcosystem)
 import Ecluse.Core.Mirror.State.Internal
 import Ecluse.Core.Mirror.State.Weight (retainedRecordWeight)
 import Ecluse.Core.Package
-import Ecluse.Core.Package.Entry (EntryKey (..))
+import Ecluse.Core.Package.Entry (EntryKey (..), distinctKeys, validEntryKey)
 import Ecluse.Core.Registry.CachedDocument (estimateValueBytes)
 import Ecluse.Core.Registry.Cargo.Document (cargoDocument, cargoRecords)
 import Ecluse.Core.Registry.Cargo.Manifest (cratesIoIndex)
@@ -41,7 +40,7 @@ import Ecluse.Core.Registry.RubyGems.Document (GemDocument (..), GemRow (..))
 import Ecluse.Core.Registry.RubyGems.SourceState (gemSourceDecodeCharge, gemSourceValue, parseGemSource)
 import Ecluse.Core.Security
 import Ecluse.Core.Server.Cache.VersionWeight (weighVersion)
-import Ecluse.Core.Server.MemoryModel (bufferedChunkCharge, decodedDocumentCharge, expandWireBytes)
+import Ecluse.Core.Server.MemoryModel (bufferedChunkCharge, decodedDocumentCharge, expandWireBytes, saturatingCharge)
 import Ecluse.Core.Text (textStorageBytes)
 import Ecluse.Core.Version (mkVersion, renderVersion)
 
@@ -109,13 +108,13 @@ checkDimensions limits bytes = do
 
 -- | Charge the durable graph separately from active-work reservations.
 projectRecordWeight :: Limits -> ProjectMirrorRecord -> Either MirrorStateFault Int
-projectRecordWeight limits record = checkRecord limits 0 record $> saturatingStateCharge (retainedRecordWeight record)
+projectRecordWeight limits record = checkRecord limits 0 record $> saturatingCharge (retainedRecordWeight record)
 
 -- | Preserve the conservative selected-release allowance for update, worker and encoding overlap.
 projectRecordWorkWeight :: Limits -> ProjectMirrorRecord -> Either MirrorStateFault Int
 projectRecordWorkWeight limits record = do
     checkRecord limits 0 record
-    pure . saturatingStateCharge $
+    pure . saturatingCharge $
         4096
             + toInteger (expandWireBytes (fromIntegral (estimateValueBytes (Object (recordEnvelope record)))))
             + sum
@@ -137,12 +136,12 @@ fragmentWeight details source = weighVersion (VersionRead (Just (VersionDoc deta
 chargedDecodeProjectRecord :: StateCharge -> Limits -> StateTarget -> PackageName -> ByteString -> IO (Either MirrorStateFault ProjectMirrorRecord)
 chargedDecodeProjectRecord charge limits target name bytes = do
     let treeCharge = toInteger stateExchangeCharge + toInteger (bufferedChunkCharge (BS.length bytes)) + toInteger (decodedDocumentCharge bytes)
-    charge (saturatingStateCharge treeCharge)
+    charge (saturatingCharge treeCharge)
     evaluate (decodeProjectValue limits bytes) >>= \case
         Left fault -> pure (Left fault)
         Right value -> do
             materialised <- evaluate (force value)
-            charge (saturatingStateCharge (treeCharge + domainDecodeCharge materialised))
+            charge (saturatingCharge (treeCharge + domainDecodeCharge materialised))
             evaluate (restoreProjectValue limits target name (BS.length bytes) materialised) >>= \case
                 Left fault -> pure (Left fault)
                 Right record -> case projectRecordWeight limits record of
@@ -176,7 +175,7 @@ chargedEncodeProjectRecord :: StateCharge -> Limits -> ProjectMirrorRecord -> IO
 chargedEncodeProjectRecord charge limits record = case projectRecordWorkWeight limits record of
     Left fault -> pure (Left fault)
     Right retained -> do
-        charge (saturatingStateCharge (4 * toInteger retained + 32768))
+        charge (saturatingCharge (4 * toInteger retained + 32768))
         result <- evaluate (encodeProjectRecord limits record)
         traverse (\bytes -> evaluate (BS.length bytes) $> bytes) result
 
@@ -198,10 +197,6 @@ forceRecordSources record = force (recordEnvelope record) `seq` foldl' forceVers
 -- | Fixed per-exchange metadata bookkeeping, independent of the configured maximum object size.
 stateExchangeCharge :: Int
 stateExchangeCharge = 4096
-
--- | Saturate accounting arithmetic before crossing the Int-sized admission interface.
-saturatingStateCharge :: Integer -> Int
-saturatingStateCharge = fromInteger . max 0 . min (toInteger (maxBound :: Int))
 
 checkRecord :: Limits -> Int -> ProjectMirrorRecord -> Either MirrorStateFault ()
 checkRecord limits size record = do
@@ -390,14 +385,14 @@ parseKey value =
         "source coordinate"
         ( \fields ->
             ( do
-                position <- fields .: "array"
-                when (position < 0) (fail "negative source coordinate")
-                pure (ArrayEntry position)
+                key <- ArrayEntry <$> fields .: "array"
+                unless (validEntryKey key) (fail "negative source coordinate")
+                pure key
             )
                 <|> ( do
-                        position <- fields .: "record"
-                        when (position < 0) (fail "negative source coordinate")
-                        pure (RecordEntry position)
+                        key <- RecordEntry <$> fields .: "record"
+                        unless (validEntryKey key) (fail "negative source coordinate")
+                        pure key
                     )
                 <|> (ObjectEntry <$> fields .: "object")
         )
@@ -456,7 +451,7 @@ parseCompanion = withObject "companion state" $ \value -> do
     pure (name, status)
 
 ensureDistinct :: (Ord a) => [a] -> Parser ()
-ensureDistinct values = unless (Set.size (Set.fromList values) == length values) (fail "duplicate state entry")
+ensureDistinct values = unless (distinctKeys values) (fail "duplicate state entry")
 
 nonempty :: String -> [a] -> Parser (NonEmpty a)
 nonempty message = maybe (fail message) pure . nonEmpty

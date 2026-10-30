@@ -83,6 +83,22 @@ The private view never falls back to crates.io.
 Cargo can keep the historical crates.io GitHub registry URL in its lockfile while fetching through sparse source replacement.
 Verify actual archive requests with fresh client state. A lockfile identity alone does not establish the network path.
 
+## RubyGems clients {#rubygems}
+
+Use Bundler 2.6.9 or 4.0.23 with the native registry source:
+
+```ruby
+source "https://packages.example.com/rubygems/"
+```
+
+Configure the caller's Basic credentials through Bundler's credential settings or your approved secret provider.
+Keep credentials out of the Gemfile and committed Bundler configuration.
+Use ordinary `bundle lock`, `bundle install`, and `bundle update`, without `--full-index`.
+Bundler reads Compact Index `/versions` discovery and fetches admitted `/info` metadata for each required gem.
+Keep Bundler checksum validation enabled.
+Publication uses `gem push --host https://packages.example.com/rubygems` with a native API key and optional OTP.
+Only declared first-party packages can publish to a configured publication target.
+
 ## Where credentials come from {#credentials}
 
 Use the same registry credential the caller would use for the private repository. For CodeArtifact, the caller obtains a short-lived token through their AWS identity.
@@ -101,19 +117,3 @@ A failed private authentication check is not a reason to try the public registry
 Client configuration selects the proxy. The network policy enforces that choice.
 
 {{ next(path="@/docs/verify.md", title="Verify your deployment") }}
-
-## RubyGems clients {#rubygems}
-
-Use Bundler 2.6.9 or 4.0.23 with the native registry source:
-
-```ruby
-source "https://packages.example.com/rubygems/"
-```
-
-Configure the caller's Basic credentials through Bundler's credential settings or your approved secret provider.
-Keep credentials out of the Gemfile and committed Bundler configuration.
-Use ordinary `bundle lock`, `bundle install`, and `bundle update`, without `--full-index`.
-Bundler reads Compact Index `/versions` discovery and fetches admitted `/info` metadata for each required gem.
-Keep Bundler checksum validation enabled.
-Publication uses `gem push --host https://packages.example.com/rubygems` with a native API key and optional OTP.
-Only declared first-party packages can publish to a configured publication target.

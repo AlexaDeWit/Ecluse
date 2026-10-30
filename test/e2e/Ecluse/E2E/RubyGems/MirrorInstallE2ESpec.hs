@@ -24,8 +24,8 @@ import UnliftIO (finally)
 import Ecluse.E2E.Fixtures.Contracts (concreteFamily)
 import Ecluse.E2E.Fixtures.RubyGems
 import Ecluse.E2E.Harness
+import Ecluse.E2E.Harness.NativeEdge
 import Ecluse.E2E.Harness.RubyGems
-import Ecluse.E2E.Harness.RubyGemsGateway
 import Ecluse.E2E.Harness.RubyGemsRegistry
 import Ecluse.E2E.RubyGems.InstallE2ESpec (assertRubyAssets, assertRubyClientAssets, rubyConsumer)
 import Ecluse.Test.Contract.Ecosystem (FamilyFixture)
@@ -81,29 +81,30 @@ mirrorDriver plane registry releases config =
     MirrorDriver
         { mirrorPublicInstall = do
             before <- versions
-            (observed, target, reachable) <- withObservedRubyProxy config{ecArgs = ["proxy", "--no-worker"]} plane $ \proxy -> do
-                reachable <- rubyPublicReachable (rubyProxy proxy)
+            (observed, target, reachable) <- withObservedNativeProxy config{ecArgs = ["proxy", "--no-worker"]} plane $ \proxy -> do
+                reachable <- rubyPublicReachable (observedProxy proxy)
                 (\(result, selected, _) -> (result, selected, reachable)) <$> rubyObservedGraph proxy
             rubyRegistryFiles registry "rubygems-mirror" `shouldReturn` []
-            withObservedRubyProxy config plane $ \proxy -> do
+            withObservedNativeProxy config plane $ \proxy -> do
                 awaitRubyRegistry registry "rubygems-mirror" releases `shouldReturn` True
-                for_ releases $ \release -> awaitProxyLog (rubyProxy proxy) (rubyMirrorComplete (releaseName release) (releaseVersion release)) 120 `shouldReturn` True
+                for_ releases $ \release -> awaitProxyLog (observedProxy proxy) (rubyMirrorComplete (releaseName release) (releaseVersion release)) 120 `shouldReturn` True
             PublicPhase observed target reachable before <$> versions
         , mirrorOfflineInstall = withStubFault plane (RubyGemsBackend (rubyRegistryPort registry) True) $
-            withObservedRubyProxy config{ecArgs = ["proxy", "--no-worker"]} plane $ \proxy -> do
-                reachable <- rubyPublicReachable (rubyProxy proxy)
-                before <- rubyTraffic proxy
+            withObservedNativeProxy config{ecArgs = ["proxy", "--no-worker"]} plane $ \proxy -> do
+                reachable <- rubyPublicReachable (observedProxy proxy)
+                before <- nativeTraffic proxy
                 (observed, target, sources) <- rubyObservedGraph proxy
-                after <- rubyTraffic proxy
-                let requests = rubyUpstreamRequests (rubyTrafficSince before after)
+                after <- nativeTraffic proxy
+                interval <- nativeTrafficSince before after
+                let requests = nativeUpstreamRequests interval
                 pure
                     ( OfflinePhase
                         observed
                         target
                         Nothing
                         reachable
-                        (Set.fromList [rubyRequestPath request | request <- requests, rubyRequestHost request == "rubygems-mirror", rubyRequestStatus request == 200])
-                        [show request | request <- requests, rubyRequestHost request == "rubygems-upstream", rubyRequestStatus request /= 444]
+                        (Set.fromList [nativeRequestPath request | request <- requests, nativeRequestHost request == "rubygems-mirror", nativeRequestStatus request == 200])
+                        [show request | request <- requests, nativeRequestHost request == "rubygems-upstream", nativeRequestStatus request /= 444]
                         sources
                     )
         , mirrorEmptyInstall = do
@@ -111,17 +112,17 @@ mirrorDriver plane registry releases config =
             for_ releases $ \release -> removeRubyRegistryVersion registry "rubygems-mirror" (releaseName release) (releaseVersion release)
             flip finally (seedRubyRegistry registry "rubygems-mirror" stored) $
                 withStubFault plane (RubyGemsBackend (rubyRegistryPort registry) True) $
-                    withObservedRubyProxy config{ecArgs = ["proxy", "--no-worker"]} plane $ \proxy -> do
-                        reachable <- rubyPublicReachable (rubyProxy proxy)
-                        rubyConsumer (rubyProxy proxy) currentBundler $ \project -> (reachable,) <$> rubyInstall project False
+                    withObservedNativeProxy config{ecArgs = ["proxy", "--no-worker"]} plane $ \proxy -> do
+                        reachable <- rubyPublicReachable (observedProxy proxy)
+                        rubyConsumer (observedProxy proxy) currentBundler $ \project -> (reachable,) <$> rubyInstall project False
         }
   where
     versions = forM (sort (ordNub (map releaseName releases))) $ \name -> (name,) <$> rubyRegistryVersions registry "rubygems-mirror" name
 
 -- | Graphs, portability and archive names come from installed native specifications, not expected fixture rows.
-rubyObservedGraph :: ObservedRubyProxy -> IO (Observed RubyCoordinates Text, TargetObservation RubyCoordinates, [Text])
+rubyObservedGraph :: ObservedNativeProxy -> IO (Observed RubyCoordinates Text, TargetObservation RubyCoordinates, [Text])
 rubyObservedGraph observed = rubyConsumer proxy currentBundler $ \project -> do
-    before <- rubyTraffic observed
+    before <- nativeTraffic observed
     result <- rubyInstall project False >>= shouldSucceed
     facts <- rubyEvaluate project "puts Bundler.load.specs.reject { |s| s.name == 'bundler' }.map { |s| [s.name, s.version.to_s, s.platform.to_s, s.file_name, s.full_gem_path].join(\"\\t\") }" >>= shouldSucceed
     rows <- traverse row (T.lines (T.strip (crStdout facts)))
@@ -131,8 +132,8 @@ rubyObservedGraph observed = rubyConsumer proxy currentBundler $ \project -> do
     lock <- rubyLockfile project >>= maybe (fail "mirror install did not create a lockfile") pure
     sources <- traverse (maybe (fail "Bundler lockfile names a source outside the product") pure . T.stripPrefix (e2eBaseUrl proxy)) [source | line <- T.lines lock, Just source <- [T.stripPrefix "  remote: " line]]
     sources `shouldSatisfy` (not . null)
-    after <- rubyTraffic observed
-    let interval = rubyTrafficSince before after
+    after <- nativeTraffic observed
+    interval <- nativeTrafficSince before after
     assertRubyClientAssets interval
     assertRubyAssets project interval
     let graph = sort [(name, version) | (name, version, _, _, _) <- rows]
@@ -143,7 +144,7 @@ rubyObservedGraph observed = rubyConsumer proxy currentBundler $ \project -> do
         observedResult = Observed (Right graph) (Right (T.strip (crStdout exported))) (Just (Right (T.strip (crStdout executable)))) tree result foreignPaths
     pure (observedResult, TargetObservation portability result (Right graph) (Right archives) tree, ordNub sources)
   where
-    proxy = rubyProxy observed
+    proxy = observedProxy observed
     row line = case T.splitOn "\t" line of
         [name, version, platform, filename, path] -> pure (name, version, platform, filename, path)
         _ -> fail "native installed specification observation is malformed"

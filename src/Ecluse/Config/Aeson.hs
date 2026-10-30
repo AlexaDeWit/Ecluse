@@ -296,38 +296,20 @@ ecosystemKey location k = maybe (fail refusal) pure (parseEcosystem (Key.toText 
 parseSecret :: String -> Value -> Parser Secret
 parseSecret field = expectString field (pure . mkSecret)
 
+-- An entry no scope, name or prefix can equal (an empty one, a wrong separator) fails the load,
+-- so a typo cannot seed a privilege that covers nothing.
 parseFirstParty :: Ecosystem -> String -> Value -> Parser FirstParty
 parseFirstParty eco field v = case eco of
     Npm -> FirstPartyNpmScopes <$> parseNpmScopes field v
     PyPI -> FirstPartyPyPI <$> parsePyPIFirstParty field v
-    Cargo -> FirstPartyCargo <$> nonEmptyCommaSeparated field parseCargoEntry (field <> " must name at least one crate or prefix") v
-    RubyGems -> FirstPartyRubyGems <$> nonEmptyCommaSeparated field parseRubyGemsEntry (field <> " must name at least one gem or prefix") v
-
-parseRubyGemsEntry :: Text -> Parser RubyGems.RubyGemsFirstParty
-parseRubyGemsEntry entry =
-    either (const (fail ("invalid RubyGems entry in firstParty: " <> show entry))) pure (RubyGems.projectFirstPartyEntry entry)
-
-parseCargoEntry :: Text -> Parser Cargo.CargoFirstParty
-parseCargoEntry entry =
-    either (const (fail ("invalid Cargo entry in firstParty: " <> show entry))) pure (Cargo.projectFirstPartyEntry entry)
+    Cargo -> FirstPartyCargo <$> nonEmptyCommaSeparated field (projectedEntry "invalid Cargo entry in firstParty" Cargo.projectFirstPartyEntry) (field <> " must name at least one crate or prefix") v
+    RubyGems -> FirstPartyRubyGems <$> nonEmptyCommaSeparated field (projectedEntry "invalid RubyGems entry in firstParty" RubyGems.projectFirstPartyEntry) (field <> " must name at least one gem or prefix") v
 
 parseNpmScopes :: String -> Value -> Parser (NonEmpty Scope)
-parseNpmScopes field = nonEmptyCommaSeparated field parseScopeEntry (field <> " must name at least one scope")
-
--- Reject a firstParty segment no scope can equal, an empty one or a wrong separator, so a typo
--- fails the load instead of seeding a privilege that covers nothing.
-parseScopeEntry :: Text -> Parser Scope
-parseScopeEntry entry =
-    either (const (fail ("invalid scope in firstParty: " <> show entry))) pure (projectScope entry)
+parseNpmScopes field = nonEmptyCommaSeparated field (projectedEntry "invalid scope in firstParty" projectScope) (field <> " must name at least one scope")
 
 parsePyPIFirstParty :: String -> Value -> Parser (NonEmpty PyPIFirstParty)
-parsePyPIFirstParty field = nonEmptyCommaSeparated field (parsePyPIEntry field) (field <> " must name at least one distribution or prefix")
-
--- Reject a firstParty segment no distribution name or prefix can equal, so a typo fails the load
--- instead of seeding a privilege that covers nothing.
-parsePyPIEntry :: String -> Text -> Parser PyPIFirstParty
-parsePyPIEntry field entry =
-    either (const (fail ("invalid entry in " <> field <> ": " <> show entry))) pure (projectFirstPartyEntry entry)
+parsePyPIFirstParty field = nonEmptyCommaSeparated field (projectedEntry ("invalid entry in " <> field) projectFirstPartyEntry) (field <> " must name at least one distribution or prefix")
 
 parseBlockedRanges :: String -> Value -> Parser [IPRange]
 parseBlockedRanges field = commaSeparated field parseBlockedRangeEntry

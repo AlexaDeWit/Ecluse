@@ -19,13 +19,13 @@ import Ecluse.Core.Package (InvalidEntry, InvalidEntryKind (InvalidVersionManife
 import Ecluse.Core.Package.Entry (EntryKey (RecordEntry))
 import Ecluse.Core.Registry.JsonStream (Steps (..), readStepsWithEnd)
 import Ecluse.Core.Registry.Metadata.Fetch.Types (DocumentWalk)
-import Ecluse.Core.Registry.Metadata.RecordStream (finishRecordSteps, recordSteps)
+import Ecluse.Core.Registry.Metadata.RecordStream (finishRecordSteps, recordFragmentCharge, recordSteps)
 import Ecluse.Core.Registry.RubyGems.Document (GemDocument (..), GemRow (..))
 import Ecluse.Core.Registry.RubyGems.Project (coordinatePlatform, coordinateVersion, unGemPlatform)
 import Ecluse.Core.Registry.RubyGems.Projection (projectGemRows)
 import Ecluse.Core.Registry.RubyGems.Wire (GemRowError (..), decodeInfoRow, infoRowIdentity, infoRowVersion)
 import Ecluse.Core.Security (Limits, checkArtifactCount, checkVersionCountOf)
-import Ecluse.Core.Server.MemoryModel (bufferedChunkCharge, decodedDocumentCharge)
+import Ecluse.Core.Server.MemoryModel (saturatingCharge)
 import Ecluse.Core.Strict (strictElements)
 import Ecluse.Core.Version (Version, renderVersion)
 
@@ -68,9 +68,9 @@ gemInfoSteps pay limits name base mode = recordSteps reserve consume complete in
     initial = Scan 0 False [] 0 Set.empty Map.empty Set.empty [] [] 0
     selected raw = case mode of FullRead -> True; SelectedRead version -> raw == renderVersion version
     reserve scan previous fragment = do
-        let cost = saturate (toInteger previous + toInteger (decodedDocumentCharge fragment) + toInteger (bufferedChunkCharge (BS.length fragment)))
+        let cost = recordFragmentCharge previous fragment
             bookkeeping = 128 * toInteger (Set.size (scanVersions scan) + Map.size (scanSeen scan) + Set.size (scanBad scan))
-        pay (saturate (toInteger (scanKeptCharge scan) + toInteger cost + bookkeeping))
+        pay (saturatingCharge (toInteger (scanKeptCharge scan) + toInteger cost + bookkeeping))
         pure cost
     consume scan charge bytes
         | not (scanHeaderDone scan) = Right scan{scanOrdinal = scanOrdinal scan + 1, scanHeaderDone = bytes == "---", scanHeader = BS.copy bytes : scanHeader scan, scanKeptCharge = addCharge scan charge}
@@ -101,7 +101,7 @@ gemInfoSteps pay limits name base mode = recordSteps reserve consume complete in
                     | selected (renderVersion (coordinateVersion (grCoordinate row))) -> Right next{scanRows = row : scanRows next, scanKeptCharge = addCharge next charge}
                     | otherwise -> Right next
     addCharge :: Scan -> Int -> Int
-    addCharge scan charge = saturate (toInteger (scanKeptCharge scan) + toInteger charge)
+    addCharge scan charge = saturatingCharge (toInteger (scanKeptCharge scan) + toInteger charge)
     complete scan
         | not (scanHeaderDone scan) = Failed "RubyGems info response has no header delimiter"
         | otherwise =
@@ -112,4 +112,3 @@ gemInfoSteps pay limits name base mode = recordSteps reserve consume complete in
              in case projectGemRows limits name base rows of
                     Left _ -> Failed "RubyGems info projection failed"
                     Right info -> Finished (GemReadResult info{infoInvalidEntries = strictElements (reverse (scanInvalid scan) <> conflicts)} (GemDocument name (BS.intercalate "\n" (reverse (scanHeader scan)) <> "\n") rows))
-    saturate = fromInteger . min (toInteger (maxBound :: Int))

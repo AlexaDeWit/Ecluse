@@ -21,8 +21,10 @@ import Ecluse.BenchLoad.Normalise (BaselineSource (InjectedFallback, MeasuredRtt
 import Ecluse.Core.Package (PackageDetails (pkgPublishedAt), PackageInfo (infoVersions), PackageName, renderPackageName)
 import Ecluse.Core.Registry.Metadata (MetadataError)
 import Ecluse.Core.Security (Limits, defaultLimits)
-import Ecluse.Test.Corpus (CorpusPackage (cpPackage, cpPath, cpTier, cpWeight), CorpusTier (Medium), corpusPackages, cpName, pypiCorpusPackages)
-import Ecluse.Test.Corpus.Subset (newestNpmShare, newestPyPIShare)
+import Ecluse.Test.Corpus (CorpusPackage (cpPackage, cpPath, cpTier, cpWeight), CorpusTier (Medium), cargoCorpusPackages, corpusPackages, cpName, pypiCorpusPackages, rubyGemsCorpusPackages)
+import Ecluse.Test.Corpus.Cargo (projectCargoTree)
+import Ecluse.Test.Corpus.RubyGems (projectRubyGemsTree)
+import Ecluse.Test.Corpus.Subset (newestCargoShare, newestNpmShare, newestPyPIShare, newestRubyGemsShare)
 import Ecluse.Test.Registry.Npm.Metadata (projectNpmManifest)
 import Ecluse.Test.Registry.PyPI.Metadata (projectPyPIIndex)
 
@@ -91,6 +93,12 @@ spec = do
 
         it "keeps the newest 5% of every PyPI capture's versions by publish time, rounded up" $
             keepsNewestShare newestPyPIShare projectPyPIIndex pypiCorpusPackages
+
+        it "keeps the newest 5% of every Cargo capture's versions by publish time, rounded up" $
+            keepsNewestShare newestCargoShare projectCargoTree cargoCorpusPackages
+
+        it "keeps the newest 5% of every RubyGems capture's versions by publish time, rounded up" $
+            keepsNewestShare newestRubyGemsShare projectRubyGemsTree rubyGemsCorpusPackages
 
     describe "weightedMix" $
         it "repeats each package's URL on the port by its weight, in corpus order" $

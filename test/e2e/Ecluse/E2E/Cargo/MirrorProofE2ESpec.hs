@@ -23,9 +23,9 @@ import Ecluse.E2E.Fixtures.Cargo
 import Ecluse.E2E.Fixtures.Contracts (ConcreteFixture (..))
 import Ecluse.E2E.Harness
 import Ecluse.E2E.Harness.Cargo
-import Ecluse.E2E.Harness.CargoGateway
 import Ecluse.E2E.Harness.CargoRegistry
 import Ecluse.E2E.Harness.MirrorState (mirrorRetryAttempts, mutateMirrorStateObject)
+import Ecluse.E2E.Harness.NativeEdge
 import Ecluse.Test.Contract.Catalogue (caseLabel)
 import Ecluse.Test.Contract.Phase (timedFixture)
 import Ecluse.Test.Contract.Runner (DeclaredGroup (..))
@@ -67,7 +67,7 @@ complete :: GlobalDataPlane -> CargoRegistry -> [CargoRelease] -> E2EConfig -> I
 complete = completeWithin 120
 
 completeWithin :: Int -> GlobalDataPlane -> CargoRegistry -> [CargoRelease] -> E2EConfig -> IO ()
-completeWithin attempts plane registry releases config = withObservedCargoProxy config plane $ \observed -> do
+completeWithin attempts plane registry releases config = withObservedNativeProxy config plane $ \observed -> do
     cargoConsumer (observedProxy observed) currentCargo $ \project -> do
         void (runCargo project ["build"] >>= shouldSucceed)
         void (cargoFetch project >>= shouldSucceed)
@@ -99,7 +99,7 @@ sourceRoundtrip plane = withCargoMirrorFixture plane $ \registry releases -> do
             KeyMap.lookup "ecluse-fixture" row `shouldBe` Nothing
         _ -> expectationFailure "native target row is not an object"
     withStubFault plane (CargoBackend (registryPort registry) True) $
-        withObservedCargoProxy config{ecArgs = ["proxy", "--no-worker"]} plane $ \observed -> do
+        withObservedNativeProxy config{ecArgs = ["proxy", "--no-worker"]} plane $ \observed -> do
             for_ (ordNub (map (crateName . releaseCrate) releases)) $ \name -> do
                 actual <- cargoReadIndex (observedProxy observed) "/cargo/" name
                 map Object actual `shouldBe` [sourceRow release | release <- releases, crateName (releaseCrate release) == name]
@@ -118,7 +118,7 @@ yankCase yanked plane = withCargoMirrorFixture plane $ \registry releases -> do
     let sourceRow = case cargoIndexRecord root of Object row -> Object (KeyMap.insert "yanked" (Bool yanked) row); other -> other
         config = cargoMirrorConfig{ecQueueUrl = Just queue}
     writeFileLBS (gdpWorkDir plane </> "cargo" </> toString (cargoShard cargoRoot)) (encode sourceRow <> "\n")
-    withObservedCargoProxy config plane $ \observed -> do
+    withObservedNativeProxy config plane $ \observed -> do
         cargoConsumer (observedProxy observed) currentCargo $ \project -> do
             writeFileText (cargoDirectory project </> "Cargo.lock") (cargoFixtureLock "registry+https://github.com/rust-lang/crates.io-index" releases)
             void (runCargo project ["build", "--locked"] >>= shouldSucceed)
@@ -126,7 +126,7 @@ yankCase yanked plane = withCargoMirrorFixture plane $ \registry releases -> do
         awaitCargoRegistry registry releases `shouldReturn` True
         for_ releases $ \release -> awaitProxyLog (observedProxy observed) (cargoMirrorComplete (crateName (releaseCrate release)) (crateVersion (releaseCrate release))) 120 `shouldReturn` True
     withStubFault plane (CargoBackend (registryPort registry) True) $
-        withObservedCargoProxy config{ecArgs = ["proxy", "--no-worker"]} plane $ \observed -> do
+        withObservedNativeProxy config{ecArgs = ["proxy", "--no-worker"]} plane $ \observed -> do
             rows <- cargoReadIndex (observedProxy observed) "/cargo/" cargoRoot
             map Object rows `shouldBe` [sourceRow]
             cargoConsumer (observedProxy observed) floorCargo $ \project -> do
@@ -144,7 +144,7 @@ lostReply plane = withCargoMirrorFixture plane $ \registry releases -> do
     setCargoRegistryFault registry CargoRegistryLoseReply
     completeWithin retryAttempts plane registry releases config
     withStubFault plane (CargoBackend (registryPort registry) True) $
-        withObservedCargoProxy config{ecArgs = ["proxy", "--no-worker"]} plane $ \observed ->
+        withObservedNativeProxy config{ecArgs = ["proxy", "--no-worker"]} plane $ \observed ->
             cargoConsumer (observedProxy observed) currentCargo $ \project -> void (runCargo project ["build"] >>= shouldSucceed)
 
 data MirrorFault = MissingArchive | ChangedChecksum | MissingState | CorruptState | PrivateAuthorisation
@@ -161,7 +161,7 @@ faultCase fault plane = withCargoMirrorFixture plane $ \registry releases -> do
         CorruptState -> mutateState plane "PUT" "{invalid retained Cargo state"
         PrivateAuthorisation -> setCargoRegistryFault registry (CargoRegistryRequireToken True)
     withStubFault plane (CargoBackend (registryPort registry) True) $
-        withObservedCargoProxy config{ecArgs = ["proxy", "--no-worker"]} plane $ \observed -> do
+        withObservedNativeProxy config{ecArgs = ["proxy", "--no-worker"]} plane $ \observed -> do
             response <- proxyRequest "GET" [] "" (observedProxy observed) ("/cargo/" <> cargoShard cargoRoot)
             case fault of
                 MissingArchive -> proxyStatus (observedProxy observed) (cargoArchiveRoute cargoRoot cargoVersion) `shouldReturn` 503

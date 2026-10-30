@@ -551,21 +551,23 @@ and `ecluse.metadata_cache.assembled.resident_bytes` gauges report accounted byt
 eviction, and expiry removal. `ecluse.metadata_cache.entries` reports the full store's entry count.
 The shipped local backend never retains full metadata. Full-store entries and resident bytes stay
 zero, and local full reads report misses or collapsed active work without capacity refusals.
-Selected-version and assembled stores share one byte bound and one entry bound, with no reserved shares. A full listing followed by
-a selected-version read can therefore fetch upstream twice. No external cache service is required.
+Selected-version, assembled, and public RubyGems directory stores share `cache.ttl`, one byte bound
+and one entry bound, with no reserved shares. No gauge reports the directory store's bytes.
+A full listing followed by a selected-version read can fetch upstream twice, because no store keeps
+the full document. No external cache service is required.
 Boot and `check-config` output report these local capabilities. `cache.maxBytes` applies only to
 eligible local retention. Increasing it cannot enable full retention.
 Each store evicts its own least-recently used entries under shared pressure. It cannot evict another
-store's live entries. The shipped eviction floors are zero. If the other store holds the capacity,
-the request serves without retention until expiry releases room.
+store's live entries. The shipped eviction floors are zero. If other stores hold the capacity, the
+request serves without retention until expiry releases room.
 One selected provider owns every metadata retention capability. Unsupported capabilities stay
 uncached. A failed backend read fetches metadata from its origin or rerenders an assembled response
 from authorised inputs. A failed write skips retention. Neither failure uses a retained local fallback.
 Recency hints and occupancy reporting do not require a remote provider to use local LRU or report
 exact server memory. Provider occupancy, when available, reports its charged bytes and entry count.
 
-Local expiry removal checks both stores on access or a retaining insert, without a background timer.
-If both stores are idle, their gauges can retain expired charges until the next operation.
+Local expiry removal checks every store on access or a retaining insert, without a background timer.
+If the stores are idle, their gauges can retain expired charges until the next operation.
 
 ### Credential expiry
 
@@ -632,10 +634,11 @@ listing and each public artifact decision for the memory it uses, as it uses it,
 | Work | What it pays |
 |---|---|
 | Entering, before the request takes a CPU slot | One 1 MiB step |
-| A full metadata read, which a listing makes | Per decompressed source byte, chunk by chunk before parsing: 1.1 bytes for npm, 3.5 bytes for PyPI |
-| A listing's response | Per byte of its output basis, before assembly: 2.0 bytes for npm, 1.9 bytes for PyPI |
+| A full metadata read, which a listing makes | Per decompressed source byte, chunk by chunk before parsing: 1.1 bytes for npm, 3.5 bytes for PyPI, 1.7 bytes for Cargo, 18.0 bytes for RubyGems |
+| A listing's response | Per byte of its output basis, before assembly: 2.0 bytes for npm, 1.9 bytes for PyPI, 2.6 bytes for Cargo, 4.6 bytes for RubyGems |
 | A selected read, which a public artifact decision makes | Nothing beyond the entry step |
-| An assembled hit or a `304` | Its reads, but no response charge |
+| A RubyGems gem or compact specification coordinate lookup | A full metadata read and a response charge for each candidate gem name's `/info` document, at the RubyGems factors |
+| An assembled hit or a `304` | Its reads, but no response charge. A RubyGems `/info` or `/versions` `304` also pays its serialisation or merge charge |
 | A gzip listing response, hit or miss | 512 KiB for the deflater, then 36 KiB for each 32 KiB output buffer |
 | A request that joins another request's public fetch or render | Nothing for that fetch or render |
 
@@ -647,9 +650,17 @@ renders about one document, so it pays for about one. A listing of one document,
 share no version, pays for every byte it merges.
 
 A listing gives charges back as it finishes each phase. When a full read completes, its charge
-steps down to what the read keeps: 0.9 bytes per source byte for npm, 3.3 bytes for PyPI. A failed
-read keeps nothing. Once the response body exists, the reads' charges go back, so only the response
+steps down to what the read keeps: 0.9 bytes per source byte for npm, 3.3 bytes for PyPI, 1.5 bytes
+for Cargo, 17.3 bytes for RubyGems. A failed read keeps nothing. Once the response body exists, the reads' charges go back, so only the response
 charge and any gzip charge stay while the body is sent.
+
+RubyGems per-gem `/info` documents are small, but their per-byte charges are the highest of the four
+ecosystems. A RubyGems `/info` reply also pays twice its admitted record bytes, plus 4 KiB, for its
+native serialisation. A `/versions` reply has no per-byte factor. Each directory scan pays about twice
+the bytes it retains while it reads, and the response pays twice the merged directory's bytes plus
+the merge workspace. The rubygems.org directory captured on 2026-10-28 is 24.5 MB, so the public
+directory is the largest RubyGems sizing input. A request that joins another request's directory
+fetch, or finds the public directory in the local cache, pays no public scan.
 
 For a listing that reads at least 1 MiB, the per-byte charges sit above the largest the residency
 tests measure on the captured package corpus, for one document and for merges that model the
@@ -900,15 +911,19 @@ Use these costs to estimate public traffic across all your deployments, includin
 
 ### Requests per operation
 
-These counts reflect shipped request paths checked on 2026-10-18. They assume admitted packages outside `firstParty`, the local cache, and a stable registry. They exclude private reads, redirects, retries, and failures. A document means the full npm packument or the project's PyPI Simple index.
+These counts reflect shipped request paths checked on 2026-10-18, and the Cargo and RubyGems paths on 2026-10-29. They assume admitted packages outside `firstParty`, the local cache, and a stable registry. They exclude private reads, redirects, retries, and failures. A document means the full npm packument, the project's PyPI Simple index, the crate's Cargo sparse index file, or the gem's RubyGems `/info` file.
 
 | Operation | Serve-only or copy unavailable | Complete private copy available |
 | --- | --- | --- |
 | Listing | 1 public document | 1 public document |
+| Cargo discovery (`config.json`) | 0 public requests | 0 public requests |
+| RubyGems `/versions` directory | 1 public directory unless the local cache holds it | 1 public directory unless the local cache holds it |
 | Artifact or declared PyPI companion download | 1 public document unless the selected-version cache hits, plus 1 artifact or companion request | 0 public requests |
+| RubyGems gem download | 1 public document for each gem name the file name can parse as, usually one, plus 1 public document unless the selected-version cache hits, plus 1 gem request | 1 public document for each gem name the file name can parse as, and no public gem request |
+| RubyGems compact specification download | 1 public document for each gem name the file name can parse as, usually one, plus 1 specification request | The same public documents, and no public specification request |
 | Mirror copy pass | 1 public document unless npm finds a selected-version cache hit, plus files that need copying or verification and missing companions | No public read when the job confirms completion |
 
-A successful admitted artifact GET can enqueue a separate mirror job. A companion request does not enqueue one. PyPI workers always read their own Simple document because they need publication fields. They copy the whole supported version, including its wheels, source distributions, and declared companions. Completion passes and queue retries add requests.
+A successful admitted artifact GET can enqueue a separate mirror job. A companion request does not enqueue one. PyPI, Cargo, and RubyGems workers always read their own public document, because they need publication and source fields. PyPI workers copy the whole supported version, including its wheels, source distributions, and declared companions. RubyGems workers copy every platform gem of the version, each with its original compact specification. Completion passes and queue retries add requests.
 
 First-party names never fall back to public registries. A private authorisation refusal also stops public fallback.
 
@@ -926,13 +941,15 @@ For example, 1,500 distinct npm versions can require 3,000 public requests throu
 
 ### Registry limits and guidance
 
-These published positions were checked on 2026-10-18. Recheck them before capacity changes. Neither registry guarantees a request allowance for your egress address.
+The npm and PyPI positions were checked on 2026-10-18, and the crates.io and rubygems.org positions on 2026-10-29. Recheck them before capacity changes. None of these registries guarantees a request allowance for your egress address.
 
 | Registry | Published position |
 | --- | --- |
 | npm | [Open-Source Terms, Acceptable Use item 17](https://docs.npmjs.com/policies/open-source-terms/#acceptable-use) treats five million requests in a month-long period from an individual, organisation, or affiliated group as unreasonable. Lower volumes can also impose unreasonable load. This is not a safe quota or a per-IP limit. Contact npm sales for high-volume needs. |
 | PyPI | [API policies](https://docs.pypi.org/api/#rate-limiting) say the edge currently applies no API rate limiting. PyPI can prohibit irresponsible consumers. It asks clients to identify themselves through `User-Agent`, preferably with contact information, and avoid thousands of requests within minutes. It recommends a mirror or cache for services that download many packages. |
 | PyPI outlook | The [August 14, 2026 infrastructure update](https://blog.pypi.org/posts/2026-08-14-how-aws-powers-pypi-and-the-psf/) says PyPI is considering rate limits for its heaviest consumers. It does not announce a numeric allowance. |
+| crates.io | The [data access page](https://crates.io/data-access) says the sparse index at `index.crates.io` requires no rate limits, and no rate limits apply to `static.crates.io` at present. Écluse reads both. The crates.io API, which Écluse does not use, allows at most one request per second with an identifying `User-Agent`. |
+| rubygems.org | The [rate limits guide](https://guides.rubygems.org/rubygems-org-rate-limits/) sets a load-balancer guideline of 10 requests per second for the API and website, by client IP unless stated. Some endpoints can be cached by the CDN and allow higher rates. The guide does not name the Compact Index `/versions` and `/info` endpoints Écluse reads. |
 
 npm's organisation-wide wording includes deployments and direct npm traffic across different egress addresses. Monthly totals alone do not describe the load from bursts.
 

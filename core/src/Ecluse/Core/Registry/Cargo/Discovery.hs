@@ -32,16 +32,15 @@ import Ecluse.Core.Ecosystem (Ecosystem (Cargo))
 import Ecluse.Core.Package (Hash, HashAlg (SHA256), hashAlg, hashValue, mkHash)
 import Ecluse.Core.Package.Filter.Internal (ArtifactOrigin, artifactOrigin, checkArtifactAddress)
 import Ecluse.Core.Registry (FetchFault (FetchUrlUnformable))
-import Ecluse.Core.Registry.Cargo.Project (projectName)
+import Ecluse.Core.Registry.Cargo.Project (cargoArchiveFilename, projectName)
 import Ecluse.Core.Registry.Cargo.Request (cargoArtifactHosts, cargoConfigRequest, cargoPrefix)
 import Ecluse.Core.Registry.Cargo.Wire (CargoRecordError (..), decodeCargoRecord)
-import Ecluse.Core.Registry.Exchange (boundedChargedRead, formThen, withSuccessBodyUsing)
+import Ecluse.Core.Registry.Exchange (boundedIncrementalRead, formThen, withSuccessBodyUsing)
 import Ecluse.Core.Registry.Metadata (MetadataError (MetadataBoundExceeded, MetadataUndecodable), metadataResponse)
 import Ecluse.Core.Registry.Origin (OriginClient (..), originBaseUrl)
 import Ecluse.Core.Registry.Public (ReadControl (..))
 import Ecluse.Core.Security (AllowedHostPorts, BodyLimit (MetadataBodyLimit), LimitError (BodyTooLarge), Limits (maxMetadataBytes, maxNestingDepth, progressFloor), ecosystemArtifactAuthorities)
 import Ecluse.Core.Server.Path (Filename, encodeComponent, mkFilename)
-import Ecluse.Core.Telemetry.Span (TracingPort)
 import Ecluse.Core.Telemetry.Upstream (PublicReadKind (Listing))
 import Ecluse.Core.Text (httpPrefix, httpsPrefix, isPrefixOfLowered)
 import Ecluse.Core.Version (Version, mkVersion, renderVersion)
@@ -70,8 +69,8 @@ discoveryOrigin :: CargoDiscovery -> ArtifactOrigin
 discoveryOrigin (CargoDiscovery _ _ _ _ origin) = origin
 
 -- | Read bounded discovery through the same transport and public control as index metadata.
-cargoDiscovery :: TracingPort -> OriginClient -> IO (Either MetadataError CargoDiscovery)
-cargoDiscovery _ origin = do
+cargoDiscovery :: OriginClient -> IO (Either MetadataError CargoDiscovery)
+cargoDiscovery origin = do
     response <- formThen FetchUrlUnformable exchange (cargoConfigRequest (ocBaseRequest origin) (ocToken origin))
     pure $ do
         (_, bytes) <- metadataResponse response
@@ -80,7 +79,7 @@ cargoDiscovery _ origin = do
     limits = ocLimits origin
     bound = MetadataBodyLimit (min 65536 (maxMetadataBytes limits))
     control = maybe Uncontrolled (\handle -> Controlled handle (fromMaybe Listing (ocReadKind origin))) (ocPublicControl origin)
-    exchange = withSuccessBodyUsing control (ocClient origin) (progressFloor limits) (boundedChargedRead (ocChargeFullRead origin) bound)
+    exchange = withSuccessBodyUsing control (ocClient origin) (progressFloor limits) (boundedIncrementalRead (ocChargeFullRead origin) bound)
 
 -- | Validate bounded discovery against predeclared authority and the selected origin.
 parseDiscoveryWithDepth :: Int -> AllowedHostPorts -> Text -> ByteString -> Either MetadataError CargoDiscovery
@@ -142,7 +141,7 @@ cargoArtifactCoordinate name version checksum = do
     _ <- maybeToRight "invalid Cargo version" (parseCargo (renderVersion version))
     unless (hashAlg checksum == SHA256) (Left "Cargo requires SHA-256")
     _ <- mkHash SHA256 (hashValue checksum)
-    filename <- maybeToRight "invalid Cargo archive filename" (mkFilename (name <> "-" <> renderVersion version <> ".crate"))
+    filename <- maybeToRight "invalid Cargo archive filename" (mkFilename (cargoArchiveFilename name version))
     pure (CargoArtifactCoordinate name (mkVersion Cargo (renderVersion version)) filename checksum)
 
 -- | Expand only native markers and recheck the address against the captured origin.

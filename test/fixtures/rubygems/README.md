@@ -15,7 +15,9 @@ Compact specifications omit extension declarations even when the archive declare
 
 `reference.rb` uses RubyGems, Marshal and zlib to observe controlled fixture or product-response bytes in tests.
 It is an independent test oracle, never a production decoder.
-Modes are `dependencies`, `compact`, `archive` and `info`. Each mode reads standard input and emits JSON.
+Modes are `dependencies`, `encode-dependencies`, `compact`, `archive` and `info`. Each mode reads standard input and emits JSON.
+`encode-dependencies` reads JSON release rows and emits the Marshal Dependencies API reply as a byte array.
+The E2E registry fixture serves that reply.
 
 For load setup, `--output DIRECTORY --payload-bytes N` writes a separate native registry.
 Each platform artifact then contains `lib/payload.bin` with exactly N deterministic bytes.

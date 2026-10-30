@@ -58,12 +58,12 @@ import Ecluse.Core.Package (artUrl)
 import Ecluse.Core.Registry.Adapter.Capability (AdapterArtifact (artifactByUrl))
 import Ecluse.Core.Registry.Exchange (singleAttemptSettings)
 import Ecluse.Core.Registry.Exchange.Types (ExchangeClient (ExchangeClient), untracedExchange)
-import Ecluse.Core.Registry.InstallEvidence (readInstallArtifact)
+import Ecluse.Core.Registry.InstallEvidence (boundedArtifactLimits, readInstallArtifact)
 import Ecluse.Core.Registry.Maintenance (
     StoreFacts (factBudget),
-    StoreMaintenance (storeFacts, storeReadArtifact),
+    StoreMaintenance (storeFacts),
     StoreManifestRead,
-    StoreObservation (obFacts, obReadArtifact),
+    StoreObservation (obFacts),
     meteredMaintenance,
     meteredObservation,
     storeFaultOfMetadata,
@@ -85,10 +85,8 @@ import Ecluse.Core.Registry.Maintenance.Upstream (UpstreamSafety (Undecidable, U
 import Ecluse.Core.Registry.Origin (OriginClient, originClient)
 import Ecluse.Core.Registry.Public (ReadControl (Uncontrolled))
 import Ecluse.Core.Registry.Sweep.Pacing (derivedCapacity)
-import Ecluse.Core.Rules.Effectful (ReadFault (ReadFault))
-import Ecluse.Core.Rules.Install (InstallArtifactRead)
-import Ecluse.Core.Rules.Types (Inability (EvaluationFailed, InstallSignalUnread), Transience (WontResolve))
-import Ecluse.Core.Security (Limits (maxMirrorArtifactBytes, maxVersionCount), authorityLabel, hostPortAddress)
+import Ecluse.Core.Rules.Install (InstallArtifactRead, unavailableInstallArtifactRead, unreadInstallSignal)
+import Ecluse.Core.Security (Limits (maxVersionCount), authorityLabel, hostPortAddress)
 import Ecluse.Core.Security.Egress (RegistryUrl, registryUrlText)
 import Ecluse.Core.Telemetry.Span (TracingPort)
 import Ecluse.Runtime.Maintenance.CodeArtifact (newCodeArtifactCacheMaintenance, newCodeArtifactCacheObservation, newCodeArtifactMaintenance, newCodeArtifactObservation, newCodeArtifactUpstreamProbe)
@@ -177,14 +175,13 @@ buildStoreMaintenance :: BuildStoreMaintenance
 buildStoreMaintenance ports limits cleared = budgeted ports cleared <$> built
   where
     built = do
-        (readManifest, client) <- storeAccess ports limits cleared
-        handle <- case cbControl cleared of
-            ClearedCodeArtifact store -> newCodeArtifactMaintenance (maxVersionCount limits) (cbAlphabet cleared) readManifest store
-            ClearedCodeArtifactCache store -> newCodeArtifactCacheMaintenance (maxVersionCount limits) (cbAlphabet cleared) readManifest store
+        (readManifest, readArtifact, client) <- storeAccess ports limits cleared
+        case cbControl cleared of
+            ClearedCodeArtifact store -> newCodeArtifactMaintenance (maxVersionCount limits) (cbAlphabet cleared) readManifest readArtifact store
+            ClearedCodeArtifactCache store -> newCodeArtifactCacheMaintenance (maxVersionCount limits) (cbAlphabet cleared) readManifest readArtifact store
             ClearedProtocol store -> do
                 deletionClient <- storeClient ports
-                pure (newProtocolMaintenance (protocolStore limits cleared store readManifest client deletionClient))
-        pure handle{storeReadArtifact = storeArtifactRead ports limits cleared client}
+                pure (newProtocolMaintenance (protocolStore limits cleared store readManifest readArtifact client deletionClient))
 
 -- Resolve the capacity pool before metering requests against it.
 budgeted :: StorePorts -> ClearedBackend -> StoreMaintenance -> StoreMaintenance
@@ -201,13 +198,12 @@ buildStoreObservation ports limits cleared = observed <$> built
         let facts = resolvedFacts ports cleared (obFacts handle)
          in (meteredObservation (gateOver ports facts) handle){obFacts = facts}
     built = do
-        (readManifest, client) <- storeAccess ports limits cleared
-        handle <- case cbControl cleared of
-            ClearedCodeArtifact store -> newCodeArtifactObservation (maxVersionCount limits) (cbAlphabet cleared) readManifest store
-            ClearedCodeArtifactCache store -> newCodeArtifactCacheObservation (maxVersionCount limits) (cbAlphabet cleared) readManifest store
+        (readManifest, readArtifact, client) <- storeAccess ports limits cleared
+        case cbControl cleared of
+            ClearedCodeArtifact store -> newCodeArtifactObservation (maxVersionCount limits) (cbAlphabet cleared) readManifest readArtifact store
+            ClearedCodeArtifactCache store -> newCodeArtifactCacheObservation (maxVersionCount limits) (cbAlphabet cleared) readManifest readArtifact store
             ClearedProtocol store ->
-                pure (newProtocolObservation (protocolRead limits cleared store readManifest client))
-        pure handle{obReadArtifact = storeArtifactRead ports limits cleared client}
+                pure (newProtocolObservation (protocolRead limits cleared store readManifest readArtifact client))
 
 resolvedFacts :: StorePorts -> ClearedBackend -> StoreFacts -> StoreFacts
 resolvedFacts ports cleared facts =
@@ -251,11 +247,11 @@ declared budget override =
   where
     weighted kind costs = maybe costs (\weight -> Map.map (* weight) costs) (Map.lookup kind (qoWeights override))
 
--- One client of the store's own, and the manifest read that leads over it.
-storeAccess :: StorePorts -> Limits -> ClearedBackend -> IO (StoreManifestRead, ExchangeClient)
+-- One client of the store's own, and the manifest and artifact reads that lead over it.
+storeAccess :: StorePorts -> Limits -> ClearedBackend -> IO (StoreManifestRead, InstallArtifactRead, ExchangeClient)
 storeAccess ports limits cleared = do
     client <- storeClient ports
-    pure (storeManifestRead ports limits cleared client, client)
+    pure (storeManifestRead ports limits cleared client, storeArtifactRead ports limits cleared client, client)
 
 -- Resolve the current secret for each read because managed tokens expire.
 storeManifestRead :: StorePorts -> Limits -> ClearedBackend -> ExchangeClient -> StoreManifestRead
@@ -266,19 +262,17 @@ storeManifestRead ports limits cleared client name = do
 
 -- Private credentials remain under the configured store authority. No public fallback exists.
 storeArtifactRead :: StorePorts -> Limits -> ClearedBackend -> ExchangeClient -> InstallArtifactRead
-storeArtifactRead ports limits cleared client bounded artifact pay =
-    case cbArtifact cleared of
-        Nothing -> pure (Left unavailable)
-        Just native
-            | hostPortAddress (artUrl artifact) /= hostPortAddress (registryUrlText (cbUrl cleared)) -> pure (Left unavailable)
-            | otherwise -> do
+storeArtifactRead ports limits cleared client = case cbArtifact cleared of
+    Nothing -> unavailableInstallArtifactRead
+    Just native -> \bounded artifact pay ->
+        if hostPortAddress (artUrl artifact) /= hostPortAddress (registryUrlText (cbUrl cleared))
+            then pure (Left unreadInstallSignal)
+            else do
                 token <- traverse mintSecret (spCredential ports)
                 let credential = case cbControl cleared of
                         ClearedProtocol store -> (ClientCredential (cbUsername cleared) <$> token) <|> (bareCredential <$> cpsToken store)
                         _ -> ClientCredential (cbUsername cleared) <$> token
-                readInstallArtifact (limits{maxMirrorArtifactBytes = min (maxMirrorArtifactBytes limits) (maxMirrorArtifactBytes bounded)}) client Uncontrolled (artifactByUrl native credential (artUrl artifact)) pay
-  where
-    unavailable = ReadFault WontResolve EvaluationFailed InstallSignalUnread
+                readInstallArtifact (boundedArtifactLimits limits bounded) client Uncontrolled (artifactByUrl native credential (artUrl artifact)) pay
 
 storeOrigin :: Limits -> ClearedBackend -> ExchangeClient -> Maybe ClientCredential -> OriginClient
 storeOrigin limits cleared client = originClient limits client (cbUrl cleared)
@@ -293,19 +287,20 @@ storeClient ports = do
 storeConnections :: Int
 storeConnections = 4
 
-protocolStore :: Limits -> ClearedBackend -> ClearedProtocolStore -> StoreManifestRead -> ExchangeClient -> ExchangeClient -> ProtocolStore
-protocolStore limits cleared store readManifest client deletionClient =
+protocolStore :: Limits -> ClearedBackend -> ClearedProtocolStore -> StoreManifestRead -> InstallArtifactRead -> ExchangeClient -> ExchangeClient -> ProtocolStore
+protocolStore limits cleared store readManifest readArtifact client deletionClient =
     ProtocolStore
-        { psRead = protocolRead limits cleared store readManifest client
+        { psRead = protocolRead limits cleared store readManifest readArtifact client
         , psDeleteOrigin = storeOrigin limits cleared deletionClient (bareCredential <$> cpsToken store)
         , psDelete = cpsDelete store
         }
 
-protocolRead :: Limits -> ClearedBackend -> ClearedProtocolStore -> StoreManifestRead -> ExchangeClient -> ProtocolRead
-protocolRead limits cleared store readManifest client =
+protocolRead :: Limits -> ClearedBackend -> ClearedProtocolStore -> StoreManifestRead -> InstallArtifactRead -> ExchangeClient -> ProtocolRead
+protocolRead limits cleared store readManifest readArtifact client =
     ProtocolRead
         { prOrigin = storeOrigin limits cleared client (bareCredential <$> cpsToken store)
         , prReadManifest = readManifest
+        , prReadArtifact = readArtifact
         , prListing = cpsListing store
         , prCodec = cpsCodec store
         , prBackendName = storeTagName (cpsTag store)

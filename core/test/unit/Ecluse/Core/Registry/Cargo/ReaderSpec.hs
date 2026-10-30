@@ -16,7 +16,6 @@ import Hedgehog (MonadTest, cover, evalEither, evalMaybe, forAll, (===))
 import Hedgehog.Gen qualified as Gen
 import Test.Hspec
 import Test.Hspec.Hedgehog (hedgehog, modifyMaxSuccess)
-import UnliftIO.Exception (throwIO)
 
 import Ecluse.Core.Package (Artifact (..), Availability (Available, Yanked), CodeExecSignal (CodeExecUnknown), CoreMetadata, HashAlg (SHA256), PackageDetails (..), PackageInfo (..), hashAlg, hashValue, renderPackageName)
 import Ecluse.Core.Package.Entry (EntryKey (RecordEntry))
@@ -29,6 +28,7 @@ import Ecluse.Core.Registry.JsonStream (StreamResult (..))
 import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), LimitError (BodyTooLarge, TooDeeplyNested, TooManyArtifacts, TooManyVersions), Limits (maxArtifactCount, maxMetadataBytes, maxNestingDepth, maxVersionCount), defaultLimits)
 import Ecluse.Core.Server.MemoryModel (bufferedChunkCharge, decodedDocumentCharge)
 import Ecluse.Core.Version (renderVersion)
+import Ecluse.Server.Admission.Support (ChargeRefused (..), refuseCharge)
 import Ecluse.Test.Package (validSha256)
 import Ecluse.Test.Registry.Cargo.Generated (CargoInputs (..), GeneratedIndex (..), NativeRow (..), genCargoIndex)
 import Ecluse.Test.Registry.Cargo.Metadata (cargoTestDiscovery, cargoTestName, cargoTestRecord, cargoTestVersion, readCargoChunks, readCargoIndex, readCargoIndexChunks)
@@ -129,9 +129,9 @@ chargingSpec = describe "selected row reservations" $ do
             pulls <- newIORef (0 :: Int)
             next <- heldChunks (sliceChunks 32768 (featureRow version (2 * 1024 * 1024)))
             let source = modifyIORef' pulls (+ 1) >> next
-                pay cost = when (cost > 1024 * 1024) (throwIO SelectedChargeRefused)
+                pay cost = when (cost > 1024 * 1024) (refuseCharge cost)
                 readSelected = readCargoIndexCharged pay discovery defaultLimits cargoTestName (SelectedRead (cargoTestVersion "1.0.0")) (MetadataBodyLimit (maxMetadataBytes defaultLimits)) (testTable []) source
-            readSelected `shouldThrow` (== SelectedChargeRefused)
+            readSelected `shouldThrow` (== ChargeRefused)
             readIORef pulls >>= (`shouldSatisfy` (< 8))
     it "keeps the pure held reader identical to the charged production parser" $ do
         discovery <- expectRight cargoTestDiscovery
@@ -174,11 +174,6 @@ chargedResult pay version input = do
     next <- heldChunks (sliceChunks 32768 input)
     streamed <- expectRight =<< readCargoIndexCharged pay discovery defaultLimits cargoTestName (SelectedRead (cargoTestVersion version)) (MetadataBodyLimit (maxMetadataBytes defaultLimits)) (testTable []) next
     expectRight (streamValue streamed)
-
-data SelectedChargeRefused = SelectedChargeRefused
-    deriving stock (Eq, Show)
-
-instance Exception SelectedChargeRefused
 
 differentialSpec :: Spec
 differentialSpec = modifyMaxSuccess (const 2000) $

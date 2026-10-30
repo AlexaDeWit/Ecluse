@@ -17,8 +17,8 @@ import Test.Hspec (around, it, shouldBe, shouldReturn, shouldSatisfy)
 import Ecluse.E2E.Fixtures.Contracts (ConcreteFixture (..))
 import Ecluse.E2E.Fixtures.RubyGems
 import Ecluse.E2E.Harness
+import Ecluse.E2E.Harness.NativeEdge
 import Ecluse.E2E.Harness.RubyGems
-import Ecluse.E2E.Harness.RubyGemsGateway
 import Ecluse.E2E.Harness.RubyGemsRegistry
 import Ecluse.E2E.RubyGems.InstallE2ESpec (rubyConsumer)
 import Ecluse.Test.Contract.Catalogue (caseLabel)
@@ -109,15 +109,15 @@ marker = BS.pack [0 .. 255]
 initialDigest :: GlobalDataPlane -> IO ()
 initialDigest plane = for_ [minimumBundler, currentBundler] $ \client -> withRelay plane $ \registry release -> do
     rubyRegistryFiles registry "rubygems-mirror" `shouldReturn` []
-    withObservedRubyProxy serveOnly plane $ \observed -> do
-        rubyConsumer (rubyProxy observed) client $ \control -> do
+    withObservedNativeProxy serveOnly plane $ \observed -> do
+        rubyConsumer (observedProxy observed) client $ \control -> do
             rubyDependency control rubyLeaf ("= " <> rubyVersion)
             rubyLockfile control `shouldReturn` Nothing
             void (rubyInstall control False >>= shouldSucceed)
         let changed = releaseArchive release <> "changed"
         setReply registry "rubygems-upstream" release (nativeReply 200 True changed)
         before <- length <$> requests registry
-        rubyConsumer (rubyProxy observed) client $ \project -> do
+        rubyConsumer (observedProxy observed) client $ \project -> do
             rubyDependency project rubyLeaf ("= " <> rubyVersion)
             rubyLockfile project `shouldReturn` Nothing
             result <- runBundler project ["install", "--verbose"] >>= shouldFail
@@ -127,22 +127,22 @@ initialDigest plane = for_ [minimumBundler, currentBundler] $ \client -> withRel
             Map.keys tree `shouldSatisfy` (not . any (T.isSuffixOf "ecluse_fixture_leaf.rb" . toText))
         attempted <- artifactRequests before registry release
         attempted `shouldSatisfy` (not . null)
-        proxyGet (rubyProxy observed) (rubyArchiveRoute release) `shouldReturn` (200, LBS.fromStrict changed)
+        proxyGet (observedProxy observed) (rubyArchiveRoute release) `shouldReturn` (200, LBS.fromStrict changed)
     rubyRegistryFiles registry "rubygems-mirror" `shouldReturn` []
 
 privateFailure :: Int -> GlobalDataPlane -> IO ()
 privateFailure expected plane = withRelay plane $ \registry release -> do
-    withObservedRubyProxy serveOnly plane $ \observed -> do
-        good <- proxyGet (rubyProxy observed) (rubyArchiveRoute release)
+    withObservedNativeProxy serveOnly plane $ \observed -> do
+        good <- proxyGet (observedProxy observed) (rubyArchiveRoute release)
         good `shouldBe` (200, LBS.fromStrict (releaseArchive release))
     seedRubyRegistry registry "rubygems-private" [release]
     let config = serveOnly{ecExtraEnv = [("ECLUSE_MOUNTS__RUBYGEMS__PRIVATE_UPSTREAM__REGISTRY__URL", stubUrl RubyGemsPrivate)]}
         changed = releaseArchive release <> "changed"
     setReply registry "rubygems-private" release (nativeReply expected False changed)
-    withObservedRubyProxy config plane $ \observed -> do
+    withObservedNativeProxy config plane $ \observed -> do
         before <- length <$> requests registry
         if expected == 200
-            then for_ [minimumBundler, currentBundler] $ \client -> rubyConsumer (rubyProxy observed) client $ \project -> do
+            then for_ [minimumBundler, currentBundler] $ \client -> rubyConsumer (observedProxy observed) client $ \project -> do
                 rubyDependency project rubyLeaf ("= " <> rubyVersion)
                 rubyLockfile project `shouldReturn` Nothing
                 result <- runBundler project ["install", "--verbose"] >>= shouldFail
@@ -150,7 +150,7 @@ privateFailure expected plane = withRelay plane $ \registry release -> do
                 (crStdout result <> crStderr result) `shouldSatisfy` T.isInfixOf "ChecksumMismatchError"
                 tree <- rubyInstalledTree project
                 Map.keys tree `shouldSatisfy` (not . any (T.isSuffixOf "ecluse_fixture_leaf.rb" . toText))
-            else proxyRequest "GET" [] "" (rubyProxy observed) (rubyArchiveRoute release) >>= rejected expected
+            else proxyRequest "GET" [] "" (observedProxy observed) (rubyArchiveRoute release) >>= rejected expected
         actual <- artifactRequests before registry release
         map (\(host, method, _) -> (host, method)) actual `shouldBe` replicate (if expected == 200 then 2 else 1) ("rubygems-private", "GET")
 
@@ -158,8 +158,8 @@ exactBound :: Bool -> GlobalDataPlane -> IO ()
 exactBound chunked plane = withRelay plane $ \registry release -> do
     let bytes = releaseArchive release
     setReply registry "rubygems-upstream" release (nativeReply 200 chunked bytes)
-    withObservedRubyProxy (bounded (BS.length bytes)) plane $ \observed -> do
-        proxyGet (rubyProxy observed) (rubyArchiveRoute release) `shouldReturn` (200, LBS.fromStrict bytes)
+    withObservedNativeProxy (bounded (BS.length bytes)) plane $ \observed -> do
+        proxyGet (observedProxy observed) (rubyArchiveRoute release) `shouldReturn` (200, LBS.fromStrict bytes)
         seen <- artifactRequests 0 registry release
         seen `shouldSatisfy` (not . null)
         for_ seen $ \(_, method, headers) -> do
@@ -174,18 +174,18 @@ overBound chunked plane = withRelay plane $ \registry release -> do
         advertised = release{releaseChecksum = digest, releaseInfoRow = T.replace (releaseChecksum release) digest (releaseInfoRow release)}
     seedRubyRegistry registry "rubygems-upstream" [advertised]
     setReply registry "rubygems-upstream" release (nativeReply 200 chunked bytes)
-    withObservedRubyProxy (bounded (cap + 1)) plane $ \observed ->
-        proxyGet (rubyProxy observed) (rubyArchiveRoute release) `shouldReturn` (200, LBS.fromStrict bytes)
-    withObservedRubyProxy (bounded cap) plane $ \observed ->
-        proxyGet (rubyProxy observed) (rubyArchiveRoute release) `shouldReturn` (200, LBS.fromStrict bytes)
+    withObservedNativeProxy (bounded (cap + 1)) plane $ \observed ->
+        proxyGet (observedProxy observed) (rubyArchiveRoute release) `shouldReturn` (200, LBS.fromStrict bytes)
+    withObservedNativeProxy (bounded cap) plane $ \observed ->
+        proxyGet (observedProxy observed) (rubyArchiveRoute release) `shouldReturn` (200, LBS.fromStrict bytes)
 
 unexpectedStatus :: Int -> GlobalDataPlane -> IO ()
 unexpectedStatus status plane = withRelay plane $ \registry release -> do
     let bytes = releaseArchive release
         reply = (nativeReply status False (if status == 304 then "" else bytes)){artifactReplyHeaders = [("Content-Range", "bytes 0-" <> show (BS.length bytes - 1) <> "/" <> show (BS.length bytes)) | status == 206]}
     setReply registry "rubygems-upstream" release reply
-    withObservedRubyProxy serveOnly plane $ \observed -> do
-        response <- proxyRequest "GET" [] "" (rubyProxy observed) (rubyArchiveRoute release)
+    withObservedNativeProxy serveOnly plane $ \observed -> do
+        response <- proxyRequest "GET" [] "" (observedProxy observed) (rubyArchiveRoute release)
         responseStatus response `shouldBe` status
         responseBody response `shouldBe` (if status == 304 then "" else LBS.fromStrict bytes)
         actual <- artifactRequests 0 registry release
@@ -199,14 +199,14 @@ conditional :: Bool -> GlobalDataPlane -> IO ()
 conditional tamper plane = withRelay plane $ \registry release -> do
     let reply bytes = (nativeReply 200 False bytes){artifactReplyHeaders = [("ETag", "\"fixture-tag\""), ("Last-Modified", "Wed, 21 Oct 2015 07:28:00 GMT")]}
     setReply registry "rubygems-upstream" release (reply (releaseArchive release))
-    withObservedRubyProxy serveOnly plane $ \observed -> do
-        initial <- proxyRequest "GET" [] "" (rubyProxy observed) (rubyArchiveRoute release)
+    withObservedNativeProxy serveOnly plane $ \observed -> do
+        initial <- proxyRequest "GET" [] "" (observedProxy observed) (rubyArchiveRoute release)
         responseStatus initial `shouldBe` 200
         tag <- maybe (fail "native response omitted its origin validator") pure (lookup "ETag" (responseHeaders initial))
         setReply registry "rubygems-upstream" release $
             if tamper then reply marker else (reply ""){artifactReplyStatus = 304}
         before <- length <$> requests registry
-        response <- proxyRequest "GET" [("If-None-Match", tag), ("If-Modified-Since", "Wed, 21 Oct 2015 07:28:00 GMT")] "" (rubyProxy observed) (rubyArchiveRoute release)
+        response <- proxyRequest "GET" [("If-None-Match", tag), ("If-Modified-Since", "Wed, 21 Oct 2015 07:28:00 GMT")] "" (observedProxy observed) (rubyArchiveRoute release)
         if tamper
             then do
                 responseStatus response `shouldBe` 200
@@ -225,8 +225,8 @@ conditional tamper plane = withRelay plane $ \registry release -> do
 
 rangeRequest :: GlobalDataPlane -> IO ()
 rangeRequest plane = withRelay plane $ \registry release ->
-    withObservedRubyProxy serveOnly plane $ \observed -> do
-        response <- proxyRequest "GET" [("Range", "bytes=0-7"), ("If-Range", "\"fixture-tag\"")] "" (rubyProxy observed) (rubyArchiveRoute release)
+    withObservedNativeProxy serveOnly plane $ \observed -> do
+        response <- proxyRequest "GET" [("Range", "bytes=0-7"), ("If-Range", "\"fixture-tag\"")] "" (observedProxy observed) (rubyArchiveRoute release)
         responseStatus response `shouldBe` 200
         responseBody response `shouldBe` LBS.fromStrict (releaseArchive release)
         actual <- artifactRequests 0 registry release
@@ -237,8 +237,8 @@ rangeRequest plane = withRelay plane $ \registry release ->
 
 headRequest :: GlobalDataPlane -> IO ()
 headRequest plane = withRelay plane $ \registry release ->
-    withObservedRubyProxy serveOnly plane $ \observed -> do
-        response <- proxyHead (rubyProxy observed) (rubyArchiveRoute release)
+    withObservedNativeProxy serveOnly plane $ \observed -> do
+        response <- proxyHead (observedProxy observed) (rubyArchiveRoute release)
         responseStatus response `shouldBe` 200
         responseBody response `shouldBe` ""
         lookup "Content-Length" (responseHeaders response) `shouldBe` Just (show (BS.length (releaseArchive release)))
@@ -248,13 +248,13 @@ headRequest plane = withRelay plane $ \registry release ->
 headConditional :: GlobalDataPlane -> IO ()
 headConditional plane = withRelay plane $ \registry release -> do
     setReply registry "rubygems-upstream" release ((nativeReply 200 False (releaseArchive release)){artifactReplyHeaders = [("ETag", "\"fixture-tag\"")]})
-    withObservedRubyProxy serveOnly plane $ \observed -> do
-        initial <- proxyRequest "GET" [] "" (rubyProxy observed) (rubyArchiveRoute release)
+    withObservedNativeProxy serveOnly plane $ \observed -> do
+        initial <- proxyRequest "GET" [] "" (observedProxy observed) (rubyArchiveRoute release)
         responseStatus initial `shouldBe` 200
         tag <- maybe (fail "GET has no origin validator") pure (lookup "ETag" (responseHeaders initial))
         setReply registry "rubygems-upstream" release ((nativeReply 304 False ""){artifactReplyHeaders = [("ETag", tag)]})
         before <- length <$> requests registry
-        response <- proxyRequest "HEAD" [("If-None-Match", tag)] "" (rubyProxy observed) (rubyArchiveRoute release)
+        response <- proxyRequest "HEAD" [("If-None-Match", tag)] "" (observedProxy observed) (rubyArchiveRoute release)
         responseStatus response `shouldBe` 304
         responseBody response `shouldBe` ""
         lookup "ETag" (responseHeaders response) `shouldBe` Just tag
@@ -267,13 +267,13 @@ headPrivateAuth plane = withRelay plane $ \registry release -> do
     seedRubyRegistry registry "rubygems-private" [release]
     setReply registry "rubygems-private" release ((nativeReply 200 False (releaseArchive release)){artifactReplyHeaders = [("ETag", "\"private-tag\"")]})
     let config = serveOnly{ecExtraEnv = [("ECLUSE_MOUNTS__RUBYGEMS__PRIVATE_UPSTREAM__REGISTRY__URL", stubUrl RubyGemsPrivate)]}
-    withObservedRubyProxy config plane $ \observed -> do
-        initial <- proxyRequest "GET" [] "" (rubyProxy observed) (rubyArchiveRoute release)
+    withObservedNativeProxy config plane $ \observed -> do
+        initial <- proxyRequest "GET" [] "" (observedProxy observed) (rubyArchiveRoute release)
         responseStatus initial `shouldBe` 200
         tag <- maybe (fail "private GET has no origin validator") pure (lookup "ETag" (responseHeaders initial))
         setReply registry "rubygems-private" release (nativeReply 401 False marker)
         before <- length <$> requests registry
-        response <- proxyRequest "HEAD" [("If-None-Match", tag)] "" (rubyProxy observed) (rubyArchiveRoute release)
+        response <- proxyRequest "HEAD" [("If-None-Match", tag)] "" (observedProxy observed) (rubyArchiveRoute release)
         responseStatus response `shouldBe` 401
         responseBody response `shouldBe` ""
         actual <- artifactRequests before registry release
@@ -284,16 +284,16 @@ conditionalRevision :: GlobalDataPlane -> IO ()
 conditionalRevision plane = withRelay plane $ \registry release -> do
     let reply bytes = (nativeReply 200 False bytes){artifactReplyHeaders = [("ETag", "\"unchanged-origin-tag\"")]}
     setReply registry "rubygems-upstream" release (reply (releaseArchive release))
-    oldTag <- withObservedRubyProxy serveOnly plane $ \observed -> do
-        initial <- proxyRequest "GET" [] "" (rubyProxy observed) (rubyArchiveRoute release)
+    oldTag <- withObservedNativeProxy serveOnly plane $ \observed -> do
+        initial <- proxyRequest "GET" [] "" (observedProxy observed) (rubyArchiveRoute release)
         responseStatus initial `shouldBe` 200
         maybe (fail "initial response has no origin validator") pure (lookup "ETag" (responseHeaders initial))
     let changed = releaseArchive release <> "x"
         digest = hexSha256Of changed
     seedRubyRegistry registry "rubygems-upstream" [release{releaseChecksum = digest, releaseInfoRow = T.replace (releaseChecksum release) digest (releaseInfoRow release)}]
     setReply registry "rubygems-upstream" release (reply changed)
-    withObservedRubyProxy serveOnly plane $ \observed -> do
-        response <- proxyRequest "GET" [("If-None-Match", oldTag)] "" (rubyProxy observed) (rubyArchiveRoute release)
+    withObservedNativeProxy serveOnly plane $ \observed -> do
+        response <- proxyRequest "GET" [("If-None-Match", oldTag)] "" (observedProxy observed) (rubyArchiveRoute release)
         responseStatus response `shouldBe` 200
         responseBody response `shouldBe` LBS.fromStrict changed
         lookup "ETag" (responseHeaders response) `shouldBe` Just oldTag
@@ -305,8 +305,8 @@ privateMiss plane = withRelay plane $ \registry release -> do
         config = serveOnly{ecExtraEnv = [("ECLUSE_MOUNTS__RUBYGEMS__PRIVATE_UPSTREAM__REGISTRY__URL", stubUrl RubyGemsPrivate)]}
     seedRubyRegistry registry "rubygems-private" [private]
     setReply registry "rubygems-private" release (nativeReply 404 False "")
-    withObservedRubyProxy config plane $ \observed -> do
-        response <- proxyRequest "GET" [] "" (rubyProxy observed) (rubyArchiveRoute release)
+    withObservedNativeProxy config plane $ \observed -> do
+        response <- proxyRequest "GET" [] "" (observedProxy observed) (rubyArchiveRoute release)
         responseStatus response `shouldBe` 200
         responseBody response `shouldBe` LBS.fromStrict (releaseArchive release)
         actual <- artifactRequests 0 registry release

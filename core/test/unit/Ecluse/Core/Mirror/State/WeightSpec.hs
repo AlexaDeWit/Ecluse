@@ -20,7 +20,7 @@ import Test.Hspec
 import Test.Hspec.Hedgehog (hedgehog)
 
 import Ecluse.Core.Ecosystem (Ecosystem (PyPI))
-import Ecluse.Core.Mirror.State.Codec (chargedDecodeProjectRecord, saturatingStateCharge)
+import Ecluse.Core.Mirror.State.Codec (chargedDecodeProjectRecord)
 import Ecluse.Core.Mirror.State.Internal
 import Ecluse.Core.Mirror.State.Weight
 import Ecluse.Core.Package
@@ -29,6 +29,7 @@ import Ecluse.Core.Registry.MirrorUpload.Internal (restoreMirrorInventory)
 import Ecluse.Core.Registry.RubyGems.Document (GemDocument (gemRows), GemRow (grSource))
 import Ecluse.Core.Security (defaultLimits)
 import Ecluse.Core.Server.Cache.Types (Source (Source), fullKey)
+import Ecluse.Core.Server.MemoryModel (saturatingCharge)
 import Ecluse.Core.Server.MirrorView (mirrorRetentionWeight)
 import Ecluse.Core.Version (mkVersion)
 import Ecluse.Test.Mirror.RubyGems
@@ -95,12 +96,12 @@ spec = describe "durable graph accounting" $ do
                 term = Gen.choice [Gen.integral (Range.linear 0 (4 * intLimit)), Gen.element [0, 1, intLimit - 1, intLimit, intLimit + 1]]
             a <- forAll term
             b <- forAll term
-            (saturatingStateCharge (a + b) >= saturatingStateCharge a) === True
+            (saturatingCharge (a + b) >= saturatingCharge a) === True
 
     it "keeps saturated entries uncacheable" $ do
         let key = fullKey (Source "test") mirrorPackage
             revision = StateRevision target mirrorPackage "etag"
-        saturatingStateCharge (toInteger (maxBound :: Int) * 4 + 32768) `shouldBe` maxBound
+        saturatingCharge (toInteger (maxBound :: Int) * 4 + 32768) `shouldBe` maxBound
         mirrorRetentionWeight key revision maxBound `shouldBe` maxBound
         mirrorRetentionWeight key (StateRevision target mirrorPackage (encodeUtf8 (T.replicate 65536 "x"))) 0
             - mirrorRetentionWeight key revision 0

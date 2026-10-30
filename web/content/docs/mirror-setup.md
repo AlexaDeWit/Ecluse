@@ -83,14 +83,18 @@ Configure the mirror's sparse index root and approved upload API base using the 
 Add `mirrorState.url` and give the proxy state-read and prefix-list permissions.
 Give the worker conditional-write permissions too. Preserve the same state prefix and target identity across restarts.
 
-Cargo state retains the original admitted index row and source identity beside the archive's expected SHA-256.
-Target publication can reset time or yank and omit fields.
-A successful upload or a present archive therefore cannot replace retained source state.
-Do not expire or discard these records.
-Unrecorded, missing, or corrupt state cannot provide an original-source managed copy during an upstream outage.
+Do not expire or discard these state records.
+A successful upload or a present archive cannot replace them, as the [Cargo protocol reference](@/docs/protocol-support.md#cargo) explains.
 
 Separate public mirrors from first-party publication where possible.
 Collapsed storage remains supported subject to existing endpoint checks and role-specific cleanup restrictions.
+
+## For RubyGems, retain platform and source records {#rubygems}
+
+RubyGems mirroring requires `mirrorState.url`, with the same proxy and worker state permissions as Cargo.
+Preserve the same state prefix and target identity across restarts, and do not expire or discard these records.
+The [configuration reference](@/docs/configuration.md#the-configuration-reference) owns the keys.
+The [RubyGems protocol reference](@/docs/protocol-support.md#rubygems) describes what the state proves.
 
 ## Verify a complete copy {#verify}
 

@@ -1,7 +1,6 @@
 -- SPDX-FileCopyrightText: 2026 Alexandra de Wit
 --
 -- SPDX-License-Identifier: MIT
-{-# LANGUAGE ImportQualifiedPost #-}
 
 -- | Native stores, isolated AWS routing and running product roles for PyPI sweep evidence.
 module Ecluse.E2E.Harness.PyPIDredger (
@@ -34,14 +33,16 @@ import System.Directory (renameFile)
 import System.FilePath ((</>))
 import UnliftIO (bracket_)
 
+import Ecluse.Core.Ecosystem (Ecosystem (PyPI))
 import Ecluse.E2E.Fixtures.PyPI (pypiWheelFor)
 import Ecluse.E2E.Fixtures.PyPI.Dredger (buildDredgerDistributions, firstPartyName)
 import Ecluse.E2E.Fixtures.PyPI.Mirror (Distribution (..), builtByCurrentTool)
-import Ecluse.E2E.Harness.Advisories (advisoryBucket, createAdvisoryBucket)
+import Ecluse.E2E.Harness.Advisories (createAdvisoryBucket)
 import Ecluse.E2E.Harness.CodeArtifact
-import Ecluse.E2E.Harness.Docker (ministackAwsEnv, withE2EWith, withStubFault)
+import Ecluse.E2E.Harness.CodeArtifact.Roles (PublicationAuthority (PublicationAuthority), codeArtifactProxyRoleEnv, codeArtifactSweepRoleEnv)
+import Ecluse.E2E.Harness.Docker (withE2EWith, withStubFault)
 import Ecluse.E2E.Harness.PyPIMirror
-import Ecluse.E2E.Harness.Stub (StubFault (PyPICodeArtifactBackend), StubRoute (PyPICodeArtifactData, PyPIPublic), stubUrl)
+import Ecluse.E2E.Harness.Stub (StubFault (PyPICodeArtifactBackend))
 import Ecluse.E2E.Harness.Types
 
 -- | Product restarts retain only the fixture's native repositories and remote S3 state.
@@ -148,13 +149,11 @@ localUrl target = "http://127.0.0.1:" <> show (ntPort target) <> "/"
 
 -- | The endpoint path preserves the CodeArtifact repository identity at boot.
 repositoryUrl :: Text -> Text
-repositoryUrl repository = stubUrl PyPICodeArtifactData <> "pypi/" <> repository <> "/"
+repositoryUrl = codeArtifactRepositoryUrl PyPI
 
 -- | Enumerate each actual repository with the production CodeArtifact adapter.
 storeInventory :: PyPISweepStore -> IO (Map Text [Text])
-storeInventory store = do
-    names <- storeNamesUnder store ""
-    Map.fromList <$> traverse (\name -> (name,) <$> storeVersions store name) names
+storeInventory store = codeArtifactInventory (pspControl (pssPlane store)) (pssRepository store)
 
 -- | Read native versions without consulting managed mirror records.
 storeVersions :: PyPISweepStore -> Text -> IO [Text]
@@ -173,33 +172,11 @@ storeArtifactBytes store name version = do
 
 -- | Dredger uses the two native stores without an inactive writer or state requirement.
 sweepRoleEnv :: [(Text, Text)]
-sweepRoleEnv =
-    [ ("ECLUSE_SERVER__PORT", "4873")
-    , ("ECLUSE_SERVER__PUBLIC_URL", "http://127.0.0.1:4873")
-    , ("ECLUSE_MOUNTS__NPM__ENABLED", "false")
-    , ("ECLUSE_MOUNTS__PYPI__ENABLED", "true")
-    , ("ECLUSE_MOUNTS__PYPI__PUBLIC_UPSTREAM__REGISTRY__URL", stubUrl PyPIPublic)
-    , ("ECLUSE_MOUNTS__PYPI__PRIVATE_UPSTREAM__CODE_ARTIFACT__URL", repositoryUrl "cache")
-    , ("ECLUSE_MOUNTS__PYPI__MIRROR_TARGET__CODE_ARTIFACT__URL", repositoryUrl "mirror")
-    , ("ECLUSE_OBSERVABILITY__LOG_FORMAT", "json")
-    , ("SSL_CERT_FILE", "/certs/bundle.pem")
-    ]
-        <> ministackAwsEnv
+sweepRoleEnv = codeArtifactSweepRoleEnv PyPI
 
 -- | Proxy and worker reads retain remote mirror records across deletion and restart.
 proxyRoleEnv :: [(Text, Text)]
-proxyRoleEnv =
-    filter ((/= "ECLUSE_SERVER__PUBLIC_URL") . fst) sweepRoleEnv
-        <> [ ("ECLUSE_MIRROR_STATE__URL", "s3://" <> advisoryBucket <> "/pypi-dredger")
-           , ("ECLUSE_MOUNTS__PYPI__MIRROR_TARGET__CODE_ARTIFACT__UPLOAD_URL", repositoryUrl "mirror" <> "legacy/")
-           , ("ECLUSE_MOUNTS__PYPI__PUBLICATION_TARGET__CODE_ARTIFACT__URL", repositoryUrl "mirror")
-           , ("ECLUSE_MOUNTS__PYPI__PUBLICATION_TARGET__CODE_ARTIFACT__UPLOAD_URL", repositoryUrl "mirror" <> "legacy/")
-           , ("ECLUSE_MOUNTS__PYPI__PUBLICATION_TARGET__CODE_ARTIFACT__USERNAME", "aws")
-           , ("ECLUSE_MOUNTS__PYPI__PUBLICATION_TARGET__CODE_ARTIFACT__TOKEN", codeArtifactToken)
-           , ("ECLUSE_MOUNTS__PYPI__FIRST_PARTY", firstPartyName)
-           , ("ECLUSE_SERVER__AUTH_TOKEN", codeArtifactToken)
-           , ("ECLUSE_CACHE__TTL", "1")
-           ]
+proxyRoleEnv = codeArtifactProxyRoleEnv PyPI (PublicationAuthority "legacy/" [("USERNAME", "aws"), ("TOKEN", codeArtifactToken)] firstPartyName codeArtifactToken)
 
 -- | Remove only the requested public version's physical files for the action.
 withSourceWithheld :: PyPISweepPlane -> Text -> Text -> IO a -> IO a
@@ -210,12 +187,8 @@ withSourceWithheld plane name version action = foldr hide action paths
 
 -- | The cache reports a native per-version refusal while its files remain readable.
 withDeleteRefusal :: PyPISweepPlane -> IO a -> IO a
-withDeleteRefusal plane = withFixtureValue (cafRefusedDeletes (pspControl plane)) ["cache"]
+withDeleteRefusal plane = withCodeArtifactDeleteRefusal (pspControl plane) "cache"
 
 -- | Removing the mirror's repository marker must stop the product before any deletion.
 withConsentWithheld :: PyPISweepPlane -> IO a -> IO a
-withConsentWithheld plane action = do
-    tags <- readTVarIO variable
-    withFixtureValue variable (Map.adjust (Map.delete "ecluse-dredger-consent") "mirror" tags) action
-  where
-    variable = cafTags (pspControl plane)
+withConsentWithheld plane = withCodeArtifactConsentRemoved (pspControl plane) "mirror"

@@ -24,14 +24,15 @@ import Data.Aeson.KeyMap qualified as KeyMap
 import Ecluse.Core.Ecosystem (Ecosystem (Cargo))
 import Ecluse.Core.Package (PackageInfo, PackageName, mkPackageName, renderPackageName)
 import Ecluse.Core.Registry.CachedDocument (CachedDoc)
-import Ecluse.Core.Registry.Cargo.Discovery (CargoDiscovery, discoveryIndex, parseDiscoveryWithDepth)
+import Ecluse.Core.Registry.Cargo.Discovery (CargoDiscovery, parseDiscoveryWithDepth)
 import Ecluse.Core.Registry.Cargo.Metadata (cargoReadWith, finishCargoFull)
-import Ecluse.Core.Registry.Cargo.Reader (CargoIndexResult, CargoRead (FullRead), cargoIndexSteps, finishCargoSteps, readCargoIndexCharged)
+import Ecluse.Core.Registry.Cargo.Reader (CargoIndexResult, CargoRead (FullRead), cargoIndexSteps, readCargoIndexCharged)
 import Ecluse.Core.Registry.Cargo.Request (cargoArtifactHosts)
 import Ecluse.Core.Registry.Cargo.Route.Internal (artifactCoordinate)
 import Ecluse.Core.Registry.JsonStream (StreamResult)
 import Ecluse.Core.Registry.Metadata (MetadataError (MetadataBoundExceeded))
 import Ecluse.Core.Registry.Metadata.Fetch.Types (DocumentWalk, EcosystemRead)
+import Ecluse.Core.Registry.Metadata.RecordStream (finishRecordSteps)
 import Ecluse.Core.Security (AllowedHostPorts, BodyLimit (MetadataBodyLimit), LimitError, Limits (maxMetadataBytes), ecosystemArtifactAuthorities)
 import Ecluse.Core.Version (Version, mkVersion, renderVersion)
 import Ecluse.Test.Registry.Cargo.Fixtures qualified as Fixtures
@@ -57,7 +58,7 @@ cargoRead = cargoReadWith (const pass) (const pass)
 projectCargoIndex :: CargoDiscovery -> Limits -> PackageName -> ByteString -> Either MetadataError (PackageInfo, CachedDoc)
 projectCargoIndex discovery limits name bytes = do
     streamed <- first MetadataBoundExceeded (readCargoIndexChunks discovery limits name FullRead (MetadataBodyLimit (maxMetadataBytes limits)) [bytes])
-    finishCargoFull discovery limits (discoveryIndex discovery) streamed
+    finishCargoFull limits streamed
 
 -- | Read held chunks without an admission ticket through the production charged reader.
 readCargoIndex :: CargoDiscovery -> Limits -> PackageName -> CargoRead -> DocumentWalk CargoIndexResult
@@ -66,7 +67,7 @@ readCargoIndex = readCargoIndexCharged (const pass)
 -- | Run captured chunks through production framing without another native parser.
 readCargoIndexChunks :: CargoDiscovery -> Limits -> PackageName -> CargoRead -> BodyLimit -> [ByteString] -> Either LimitError (StreamResult CargoIndexResult)
 readCargoIndexChunks discovery limits name mode bound =
-    readStepsChunks finishCargoSteps bound (cargoIndexSteps (const (pure ())) discovery limits name mode)
+    readStepsChunks finishRecordSteps bound (cargoIndexSteps (const (pure ())) discovery limits name mode)
 
 -- | A native identity with no filesystem or network fixture dependency.
 cargoTestName :: PackageName

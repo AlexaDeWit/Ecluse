@@ -68,6 +68,7 @@ npmAdapter =
         , adapterProjectName = rightToMaybe . projectName
         , adapterPublish = Just npmPublish
         , adapterMaintenance = npmMaintenance
+        , adapterInstallEvidence = Nothing
         }
 
 -- | npm's publish capability, named so a consumer of it alone need not unwrap the optional field.

@@ -9,10 +9,10 @@ import Data.Text qualified as T
 import System.Exit (ExitCode (ExitFailure, ExitSuccess))
 
 import Ecluse.Core.Server.Path (encodeComponent)
+import Ecluse.E2E.Harness.NativeEdge (observedProxy)
 import Ecluse.E2E.Harness.Proxy (proxyContainerLogs)
 import Ecluse.E2E.Harness.RubyGems
 import Ecluse.E2E.Harness.RubyGemsCodeArtifact
-import Ecluse.E2E.Harness.RubyGemsGateway (rubyProxy)
 import Ecluse.E2E.Harness.RubyGemsRegistry (rubyRegistryToken)
 import Ecluse.E2E.Harness.Types (ClientResult (..))
 import Ecluse.Test.Contract.Sweep.Types (ClientOps (..))
@@ -32,14 +32,14 @@ rubySweepClientOps =
             release <- rubyRelease (rspReleases (rssPlane store)) name version "ruby"
             response@(status, body) <- storeRequest store ("gems/" <> encodeComponent (releaseFilename release)) "GET" Nothing
             when (status == 503) $ do
-                logs <- proxyContainerLogs (rubyProxy (rssObserved store))
+                logs <- proxyContainerLogs (observedProxy (rssObserved store))
                 putTextLn ("unexpected RubyGems maintenance artifact response for " <> name <> "@" <> version <> ": " <> show status <> "\nBody:\n" <> decodeUtf8 body <> "\nProxy logs:\n" <> logs)
             pure response
         , clientMetadataStatus = \store name -> fst <$> storeRequest store ("info/" <> encodeComponent name) "GET" Nothing
         }
 
 withProject :: RubySweepStore -> (RubyProject -> IO a) -> IO a
-withProject store = withRubyProject currentBundler (rubyProxy (rssObserved store)) (rssReadUrl store) (Just ("aws:" <> rubyRegistryToken))
+withProject store = withRubyProject currentBundler (observedProxy (rssObserved store)) (rssReadUrl store) (Just ("aws:" <> rubyRegistryToken))
 
 installIn :: RubyProject -> Text -> Maybe Text -> IO ClientResult
 installIn project name version = do

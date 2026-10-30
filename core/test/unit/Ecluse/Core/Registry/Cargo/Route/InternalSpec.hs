@@ -10,7 +10,7 @@ import Data.Aeson (Value, eitherDecode, object, (.=))
 import Data.Aeson qualified as Aeson
 import Data.List (lookup)
 import Data.Text qualified as T
-import Network.HTTP.Types (Method, ResponseHeaders, Status, methodGet, methodHead, methodPut, status200, status400, status401, status403, status404, status405, status500, status503)
+import Network.HTTP.Types (Method, ResponseHeaders, Status, methodDelete, methodGet, methodHead, methodPut, status200, status400, status401, status403, status404, status405, status500, status503)
 import Network.Wai (Request (pathInfo, requestHeaders, requestMethod), responseHeaders, responseStatus)
 import Network.Wai.Test (SRequest (SRequest), SResponse (..), defaultRequest, runSession, setPath, srequest)
 import Test.Hspec
@@ -164,6 +164,17 @@ spec = do
                 for_ [["crates"], ["crates", "fixture"], ["crates", "fixture", "1.0.0"], ["crates", "fixture", "invalid", "fixture-invalid.crate"]] $ \path -> do
                     response <- captureCargo runtime (routeBinding deps (Just deps) Nothing) methodGet path ""
                     simpleStatus response `shouldBe` status404
+                allCaptured stub `shouldReturn` []
+        it "answers native yank and unyank writes locally without reaching the registry" $
+            withSweeper $ \deadlines -> withStub status200 "never read" $ \stub -> do
+                runtime <- testServeRuntime deadlines noopMetricsPort
+                budget <- newByteAdmission deadlines (128 * 1024 * 1024)
+                let deps = routeDeps stub
+                    enabled = routeBinding deps (Just deps) (Just (routePublication stub budget))
+                for_ [(methodDelete, "yank"), (methodPut, "unyank")] $ \(method, operation) -> do
+                    response <- captureCargo runtime enabled method ["private", "api", "v1", "crates", "fixture", "1.0.0", operation] ""
+                    simpleStatus response `shouldBe` status404
+                    simpleBody response `shouldBe` ""
                 allCaptured stub `shouldReturn` []
 
     describe "native private refusals" $

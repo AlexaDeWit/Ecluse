@@ -10,7 +10,7 @@ import Test.Hspec
 
 import Ecluse.Core.Ecosystem (Ecosystem (Cargo, Npm, PyPI, RubyGems))
 import Ecluse.Test.Corpus.RubyGems (benchGem, syntheticInfoBytes)
-import Ecluse.Test.EcosystemBench (EcosystemBench (ebCheckServed), benchmarkEcosystems, checkBenchmarkCoverage, ecosystemBenchFor)
+import Ecluse.Test.EcosystemBench (EcosystemBench (ebCheckServed), benchmarkEcosystems, checkBenchmarkCoverage, checkCoverageAgainst, ecosystemBenchFor)
 
 -- | Missing, duplicate and unshipped providers cannot erase or satisfy an obligation.
 spec :: Spec
@@ -24,8 +24,9 @@ spec = describe "measurement provider coverage" $ do
             checkBenchmarkCoverage providers `shouldSatisfy` isLeft
     it "rejects a duplicate provider" $
         checkBenchmarkCoverage [Cargo, Npm, PyPI, RubyGems, Npm] `shouldSatisfy` isLeft
-    it "rejects a missing native provider" $
-        checkBenchmarkCoverage [Cargo, Npm, PyPI] `shouldSatisfy` isLeft
+    it "rejects providers that differ from the production adapters" $ do
+        checkCoverageAgainst [Cargo, Npm, PyPI, RubyGems] [Cargo, Npm, PyPI, RubyGems] `shouldBe` Right ()
+        checkCoverageAgainst [Cargo, Npm, PyPI] [Cargo, Npm, PyPI, RubyGems] `shouldSatisfy` isLeft
 
     it "checks native served fields independently instead of inventing policy facts" $ do
         provider <- maybe (fail "missing RubyGems benchmark provider") pure (ecosystemBenchFor RubyGems)

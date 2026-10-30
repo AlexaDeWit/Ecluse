@@ -1,7 +1,6 @@
 -- SPDX-FileCopyrightText: 2026 Alexandra de Wit
 --
 -- SPDX-License-Identifier: MIT
-{-# LANGUAGE ImportQualifiedPost #-}
 
 -- | Scoped XZ and legacy LZMA decoding under the same native dictionary limit.
 module Ecluse.Core.Registry.PyPI.Archive.Lzma (LzmaFormat (..), withLzmaChunks) where
@@ -13,7 +12,7 @@ import Data.ByteString qualified as BS
 import UnliftIO.Exception (throwIO)
 
 import Ecluse.Core.Registry (ParseError (..))
-import Ecluse.Core.Registry.PyPI.Archive.Tar (TarDecode)
+import Ecluse.Core.Registry.Archive.Tar (TarDecode)
 
 -- | ZIP's LZMA properties are converted to an alone-format header before decoding.
 data LzmaFormat = XzArchive | ZipLzmaMember

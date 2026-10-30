@@ -68,6 +68,7 @@ measurementCatalogue registrations =
                 ["live/npm/react", "live/npm/types-node", "live/npm/lodash", "live/npm/typescript"]
             , required "live/pypi" "measurement/pypi" "live-metadata" ["live/pypi/sampleproject"]
             , required "live/rubygems" "measurement/rubygems" "live-metadata" ["live/rubygems/rake"]
+            , required "live/cargo" "measurement/cargo" "live-metadata" ["live/cargo/serde"]
             ]
         , catalogueGroups = registrations
         }

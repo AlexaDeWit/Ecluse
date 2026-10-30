@@ -13,10 +13,12 @@ import Ecluse.BenchLoad.Fixture (benchNow)
 import Ecluse.BenchLoad.Harness (LoadKnobs (..), Scenario (..), Target, scenario)
 import Ecluse.BenchLoad.PyPI.WorkerFixture
 import Ecluse.BenchLoad.Worker (NativeWorker (..), WorkerEnvironment (..), bootNativeWorker)
+import Ecluse.BenchLoad.WorkerState (WorkerTarget (..))
 import Ecluse.Core.Queue (MirrorJob (..))
 import Ecluse.Core.Registry.Adapter.Types (RegistryAdapter (adapterArtifact))
 import Ecluse.Core.Registry.Metadata (versionEvaluation)
 import Ecluse.Core.Registry.Metadata.Fetch (chargingSelectedReads, fetchVersion)
+import Ecluse.Core.Registry.Origin (originClientOf)
 import Ecluse.Core.Registry.Publish (MirrorTransport (..), newMirrorPublish)
 import Ecluse.Core.Registry.PyPI.Adapter (pypiAdapter)
 import Ecluse.Core.Registry.PyPI.Metadata (pypiMirrorRead)
@@ -40,6 +42,7 @@ boot :: LoadKnobs -> (Target -> IO a) -> IO a
 boot knobs use = do
     fixture <- newWorkerFixture (lkPayloadBytes knobs)
     let latency = lkUpstreamLatencyMicros knobs
+        workerTarget = wfState fixture
         native =
             NativeWorker
                 { nwSourceApp = sourceApp latency fixture
@@ -49,9 +52,9 @@ boot knobs use = do
                 , nwJob = MirrorJob fixturePackage fixtureVersion (Just (unsafeFilename fixtureTrigger)) Nothing
                 , nwExpectedFiles = 4
                 , nwReset = resetWorkerFixture fixture
-                , nwRejectUpload = writeIORef (wfReject fixture)
-                , nwUploadAttempts = Map.findWithDefault 0 "upload-attempt" <$> readIORef (wfCounts fixture)
-                , nwRemoveTrigger = modifyIORef' (wfTarget fixture) (Map.delete fixtureTrigger)
+                , nwRejectUpload = writeIORef (wtReject workerTarget)
+                , nwUploadAttempts = Map.findWithDefault 0 "upload-attempt" <$> readIORef (wtCounts workerTarget)
+                , nwRemoveTrigger = modifyIORef' (wtFiles workerTarget) (Map.delete fixtureTrigger)
                 , nwMissingArtifact = "wheel"
                 , nwVerifyCopy = verifyCopy fixture
                 }
@@ -78,12 +81,12 @@ pypiPolicy environment =
     targetReadRoot = weTargetReadRoot environment
     uploadRoot = loopbackRegistryUrl (registryUrlText targetReadRoot <> "/upload")
     publish = newMirrorPublish (MirrorTransport (weClient environment) (pure Nothing) defaultLimits passthroughTracingPort) targetReadRoot uploadRoot pypiPublishCodec
-    sourceOrigin = weSourceOrigin environment
+    sourceOrigin = originClientOf (weSourceOrigin environment)
 
 verifyCopy :: WorkerFixture -> Int -> Int -> IO ()
 verifyCopy fixture published acked = do
-    target <- readIORef (wfTarget fixture)
-    counts <- readIORef (wfCounts fixture)
+    target <- readIORef (wtFiles (wfState fixture))
+    counts <- readIORef (wtCounts (wfState fixture))
     let count name = Map.findWithDefault 0 name counts
         files = Map.size (wfFiles fixture)
     unless (published == 1 && acked == 1 && target == wfFiles fixture && count "source-index" == 1 && count "source-file" == files && count "upload" == files && count "target-index" == 2 && count "state-write" > 0) $

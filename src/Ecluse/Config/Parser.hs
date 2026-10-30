@@ -27,6 +27,7 @@ module Ecluse.Config.Parser (
     expectString,
     commaSeparated,
     nonEmptyCommaSeparated,
+    projectedEntry,
     valueKind,
     rejectSecretKeys,
 
@@ -220,6 +221,10 @@ nonEmptyCommaSeparated :: String -> (Text -> Parser a) -> String -> Value -> Par
 nonEmptyCommaSeparated field parseEntry emptyRefusal value = do
     entries <- commaSeparated field parseEntry value
     maybe (fail emptyRefusal) pure (nonEmpty entries)
+
+-- | Read one list entry through a projection, refusing with the label and the quoted entry.
+projectedEntry :: String -> (Text -> Either e a) -> Text -> Parser a
+projectedEntry refusal project entry = either (const (fail (refusal <> ": " <> show entry))) pure (project entry)
 
 -- | Refuse credentials before any URL refusal can quote the input.
 parseRegistryUrl :: String -> Value -> Parser RegistryUrl

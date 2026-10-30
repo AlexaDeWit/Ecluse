@@ -25,6 +25,8 @@ spec = do
         for_ ["", "../rack", "a/b", "a%2fb", "a b", "café"] $ \raw ->
             it ("refuses " <> show raw) $
                 projectName raw `shouldSatisfy` isLeft
+        it "lists exactly the ASCII characters a native name may use, for maintenance buckets" $
+            sort rubyGemsNameChars `shouldBe` filter rubyGemsNameChar ['\0' .. '\127']
     describe "mkGemPlatform" $ do
         for_ ["ruby", "java", "arm64-darwin", "x86_64-linux-musl", "x64-mingw-ucrt", "x86-mswin32-60"] $ \platform ->
             it ("accepts native platform " <> toString platform) $ mkGemPlatform platform `shouldSatisfy` isRight

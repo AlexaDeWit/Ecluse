@@ -70,7 +70,7 @@ import Ecluse.Core.Server.Pipeline.Publish (PublishReplies (..), servePublish)
 import Ecluse.Core.Server.Pipeline.Sidecar (sidecarAction)
 import Ecluse.Core.Server.Pipeline.Tarball (tarballAction)
 import Ecluse.Core.Server.Pipeline.Tarball.Types (TarballReplies (..))
-import Ecluse.Core.Server.Response (HelpMessage, Refusal, mkRefusal, refusalHelp)
+import Ecluse.Core.Server.Response (HelpMessage, Refusal, mkRefusal, refusalHelpBytes)
 import Ecluse.Core.Server.Response.Summary (detailedRejections)
 import Ecluse.Core.Server.Route (
     Capture (Capture),
@@ -209,7 +209,7 @@ refusalContract status description =
     optionalBodyContract status (description <> " The body is empty unless `server.helpMessage` is configured.") (SchemaText "text/plain")
 
 pypiIndexReplies :: PackumentReplies PyPIIndexResponse
-pypiIndexReplies = metadataReplies detailedRejections helpBytes
+pypiIndexReplies = metadataReplies detailedRejections refusalHelpBytes
 
 -- The router's @406@, for an @Accept@ that admits no JSON form, before any handler runs.
 notAcceptable :: ResponseHeaders -> Maybe HelpMessage -> PyPIIndexResponse
@@ -254,18 +254,14 @@ unsupportedContract = refusalContract status404 "Unrecognised path; deny by defa
 -- Écluse's own wording stays off the wire: PyPI's refusal is a bare status, so the body is the
 -- operator help message alone and nothing at all when none is configured.
 helpBody :: ResponseHeaders -> Refusal -> ResponseValue (Maybe LByteString)
-helpBody headers refusal = responseValue headers (helpBytes refusal)
+helpBody headers refusal = responseValue headers (refusalHelpBytes refusal)
 
 declaredRefusal :: Text -> ResponseHeaders -> Maybe HelpMessage -> ResponseValue (Maybe LByteString)
 declaredRefusal reason headers help = helpBody headers (mkRefusal help reason)
 
 -- The artifact relay's refusal, which is the same body under the transparent-relay contract.
 artifactRefusalBody :: Refusal -> PassthroughBody
-artifactRefusalBody refusal = maybe PassthroughEmpty PassthroughBytes (helpBytes refusal)
-
--- The operator help message as body bytes, absent when none is configured.
-helpBytes :: Refusal -> Maybe LByteString
-helpBytes = fmap (fromStrict . encodeUtf8) . refusalHelp
+artifactRefusalBody refusal = maybe PassthroughEmpty PassthroughBytes (refusalHelpBytes refusal)
 
 -- @GET \/simple\/{project}@: a project unit is an index read.
 buildIndex :: Method -> [PyPICap] -> Maybe (ResponseAction PyPIIndexResponse)

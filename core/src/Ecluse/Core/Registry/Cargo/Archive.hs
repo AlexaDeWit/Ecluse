@@ -1,7 +1,6 @@
 -- SPDX-FileCopyrightText: 2026 Alexandra de Wit
 --
 -- SPDX-License-Identifier: MIT
-{-# LANGUAGE ImportQualifiedPost #-}
 
 -- | Inspect verified Cargo archives without extraction or execution. Publication text uses one further local pass.
 module Ecluse.Core.Registry.Cargo.Archive (
@@ -23,18 +22,20 @@ import Data.Text qualified as T
 import Data.Text.Encoding qualified as TE
 import Text.Show (showString, shows, showsPrec)
 import UnliftIO.Exception (evaluate)
-import UnliftIO.Timeout (timeout)
 
 import Ecluse.Core.Package.Hash (sha256Hex)
-import Ecluse.Core.Registry (ParseError (..))
-import Ecluse.Core.Registry.Archive.Inflate (InflateFormat (GzipMembers), splitArchiveCharge, withInflatedChunks)
+import Ecluse.Core.Registry (ParseError (..), parseRefusal)
+import Ecluse.Core.Registry.Archive.Inflate (InflateFormat (GzipMembers), withInflatedChunks)
 import Ecluse.Core.Registry.Archive.Tar (TarMember (..), TarScan, scanTar, sourceReader, tarContents, tarMembers)
 import Ecluse.Core.Registry.CachedDocument (estimateValueBytes)
 import Ecluse.Core.Registry.Cargo.Manifest (CargoManifest, CargoPublishMetadata, checkPublicationIndex, checkUploadAgreement, decodeManifest, manifestExecution, manifestTextPaths, publicationMetadata, publishMetadataValue)
+import Ecluse.Core.Registry.Cargo.Project (cargoArchiveStem)
 import Ecluse.Core.Registry.Cargo.Wire (cargoTreeCharge)
-import Ecluse.Core.Security.Limits (Limits (..), requestTimeoutSeconds)
+import Ecluse.Core.Security.Limits (Limits (..))
+import Ecluse.Core.Server.Admission.Meter (newChargePair)
+import Ecluse.Core.Server.MemoryModel (saturatingCharge)
 
--- | The private source bytes are the same bytes checked against the admitted SHA-256.
+-- | The inspected source bytes, checked against the admitted SHA-256 when one exists.
 data CargoArchiveMetadata = CargoArchiveMetadata
     { caManifest :: CargoManifest
     , caInventory :: Set Text
@@ -48,16 +49,18 @@ data CargoArchiveMetadata = CargoArchiveMetadata
 instance Show CargoArchiveMetadata where
     showsPrec _ metadata = showString "CargoArchiveMetadata " . shows (caRoot metadata)
 
--- | Charge extra workspace as an absolute total. The caller separately owns the compressed-byte charge.
-inspectCargoArchive :: Limits -> (Int -> IO ()) -> Text -> Text -> Text -> ByteString -> IO (Either ParseError CargoArchiveMetadata)
-inspectCargoArchive limits charge name version checksum bytes = deadline $ do
+{- | Charge extra workspace as an absolute total. The caller owns the compressed-byte charge.
+A first-party upload carries no checksum, so only an admitted SHA-256 is compared.
+-}
+inspectCargoArchive :: Limits -> (Int -> IO ()) -> Text -> Text -> Maybe Text -> ByteString -> IO (Either ParseError CargoArchiveMetadata)
+inspectCargoArchive limits charge name version checksum bytes = do
     if maxMirrorArtifactBytes limits <= 0 || BS.length bytes > maxMirrorArtifactBytes limits
-        then pure (bad "Cargo compressed archive exceeds its byte bound")
+        then pure (parseRefusal "Cargo compressed archive exceeds its byte bound")
         else
-            if T.toLower checksum /= sha256Hex bytes
-                then pure (bad "Cargo compressed archive disagrees with its admitted SHA-256")
+            if any (\expected -> T.toLower expected /= sha256Hex bytes) checksum
+                then pure (parseRefusal "Cargo compressed archive disagrees with its admitted SHA-256")
                 else do
-                    let root = name <> "-" <> version
+                    let root = cargoArchiveStem name version
                     result <- archivePass limits charge root (Set.singleton "Cargo.toml") bytes
                     case result >>= \(scan, inflated) -> (,inflated) <$> archiveFacts root scan of
                         Left fault -> pure (Left fault)
@@ -80,7 +83,7 @@ cargoArchiveExecution metadata = manifestExecution (caManifest metadata) (cargoA
 
 -- | Capture only the selected README and licence after the manifest pass, using the same verified compressed bytes.
 cargoPublicationMetadata :: Limits -> (Int -> IO ()) -> CargoArchiveMetadata -> IO (Either ParseError CargoPublishMetadata)
-cargoPublicationMetadata limits charge metadata = deadline $
+cargoPublicationMetadata limits charge metadata =
     case manifestTextPaths (caManifest metadata) (caInventory metadata) of
         Left fault -> pure (Left fault)
         Right [] -> finish Map.empty
@@ -96,19 +99,19 @@ cargoPublicationMetadata limits charge metadata = deadline $
         charge (retained + 65536 + 8 * textBytes + 512 * Map.size content)
         evaluate (publicationMetadata (caManifest metadata) content)
 
--- | Compare mirror source claims under the archive deadline after reserving both resolver inputs.
+-- | Compare mirror source claims after reserving both resolver inputs.
 cargoPublicationAgreement :: Limits -> (Int -> IO ()) -> CargoArchiveMetadata -> Value -> CargoPublishMetadata -> IO (Either ParseError CargoPublishMetadata)
-cargoPublicationAgreement limits charge archive source metadata = deadline $ do
+cargoPublicationAgreement limits charge archive source metadata = do
     let inputs = [source, publishMetadataValue metadata]
         workspace = sum (map (toInteger . cargoTreeCharge . toInteger . estimateValueBytes) inputs)
         retained = toInteger (caRetainedBytes archive) + toInteger (caManifestWorkspace archive)
-    charge (fromInteger (min (toInteger (maxBound :: Int)) (retained + workspace)))
+    charge (saturatingCharge (retained + workspace))
     evaluate (checkPublicationIndex limits metadata source)
 
 -- | Reuse the retained effective manifest without a text extraction or another archive pass.
 cargoUploadAgreement :: Limits -> (Int -> IO ()) -> Int -> Text -> Value -> CargoArchiveMetadata -> IO (Either ParseError ())
 cargoUploadAgreement limits charge uploadWorkspace registry upload metadata = do
-    charge (fromInteger (min (toInteger (maxBound :: Int)) (sum (map toInteger [caRetainedBytes metadata, caManifestWorkspace metadata, uploadWorkspace]))))
+    charge (saturatingCharge (sum (map toInteger [caRetainedBytes metadata, caManifestWorkspace metadata, uploadWorkspace])))
     evaluate (checkUploadAgreement limits registry (caManifest metadata) upload)
 
 archiveFacts :: Text -> TarScan -> Either ParseError (ByteString, Set Text, Int)
@@ -116,17 +119,17 @@ archiveFacts root scan = do
     case Map.lookup root (tarMembers scan) of
         Nothing -> Right ()
         Just Directory -> Right ()
-        _ -> bad "Cargo archive root is not a directory"
+        _ -> parseRefusal "Cargo archive root is not a directory"
     for_ (Map.elems (tarMembers scan)) $ \case
-        Link _ -> bad "Cargo packaged archive contains an unflattened link"
+        Link _ -> parseRefusal "Cargo packaged archive contains an unflattened link"
         _ -> Right ()
     let prefix = root <> "/"
         files = Set.fromList [dropArchiveRoot path | (path, Regular) <- Map.toList (tarMembers scan)]
         retained = 65536 + sum [256 + 4 * BS.length (TE.encodeUtf8 path) | path <- Set.toList files]
     for_ (Set.toList files) $ \path -> do
         let prefixes = drop 1 (scanl (\held part -> if T.null held then part else held <> "/" <> part) "" (T.splitOn "/" path))
-        when (any (`Set.member` files) (take (length prefixes - 1) prefixes)) (bad "Cargo archive file traverses another regular file")
-    manifest <- maybe (bad "Cargo archive lacks its effective Cargo.toml") Right (Map.lookup (prefix <> "Cargo.toml") (tarContents scan))
+        when (any (`Set.member` files) (take (length prefixes - 1) prefixes)) (parseRefusal "Cargo archive file traverses another regular file")
+    manifest <- maybe (parseRefusal "Cargo archive lacks its effective Cargo.toml") Right (Map.lookup (prefix <> "Cargo.toml") (tarContents scan))
     pure (manifest, files, retained)
 
 dropArchiveRoot :: Text -> Text
@@ -134,7 +137,7 @@ dropArchiveRoot = T.drop 1 . snd . T.breakOn "/"
 
 archivePass :: Limits -> (Int -> IO ()) -> Text -> Set Text -> ByteString -> IO (Either ParseError (TarScan, Int))
 archivePass limits charge root selected bytes = do
-    (decoderCharge, retainedCharge) <- splitArchiveCharge charge
+    (decoderCharge, retainedCharge) <- newChargePair charge
     inflated <- newIORef (0 :: Integer)
     result <- scanTar limits retainedCharge select $ \consume ->
         withInflatedChunks (GzipMembers (maxArtifactCount limits)) decoderCharge bytes $ \pull ->
@@ -147,13 +150,7 @@ archivePass limits charge root selected bytes = do
   where
     select parts = case parts of
         actualRoot : relative | actualRoot == root -> Right (Set.member (T.intercalate "/" relative) selected)
-        _ -> bad "Cargo archive member disagrees with its admitted package root"
+        _ -> parseRefusal "Cargo archive member disagrees with its admitted package root"
 
 manifestMemory :: ByteString -> Int
 manifestMemory = cargoTreeCharge . toInteger . BS.length
-
-deadline :: IO (Either ParseError a) -> IO (Either ParseError a)
-deadline action = fromMaybe (bad "Cargo archive inspection exceeded its deadline") <$> timeout (requestTimeoutSeconds * 1000000) action
-
-bad :: Text -> Either ParseError a
-bad = Left . ParseError

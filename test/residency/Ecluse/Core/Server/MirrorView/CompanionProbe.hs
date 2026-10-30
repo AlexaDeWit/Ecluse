@@ -16,6 +16,7 @@ import System.IO (withBinaryFile)
 import UnliftIO.Async (cancel, waitCatch, waitEither, withAsync)
 import UnliftIO.Exception (bracket, evaluate)
 
+import Ecluse.Core.Deadline (Deadlines)
 import Ecluse.Core.Ecosystem (Ecosystem (RubyGems))
 import Ecluse.Core.Mirror.State
 import Ecluse.Core.Package (artFilename)
@@ -32,6 +33,7 @@ import Ecluse.Core.Server.Cache.Types (StoreBudget (StoreBudget))
 import Ecluse.Core.Server.MemoryModel.HeapSample qualified as Heap
 import Ecluse.Core.Server.MirrorView
 import Ecluse.Core.Version (Version, mkVersion)
+import Ecluse.Test.Deadline (withSweeper)
 import Ecluse.Test.Mirror.RubyGems.Residency
 import Ecluse.Test.Port (noopMetricsPort)
 import Ecluse.Test.Support (expectRight, testMemoryMeter)
@@ -76,13 +78,14 @@ data Context = Context
     , ctxBaseline :: IORef Word64
     , ctxReached :: MVar.MVar ()
     , ctxBlocked :: MVar.MVar ()
+    , ctxDeadlines :: Deadlines
     }
 
 -- | Every child reopens native state, then allocates object bytes only inside their reservation.
 probeMain :: String -> FilePath -> IO ()
-probeMain mode directory = do
+probeMain mode directory = withSweeper $ \deadlines -> do
     unless (mode `elem` ["RubyCompanionRead", "RubyCompanionValidate", "RubyCompanionCorrupt", "RubyCompanionCancel", "RubyCompanionCancelValidation"]) (fail "unknown native companion probe mode")
-    context <- newContext directory
+    context <- newContext deadlines directory
     void (performRead (if mode `elem` ["RubyCompanionValidate", "RubyCompanionCancelValidation"] then "RubyCompanionValidate" else "RubyCompanionRead") context)
     void (takeLargestCharge (ctxMeter context))
     writeIORef (ctxReadBytes context) 0
@@ -118,8 +121,8 @@ probeMain mode directory = do
             after
             result
 
-newContext :: FilePath -> IO Context
-newContext directory = do
+newContext :: Deadlines -> FilePath -> IO Context
+newContext deadlines directory = do
     record <- readRubyStateRecord directory
     (target, _) <- readRubyStateIdentity directory
     (rawVersion, version) <- maybe (fail "native state has no retained version") pure (Map.lookupMin (recordVersions record))
@@ -151,7 +154,7 @@ newContext directory = do
                 observe cost = modifyIORef' requested (max cost) >> pay cost >> sample
             first StateBound . fmap snd <$> boundedChargedRead observe (MetadataBodyLimit (companionSize ref)) next
         store = MirrorState (\_ _ _ -> pure (Left StateMissingCompanion)) (\_ _ _ _ -> pure (Left StateRetryExhausted)) (\_ _ -> pure (Left StateMissingCompanion)) load
-    pure (Context (newMirrorView defaultLimits target store retention) record (mkVersion RubyGems rawVersion) filename reference inventory file meter mode consumed chunks requested peak baseline reached blocked)
+    pure (Context (newMirrorView defaultLimits target store retention) record (mkVersion RubyGems rawVersion) filename reference inventory file meter mode consumed chunks requested peak baseline reached blocked deadlines)
 
 corrupt :: ByteString -> ByteString
 corrupt bytes = case BS.uncons bytes of
@@ -187,7 +190,7 @@ readAndHold mode context ticket = do
                     region cost
                     samplePeak (ctxBaseline context) (ctxPeak context)
                     when (mode == "RubyCompanionCancelValidation") (MVar.putMVar (ctxReached context) () >> MVar.takeMVar (ctxBlocked context))
-            fmap (first show) (mcValidate rubyMirrorCompanion defaultLimits pay (ctxInventory context) (ctxFile context) bytes)
+            fmap (first show) (mcValidate rubyMirrorCompanion (ctxDeadlines context) defaultLimits pay (ctxInventory context) (ctxFile context) bytes)
         Right bytes -> pure (Right bytes)
     case checked of
         Left fault -> do

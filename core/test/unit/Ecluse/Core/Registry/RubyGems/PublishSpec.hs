@@ -5,7 +5,6 @@
 -- | Genuine publication preserves native bytes and keeps caller credentials out of read roles.
 module Ecluse.Core.Registry.RubyGems.PublishSpec (spec) where
 
-import Data.ByteString.Char8 qualified as BS8
 import Data.ByteString.Lazy qualified as LBS
 import Data.List (lookup)
 import Data.Map.Strict qualified as Map
@@ -15,25 +14,25 @@ import Test.Hspec
 
 import Ecluse.Core.Credential (ClientCredential (ClientCredential), bareCredential, mkSecret)
 import Ecluse.Core.Package (PackageDetails (..), PackageInfo (..))
-import Ecluse.Core.Package.Entry (EntryKey (RecordEntry))
 import Ecluse.Core.Registry.Adapter.Capability
 import Ecluse.Core.Registry.CachedDocument (rubyGemsCached)
 import Ecluse.Core.Registry.Metadata (VersionDoc (..))
 import Ecluse.Core.Registry.MirrorUpload
-import Ecluse.Core.Registry.Origin (originClient)
+import Ecluse.Core.Registry.Origin (OriginClient (ocChargeFullReadWorkspace), originClient)
 import Ecluse.Core.Registry.Publish (MirrorPublish (mpProbeInventory), MirrorTransport (..), PublishCodec (..), PublishPlan (PublishPlan), newMirrorPublish)
-import Ecluse.Core.Registry.RubyGems.Credential (rubyCodeArtifactPublishCredential, rubyCodeArtifactReadCredential)
+import Ecluse.Core.Registry.RubyGems.Credential (rubyCodeArtifactPublishCredential)
 import Ecluse.Core.Registry.RubyGems.Document
 import Ecluse.Core.Registry.RubyGems.Project (projectName)
 import Ecluse.Core.Registry.RubyGems.Projection (projectGemRows)
 import Ecluse.Core.Registry.RubyGems.Publish
-import Ecluse.Core.Registry.RubyGems.Wire (decodeInfoRow)
 import Ecluse.Core.Security (Limits (maxMirrorArtifactBytes), defaultLimits)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Core.Server.Admission.Types (ChargeFactors (ChargeFactors))
-import Ecluse.Test.Deadline (withExchangeClient)
+import Ecluse.Server.Admission.Support (refuseCharge)
+import Ecluse.Test.Deadline (withExchangeClient, withSweeper)
 import Ecluse.Test.Port (passthroughTracingPort)
 import Ecluse.Test.Registry.Publish (publishOnlyFile)
+import Ecluse.Test.Registry.RubyGems.Fixtures (loadFixtureInfo)
 import Ecluse.Test.Stub (Captured (..), allCaptured, headerValue, stubBaseUrl, withRoutedStub)
 import Ecluse.Test.Support (expectRight)
 
@@ -56,6 +55,15 @@ spec = describe "RubyGems publication" $ do
                         headerValue "OTP" written `shouldBe` Just "opaque-code"
                     _ -> expectationFailure "expected exactly one native publication"
 
+    it "relays an authorised body without inspecting the archive a second time" $
+        withRoutedStub (const (status200, [], "owned native reply")) $ \target -> do
+            archive <- readFileBS "test/fixtures/rubygems/gems/ecluse-fixture-root-1.0.0.gem"
+            name <- expectRight (projectName "ecluse-fixture-root")
+            withExchangeClient (newManager defaultManagerSettings) $ \client -> do
+                let origin = (originClient defaultLimits client (loopbackRegistryUrl (stubBaseUrl target <> "/private")) (Just (bareCredential (mkSecret "native-api-key")))){ocChargeFullReadWorkspace = refuseCharge}
+                void (publishRelay publisher origin name (PublishRequestBody archive (Just "application/octet-stream") NoPublishExtras) >>= expectRight)
+                map capMethod <$> allCaptured target `shouldReturn` ["POST"]
+
     it "accepts native-extension builds and refuses malformed or oversized archives" $ do
         archive <- readFileBS "test/fixtures/rubygems/gems/ecluse-fixture-native-1.0.0.gem"
         let body = PublishRequestBody archive Nothing NoPublishExtras
@@ -75,7 +83,7 @@ spec = describe "RubyGems publication" $ do
                     _ -> fail "expected one native archive"
                 verified <- expectRight (verifyMirrorBytes file archive)
                 verifyMirrorBytes file (archive <> "changed") `shouldSatisfy` isLeft
-                upload <- pcPrepareUpload defaultLimits (const pass) inventory source file verified >>= expectRight
+                upload <- withSweeper (\deadlines -> pcPrepareUpload deadlines defaultLimits (const pass) inventory source file verified) >>= expectRight
                 request <- expectRight (pcPublishRequest "https://target.test/private" (Just (bareCredential (mkSecret "worker-key"))) (PublishPlan (pkgVersion details)) upload)
                 method request `shouldBe` "POST"
                 lookup "Authorization" (requestHeaders request) `shouldBe` Just "worker-key"
@@ -85,7 +93,7 @@ spec = describe "RubyGems publication" $ do
                     _ -> expectationFailure "native publication replaced the verified byte body"
                 pcNativeComplete (pkgName details) (pkgVersion details) (PackageInfo (pkgName details) (Map.singleton "1.0.0" details) mempty []) `shouldBe` False
 
-    for_ [("declared CodeArtifact roles", rubyPublishCodecWith rubyCodeArtifactReadCredential rubyCodeArtifactPublishCredential factors, "Bearer worker-key"), ("generic roles with username aws", rubyPublishCodec factors, "worker-key")] $ \(label, codec, expectedKey) ->
+    for_ [("declared CodeArtifact roles", rubyPublishCodecWith rubyCodeArtifactPublishCredential factors, "Bearer worker-key"), ("generic roles with username aws", rubyPublishCodec factors, "worker-key")] $ \(label, codec, expectedKey) ->
         it ("uses Basic reads and the selected native writer mapping for " <> label) $ do
             listing <- readFileBS "test/fixtures/rubygems/info/ecluse-fixture-root"
             archive <- readFileBS "test/fixtures/rubygems/gems/ecluse-fixture-root-1.0.0.gem"
@@ -127,9 +135,7 @@ factors = ChargeFactors 1000 1000 1000
 
 sourceVersion :: IO VersionDoc
 sourceVersion = do
-    name <- expectRight (projectName "ecluse-fixture-root")
-    bytes <- readFileBS "test/fixtures/rubygems/info/ecluse-fixture-root"
-    rows <- traverse (\(position, raw) -> expectRight (decodeInfoRow name (RecordEntry position) raw)) (zip [1 ..] (filter (not . BS8.null) (drop 1 (BS8.lines bytes))))
+    (name, rows) <- loadFixtureInfo "ecluse-fixture-root"
     info <- expectRight (projectGemRows defaultLimits name "https://public.test" rows)
     details <- maybe (fail "missing native fixture version") pure (Map.lookup "1.0.0" (infoVersions info))
     source <- maybe (fail "missing native fixture document") pure (selectGemVersion (pkgVersion details) (GemDocument name "---\n" rows))

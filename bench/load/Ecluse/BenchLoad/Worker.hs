@@ -29,7 +29,7 @@ import Ecluse.Core.Package (infoVersions, pkgArtifacts, pkgEcosystem)
 import Ecluse.Core.Queue (MirrorJob (..), MirrorQueue (..), QueueMessage)
 import Ecluse.Core.Queue.Memory (defaultMemoryQueueConfig, newBoundedInMemoryQueue)
 import Ecluse.Core.Registry.Exchange.Types (ExchangeClient (ecDeadlines))
-import Ecluse.Core.Registry.Origin (OriginClient, anonymousOrigin, controlPublicOrigin, originClientOf)
+import Ecluse.Core.Registry.Origin (OriginFor, Public, anonymousOrigin, controlPublicOrigin)
 import Ecluse.Core.Registry.Public (newPublicControl)
 import Ecluse.Core.Registry.Publish (MirrorPublish (mpProbeInventory))
 import Ecluse.Core.Registry.Request (mkBaseRequest)
@@ -75,7 +75,7 @@ data NativeWorker = NativeWorker
 -- | The policy receives controlled source reads and durable state under the active memory meter.
 data WorkerEnvironment = WorkerEnvironment
     { weClient :: ExchangeClient
-    , weSourceOrigin :: OriginClient
+    , weSourceOrigin :: OriginFor Public
     , weTargetReadRoot :: RegistryUrl
     -- ^ The native provider chooses its upload root separately.
     , weMirrorState :: WorkerMirrorState
@@ -96,7 +96,7 @@ bootNativeWorker knobs native use =
                     publicControl <- newPublicControl (\_ _ _ -> pass) (\_ _ -> pass)
                     meter <- testMemoryMeter
                     rules <- Rules.prepare inertRuleDeps [atDefaultPrecedence (AllowIfOlderThan (7 * nominalDay))]
-                    let sourceOrigin = originClientOf (controlPublicOrigin publicControl (Just WorkerMetadata) (anonymousOrigin defaultLimits client (mkBaseRequest (loopbackRegistryUrl (localhost sourcePort)))))
+                    let sourceOrigin = controlPublicOrigin publicControl (Just WorkerMetadata) (anonymousOrigin defaultLimits client (mkBaseRequest (loopbackRegistryUrl (localhost sourcePort))))
                         environment = WorkerEnvironment client sourceOrigin (loopbackRegistryUrl (localhost targetPort)) (WorkerMirrorState store target defaultLimits (withinWorkerBudget meter)) rules
                     policy <- nwPolicy native environment
                     successes <- newIORef (0 :: Int)

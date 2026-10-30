@@ -85,7 +85,7 @@ spec = do
                                 , ptLimits = defaultLimits
                                 , ptTracing = passthroughTracingPort
                                 }
-                        factory = PrepareRead $ \_ origin -> do
+                        factory = PrepareRead $ \origin -> do
                             modifyIORef' events (<> ["prepare"])
                             ocToken origin `shouldBe` credential
                             originBaseUrl origin `shouldBe` registryUrlText target
@@ -160,11 +160,11 @@ spec = do
 
         it "the publish request attaches the bearer with redirects disabled" $
             case npmPublishCodec of
-                PublishCodec{pcPrepareSource, pcPrepareUpload, pcPublishRequest} -> do
+                PublishCodec{pcPrepareSource, pcPrepareUpload, pcPublishRequest} -> withSweeper $ \deadlines -> do
                     (inventory, source) <- expectRight (pcPrepareSource isOdd v1_0_0 (mirrorVersionDoc isOdd v1_0_0 isOddVersionDoc dummyArtifact))
                     let file :| _ = inventoryFiles inventory
                     verified <- expectRight (verifyMirrorBytes file "")
-                    upload <- pcPrepareUpload defaultLimits (const pass) inventory source file verified >>= expectRight
+                    upload <- pcPrepareUpload deadlines defaultLimits (const pass) inventory source file verified >>= expectRight
                     request <- expectRight (pcPublishRequest "https://mirror.test" (Just (bareCredential (mkSecret "tok"))) planV1 upload)
                     Client.redirectCount request `shouldBe` 0
                     lookup "Authorization" (Client.requestHeaders request) `shouldBe` Just "Bearer tok"
@@ -204,7 +204,7 @@ unsealedCodec =
         , pcTargetRead = staticRead npmRead{erRequest = \target _ _ -> unsealed (registryUrlText (baseRequestUrl target) <> "/probe")}
         , pcPrepareTarget = pcPrepareTarget npmPublishCodec
         , pcPrepareSource = prepareNpmSource
-        , pcPrepareUpload = \_ _ inventory source file bytes -> pure (prepareNpmUpload inventory source file bytes)
+        , pcPrepareUpload = \_ _ _ inventory source file bytes -> pure (prepareNpmUpload inventory source file bytes)
         , pcPublishRequest = \targetUrl _token _plan _upload ->
             first (PublishFetch . FetchUrlUnformable) (unsealed (targetUrl <> "/write"))
         , pcPublishOutcome = \_ _ -> Right ()

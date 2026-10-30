@@ -8,7 +8,6 @@ module Ecluse.Core.Registry.Exchange (
     boundedExchange,
     runExchange,
     runExchangeUsing,
-    runExchangeUsingObserved,
     singleAttemptSettings,
     newSingleAttemptManager,
     withSuccessBody,
@@ -17,6 +16,7 @@ module Ecluse.Core.Registry.Exchange (
 
     -- * The serve-path cap
     withinServeCap,
+    withinServeCapOr,
 
     -- * Source digests
     digestingRead,
@@ -27,6 +27,7 @@ module Ecluse.Core.Registry.Exchange (
     accumulatingCharge,
     accumulatingChargeFrom,
     boundedChargedRead,
+    boundedIncrementalRead,
 
     -- * Request formation
     formThen,
@@ -46,8 +47,7 @@ import Network.HTTP.Client (
     responseBody,
     responseHeaders,
  )
-import Network.HTTP.Types (ResponseHeaders)
-import Network.HTTP.Types.Status (Status, statusCode)
+import Network.HTTP.Types.Status (statusCode)
 import UnliftIO (try)
 
 import Ecluse.Core.Deadline (Deadlines, timeout)
@@ -106,11 +106,7 @@ runExchange = runExchangeUsing Uncontrolled
 
 -- | Retain the controlled response lifetime for header-aware bounded consumers.
 runExchangeUsing :: ReadControl -> ExchangeClient -> ProgressFloor -> Request -> (Response BodyReader -> IO (Either LimitError a)) -> IO (Either FetchFault a)
-runExchangeUsing = runExchangeUsingObserved (\_ _ -> pass)
-
--- | Observe actual origin headers before cooldown handling can replace their response.
-runExchangeUsingObserved :: (Status -> ResponseHeaders -> IO ()) -> ReadControl -> ExchangeClient -> ProgressFloor -> Request -> (Response BodyReader -> IO (Either LimitError a)) -> IO (Either FetchFault a)
-runExchangeUsingObserved observe control client progress request readResponse =
+runExchangeUsing control client progress request readResponse =
     watched
         (ecDeadlines client)
         progress
@@ -118,7 +114,6 @@ runExchangeUsingObserved observe control client progress request readResponse =
             try
                 ( withReadControl control (metered watch) $ \observed recordHeaders ->
                     withResponse client observed $ \response -> do
-                        observe (responseStatus response) (responseHeaders response)
                         cooldown <- recordHeaders (responseStatus response) (responseHeaders response)
                         case cooldown of
                             Just retry -> pure (Left (FetchCooldown retry))
@@ -134,10 +129,14 @@ runExchangeUsingObserved observe control client progress request readResponse =
 
 -- | Fail an action that outlives the floor's serve-path cap with the transport timeout, about one sweep late.
 withinServeCap :: Deadlines -> ProgressFloor -> (FetchFault -> e) -> IO (Either e a) -> IO (Either e a)
-withinServeCap deadlines progress inject action =
-    fromMaybe (Left (inject capExceeded)) <$> timeout deadlines (floorServeCapMicros progress) action
+withinServeCap deadlines progress inject = withinServeCapOr deadlines progress (Left (inject capExceeded))
   where
     capExceeded = FetchTransport (transportFault TransportTimeout ("the upstream exchange outlived its " <> seconds (floorServeCapMicros progress) <> "-second serve-path cap"))
+
+-- | Answer @expired@ once an action outlives the floor's serve-path cap, about one sweep late.
+withinServeCapOr :: Deadlines -> ProgressFloor -> a -> IO a -> IO a
+withinServeCapOr deadlines progress expired action =
+    fromMaybe expired <$> timeout deadlines (floorServeCapMicros progress) action
 
 belowFloor :: ProgressFloor -> FetchFault
 belowFloor progress =
@@ -203,11 +202,13 @@ accumulatingChargeFrom initial charge = do
             charge (total required)
     pure (add, total <$> readIORef held)
 
--- | Reserve buffered chunks and their final strict copy before the bounded reader retains them.
+-- | Pay the running total of buffered chunks and their final strict copy before the bounded reader retains them.
 boundedChargedRead :: (Int -> IO ()) -> BodyLimit -> IO ByteString -> IO (Either LimitError (Int, ByteString))
-boundedChargedRead charge limits readChunk = do
-    retain <- accumulatingCharge charge
-    boundedRead limits (chargedRead (retain . bufferedChunkCharge) readChunk)
+boundedChargedRead charge limits readChunk = accumulatingCharge charge >>= \retain -> boundedIncrementalRead retain limits readChunk
+
+-- | Pay each buffered chunk's own charge, never a running total, before the bounded reader retains it.
+boundedIncrementalRead :: (Int -> IO ()) -> BodyLimit -> IO ByteString -> IO (Either LimitError (Int, ByteString))
+boundedIncrementalRead charge limits = boundedRead limits . chargedRead (\bytes -> let cost = bufferedChunkCharge bytes in when (cost > 0) (charge cost))
 
 -- | Report request-formation and exchange failures through the same error channel.
 formThen ::

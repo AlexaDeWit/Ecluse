@@ -8,6 +8,7 @@ module Ecluse.Core.Registry.RubyGems.Marshal (
     decodeMarshal,
     marshalText,
     stripInstanceVariables,
+    inertNodeBudget,
 ) where
 
 import Data.Bits (shiftL)
@@ -17,7 +18,7 @@ import Data.IntMap.Strict qualified as IntMap
 import Data.Set qualified as Set
 import Data.Text.Encoding qualified as TE
 
-import Ecluse.Core.Registry (ParseError (..))
+import Ecluse.Core.Registry (ParseError (..), parseRefusal)
 import Ecluse.Core.Security.Limits (Limits (..))
 
 -- | A data tree with resolved, acyclic references and no executable hooks.
@@ -50,9 +51,9 @@ type Decoder = StateT Cursor (Either ParseError)
 -- | Decode exactly one object, refusing unsupported tags, cycles and invalid references.
 decodeMarshal :: Limits -> ByteString -> Either ParseError MarshalValue
 decodeMarshal limits bytes = do
-    when (BS.length bytes > maxMetadataBytes limits) (bad "Marshal body exceeds its byte bound")
+    when (BS.length bytes > maxMetadataBytes limits) (parseRefusal "Marshal body exceeds its byte bound")
     (value, cursor) <- runStateT parser (Cursor bytes IntMap.empty IntMap.empty 0 0 limits)
-    unless (BS.null (remaining cursor)) (bad "Marshal has trailing bytes")
+    unless (BS.null (remaining cursor)) (parseRefusal "Marshal has trailing bytes")
     pure value
   where
     parser = do
@@ -86,9 +87,7 @@ readValue depth = do
                 Just (Just (value, cost, height)) -> do
                     cursor <- get
                     when (depth + height > maxNestingDepth (bounds cursor)) (refuse "Marshal referenced depth exceeds its bound")
-                    let cap = min (maxArtifactCount (bounds cursor)) (maxMetadataBytes (bounds cursor) `div` 8)
-                    when (cost > cap - nodes cursor) (refuse "Marshal reference work exceeds its bound")
-                    modify' (\current -> current{nodes = nodes current + cost})
+                    spendNodes "Marshal reference work exceeds its bound" cost
                     pure value
                 _ -> refuse "invalid or cyclic Marshal object reference"
         91 -> tracked (MArray <$> counted (readValue (depth + 1)))
@@ -109,7 +108,7 @@ readHash depth = do
     hashKey value = case stripInstanceVariables value of
         MString bytes -> Right (False, bytes)
         MSymbol bytes -> Right (True, bytes)
-        _ -> bad "unsupported Marshal hash key"
+        _ -> parseRefusal "unsupported Marshal hash key"
 
 tracked :: Decoder MarshalValue -> Decoder MarshalValue
 tracked parse = do
@@ -161,11 +160,18 @@ referenceSymbol = do
     maybe (refuse "invalid Marshal symbol reference") pure (IntMap.lookup index table)
 
 countNode :: Decoder ()
-countNode = do
-    limits <- gets bounds
-    count <- gets nodes
-    when (count >= maxMetadataBytes limits `div` 8 || count >= maxArtifactCount limits) (refuse "Marshal node count exceeds its bound")
-    modify' (\cursor -> cursor{nodes = count + 1})
+countNode = spendNodes "Marshal node count exceeds its bound" 1
+
+-- Spend node work against the inert budget, refusing with the reason once it would pass the budget.
+spendNodes :: Text -> Int -> Decoder ()
+spendNodes reason amount = do
+    cursor <- get
+    when (amount > inertNodeBudget (bounds cursor) - nodes cursor) (refuse reason)
+    modify' (\current -> current{nodes = nodes current + amount})
+
+-- | The node and alias work one inert Marshal or YAML decode may do.
+inertNodeBudget :: Limits -> Int
+inertNodeBudget limits = min (maxArtifactCount limits) (maxMetadataBytes limits `div` 8)
 
 counted :: Decoder a -> Decoder [a]
 counted parse = do
@@ -217,10 +223,7 @@ takeBytes count = do
     pure bytes
 
 refuse :: Text -> Decoder a
-refuse = lift . bad
-
-bad :: Text -> Either ParseError a
-bad = Left . ParseError
+refuse = lift . parseRefusal
 
 -- | Remove inert encoding and instance-variable wrappers when reading scalar fields.
 stripInstanceVariables :: MarshalValue -> MarshalValue
@@ -231,4 +234,4 @@ stripInstanceVariables value = value
 marshalText :: MarshalValue -> Either ParseError Text
 marshalText value = case stripInstanceVariables value of
     MString bytes -> first (const (ParseError "Marshal string is not UTF-8")) (TE.decodeUtf8' bytes)
-    _ -> bad "expected Marshal string"
+    _ -> parseRefusal "expected Marshal string"

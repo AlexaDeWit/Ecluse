@@ -1,7 +1,6 @@
 -- SPDX-FileCopyrightText: 2026 Alexandra de Wit
 --
 -- SPDX-License-Identifier: MIT
-{-# LANGUAGE ImportQualifiedPost #-}
 
 -- | Scoped zlib decoding checks framing and closes its pull action on every callback exit.
 module Ecluse.Core.Registry.Archive.InflateSpec (spec) where
@@ -21,7 +20,12 @@ import Ecluse.Core.Registry.Archive.Inflate
 import Ecluse.Test.Support (expectRight)
 
 spec :: Spec
-spec = describe "withInflatedChunks" $ do
+spec = do
+    chunkSpec
+    inflateBoundedSpec
+
+chunkSpec :: Spec
+chunkSpec = describe "withInflatedChunks" $ do
     it "decodes raw deflate and gzip with bounded output chunks" $ do
         let body = BS.replicate 100000 97
         for_ [(RawDeflate, Raw.compress), (ZlibStream, Zlib.compress), (GzipMembers 1, GZip.compress)] $ \(format, compress) -> do
@@ -74,6 +78,18 @@ spec = describe "withInflatedChunks" $ do
             race_ (MVar.takeMVar ready) (wait worker)
             cancel worker
         join (readIORef saved) `shouldReturn` Right BS.empty
+
+inflateBoundedSpec :: Spec
+inflateBoundedSpec = describe "inflateBounded" $ do
+    it "collects the payload, paying for the decoder and then for each kept chunk" $ do
+        paid <- newIORef []
+        let body = BS.replicate 70000 97
+        result <- inflateBounded ZlibStream "payload exceeds its inflated byte bound" 70000 (\n -> modifyIORef' paid (<> [n])) (BSL.toStrict (Zlib.compress (BSL.fromStrict body)))
+        result `shouldBe` Right body
+        readIORef paid `shouldReturn` [32768 + 7168 + 32768, 73728 + 3 * 32768, 73728 + 3 * 65536, 73728 + 3 * 70000]
+    it "refuses a payload past its inflated bound with the caller's reason" $
+        inflateBounded (GzipMembers 1) "payload exceeds its inflated byte bound" 2 (const pass) (BSL.toStrict (GZip.compress "one"))
+            `shouldReturn` Left (ParseError "payload exceeds its inflated byte bound")
 
 collect :: IO (Either ParseError ByteString) -> IO (Either ParseError [ByteString])
 collect pull =

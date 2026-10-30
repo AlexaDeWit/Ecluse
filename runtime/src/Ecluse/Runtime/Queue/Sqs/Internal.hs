@@ -2,7 +2,7 @@
 --
 -- SPDX-License-Identifier: MIT
 
--- | SQS queue operations with checked native identities and bounded receipt leases.
+-- | SQS queue operations with grammar-checked npm, Cargo and RubyGems identities and bounded receipt leases.
 module Ecluse.Runtime.Queue.Sqs.Internal (
     -- * Configuration
     SqsConfig (..),
@@ -39,7 +39,7 @@ import Lens.Micro ((?~), (^.))
 
 import Ecluse.Core.Ecosystem (Ecosystem (Cargo, Npm, PyPI, RubyGems))
 import Ecluse.Core.Fault (TransportFault)
-import Ecluse.Core.Package (PackageName, mkPackageName, mkScope)
+import Ecluse.Core.Package (PackageName, WireNameRefusal (..), mkPackageName, mkScope, unnamespacedWireName)
 import Ecluse.Core.Queue (
     DeadLetterTerminus (TerminusAbsent, TerminusAttached),
     DeliveryBudget (DeliveryBudget),
@@ -57,6 +57,7 @@ import Ecluse.Core.Queue.Lease (ReceiptLease, monotonicNow, receiptLease)
 import Ecluse.Core.Registry (parseErrorMessage)
 import Ecluse.Core.Registry.Cargo.Project qualified as Cargo
 import Ecluse.Core.Registry.Npm.Project (projectName)
+import Ecluse.Core.Registry.RubyGems.Project qualified as RubyGems
 import Ecluse.Core.Security.Egress (RegistryUrl)
 import Ecluse.Core.Text (nonBlank, readDecimalText)
 import Ecluse.Runtime.Aws.Env (AwsEndpoint, newAwsEnv)
@@ -285,15 +286,18 @@ dropReasonLabel = \case
     MissingReceipt -> "missing receipt"
     UndecodableBody -> "undecodable body"
 
--- | Parse queued native identities before the worker accepts their coordinates.
+{- | Read npm, Cargo and RubyGems identities through their grammars before the worker accepts them.
+PyPI names pass as given.
+-}
 mirrorJobPackage :: Ecosystem -> Maybe Text -> Text -> Either Text PackageName
 mirrorJobPackage eco namespace rawName = case eco of
     Npm -> first parseErrorMessage (projectName npmWireName)
-    Cargo -> do
-        unless (maybe True (== "") namespace) (Left "Cargo packages cannot have a namespace")
-        first parseErrorMessage (Cargo.projectName rawName)
-    PyPI -> Right asGiven
-    RubyGems -> Right asGiven
+    Cargo -> unnamespaced "Cargo" Cargo.projectName
+    RubyGems -> unnamespaced "RubyGems" RubyGems.projectName
+    PyPI -> Right (mkPackageName eco (mkScope <$> namespace) rawName)
   where
-    asGiven = mkPackageName eco (mkScope <$> namespace) rawName
     npmWireName = maybe rawName (\ns -> "@" <> ns <> "/" <> rawName) namespace
+    unnamespaced label parse = first (refusal label) (unnamespacedWireName parse namespace rawName)
+    refusal label = \case
+        WireNamespaced -> label <> " packages cannot have a namespace"
+        WireNameUnusable fault -> parseErrorMessage fault

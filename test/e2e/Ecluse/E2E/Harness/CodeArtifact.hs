@@ -13,9 +13,14 @@ module Ecluse.E2E.Harness.CodeArtifact (
     codeArtifactOwner,
     codeArtifactToken,
     repositoryArn,
+    codeArtifactRepositoryUrl,
     codeArtifactNamesUnder,
     codeArtifactVersions,
+    codeArtifactInventory,
     withFixtureValue,
+    withCodeArtifactDeleteRefusal,
+    withCodeArtifactConsentRemoved,
+    withCodeArtifactUpstreams,
     codeArtifactDeleteRequests,
     creditCodeArtifactDeletes,
     withCodeArtifactDeleteAudit,
@@ -43,9 +48,11 @@ import Ecluse.Core.Package (mkPackageName, renderPackageName)
 import Ecluse.Core.Registry.Maintenance (StoreObservation (..), StoredVersion (storedVersion), collectPages)
 import Ecluse.Core.Registry.Maintenance.NameSpace (mkNameAlphabet)
 import Ecluse.Core.Registry.PyPI.Project (pypiNameLeadChars)
+import Ecluse.Core.Rules.Install (unavailableInstallArtifactRead)
 import Ecluse.Core.Security.Limits (BodyLimit (PublishRequestBodyLimit), boundedRead)
 import Ecluse.Core.Version (renderVersion)
 import Ecluse.E2E.Harness.Container (withBridgeApplication)
+import Ecluse.E2E.Harness.Stub (StubRoute (PyPICodeArtifactData), stubUrl)
 import Ecluse.Runtime.Maintenance.CodeArtifact.Decide (CodeArtifactStore (..), codeArtifactFormat, formatToken)
 import Ecluse.Runtime.Maintenance.CodeArtifact.Internal (ControlPlane (cpRead), controlPlaneFor, observationFor)
 import Ecluse.Test.Contract.Sweep.Types (SweepRun)
@@ -88,6 +95,14 @@ codeArtifactToken = "fixture-token"
 repositoryArn :: Text -> Text
 repositoryArn name = "arn:aws:codeartifact:us-east-1:" <> codeArtifactOwner <> ":repository/" <> codeArtifactDomain <> "/" <> name
 
+-- | A native repository endpoint on the isolated data host, in the form production configuration parses.
+codeArtifactRepositoryUrl :: Ecosystem -> Text -> Text
+codeArtifactRepositoryUrl ecosystem repository = stubUrl PyPICodeArtifactData <> foldMap formatToken (codeArtifactFormat ecosystem) <> "/" <> repository <> "/"
+
+-- | The repository tag whose absence withholds consent to destructive maintenance.
+dredgerConsentTag :: Text
+dredgerConsentTag = "ecluse-dredger-consent"
+
 -- | Expose the documented REST paths to the running product's ordinary AWS adapters.
 withCodeArtifactFixture :: [RepositoryBoundary] -> (CodeArtifactFixture -> IO a) -> IO a
 withCodeArtifactFixture = withCodeArtifactFixtureFor PyPI codeArtifactToken
@@ -96,7 +111,7 @@ withCodeArtifactFixture = withCodeArtifactFixtureFor PyPI codeArtifactToken
 withCodeArtifactFixtureFor :: Ecosystem -> Text -> [RepositoryBoundary] -> (CodeArtifactFixture -> IO a) -> IO a
 withCodeArtifactFixtureFor ecosystem token repositories action = do
     when (isNothing (codeArtifactFormat ecosystem)) (fail "fixture ecosystem has no native CodeArtifact format")
-    tags <- newTVarIO (Map.fromList [(repositoryName repository, Map.singleton "ecluse-dredger-consent" "true") | repository <- repositories])
+    tags <- newTVarIO (Map.fromList [(repositoryName repository, Map.singleton dredgerConsentTag "true") | repository <- repositories])
     upstreams <- newTVarIO (Map.fromList [(repositoryName repository, repositoryUpstreams repository) | repository <- repositories])
     refused <- newTVarIO []
     requests <- newTVarIO []
@@ -118,6 +133,12 @@ codeArtifactVersions fixture repository name = do
     result <- obEnumerateVersions observer (mkPackageName (cafEcosystem fixture) Nothing name)
     sort . map (renderVersion . storedVersion) <$> expectRightText (first show result)
 
+-- | Enumerate every physical name and version in one repository through the production adapter.
+codeArtifactInventory :: CodeArtifactFixture -> Text -> IO (Map Text [Text])
+codeArtifactInventory fixture repository = do
+    names <- codeArtifactNamesUnder fixture repository ""
+    Map.fromList <$> traverse (\name -> (name,) <$> codeArtifactVersions fixture repository name) names
+
 fixtureObservation :: CodeArtifactFixture -> Text -> IO StoreObservation
 fixtureObservation fixture repository = do
     base <- AWS.newEnv (pure . fromKeys (AWS.AccessKey "test") (AWS.SecretKey "test"))
@@ -129,7 +150,7 @@ fixtureObservation fixture repository = do
             Cargo -> "-0123456789_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
             RubyGems -> ".-0123456789_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
             _ -> pypiNameLeadChars
-    pure (observationFor (mkNameAlphabet alphabet) (\_ -> fail "direct inventory must not read package metadata") store plane)
+    pure (observationFor (mkNameAlphabet alphabet) (\_ -> fail "direct inventory must not read package metadata") unavailableInstallArtifactRead store plane)
 
 codeArtifactApplication :: [RepositoryBoundary] -> CodeArtifactFixture -> Application
 codeArtifactApplication repositories fixture request respond = case pathInfo request of
@@ -274,6 +295,22 @@ missingRepository = fault status404 "ResourceNotFoundException" "unknown fixture
 -- | Restore fixture state even when a product role or assertion fails.
 withFixtureValue :: TVar a -> a -> IO b -> IO b
 withFixtureValue variable value action = bracket (atomically (swapTVar variable value)) (atomically . writeTVar variable) (const action)
+
+-- | The repository refuses each version deletion natively while its files stay readable.
+withCodeArtifactDeleteRefusal :: CodeArtifactFixture -> Text -> IO a -> IO a
+withCodeArtifactDeleteRefusal fixture repository = withFixtureValue (cafRefusedDeletes fixture) [repository]
+
+-- | Remove the repository's Dredger consent tag for the duration of the action.
+withCodeArtifactConsentRemoved :: CodeArtifactFixture -> Text -> IO a -> IO a
+withCodeArtifactConsentRemoved fixture repository action = do
+    tags <- readTVarIO (cafTags fixture)
+    withFixtureValue (cafTags fixture) (Map.adjust (Map.delete dredgerConsentTag) repository tags) action
+
+-- | Link the repository to upstream repositories for the action, which makes a target refillable.
+withCodeArtifactUpstreams :: CodeArtifactFixture -> Text -> [Text] -> IO a -> IO a
+withCodeArtifactUpstreams fixture repository upstreams action = do
+    links <- readTVarIO (cafUpstreams fixture)
+    withFixtureValue (cafUpstreams fixture) (Map.insert repository upstreams links) action
 
 -- | Physical version-delete requests exclude native yank and metadata changes.
 codeArtifactDeleteRequests :: CodeArtifactFixture -> IO [(Text, Text)]

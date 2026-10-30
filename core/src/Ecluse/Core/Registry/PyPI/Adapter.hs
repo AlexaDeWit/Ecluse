@@ -88,6 +88,7 @@ pypiAdapter =
                 , maintenanceVersionDelete = Nothing
                 , maintenanceAlphabet = mkNameAlphabet pypiNameLeadChars
                 }
+        , adapterInstallEvidence = Nothing
         }
 
 -- | Preserve client upload bytes and response statuses without mirror duplicate classification.

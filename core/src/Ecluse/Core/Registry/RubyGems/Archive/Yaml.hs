@@ -9,6 +9,8 @@ module Ecluse.Core.Registry.RubyGems.Archive.Yaml (
     yamlMapping,
     yamlSequence,
     yamlText,
+    yamlNativeText,
+    yamlNativeString,
     yamlField,
     yamlTag,
 ) where
@@ -16,16 +18,20 @@ module Ecluse.Core.Registry.RubyGems.Archive.Yaml (
 import Conduit
 import Control.Monad.Except (throwError)
 import Data.ByteString qualified as BS
+import Data.Char (isAlpha, isDigit, isHexDigit, isSpace)
 import Data.Map.Strict qualified as Map
+import Data.Text qualified as T
 import Data.Text.Encoding qualified as TE
+import Data.Time.Calendar (fromGregorianValid)
 import Text.Libyaml qualified as Y
 import UnliftIO.Exception (try)
 
 import Ecluse.Core.Registry (ParseError (..))
+import Ecluse.Core.Registry.RubyGems.Marshal (inertNodeBudget)
 import Ecluse.Core.Security.Limits (Limits (..))
 
 -- | Tags identify data schema only. No class lookup or object construction occurs.
-data YamlValue = YamlScalar Y.Tag Text | YamlSequence Y.Tag [YamlValue] | YamlMapping Y.Tag (Map Text YamlValue)
+data YamlValue = YamlScalar Y.Tag Y.Style Text | YamlSequence Y.Tag [YamlValue] | YamlMapping Y.Tag (Map Text YamlValue)
     deriving stock (Eq, Show)
 
 data YamlState = YamlState
@@ -70,10 +76,10 @@ node depth event = do
                     when (depth + height > maxNestingDepth limits) (refuse "YAML referenced depth exceeds its bound")
                     consume cost
                     pure value
-        Y.EventScalar bytes tag _ anchor -> do
+        Y.EventScalar bytes tag style anchor -> do
             checkTag tag
             value <- either (const (refuse "YAML scalar is not UTF-8")) pure (TE.decodeUtf8' bytes)
-            retain anchor 1 (YamlScalar tag value)
+            retain anchor 1 (YamlScalar tag style value)
         Y.EventSequenceStart tag _ anchor -> do
             checkTag tag
             before <- gets ysNodes
@@ -115,7 +121,7 @@ retain anchor cost value = do
 
 valueDepth :: YamlValue -> Int
 valueDepth = \case
-    YamlScalar _ _ -> 0
+    YamlScalar{} -> 0
     YamlSequence _ values -> descendants values
     YamlMapping _ fields -> descendants (Map.elems fields)
   where
@@ -124,8 +130,7 @@ valueDepth = \case
 consume :: Int -> Decoder ()
 consume amount = do
     cursor <- get
-    let cap = min (maxArtifactCount (ysLimits cursor)) (maxMetadataBytes (ysLimits cursor) `div` 8)
-    when (amount > cap - ysNodes cursor) (refuse "YAML node or alias work exceeds its bound")
+    when (amount > inertNodeBudget (ysLimits cursor) - ysNodes cursor) (refuse "YAML node or alias work exceeds its bound")
     modify' (\current -> current{ysNodes = ysNodes current + amount})
 
 checkTag :: Y.Tag -> Decoder ()
@@ -159,8 +164,85 @@ yamlSequence _ = Left (ParseError "expected YAML sequence")
 
 -- | Read the exact decoded scalar spelling.
 yamlText :: YamlValue -> Either ParseError Text
-yamlText (YamlScalar _ value) = Right value
+yamlText (YamlScalar _ _ value) = Right value
 yamlText _ = Left (ParseError "expected YAML scalar")
+
+-- | The String Psych loads from a name, version or platform scalar, refusing nil and other types.
+yamlNativeText :: YamlValue -> Either ParseError Text
+yamlNativeText value = yamlNativeString value >>= maybeToRight notNativeString
+
+{- | The String Psych loads from a scalar, or 'Nothing' for its nil, refusing a scalar it types
+otherwise. Text outside @[A-Za-z0-9._-]@ is left to the caller's name grammar.
+-}
+yamlNativeString :: YamlValue -> Either ParseError (Maybe Text)
+yamlNativeString = \case
+    YamlScalar tag style value
+        | tag == Y.StrTag || (tag == Y.NoTag && style `elem` [Y.SingleQuoted, Y.DoubleQuoted, Y.Literal, Y.Folded]) -> Right (Just value)
+        | tag == Y.FloatTag || tag == Y.UriTag "!ruby/symbol" -> Left notNativeString
+        -- Psych re-scans the text of a plain scalar and of every other tag it accepts.
+        | otherwise -> plainNativeString value
+    _ -> Left (ParseError "expected YAML scalar")
+
+-- Psych's ScalarScanner#tokenize, deciding only between a String, nil and another type.
+plainNativeString :: Text -> Either ParseError (Maybe Text)
+plainNativeString value
+    | T.null value = Right Nothing
+    | wordLike || T.any (== '\n') value = keyword
+    | gregorianDate || T.toLower value `elem` [".inf", "+.inf", "-.inf", ".nan"] || psychNumber value = Left notNativeString
+    | otherwise = Right (Just value)
+  where
+    lower = T.toLower value
+    wordClass c = isAlpha c || isSpace c || c `elem` ("_!@#$%^&*(){}<>|/\\~;=" :: String)
+    wordLike = case T.unpack (T.take 2 value) of
+        c0 : rest -> wordClass c0 || (c0 `notElem` ("0123456789.:-" :: String) && any wordClass rest)
+        [] -> False
+    keyword
+        | T.compareLength value 5 == GT || T.take 1 lower `notElem` ["y", "t", "o", "n", "f", "~"] = Right (Just value)
+        | value == "~" || lower == "null" = Right Nothing
+        | lower `elem` ["yes", "true", "on", "no", "false", "off"] = Left notNativeString
+        | otherwise = Right (Just value)
+    gregorianDate = case T.splitOn "-" value of
+        [year, month, day]
+            | T.compareLength year 4 == EQ && all (\part -> not (T.null part) && T.all isDigit part) [year, month, day] && T.compareLength month 2 /= GT && T.compareLength day 2 /= GT ->
+                isJust (fromGregorianValid (readDigits year) (fromInteger (readDigits month)) (fromInteger (readDigits day)))
+        _ -> False
+    readDigits = T.foldl' (\total digit -> total * 10 + toInteger (fromEnum digit - fromEnum '0')) 0
+
+-- Psych's legacy YAML 1.1 integer and float spellings, optionally signed.
+psychNumber :: Text -> Bool
+psychNumber signed = integer || float
+  where
+    text = fromMaybe signed (T.stripPrefix "-" signed <|> T.stripPrefix "+" signed)
+    separated = (`elem` ['_', ','])
+    radix prefix digit = case T.stripPrefix prefix text of
+        Just rest -> case T.uncons (T.dropWhile separated rest) of
+            Just (leading, others) -> digit leading && T.all (\c -> digit c || separated c) others
+            Nothing -> False
+        Nothing -> False
+    decimal = case T.uncons text of
+        Just ('0', rest) -> T.null rest
+        Just (leading, rest) -> leading `elem` ['1' .. '9'] && grouped (T.unpack rest)
+        Nothing -> False
+    grouped = \case
+        [] -> True
+        c : cs | isDigit c -> grouped cs
+        c : d : cs | separated c && isDigit d -> grouped cs
+        _ -> False
+    integer = radix "0b" (`elem` ['0', '1']) || radix "0x" isHexDigit || radix "0" (`elem` ['0' .. '7']) || decimal
+    float = case T.breakOn "." text of
+        (whole, point)
+            | Just after <- T.stripPrefix "." point ->
+                let (_, scale) = T.span isDigit after
+                 in (T.null whole || (T.all isDigit (T.take 1 whole) && T.all (\c -> isDigit c || separated c) whole))
+                        && not (T.null whole && T.null after)
+                        && (T.null scale || validScale scale)
+        _ -> False
+    validScale scale = case T.unpack scale of
+        e : sign : digits@(_ : _) -> e `elem` ['e', 'E'] && sign `elem` ['-', '+'] && all isDigit digits
+        _ -> False
+
+notNativeString :: ParseError
+notNativeString = ParseError "YAML scalar does not load as a native string"
 
 -- | Require one named field of a native mapping.
 yamlField :: Text -> Map Text YamlValue -> Either ParseError YamlValue
@@ -168,6 +250,6 @@ yamlField key = maybeToRight (ParseError ("missing YAML field: " <> key)) . Map.
 
 -- | Return the explicit native tag for schema checks.
 yamlTag :: YamlValue -> Y.Tag
-yamlTag (YamlScalar tag _) = tag
+yamlTag (YamlScalar tag _ _) = tag
 yamlTag (YamlSequence tag _) = tag
 yamlTag (YamlMapping tag _) = tag

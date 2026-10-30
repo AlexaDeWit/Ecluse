@@ -19,33 +19,30 @@ module Ecluse.Core.Registry.CachedDocument (
     -- * PyPI's packed full reads and their renders
     pypiPacked,
     pypiRendered,
+
+    -- * Cargo's native records, packed full reads and their renders
     cargoCached,
     cargoPacked,
     cargoRendered,
+
+    -- * RubyGems' native rows
     rubyGemsCached,
 ) where
 
 import Data.Aeson (Value (..))
 import Data.Aeson.Key qualified as Key
 import Data.Aeson.KeyMap qualified as KeyMap
-import Data.ByteString qualified as BS
-import Data.Map.Strict qualified as Map
 import Data.Scientific (coefficient)
 import Data.Text.Internal qualified as Text
 import Math.NumberTheory.Logarithms (integerLog2)
 
-import Ecluse.Core.Package (hashValue, renderPackageName)
 import Ecluse.Core.Package.Entry (EntryKey (ArrayEntry, RecordEntry))
 import Ecluse.Core.Registry.Cargo.Document (CargoDocument, PackedIndex, cargoDocument, cargoRecords, packedIndexDocument, packedIndexResident)
 import Ecluse.Core.Registry.Json.Packed (LinePlan, RenderPlan (planMembers), linePlanResident, linePlanValues, planResident, planValue)
 import Ecluse.Core.Registry.Npm.Document (PackedPackument (packumentTop), packumentResident, packumentValue)
 import Ecluse.Core.Registry.PyPI.Document (PackedSimple, SimpleDocument, packedEnvelope, packedSimpleDocument, packedSimpleResident, simpleDocument, simpleEnvelope, simpleFiles)
-import Ecluse.Core.Registry.RubyGems.Document (GemDependency (..), GemDocument (..), GemRow (..))
-import Ecluse.Core.Registry.RubyGems.Project (coordinateFilename, coordinateName, coordinatePlatform, coordinateVersion, unGemPlatform)
+import Ecluse.Core.Registry.RubyGems.Document (GemDocument, gemDocumentBytes)
 import Ecluse.Core.Server.MemoryModel (chargeForResident)
-import Ecluse.Core.Server.Path (unFilename)
-import Ecluse.Core.Text (textStorageBytes)
-import Ecluse.Core.Version (renderVersion)
 
 -- | Serving documents held by the pipeline and permitted caches. Derived 'Show' and 'Eq' support debugging and tests, not wire projection.
 data CachedDoc
@@ -178,22 +175,16 @@ integerBytes value
 
 -- | RubyGems retains native artifact rows without reconstructing installation metadata from policy facts.
 rubyGemsCached :: (GemDocument -> CachedDoc, CachedDoc -> Maybe GemDocument)
-rubyGemsCached = (\document -> CachedRubyGems document (gemBytes document), \case CachedRubyGems document _ -> Just document; _ -> Nothing)
-
-gemBytes :: GemDocument -> Int64
-gemBytes document = 64 + nativeTextBytes (renderPackageName (gemName document)) + fromIntegral (BS.length (gemHeader document)) + sum (map rowBytes (gemRows document))
+rubyGemsCached = (\document -> CachedRubyGems document (gemDocumentBytes document), project)
   where
-    rowBytes row =
-        let coordinate = grCoordinate row
-            strings = [renderPackageName (coordinateName coordinate), renderVersion (coordinateVersion coordinate), unGemPlatform (coordinatePlatform coordinate), unFilename (coordinateFilename coordinate), hashValue (grChecksum row)]
-            requirementBytes values = sum [32 + nativeTextBytes clause | clause <- toList values]
-         in 256
-                + sum (map nativeTextBytes strings)
-                + fromIntegral (BS.length (grSource row))
-                + requirementBytes (grRequiredRuby row)
-                + requirementBytes (grRequiredRubyGems row)
-                + sum [64 + nativeTextBytes (renderPackageName (gdName dependency)) + requirementBytes (gdRequirement dependency) | dependency <- grDependencies row]
-                + sum [64 + nativeTextBytes key + nativeTextBytes value | (key, value) <- Map.toList (grExtras row)]
-
-nativeTextBytes :: Text -> Int64
-nativeTextBytes = fromIntegral . textStorageBytes
+    project = \case
+        CachedRubyGems document _ -> Just document
+        CachedNpm _ _ -> Nothing
+        CachedPyPISimple _ _ -> Nothing
+        PackedNpm _ -> Nothing
+        RenderedNpm _ -> Nothing
+        PackedPyPI _ -> Nothing
+        RenderedPyPI _ -> Nothing
+        CachedCargo _ _ -> Nothing
+        PackedCargo _ -> Nothing
+        RenderedCargo _ -> Nothing

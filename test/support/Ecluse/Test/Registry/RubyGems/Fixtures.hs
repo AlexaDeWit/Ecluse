@@ -13,16 +13,23 @@ module Ecluse.Test.Registry.RubyGems.Fixtures (
     rubyRelease,
     writeRubyRegistry,
     rubyVersions,
+    loadFixtureInfo,
 ) where
 
 import Data.Aeson (Value, eitherDecodeStrict, withObject, (.:))
 import Data.Aeson.Types (Parser, parseEither)
 import Data.ByteString qualified as BS
+import Data.ByteString.Char8 qualified as B8
 import Data.Text qualified as T
 import Data.Time (defaultTimeLocale, formatTime, getCurrentTime)
 import System.Directory (copyFile, createDirectoryIfMissing)
 import System.FilePath (takeDirectory, (</>))
 
+import Ecluse.Core.Package (PackageName)
+import Ecluse.Core.Package.Entry (EntryKey (RecordEntry))
+import Ecluse.Core.Registry.RubyGems.Document (GemRow)
+import Ecluse.Core.Registry.RubyGems.Project (projectName)
+import Ecluse.Core.Registry.RubyGems.Wire (decodeInfoRow)
 import Ecluse.Test.Package (hexSha256Of)
 
 -- | The manifest comes from Ruby's native tools rather than the production parsers.
@@ -115,6 +122,15 @@ rubyVersions releases =
     names = sort (ordNub (map releaseName releases))
     directoryRow name =
         name <> " " <> T.intercalate "," [T.takeWhile (/= ' ') (releaseInfoRow release) | release <- releases, releaseName release == name] <> " "
+
+-- | A committed info file's rows, each non-empty line after the header at its position from 1.
+loadFixtureInfo :: Text -> IO (PackageName, [GemRow])
+loadFixtureInfo raw = do
+    name <- either (fail . show) pure (projectName raw)
+    bytes <- BS.readFile (fixtureDirectory </> "info" </> toString raw)
+    let lines' = filter (not . BS.null) (drop 1 (B8.lines bytes))
+    rows <- traverse (\(position, line) -> either (fail . show) pure (decodeInfoRow name (RecordEntry position) line)) (zip [1 ..] lines')
+    pure (name, rows)
 
 fixtureDirectory :: FilePath
 fixtureDirectory = "test/fixtures/rubygems"

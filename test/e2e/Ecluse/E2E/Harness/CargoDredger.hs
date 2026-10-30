@@ -39,12 +39,13 @@ import UnliftIO (bracket_)
 
 import Ecluse.Core.Ecosystem (Ecosystem (Cargo))
 import Ecluse.E2E.Fixtures.Cargo.Dredger (buildDredgerReleases, firstPartyName)
-import Ecluse.E2E.Harness.Advisories (advisoryBucket, createAdvisoryBucket)
-import Ecluse.E2E.Harness.CargoGateway
+import Ecluse.E2E.Harness.Advisories (createAdvisoryBucket)
 import Ecluse.E2E.Harness.CargoRegistry
 import Ecluse.E2E.Harness.CodeArtifact
-import Ecluse.E2E.Harness.Docker (ministackAwsEnv, withStubFault)
-import Ecluse.E2E.Harness.Stub (StubFault (CargoCodeArtifactBackend), StubRoute (CargoPublic, PyPICodeArtifactData), stubUrl)
+import Ecluse.E2E.Harness.CodeArtifact.Roles (PublicationAuthority (..), codeArtifactProxyRoleEnv, codeArtifactSweepRoleEnv)
+import Ecluse.E2E.Harness.Docker (withStubFault)
+import Ecluse.E2E.Harness.NativeEdge
+import Ecluse.E2E.Harness.Stub (StubFault (CargoCodeArtifactBackend))
 import Ecluse.E2E.Harness.Types
 import Ecluse.Test.Registry.Cargo.Fixtures
 
@@ -60,7 +61,7 @@ data CargoSweepPlane = CargoSweepPlane
 -- | Client endpoints remain paired with the physical repository observed by the contract.
 data CargoSweepStore = CargoSweepStore
     { cssPlane :: CargoSweepPlane
-    , cssObserved :: ObservedCargoProxy
+    , cssObserved :: ObservedNativeProxy
     , cssRepository :: Text
     , cssReadUrl :: Text
     , cssPublishUrl :: Text
@@ -125,7 +126,7 @@ cacheReader registry request = do
 -- | Public replacement reads and private publication share one observed product listener.
 withSweepProxy :: CargoSweepPlane -> [(Text, Text)] -> Maybe Text -> [String] -> (CargoSweepStore -> IO a) -> IO a
 withSweepProxy plane extra queue args action =
-    withObservedCargoProxy config (cspGlobal plane) $ \observed -> do
+    withObservedNativeProxy config (cspGlobal plane) $ \observed -> do
         let base = e2eBaseUrl (observedProxy observed)
         action (CargoSweepStore plane observed "mirror" (base <> "/cargo/") (base <> "/cargo/private/"))
   where
@@ -143,13 +144,11 @@ directStore store = store{cssReadUrl = base, cssPublishUrl = base}
 
 -- | The URL retains the repository and Cargo format required by production configuration parsing.
 repositoryUrl :: Text -> Text
-repositoryUrl repository = stubUrl PyPICodeArtifactData <> "cargo/" <> repository <> "/"
+repositoryUrl = codeArtifactRepositoryUrl Cargo
 
 -- | Observe repository-local native inventory through production CodeArtifact response parsing.
 storeInventory :: CargoSweepStore -> IO (Map Text [Text])
-storeInventory store = do
-    names <- storeNamesUnder store ""
-    Map.fromList <$> traverse (\name -> (name,) <$> storeVersions store name) names
+storeInventory store = codeArtifactInventory (cspControl (cssPlane store)) (cssRepository store)
 
 -- | Native versions come from actual physical files, independently of retained mirror state.
 storeVersions :: CargoSweepStore -> Text -> IO [Text]
@@ -163,7 +162,7 @@ storeNamesUnder store = codeArtifactNamesUnder (cspControl (cssPlane store)) (cs
 storeArtifactBytes :: CargoSweepStore -> Text -> Text -> IO (Int, LBS.ByteString)
 storeArtifactBytes store name version = do
     let registry = cspRegistry (cssPlane store)
-        path = "http://127.0.0.1:" <> show (registryPort registry) <> "/crates/" <> name <> "/" <> version <> "/" <> name <> "-" <> version <> ".crate"
+        path = "http://127.0.0.1:" <> show (registryPort registry) <> "/" <> cargoArchivePathFor name version
     base <- Http.parseRequest (toString path)
     let request = base{Http.requestHeaders = [("Host", encodeUtf8 (nativeHost (cssRepository store))), ("Authorization", encodeUtf8 cargoRegistryToken)]}
     response <- Http.httpLbs request (e2eManager (observedProxy (cssObserved store)))
@@ -171,33 +170,11 @@ storeArtifactBytes store name version = do
 
 -- | Each Dredger process receives separate mirror and cache authority with the native control plane.
 sweepRoleEnv :: [(Text, Text)]
-sweepRoleEnv =
-    [ ("ECLUSE_SERVER__PORT", "4873")
-    , ("ECLUSE_SERVER__PUBLIC_URL", "http://127.0.0.1:4873")
-    , ("ECLUSE_MOUNTS__NPM__ENABLED", "false")
-    , ("ECLUSE_MOUNTS__PYPI__ENABLED", "false")
-    , ("ECLUSE_MOUNTS__CARGO__ENABLED", "true")
-    , ("ECLUSE_MOUNTS__CARGO__PUBLIC_UPSTREAM__REGISTRY__URL", stubUrl CargoPublic)
-    , ("ECLUSE_MOUNTS__CARGO__PRIVATE_UPSTREAM__CODE_ARTIFACT__URL", repositoryUrl "cache")
-    , ("ECLUSE_MOUNTS__CARGO__MIRROR_TARGET__CODE_ARTIFACT__URL", repositoryUrl "mirror")
-    , ("ECLUSE_OBSERVABILITY__LOG_FORMAT", "json")
-    , ("SSL_CERT_FILE", "/certs/bundle.pem")
-    ]
-        <> ministackAwsEnv
+sweepRoleEnv = codeArtifactSweepRoleEnv Cargo
 
 -- | Serving and worker roles retain source rows remotely across deletion and process restarts.
 proxyRoleEnv :: [(Text, Text)]
-proxyRoleEnv =
-    filter ((/= "ECLUSE_SERVER__PUBLIC_URL") . fst) sweepRoleEnv
-        <> [ ("ECLUSE_MIRROR_STATE__URL", "s3://" <> advisoryBucket <> "/cargo-dredger")
-           , ("ECLUSE_MOUNTS__CARGO__MIRROR_TARGET__CODE_ARTIFACT__UPLOAD_URL", repositoryUrl "mirror")
-           , ("ECLUSE_MOUNTS__CARGO__PUBLICATION_TARGET__CODE_ARTIFACT__URL", repositoryUrl "mirror")
-           , ("ECLUSE_MOUNTS__CARGO__PUBLICATION_TARGET__CODE_ARTIFACT__UPLOAD_URL", repositoryUrl "mirror")
-           , ("ECLUSE_MOUNTS__CARGO__PUBLICATION_TARGET__CODE_ARTIFACT__TOKEN", cargoRegistryToken)
-           , ("ECLUSE_MOUNTS__CARGO__FIRST_PARTY", firstPartyName)
-           , ("ECLUSE_SERVER__AUTH_TOKEN", cargoRegistryToken)
-           , ("ECLUSE_CACHE__TTL", "1")
-           ]
+proxyRoleEnv = codeArtifactProxyRoleEnv Cargo (PublicationAuthority "" [("TOKEN", cargoRegistryToken)] firstPartyName cargoRegistryToken)
 
 -- | Hide only the requested public archive while preserving its sparse record.
 withSourceWithheld :: CargoSweepPlane -> Text -> Text -> IO a -> IO a
@@ -210,23 +187,15 @@ withSourceWithheld plane name version action = do
 
 -- | The cache reports a per-version refusal while its physical archive remains readable.
 withDeleteRefusal :: CargoSweepPlane -> IO a -> IO a
-withDeleteRefusal plane = withFixtureValue (cafRefusedDeletes (cspControl plane)) ["cache"]
+withDeleteRefusal plane = withCodeArtifactDeleteRefusal (cspControl plane) "cache"
 
 -- | Removing the mirror consent marker must prevent a destructive request.
 withConsentWithheld :: CargoSweepPlane -> IO a -> IO a
-withConsentWithheld plane action = do
-    tags <- readTVarIO variable
-    withFixtureValue variable (Map.adjust (Map.delete "ecluse-dredger-consent") "mirror" tags) action
-  where
-    variable = cafTags (cspControl plane)
+withConsentWithheld plane = withCodeArtifactConsentRemoved (cspControl plane) "mirror"
 
 -- | A refill relationship on the mirror must fail the product's target-role checks.
 withUnsafeMirror :: CargoSweepPlane -> IO a -> IO a
-withUnsafeMirror plane action = do
-    links <- readTVarIO variable
-    withFixtureValue variable (Map.insert "mirror" ["cache"] links) action
-  where
-    variable = cafUpstreams (cspControl plane)
+withUnsafeMirror plane = withCodeArtifactUpstreams (cspControl plane) "mirror" ["cache"]
 
 -- | Native yank changes metadata while retaining the physical archive for subsequent deletion proof.
 setStoredYank :: CargoSweepStore -> Text -> Text -> IO ()

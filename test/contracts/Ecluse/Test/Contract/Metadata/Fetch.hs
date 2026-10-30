@@ -169,12 +169,12 @@ requestSpec eco = describe "the request" $ do
     fetchCase eco "no-redirect" "follows no redirect when the ecosystem's request builder did not seal its request" $
         withRoutedStub redirectOnce $ \stub -> withSweeper $ \deadlines -> do
             origin <- stubConfig deadlines loopbackRegistryUrl stub
-            let factory = PrepareRead $ \tracing selectedOrigin ->
-                    fmap (\nativeRead -> nativeRead{erRequest = unsealedRequest}) <$> prepareRead (rdPrepareRead eco) tracing selectedOrigin
+            let factory = PrepareRead (fmap (fmap unseal) . prepareRead (rdPrepareRead eco))
             outcome <- prepareManifest factory passthroughTracingPort origin (thing eco)
             void outcome `shouldBe` Left (MetadataHttpFailure 302)
             map capPath <$> allCaptured stub `shouldReturn` (["/config.json" | isJust (rdDiscovery eco)] <> ["/"])
   where
+    unseal nativeRead = nativeRead{erRequest = unsealedRequest}
     -- http-client's own parse leaves redirect following on, which a sealed request turns off.
     unsealedRequest base _ _ = first (const EmptyBaseUrl) (parseRequest (toString (registryUrlText (baseRequestUrl base))) :: Either SomeException Request)
     redirectOnce captured

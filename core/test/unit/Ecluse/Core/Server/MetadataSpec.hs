@@ -237,7 +237,7 @@ spec = do
             let selected = VersionRead{vrVersion = Just (VersionDoc (details name "1.0.0") (Just (markedObject "selected-provider"))), vrBodyBytes = 31, vrUpstreamLatest = Just (npmVersion "1.0.0")}
                 full = externalOperations (\_ _ -> modifyIORef' fullReads (+ 1) $> Nothing) (\_ _ -> pass)
                 version = externalOperations (\_ _ -> modifyIORef' versionReads (+ 1) $> Just selected) (\_ _ -> pass)
-            cache <- newMetadataCacheWithProvider (cacheProvider (ExternalStorage 100000) (Just full) (Just version) Nothing)
+            cache <- newMetadataCacheWithProvider (cacheProvider (ExternalStorage 100000) Nothing (Just full) (Just version) Nothing)
             let client = publicClient anonymous cache (unreachableFull originReads) (failingVersion originReads)
             fetchVersionMetadata client name (npmVersion "1.0.0") `shouldReturn` Right selected
             readIORef versionReads `shouldReturn` 1
@@ -408,8 +408,8 @@ preparationSpec = describe "origin preparation" $ do
                 versionValues <- newIORef Map.empty
                 let fullStore = externalOperations (\_ key -> Map.lookup key <$> readIORef fullValues) (\key value -> modifyIORef' fullValues (Map.insert key value))
                     versionStore = externalOperations (\_ key -> Map.lookup key <$> readIORef versionValues) (\key value -> modifyIORef' versionValues (Map.insert key value))
-                cache <- newMetadataCacheWithProvider (cacheProvider (ExternalStorage 100000) (Just fullStore) (Just versionStore) Nothing)
-                let factory = PrepareRead $ \_ selectedOrigin -> do
+                cache <- newMetadataCacheWithProvider (cacheProvider (ExternalStorage 100000) Nothing (Just fullStore) (Just versionStore) Nothing)
+                let factory = PrepareRead $ \selectedOrigin -> do
                         ocToken selectedOrigin `shouldBe` Nothing
                         atomicModifyIORef' prepared (\count -> (count + 1, ()))
                         pure (Right npmRead)
@@ -431,7 +431,7 @@ preparationSpec = describe "origin preparation" $ do
                 prepared <- newIORef []
                 let firstToken = Just (bareCredential (mkSecret "first"))
                     secondToken = Just (bareCredential (mkSecret "second"))
-                    factory = PrepareRead $ \_ selectedOrigin -> do
+                    factory = PrepareRead $ \selectedOrigin -> do
                         atomicModifyIORef' prepared (\tokens -> (ocToken selectedOrigin : tokens, ()))
                         pure (Right npmRead)
                     client token =
@@ -461,7 +461,7 @@ preparationSpec = describe "origin preparation" $ do
                 prepared <- newIORef (0 :: Int)
                 cache <- newMetadataCache defaultCacheConfig
                 let refusal = MetadataAuthorisationFailure 401
-                    factory = PrepareRead $ \_ _ -> do
+                    factory = PrepareRead $ \_ -> do
                         modifyIORef' prepared (+ 1)
                         pure (Left refusal)
                     origin = anonymousOrigin defaultLimits exchanges (mkBaseRequest (loopbackRegistryUrl (stubBaseUrl stub)))
@@ -475,7 +475,7 @@ preparationSpec = describe "origin preparation" $ do
     it "includes preparation in the raw read's request deadline" $
         withExchangeClient (newManager defaultManagerSettings) $ \exchanges -> withSweeper $ \deadlines -> do
             progress <- either (fail . show) pure (mkProgressFloor 0.5 0.25 1)
-            let factory = PrepareRead (\_ _ -> threadDelay 20_000_000 $> Left MetadataAbsent)
+            let factory = PrepareRead (\_ -> threadDelay 20_000_000 $> Left MetadataAbsent)
                 origin = perCallerOrigin defaultLimits exchanges (mkBaseRequest stubUrl) Nothing
                 preparedReads = ecosystemMetadataReads factory passthroughTracingPort noopMetricsPort noLog noInvalidLog noFetchLog origin
                 client = privateMetadataClient (withinRequestCap deadlines progress preparedReads)

@@ -52,6 +52,7 @@ import Ecluse.Core.Mirror.State.Internal
 import Ecluse.Core.Package (PackageDetails, PackageName)
 import Ecluse.Core.Registry.MirrorUpload (MirrorInventory, MirrorReadData, VerifiedArtifactBytes, inventoryPackage)
 import Ecluse.Core.Security (Limits)
+import Ecluse.Core.Server.MemoryModel (saturatingCharge)
 import Ecluse.Core.Version (Version)
 
 -- | Original admission facts remain attached to their retained source entries.
@@ -92,7 +93,7 @@ updateRecord limits charge inputWeight store name change = go (8 :: Int) StateRe
     apply attempts revision previous = case traverse (projectRecordWorkWeight limits) previous of
         Left fault -> pure (Left fault)
         Right retained -> do
-            charge (saturatingStateCharge (2 * (toInteger inputWeight + maybe 0 toInteger retained) + 4096))
+            charge (saturatingCharge (2 * (toInteger inputWeight + maybe 0 toInteger retained) + 4096))
             case change previous of
                 Left fault -> pure (Left fault)
                 Right updated -> case revision of

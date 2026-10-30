@@ -1,7 +1,6 @@
 -- SPDX-FileCopyrightText: 2026 Alexandra de Wit
 --
 -- SPDX-License-Identifier: MIT
-{-# LANGUAGE ImportQualifiedPost #-}
 {-# LANGUAGE TupleSections #-}
 
 -- | The native multipart writer exercised through the shared HTTP transport.
@@ -30,7 +29,7 @@ import Ecluse.Core.Registry.Publish (MirrorPublish (..), MirrorTransport (..), P
 import Ecluse.Core.Registry.PyPI.Publish (classifyPublish, pypiPublishCodec)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Core.Security.Limits (defaultLimits)
-import Ecluse.Test.Deadline (withExchangeClient)
+import Ecluse.Test.Deadline (withExchangeClient, withSweeper)
 import Ecluse.Test.Osv (osvZipOf)
 import Ecluse.Test.Package (pypiVersion, unscopedPyPI)
 import Ecluse.Test.Port (passthroughTracingPort)
@@ -79,11 +78,11 @@ spec = do
                 let bytes = "not an archive"
                 snapshot <- sourceSnapshotFor filename bytes
                 case pypiPublishCodec of
-                    PublishCodec{pcPrepareSource = prepareSource, pcPrepareUpload = prepareUpload} -> do
+                    PublishCodec{pcPrepareSource = prepareSource, pcPrepareUpload = prepareUpload} -> withSweeper $ \deadlines -> do
                         (inventory, source) <- expectRight (prepareSource (unscopedPyPI "example") (pypiVersion "1") snapshot)
                         let file = NE.head (inventoryFiles inventory)
                         verified <- expectRight (verifyMirrorBytes file bytes)
-                        prepared <- prepareUpload defaultLimits (const (pure ())) inventory source file verified
+                        prepared <- prepareUpload deadlines defaultLimits (const (pure ())) inventory source file verified
                         void prepared `shouldBe` Left (PublishSourceUnavailable "missing or ambiguous ZIP end record")
     describe "classifyPublish" $ do
         it "recognises duplicate filename responses but preserves unrelated 400 failures" $ do

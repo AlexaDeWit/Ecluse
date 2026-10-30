@@ -23,13 +23,13 @@ import Data.ByteString.Lazy qualified as LBS
 import Data.List (lookup)
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
-import Network.HTTP.Types (hContentType, status200, status400, status404, status503)
+import Network.HTTP.Types (hContentType, status200, status400, status404)
 import Network.Wai (Application, Request, pathInfo, requestHeaders, requestMethod, responseLBS, strictRequestBody)
 import Network.Wai.Parse (FileInfo (..), RequestBodyType (Multipart), lbsBackEnd, parseContentType, sinkRequestBody)
 
 import Ecluse.BenchLoad.Error (benchFail)
 import Ecluse.BenchLoad.Fixture (artifactBytes, delayUpstream)
-import Ecluse.BenchLoad.WorkerState (stateAppFor)
+import Ecluse.BenchLoad.WorkerState (WorkerTarget (..), acceptUpload, countRequest, newWorkerTarget, resetWorkerTarget, targetStateApp)
 import Ecluse.Core.Ecosystem (Ecosystem (PyPI))
 import Ecluse.Core.Package (PackageName, mkPackageName)
 import Ecluse.Core.Registry.PyPI.Wire (simpleIndexMediaType)
@@ -42,10 +42,7 @@ import Ecluse.Test.Wai (selfBaseUrl)
 -- | Each reset removes both target files and durable objects before another complete copy.
 data WorkerFixture = WorkerFixture
     { wfFiles :: Map Text ByteString
-    , wfTarget :: IORef (Map Text ByteString)
-    , wfObjects :: IORef (Map ByteString (ByteString, ByteString))
-    , wfCounts :: IORef (Map Text Int)
-    , wfReject :: IORef Bool
+    , wfState :: WorkerTarget
     }
 
 -- | Native archive framing encloses the configured uncompressed payload in each distribution.
@@ -57,14 +54,11 @@ newWorkerFixture payloadBytes = do
     sourceTar <- LBS.toStrict . GZip.compress <$> tarBytes [("example-1/PKG-INFO", metadata), ("example-1/data", payload)]
     checkUploadOracle fixtureTrigger wheel
     let files = Map.fromList [(fixtureTrigger, wheel), ("example-1-py2-none-any.whl", wheel), ("example-1.zip", sourceZip), ("example-1.tar.gz", sourceTar)]
-    WorkerFixture files <$> newIORef mempty <*> newIORef mempty <*> newIORef mempty <*> newIORef False
+    WorkerFixture files <$> newWorkerTarget
 
 -- | Resets do not change the immutable source archives or injected failure switch.
 resetWorkerFixture :: WorkerFixture -> IO ()
-resetWorkerFixture fixture = do
-    writeIORef (wfTarget fixture) mempty
-    writeIORef (wfObjects fixture) mempty
-    writeIORef (wfCounts fixture) mempty
+resetWorkerFixture = resetWorkerTarget . wfState
 
 -- | The demand names one wheel while the selected source version contains all four distributions.
 fixtureTrigger :: Text
@@ -84,10 +78,10 @@ sourceApp latency fixture request respond = do
     delayUpstream latency
     case route request of
         ["simple", "example"] -> do
-            count fixture "source-index"
+            countRequest (wfState fixture) "source-index"
             respond (responseLBS status200 [(hContentType, simpleIndexMediaType)] (encode (indexValue (selfBaseUrl request) (wfFiles fixture))))
         ["files", filename] | Just bytes <- Map.lookup filename (wfFiles fixture) -> do
-            count fixture "source-file"
+            countRequest (wfState fixture) "source-file"
             respond (responseLBS status200 [(hContentType, "application/octet-stream")] (LBS.fromStrict bytes))
         _ -> respond (responseLBS status404 [] "missing")
 
@@ -97,26 +91,14 @@ targetApp latency fixture request respond = do
     delayUpstream latency
     case (requestMethod request, route request) of
         ("GET", ["simple", "example"]) -> do
-            count fixture "target-index"
-            files <- readIORef (wfTarget fixture)
+            countRequest (wfState fixture) "target-index"
+            files <- readIORef (wtFiles (wfState fixture))
             respond (responseLBS status200 [(hContentType, simpleIndexMediaType)] (encode (indexValue (selfBaseUrl request) files)))
         ("POST", ["upload"]) -> do
             body <- LBS.toStrict <$> strictRequestBody request
             accepted <- decodeUpload fixture request body
-            reject <- readIORef (wfReject fixture)
             case accepted of
-                Just (filename, bytes) -> do
-                    count fixture "upload-attempt"
-                    if reject
-                        then respond (responseLBS status503 [] "injected upload rejection")
-                        else do
-                            objects <- readIORef (wfObjects fixture)
-                            if Map.null objects
-                                then respond (responseLBS status400 [] "upload preceded durable inventory")
-                                else do
-                                    modifyIORef' (wfTarget fixture) (Map.insert filename bytes)
-                                    count fixture "upload"
-                                    respond (responseLBS status200 [] "stored")
+                Just (filename, bytes) -> acceptUpload (wfState fixture) filename bytes (responseLBS status200 [] "stored") >>= respond
                 Nothing -> respond (responseLBS status400 [] "upload fields or bytes differ")
         _ -> respond (responseLBS status404 [] "missing")
 
@@ -172,7 +154,7 @@ expectedUploadFields filename bytes =
 
 -- | Reuse conditional object semantics with this fixture's owned stores and counters.
 stateApp :: Int -> WorkerFixture -> Application
-stateApp latency fixture = stateAppFor (wfObjects fixture) (wfCounts fixture) latency
+stateApp latency = targetStateApp latency . wfState
 
 indexValue :: Text -> Map Text ByteString -> Value
 indexValue base files =
@@ -184,6 +166,3 @@ indexValue base files =
 
 route :: Request -> [Text]
 route = filter (not . T.null) . pathInfo
-
-count :: WorkerFixture -> Text -> IO ()
-count fixture name = atomicModifyIORef' (wfCounts fixture) (\counts -> (Map.insertWith (+) name 1 counts, ()))

@@ -5,21 +5,27 @@
 -- | Discovery templates cannot grant an archive authority or change its native logical filename.
 module Ecluse.Core.Registry.Cargo.DiscoverySpec (spec) where
 
-import Data.Aeson (Value, eitherDecodeStrict)
+import Data.Aeson (Value, eitherDecodeStrict, object, (.=))
 import Data.ByteString qualified as BS
 import Data.Text qualified as T
+import Network.HTTP.Client (defaultManagerSettings, newManager)
+import Network.HTTP.Types.Status (status200)
 import Test.Hspec
 
 import Ecluse.Core.Ecosystem (Ecosystem (Cargo))
 import Ecluse.Core.Package (HashAlg (SHA1, SHA256), mkHash)
-import Ecluse.Core.Registry.Cargo.Discovery (bindCargoDownload, cargoArtifactCoordinate, coordinateChecksum, coordinateFilename, coordinateName, coordinateVersion, discoveryApi, discoveryAuthRequired, discoveryDl, parseDiscoveryWithDepth, renderCargoDiscovery)
+import Ecluse.Core.Registry.Cargo.Discovery (bindCargoDownload, cargoArtifactCoordinate, cargoDiscovery, coordinateChecksum, coordinateFilename, coordinateName, coordinateVersion, discoveryApi, discoveryAuthRequired, discoveryDl, parseDiscoveryWithDepth, renderCargoDiscovery)
 import Ecluse.Core.Registry.Cargo.Request (cargoArtifactHosts)
 import Ecluse.Core.Registry.Metadata (MetadataError (MetadataBoundExceeded, MetadataUndecodable))
-import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), LimitError (BodyTooLarge, TooDeeplyNested), ecosystemArtifactAuthorities)
+import Ecluse.Core.Registry.Origin (OriginClient (ocChargeFullRead), originClient)
+import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), LimitError (BodyTooLarge, TooDeeplyNested), defaultLimits, ecosystemArtifactAuthorities)
+import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Core.Server.Path (unFilename)
 import Ecluse.Core.Version (mkVersion)
+import Ecluse.Test.Deadline (withExchangeClient)
 import Ecluse.Test.Registry.Cargo.Metadata (cargoTestVersion, parseCargoDiscovery)
-import Ecluse.Test.Support (expectRight)
+import Ecluse.Test.Stub (stubBaseUrl, withStub)
+import Ecluse.Test.Support (expectRight, expectRightIO)
 
 spec :: Spec
 spec = describe "Cargo discovery" $ do
@@ -80,9 +86,26 @@ spec = describe "Cargo discovery" $ do
         discovery <- expectRight (parseCargoDiscovery hosts origin trusted)
         discoveryAuthRequired discovery `shouldBe` True
         fmap discoveryDl (parseCargoDiscovery hosts origin "{\"dl\":\"https://index.crates.io\",\"auth-required\":null}") `shouldSatisfy` isLeft
+    it "pays each discovery chunk's own charge, never a running total" $ do
+        let body = renderCargoDiscovery "https://static.crates.io/{crate}" Nothing False <> BS.replicate 51200 32
+        recorded <- newIORef []
+        withStub status200 (toLazy body) $ \stub ->
+            withExchangeClient (newManager defaultManagerSettings) $ \client -> do
+                let index = originClient defaultLimits client (loopbackRegistryUrl (stubBaseUrl stub <> "/index")) Nothing
+                discovery <- expectRightIO (cargoDiscovery index{ocChargeFullRead = \cost -> modifyIORef' recorded (cost :)})
+                discoveryDl discovery `shouldBe` "https://static.crates.io/{crate}"
+        charges <- readIORef recorded
+        length charges `shouldSatisfy` (>= 2)
+        sum charges `shouldBe` 4 * BS.length body + 128 * length charges
     it "renders only the supplied local routes" $
         (eitherDecodeStrict (renderCargoDiscovery "https://proxy.test/cargo/crates/{crate}/{version}/{crate}-{version}.crate" (Just "https://proxy.test/cargo/private") True) :: Either String Value)
-            `shouldSatisfy` isRight
+            `shouldBe` Right
+                ( object
+                    [ "dl" .= ("https://proxy.test/cargo/crates/{crate}/{version}/{crate}-{version}.crate" :: Text)
+                    , "api" .= ("https://proxy.test/cargo/private" :: Text)
+                    , "auth-required" .= True
+                    ]
+                )
   where
     hosts = ecosystemArtifactAuthorities cargoArtifactHosts
     origin = "https://index.crates.io"

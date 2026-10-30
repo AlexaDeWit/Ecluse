@@ -13,6 +13,7 @@ module Ecluse.Core.Server.MemoryModel (
     mirrorJobEstimatedBytes,
     bufferedChunkCharge,
     decodedDocumentCharge,
+    saturatingCharge,
 ) where
 
 import Data.ByteString qualified as BS
@@ -46,7 +47,7 @@ mirrorJobEstimatedBytes = 1024
 
 -- | Allow four overlapping byte copies and builder/list cells before retaining a nonempty chunk.
 bufferedChunkCharge :: Int -> Int
-bufferedChunkCharge = fromInteger . min (toInteger (maxBound :: Int)) . bufferedChargeInteger . toInteger
+bufferedChunkCharge = saturatingCharge . bufferedChargeInteger . toInteger
 
 bufferedChargeInteger :: Integer -> Integer
 bufferedChargeInteger bytes
@@ -57,6 +58,10 @@ bufferedChargeInteger bytes
 decodedDocumentCharge :: ByteString -> Int
 decodedDocumentCharge bytes
     | BS.null bytes = 0
-    | otherwise = fromInteger (min (toInteger (maxBound :: Int)) (4096 + 8 * toInteger (BS.length bytes) + 512 * markers))
+    | otherwise = saturatingCharge (4096 + 8 * toInteger (BS.length bytes) + 512 * markers)
   where
     markers = BS.foldl' (\count byte -> if byte `elem` [34, 44, 58, 60, 62, 91, 93, 123, 125] then count + 1 else count) 0 bytes
+
+-- | Clamp an Integer charge into the Int admission interface: below zero to zero, past 'maxBound' to 'maxBound'.
+saturatingCharge :: Integer -> Int
+saturatingCharge = fromInteger . max 0 . min (toInteger (maxBound :: Int))

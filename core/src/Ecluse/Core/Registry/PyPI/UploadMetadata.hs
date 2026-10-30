@@ -1,7 +1,6 @@
 -- SPDX-FileCopyrightText: 2026 Alexandra de Wit
 --
 -- SPDX-License-Identifier: MIT
-{-# LANGUAGE ImportQualifiedPost #-}
 {-# LANGUAGE TupleSections #-}
 
 -- | Checked per-distribution Core Metadata for the PyPI upload protocol.
@@ -19,7 +18,7 @@ import Data.Text qualified as T
 import Data.Text.Encoding qualified as TE
 
 import Ecluse.Core.Package (PackageName)
-import Ecluse.Core.Registry (ParseError (..))
+import Ecluse.Core.Registry (ParseError (..), parseRefusal)
 import Ecluse.Core.Registry.PyPI.Project (projectName)
 import Ecluse.Core.Version (Version, canonicalPep440)
 
@@ -30,30 +29,30 @@ newtype PyPIUploadMetadata = PyPIUploadMetadata [(Text, Text)]
 -- | Reject malformed headers, ambiguous single-use fields, and inconsistent package identity.
 parseUploadMetadata :: Int -> PackageName -> Version -> ByteString -> Either ParseError PyPIUploadMetadata
 parseUploadMetadata cap package version bytes = do
-    when (cap <= 0 || BS.length bytes > cap) (bad "Core Metadata exceeds its byte bound")
+    when (cap <= 0 || BS.length bytes > cap) (parseRefusal "Core Metadata exceeds its byte bound")
     document <- first (const (ParseError "Core Metadata is not UTF-8")) (TE.decodeUtf8' bytes)
-    when (T.any invalidControl document) (bad "Core Metadata contains a control character")
+    when (T.any invalidControl document) (parseRefusal "Core Metadata contains a control character")
     fields <- parseHeaders document
     checked <- traverse projectField fields
     let counts = Map.fromListWith (+) [(name, 1 :: Int) | (name, _) <- fields]
     for_ (Map.toList counts) $ \(name, count) ->
-        when (count > 1 && name `notElem` repeatedFields) (bad ("repeated single-use Core Metadata field: " <> name))
+        when (count > 1 && name `notElem` repeatedFields) (parseRefusal ("repeated single-use Core Metadata field: " <> name))
     format <- required "metadata-version" fields
     unless (format `elem` ["1.0", "1.1", "1.2", "2.1", "2.2", "2.3", "2.4", "2.5", "2.6"]) $
-        bad "unsupported Core Metadata version"
+        parseRefusal "unsupported Core Metadata version"
     declaredName <- required "name" fields >>= projectName
-    unless (declaredName == package) (bad "Core Metadata names another package")
+    unless (declaredName == package) (parseRefusal "Core Metadata names another package")
     declaredVersion <- required "version" fields
-    unless (canonicalPep440 declaredVersion == Just version) (bad "Core Metadata names another version")
+    unless (canonicalPep440 declaredVersion == Just version) (parseRefusal "Core Metadata names another version")
     for_ [value | ("dynamic", value) <- fields] $ \value ->
         when (T.toLower value `elem` ["name", "version", "metadata-version", "dynamic"] || isNothing (fieldName (T.toLower value))) $
-            bad "invalid Dynamic declaration"
+            parseRefusal "invalid Dynamic declaration"
     pure (PyPIUploadMetadata checked)
 
 -- | Charge the actual raw, decoded, and encoded metadata plus bounded header structures before preparation.
 uploadMetadataMemoryBytes :: ByteString -> Either ParseError Int
 uploadMetadataMemoryBytes bytes
-    | wanted > toInteger (maxBound :: Int) = bad "Core Metadata memory charge exceeds the platform bound"
+    | wanted > toInteger (maxBound :: Int) = parseRefusal "Core Metadata memory charge exceeds the platform bound"
     | otherwise = Right (fromInteger wanted)
   where
     wanted = 1024 + 6 * toInteger (BS.length bytes) + 512 * toInteger (headerCount 0 bytes)
@@ -82,26 +81,26 @@ parseHeaders = go 0 "" []
              in if rawLine `elem` ["", "\r"]
                     then finish held rest
                     else do
-                        when (count >= (65536 :: Int)) (bad "Core Metadata header count exceeds its bound")
-                        when (T.compareLength rawLine 16384 == GT) (bad "Core Metadata header line exceeds its bound")
-                        when (T.null suffix && ending == "\r\n") (bad "bare carriage return in Core Metadata")
+                        when (count >= (65536 :: Int)) (parseRefusal "Core Metadata header count exceeds its bound")
+                        when (T.compareLength rawLine 16384 == GT) (parseRefusal "Core Metadata header line exceeds its bound")
+                        when (T.null suffix && ending == "\r\n") (parseRefusal "bare carriage return in Core Metadata")
                         addLine (count + 1) previousEnding ending held line rest
     finish held body
         | T.null body = Right (finishFields held)
-        | any ((== "description") . fst) held = bad "description appears in both header and body"
+        | any ((== "description") . fst) held = parseRefusal "description appears in both header and body"
         | otherwise = Right (finishFields held <> [("description", body)])
     finishFields = map finishField . reverse
     finishField (name, pieces) =
         let value = T.concat (reverse pieces)
          in (name, if name == "description" then T.replace "\n       |" "\n" (T.replace "\r\n       |" "\r\n" value) else value)
     addLine count previousEnding nextEnding held line remaining
-        | T.any (== '\r') line = bad "bare carriage return in Core Metadata"
+        | T.any (== '\r') line = parseRefusal "bare carriage return in Core Metadata"
         | T.isPrefixOf " " line || T.isPrefixOf "\t" line = case held of
-            [] -> bad "Core Metadata starts with a continuation"
+            [] -> parseRefusal "Core Metadata starts with a continuation"
             (name, pieces) : rest -> go count nextEnding ((name, (previousEnding <> line) : pieces) : rest) remaining
         | otherwise = do
             let (name, suffix) = T.breakOn ":" line
-            when (T.null name || T.null suffix || not (T.all headerChar name)) (bad "malformed Core Metadata header")
+            when (T.null name || T.null suffix || not (T.all headerChar name)) (parseRefusal "malformed Core Metadata header")
             let value = T.dropWhile (`elem` [' ', '\t']) (T.drop 1 suffix)
             go count nextEnding ((T.toLower name, [value]) : held) remaining
 
@@ -111,11 +110,11 @@ headerChar character = isAsciiLower character || isAsciiUpper character || isDig
 required :: Text -> [(Text, Text)] -> Either ParseError Text
 required name fields = case [value | (key, value) <- fields, key == name] of
     [value] | not (T.null value) -> Right value
-    _ -> bad ("missing or ambiguous Core Metadata field: " <> name)
+    _ -> parseRefusal ("missing or ambiguous Core Metadata field: " <> name)
 
 projectField :: (Text, Text) -> Either ParseError (Text, Text)
 projectField (name, value) = case fieldName name of
-    Nothing -> bad ("unsupported Core Metadata field: " <> name)
+    Nothing -> parseRefusal ("unsupported Core Metadata field: " <> name)
     Just target -> Right (target, value)
 
 fieldName :: Text -> Maybe Text
@@ -164,6 +163,3 @@ repeatedFields =
     , "import-name"
     , "import-namespace"
     ]
-
-bad :: Text -> Either ParseError a
-bad = Left . ParseError

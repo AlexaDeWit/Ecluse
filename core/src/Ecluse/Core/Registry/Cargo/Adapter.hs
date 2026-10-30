@@ -14,6 +14,7 @@ import Ecluse.Core.Registry (UrlFormationError (UnparseableUrl))
 import Ecluse.Core.Registry.Adapter.Capability (AdapterArtifact (..), AdapterMaintenance (..), AdapterMetadata (..), PrivateArtifactAddressing (AdmittedIndexedArtifactLocation))
 import Ecluse.Core.Registry.Adapter.Types (AdapterServe (..), RegistryAdapter (..))
 import Ecluse.Core.Registry.Cargo.Credential (cargoCredential)
+import Ecluse.Core.Registry.Cargo.Execution (newCargoInstallEvidence)
 import Ecluse.Core.Registry.Cargo.Metadata (prepareCargoRead)
 import Ecluse.Core.Registry.Cargo.Project (cargoNameChars, projectName)
 import Ecluse.Core.Registry.Cargo.Publish (cargoPublish)
@@ -62,4 +63,5 @@ cargoAdapter factors =
                 , maintenanceVersionDelete = Nothing
                 , maintenanceAlphabet = mkNameAlphabet cargoNameChars
                 }
+        , adapterInstallEvidence = Just newCargoInstallEvidence
         }

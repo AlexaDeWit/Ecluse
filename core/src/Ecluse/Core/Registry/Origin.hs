@@ -20,15 +20,19 @@ module Ecluse.Core.Registry.Origin (
     chargingFullReads,
     chargingFullReadWorkspace,
     chargingSelectedMetadata,
+    chargingNativeReads,
     controlPublicOrigin,
 ) where
 
 import Ecluse.Core.Credential (ClientCredential)
+import Ecluse.Core.Registry.Exchange (accumulatingCharge)
 import Ecluse.Core.Registry.Exchange.Types (ExchangeClient)
 import Ecluse.Core.Registry.Public (PublicControl)
 import Ecluse.Core.Registry.Request (BaseRequest, baseRequestUrl, mkBaseRequest)
 import Ecluse.Core.Security (Limits)
 import Ecluse.Core.Security.Egress (RegistryUrl, registryUrlText)
+import Ecluse.Core.Server.Admission.Budget (scaleCharge)
+import Ecluse.Core.Server.Admission.Types (ChargeFactors (cfFullReadPermille))
 import Ecluse.Core.Telemetry.Upstream (PublicReadKind)
 
 -- | One origin's coordinates, credential posture, and response bound.
@@ -48,7 +52,9 @@ data OriginClient = OriginClient
     , ocChargeFullReadWorkspace :: Int -> IO ()
     -- ^ Reserve the full reader's absolute row workspace separately from retained source bytes.
     , ocChargeFullRead :: Int -> IO ()
-    -- ^ Pays for each decompressed chunk of a full metadata read before the parser sees it.
+    {- ^ Pays each decompressed chunk's own charge, never a running total, before the parser sees it.
+    A high-water payer must be wrapped in 'accumulatingCharge'.
+    -}
     }
 
 -- | Build an origin with caller-supplied limits, transport, and credential posture.
@@ -90,7 +96,9 @@ perCallerOrigin limits client base token = OriginFor (originAt limits client bas
 originClientOf :: OriginFor posture -> OriginClient
 originClientOf (OriginFor client) = client
 
--- | The same origin, paying for what its full metadata reads hand on.
+{- | The same origin, whose full reads hand the payer each chunk's own charge, never a running total.
+A high-water payer must be wrapped in 'accumulatingCharge'.
+-}
 chargingFullReads :: (Int -> IO ()) -> OriginFor posture -> OriginFor posture
 chargingFullReads charge (OriginFor client) = OriginFor client{ocChargeFullRead = charge}
 
@@ -101,6 +109,14 @@ chargingFullReadWorkspace pay (OriginFor client) = OriginFor client{ocChargeFull
 -- | Bind an absolute workspace reservation for native selected metadata reads.
 chargingSelectedMetadata :: (Int -> IO ()) -> OriginFor posture -> OriginFor posture
 chargingSelectedMetadata pay (OriginFor client) = OriginFor client{ocChargeSelectedRead = pay}
+
+{- | Bind one high-water payer to a native read: the selected workspace at face value, and the
+running total of the incremental full-read charges at the full-read factor.
+-}
+chargingNativeReads :: ChargeFactors -> (Int -> IO ()) -> OriginFor posture -> IO (OriginFor posture)
+chargingNativeReads factors pay origin = do
+    fullRead <- accumulatingCharge (pay . scaleCharge (cfFullReadPermille factors))
+    pure (chargingSelectedMetadata pay (chargingFullReads fullRead origin))
 
 -- | Control anonymous public reads, optionally assigning one kind to both metadata operations.
 controlPublicOrigin :: PublicControl -> Maybe PublicReadKind -> OriginFor Public -> OriginFor Public

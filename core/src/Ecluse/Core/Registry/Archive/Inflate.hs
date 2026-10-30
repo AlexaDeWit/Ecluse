@@ -1,12 +1,10 @@
 -- SPDX-FileCopyrightText: 2026 Alexandra de Wit
 --
 -- SPDX-License-Identifier: MIT
-{-# LANGUAGE ImportQualifiedPost #-}
 
 -- | A scoped inflater over the existing streaming-commons ABI, with deterministic release on every exit.
-module Ecluse.Core.Registry.Archive.Inflate (InflateFormat (..), withInflatedChunks, splitArchiveCharge) where
+module Ecluse.Core.Registry.Archive.Inflate (InflateFormat (..), withInflatedChunks, inflateBounded) where
 
-import Control.Concurrent.MVar qualified as MVar
 import Data.ByteString qualified as BS
 import Data.Streaming.Zlib.Lowlevel qualified as Z
 import Foreign.C.Types (CInt)
@@ -14,7 +12,7 @@ import Foreign.ForeignPtr (ForeignPtr, mallocForeignPtrBytes, withForeignPtr)
 import Foreign.Ptr (castPtr)
 import UnliftIO.Exception (bracket, mask_, throwIO)
 
-import Ecluse.Core.Registry (ParseError (..))
+import Ecluse.Core.Registry (ParseError (..), parseRefusal)
 import Ecluse.Core.Zlib (ZlibFault (InvalidZlibState, ZlibAllocationFailed), advanceStream, initialiseInflate, openStream, releaseInflate)
 
 -- | Raw deflate, one zlib stream, or a bounded sequence of gzip members.
@@ -29,6 +27,21 @@ withInflatedChunks format charge bytes consume = do
     charge (32768 + 7168 + chunkBytes)
     output <- mallocForeignPtrBytes chunkBytes
     bracket (newIORef (Fresh 0 bytes)) close $ \owner -> consume (nextChunk format owner output)
+
+-- | Collect one payload of at most @bound@ inflated bytes, paying @73728 + 3 * held@ before keeping each chunk.
+inflateBounded :: InflateFormat -> Text -> Int -> (Int -> IO ()) -> ByteString -> IO (Either ParseError ByteString)
+inflateBounded format refusal bound charge bytes = withInflatedChunks format charge bytes (collect 0 [])
+  where
+    collect seen held pull =
+        pull >>= \case
+            Left fault -> pure (Left fault)
+            Right chunk
+                | BS.null chunk -> pure (Right (BS.concat (reverse held)))
+                | BS.length chunk > bound - seen -> pure (parseRefusal refusal)
+                | otherwise -> do
+                    let next = seen + BS.length chunk
+                    charge (73728 + 3 * next)
+                    collect next (chunk : held) pull
 
 chunkBytes :: Int
 chunkBytes = 32768
@@ -98,13 +111,3 @@ step native input output =
         (status, consumed, written) <- advanceStream Z.c_call_inflate_noflush native (BS.take chunkBytes input) destination chunkBytes
         bytes <- BS.packCStringLen (castPtr destination, written)
         pure (status, consumed, bytes)
-
--- | Combine decoder and retained-content reservations into one absolute workspace charge.
-splitArchiveCharge :: (Int -> IO ()) -> IO (Int -> IO (), Int -> IO ())
-splitArchiveCharge pay = do
-    portions <- MVar.newMVar (0, 0)
-    let reserve change = MVar.modifyMVar_ portions $ \previous -> do
-            let next@(decoder, retained) = change previous
-            pay (decoder + retained)
-            pure next
-    pure (\decoder -> reserve (\(_, retained) -> (decoder, retained)), \retained -> reserve (\(decoder, _) -> (decoder, retained)))

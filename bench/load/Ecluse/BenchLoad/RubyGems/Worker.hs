@@ -12,6 +12,7 @@ import Ecluse.BenchLoad.Fixture (benchNow)
 import Ecluse.BenchLoad.Harness (LoadKnobs (..), Scenario (..), Target, scenario)
 import Ecluse.BenchLoad.RubyGems.WorkerFixture
 import Ecluse.BenchLoad.Worker (NativeWorker (..), WorkerEnvironment (..), bootNativeWorker)
+import Ecluse.BenchLoad.WorkerState (WorkerTarget (..))
 import Ecluse.Core.Ecosystem (Ecosystem (RubyGems))
 import Ecluse.Core.Queue (MirrorJob (..))
 import Ecluse.Core.Registry.Adapter (adapterFor)
@@ -19,14 +20,12 @@ import Ecluse.Core.Registry.Adapter.Capability (AdapterMetadata (metadataChargeF
 import Ecluse.Core.Registry.Adapter.Types (RegistryAdapter (adapterArtifact, adapterMetadata))
 import Ecluse.Core.Registry.Metadata (versionEvaluation)
 import Ecluse.Core.Registry.Metadata.Fetch.Preparation (prepareVersion)
-import Ecluse.Core.Registry.Origin (OriginClient (ocChargeFullReadWorkspace, ocChargeSelectedRead))
+import Ecluse.Core.Registry.Origin (chargingNativeReads, originClientOf)
 import Ecluse.Core.Registry.Publish (MirrorTransport (..), newMirrorPublish)
 import Ecluse.Core.Registry.RubyGems.Metadata (prepareGemRead)
 import Ecluse.Core.Registry.RubyGems.Publish (rubyPublishCodec)
 import Ecluse.Core.Security (defaultLimits)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
-import Ecluse.Core.Server.Admission.Budget (scaleCharge)
-import Ecluse.Core.Server.Admission.Types (ChargeFactors (cfFullReadPermille))
 import Ecluse.Core.Worker (WorkerPolicy (..))
 import Ecluse.Test.Package (defaultMinIntegrity, unsafeFilename)
 import Ecluse.Test.Port (passthroughTracingPort)
@@ -52,9 +51,9 @@ boot knobs use = do
                 , nwJob = MirrorJob fixturePackage fixtureVersion (Just (unsafeFilename fixtureTrigger)) Nothing
                 , nwExpectedFiles = 4
                 , nwReset = resetWorkerFixture fixture
-                , nwRejectUpload = writeIORef (wfReject fixture)
-                , nwUploadAttempts = Map.findWithDefault 0 "upload-attempt" <$> readIORef (wfCounts fixture)
-                , nwRemoveTrigger = modifyIORef' (wfTarget fixture) (Map.delete fixtureTrigger)
+                , nwRejectUpload = writeIORef (wtReject (wfState fixture))
+                , nwUploadAttempts = Map.findWithDefault 0 "upload-attempt" <$> readIORef (wtCounts (wfState fixture))
+                , nwRemoveTrigger = modifyIORef' (wtFiles (wfState fixture)) (Map.delete fixtureTrigger)
                 , nwMissingArtifact = "gem"
                 , nwVerifyCopy = verifyCopy fixture
                 }
@@ -65,11 +64,10 @@ rubyGemsPolicy adapter environment = do
     let factors = metadataChargeFactors (adapterMetadata adapter)
         target = weTargetReadRoot environment
         publish = newMirrorPublish (MirrorTransport (weClient environment) (pure Nothing) defaultLimits passthroughTracingPort) target target (rubyPublishCodec factors)
-        source = weSourceOrigin environment
     pure
         WorkerPolicy
             { wpFirstParty = const False
-            , wpResolveVersion = \pay name version -> versionEvaluation <$> prepareVersion prepareGemRead passthroughTracingPort source{ocChargeFullReadWorkspace = pay . scaleCharge (cfFullReadPermille factors), ocChargeSelectedRead = pay} name version
+            , wpResolveVersion = \pay name version -> chargingNativeReads factors pay (weSourceOrigin environment) >>= \origin -> versionEvaluation <$> prepareVersion prepareGemRead passthroughTracingPort (originClientOf origin) name version
             , wpInstallEvidence = Nothing
             , wpRules = weRules environment
             , wpMinIntegrity = defaultMinIntegrity
@@ -84,8 +82,8 @@ rubyGemsPolicy adapter environment = do
 
 verifyCopy :: WorkerFixture -> Int -> Int -> IO ()
 verifyCopy fixture published acked = do
-    target <- readIORef (wfTarget fixture)
-    counts <- readIORef (wfCounts fixture)
+    target <- readIORef (wtFiles (wfState fixture))
+    counts <- readIORef (wtCounts (wfState fixture))
     let count label = Map.findWithDefault 0 label counts
     unless (published == 1 && acked == 1 && target == wfFiles fixture && Map.size target == 4 && count "source-info" == 1 && count "source-file" == 4 && count "source-quick" == 4 && count "upload" == 4 && count "target-info" >= 2 && count "state-write" > 0) $
         benchFail ("RubyGems worker incomplete copy: published=" <> show published <> ", acknowledged=" <> show acked <> ", requests=" <> show counts)

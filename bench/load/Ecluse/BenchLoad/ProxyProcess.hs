@@ -10,6 +10,8 @@ module Ecluse.BenchLoad.ProxyProcess (
     AdvisoryFeed (..),
     advisoryBucket,
     mirrorStateBucket,
+    copyStatePublicHost,
+    copyStatePrivateHost,
     podShapeFromEnv,
     serveProxyFlag,
     proxyEnvironment,
@@ -121,7 +123,7 @@ import Ecluse.BenchLoad.Pod (
 import Ecluse.BenchLoad.RtsProbe (rtsStatsFlag)
 import Ecluse.BenchLoad.RtsWindow (Collection (MajorCollection), RtsSnapshot, collectionName)
 import Ecluse.BenchLoad.Verdict (ProxyEnding, classifyEnding)
-import Ecluse.Core.Ecosystem (Ecosystem (Cargo), ecosystemName)
+import Ecluse.Core.Ecosystem (Ecosystem (Cargo, Npm, PyPI, RubyGems), ecosystemName)
 import Ecluse.Core.Server.Encoding (MetadataCompression (IdentityOnly))
 import Ecluse.Rts.Cgroup (parseMemoryMax, readIfExists)
 import Ecluse.Runtime.Server (listeningPrefix, proxyListener)
@@ -144,6 +146,8 @@ data ProxySettings = ProxySettings
     , psPublicConnections :: Maybe Int
     , psPublicHost :: Maybe Text
     -- ^ An override for the public leg only. 'Nothing' preserves the fixture's hostname.
+    , psPrivateHost :: Maybe Text
+    -- ^ An override for the private and mirror target legs. 'Nothing' preserves the fixture's hostname.
     , psPrivateConnections :: Maybe Int
     , psClock :: Maybe UTCTime
     -- ^ A fixed evaluation clock for the rules, 'Nothing' for the wall clock.
@@ -155,7 +159,30 @@ data ProxySettings = ProxySettings
 
 -- | Settings for one mount with the given cache TTL, every bound left to the boot.
 proxySettings :: Ecosystem -> Int -> ProxySettings
-proxySettings ecosystem ttl = ProxySettings ecosystem ttl Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing noTuning
+proxySettings ecosystem ttl =
+    ProxySettings
+        { psEcosystem = ecosystem
+        , psCacheTtlSeconds = ttl
+        , psCacheMaxEntries = Nothing
+        , psCacheMaxBytes = Nothing
+        , psMaxResponseBytes = Nothing
+        , psServeMaxInFlight = Nothing
+        , psPublicConnections = Nothing
+        , psPublicHost = publicHost
+        , psPrivateHost = privateHost
+        , psPrivateConnections = Nothing
+        , psClock = Nothing
+        , psMirrorStatePort = Nothing
+        , psAdvisories = Nothing
+        , psTuning = noTuning
+        }
+  where
+    -- Cargo's private-copy state fixture reads its public sources and keys its private records by these hosts.
+    (publicHost, privateHost) = case ecosystem of
+        Npm -> (Nothing, Nothing)
+        PyPI -> (Nothing, Nothing)
+        Cargo -> (Just copyStatePublicHost, Just copyStatePrivateHost)
+        RubyGems -> (Nothing, Nothing)
 
 -- | The loopback object store serving the advisory database, and the named rules the policy adds to read it.
 data AdvisoryFeed = AdvisoryFeed
@@ -168,6 +195,14 @@ data AdvisoryFeed = AdvisoryFeed
 -- | The bucket holding the managed-read fixture's project record.
 mirrorStateBucket :: Text
 mirrorStateBucket = "ecluse-bench-mirror-state"
+
+-- | The public upstream host a native private-copy state fixture reads its sources from.
+copyStatePublicHost :: Text
+copyStatePublicHost = "localhost"
+
+-- | The private upstream host a native private-copy state fixture keys its records by.
+copyStatePrivateHost :: Text
+copyStatePrivateHost = "127.0.0.1"
 
 -- | The pod shape in @BENCH_LOAD_POD@, unlimited when unset.
 podShapeFromEnv :: IO PodShape
@@ -380,7 +415,7 @@ proxyEnvironment settings shape capabilities dir (port, controlPort, scrapePort)
     upstreamHost :: Text -> Text
     upstreamHost leg
         | leg == "PUBLIC_UPSTREAM", Just host <- psPublicHost settings = host
-        | psEcosystem settings == Cargo = if leg == "PUBLIC_UPSTREAM" then "localhost" else "127.0.0.1"
+        | leg /= "PUBLIC_UPSTREAM", Just host <- psPrivateHost settings = host
         | leg == "PUBLIC_UPSTREAM", isJust (psMirrorStatePort settings) = "127.0.0.1"
         | otherwise = "localhost"
     fixed =

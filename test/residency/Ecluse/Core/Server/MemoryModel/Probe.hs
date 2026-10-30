@@ -92,6 +92,7 @@ import Ecluse.Test.Corpus qualified as Corpus
 import Ecluse.Test.Corpus.Cargo qualified as Cargo
 import Ecluse.Test.Corpus.Merge (MergeDocument (Captured, Rewritten, RewrittenNative), MergeShape, captureDocuments, mergeDocuments)
 import Ecluse.Test.Corpus.RubyGems qualified as RubyGems
+import Ecluse.Test.EcosystemBench (CorpusFraming (JsonFraming, NativeFraming), EcosystemBench (ebFraming), ecosystemBenchFor)
 import Ecluse.Test.Port (passthroughTracingPort)
 import Ecluse.Test.Registry.Cargo.Metadata (cargoRead)
 import Ecluse.Test.Registry.Metadata.Fetch (captureManifest, heldBody, sourceBody)
@@ -522,10 +523,10 @@ prepare shape package = do
     (held, compact, weight, count) <- case shape of
         Wire -> pure (HeldWire bytes, 0, 0, 0)
         Raw -> do
-            raw <- either fail pure $ case pkgEcosystem (cpPackage package) of
-                Cargo -> first toString (Cargo.decodeCargoValues bytes)
-                RubyGems -> first toString (RubyGems.decodeRubyGemsValues bytes)
-                _ -> eitherDecodeStrict bytes
+            bench <- maybe (fail "capture ecosystem has no benchmark provider") pure (ecosystemBenchFor (pkgEcosystem (cpPackage package)))
+            raw <- either fail pure $ case ebFraming bench of
+                JsonFraming -> eitherDecodeStrict bytes
+                NativeFraming decodeValues _ -> first toString (decodeValues bytes)
             _ <- forceShown raw
             compact <- evaluate (LBS.length (encode raw))
             pure (HeldRaw raw, compact, 0, 0)

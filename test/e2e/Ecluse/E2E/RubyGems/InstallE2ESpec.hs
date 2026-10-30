@@ -22,8 +22,8 @@ import Test.Hspec (shouldBe, shouldMatchList, shouldSatisfy)
 import Ecluse.E2E.Fixtures.Contracts (concreteFamily)
 import Ecluse.E2E.Fixtures.RubyGems
 import Ecluse.E2E.Harness
+import Ecluse.E2E.Harness.NativeEdge
 import Ecluse.E2E.Harness.RubyGems
-import Ecluse.E2E.Harness.RubyGemsGateway
 import Ecluse.E2E.InstallationE2ESpec (codedArtifact)
 import Ecluse.Test.Contract.Ecosystem (FamilyFixture)
 import Ecluse.Test.Contract.Install
@@ -34,12 +34,12 @@ import Ecluse.Test.Registry.RubyGems.Fixtures
 -- | Refused and admitted installs use separate homes, caches and installed trees.
 rubyInstallationFamily :: FamilyFixture (InstallationDriver Bool)
 rubyInstallationFamily = concreteFamily (rubyReadFixture "installation" ["read", "client-install"]) $ \recorder action plane ->
-    timedFixture recorder (withObservedRubyProxy defaultE2EConfig plane) $ \observed -> do
+    timedFixture recorder (withObservedNativeProxy defaultE2EConfig plane) $ \observed -> do
         releases <- loadRubyReleases
         release <- rubyRelease releases rubyRoot rubyVersion "ruby"
         action (installation observed release)
 
-installation :: ObservedRubyProxy -> RubyRelease -> InstallationDriver Bool
+installation :: ObservedNativeProxy -> RubyRelease -> InstallationDriver Bool
 installation observed release =
     InstallationDriver
         { installationAccepted = InstallDriver accepted True
@@ -50,19 +50,20 @@ installation observed release =
         , installationCodedArtifact = codedArtifact proxy RubyGemsPublic (T.drop (T.length "/rubygems") archive) archive (pure (releaseChecksum release))
         }
   where
-    proxy = rubyProxy observed
+    proxy = observedProxy observed
     archive = rubyArchiveRoute release
     accepted = rubyConsumer proxy currentBundler $ \project -> do
-        before <- rubyTraffic observed
+        before <- nativeTraffic observed
         result <- rubyInstall project False
         when (crExit result == ExitSuccess) $ do
             assertRubyContents project "ecluse-fixture-leaf-1.0.0-ruby|root-1.0.0"
-            after <- rubyTraffic observed
-            assertRubyRouting (rubyTrafficSince before after)
-            assertRubyAssets project (rubyTrafficSince before after)
+            after <- nativeTraffic observed
+            interval <- nativeTrafficSince before after
+            assertRubyRouting interval
+            assertRubyAssets project interval
         pure (result, crExit result == ExitSuccess)
-    denied = withObservedRubyProxy rubyDeniedConfig (e2ePlane proxy) $ \refused ->
-        rubyConsumer (rubyProxy refused) currentBundler $ \project -> do
+    denied = withObservedNativeProxy rubyDeniedConfig (e2ePlane proxy) $ \refused ->
+        rubyConsumer (observedProxy refused) currentBundler $ \project -> do
             result <- rubyInstall project False
             tree <- rubyInstalledTree project
             pure (result, (crExit result == ExitSuccess, tree))
@@ -80,37 +81,37 @@ assertRubyContents project expected = do
     T.strip (crStdout executable) `shouldBe` expected
 
 -- | The proxy and TLS edge observe native archives and on-demand info exchanges.
-assertRubyRouting :: RubyTraffic -> IO ()
+assertRubyRouting :: NativeTraffic -> IO ()
 assertRubyRouting traffic = do
     assertRubyClientAssets traffic
-    let native request = any (`T.isSuffixOf` rubyRequestPath request) [".gem", ".gemspec.rz"]
-        clients = filter native (rubyClientRequests traffic)
-        origins = filter ((== "rubygems-upstream") . rubyRequestHost) (rubyUpstreamRequests traffic)
-        exchange request = (rubyRequestMethod request, rubyRequestPath request, rubyRequestStatus request)
-    origins `shouldSatisfy` any (T.isPrefixOf "/info/" . rubyRequestPath)
-    map (\request -> (rubyRequestMethod request, T.drop (T.length "/rubygems") (rubyRequestPath request), rubyRequestStatus request)) clients
+    let native request = any (`T.isSuffixOf` nativeRequestPath request) [".gem", ".gemspec.rz"]
+        clients = filter native (nativeClientRequests traffic)
+        origins = filter ((== "rubygems-upstream") . nativeRequestHost) (nativeUpstreamRequests traffic)
+        exchange request = (nativeRequestMethod request, nativeRequestPath request, nativeRequestStatus request)
+    origins `shouldSatisfy` any (T.isPrefixOf "/info/" . nativeRequestPath)
+    map (\request -> (nativeRequestMethod request, T.drop (T.length "/rubygems") (nativeRequestPath request), nativeRequestStatus request)) clients
         `shouldMatchList` map exchange (filter native origins)
 
 -- | Client archives and info rows traverse the product listener.
-assertRubyClientAssets :: RubyTraffic -> IO ()
+assertRubyClientAssets :: NativeTraffic -> IO ()
 assertRubyClientAssets traffic = do
-    let native request = any (`T.isSuffixOf` rubyRequestPath request) [".gem", ".gemspec.rz"]
-        clients = filter native (rubyClientRequests traffic)
-        forwarded = filter native (rubyProxyRequests traffic)
-        exchange request = (rubyRequestMethod request, rubyRequestPath request, rubyRequestStatus request)
-        successful suffix = any (\request -> suffix `T.isSuffixOf` rubyRequestPath request && rubyRequestStatus request == 200)
+    let native request = any (`T.isSuffixOf` nativeRequestPath request) [".gem", ".gemspec.rz"]
+        clients = filter native (nativeClientRequests traffic)
+        forwarded = filter native (nativeProxyRequests traffic)
+        exchange request = (nativeRequestMethod request, nativeRequestPath request, nativeRequestStatus request)
+        successful suffix = any (\request -> suffix `T.isSuffixOf` nativeRequestPath request && nativeRequestStatus request == 200)
     clients `shouldSatisfy` successful ".gem"
-    rubyClientRequests traffic `shouldSatisfy` any (\request -> "/rubygems/info/" `T.isPrefixOf` rubyRequestPath request && rubyRequestStatus request == 200)
-    map rubyRequestScheme clients `shouldSatisfy` all (== "https")
-    map rubyRequestPath clients `shouldSatisfy` all (T.isPrefixOf "/rubygems/")
+    nativeClientRequests traffic `shouldSatisfy` any (\request -> "/rubygems/info/" `T.isPrefixOf` nativeRequestPath request && nativeRequestStatus request == 200)
+    map nativeRequestScheme clients `shouldSatisfy` all (== "https")
+    map nativeRequestPath clients `shouldSatisfy` all (T.isPrefixOf "/rubygems/")
     map exchange clients `shouldMatchList` map exchange forwarded
 
 -- | Every archive retained by Bundler needs a successful exchange at the product listener.
-assertRubyAssets :: RubyProject -> RubyTraffic -> IO ()
+assertRubyAssets :: RubyProject -> NativeTraffic -> IO ()
 assertRubyAssets project traffic = do
     tree <- rubyInstalledTree project
     let archives = ordNub [toText (takeFileName path) | path <- Map.keys tree, ".gem" `T.isSuffixOf` toText path]
-        received = ordNub [T.takeWhileEnd (/= '/') (rubyRequestPath request) | request <- rubyClientRequests traffic, ".gem" `T.isSuffixOf` rubyRequestPath request, rubyRequestStatus request == 200]
+        received = ordNub [T.takeWhileEnd (/= '/') (nativeRequestPath request) | request <- nativeClientRequests traffic, ".gem" `T.isSuffixOf` nativeRequestPath request, nativeRequestStatus request == 200]
     archives `shouldSatisfy` (not . null)
     archives `shouldMatchList` received
 

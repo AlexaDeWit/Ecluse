@@ -23,7 +23,7 @@ import Ecluse.Core.Registry (
     PublishRelayResponse (PublishRelayResponse),
  )
 import Ecluse.Core.Registry.Adapter.Capability (AdapterPublish (publishCodec, publishCredential, publishRelay, publishRequestExtras, publishUploadClaims), PublishRequestBody (..))
-import Ecluse.Core.Registry.Exchange (withinServeCap)
+import Ecluse.Core.Registry.Exchange (accumulatingCharge, withinServeCap)
 import Ecluse.Core.Registry.Exchange.Types (ExchangeClient (ecDeadlines))
 import Ecluse.Core.Registry.Metadata (MetadataError (..))
 import Ecluse.Core.Registry.Origin (OriginClient (ocBaseRequest, ocChargeFullRead, ocClient), originClient)
@@ -97,7 +97,7 @@ publishWithDeps replies deps registry clientToken name request respond
             ( \ticket -> do
                 workspace <- liftIO (newChargeRegion (charge ticket))
                 withByteAdmission (srMetrics rt) (pubBodyBudget deps) bodyWeight $
-                    liftIO (readAndRelay replies deps registry rt workspace (publicationTarget deps rt clientToken) name request)
+                    liftIO (readAndRelay replies deps registry workspace (publicationTarget deps rt clientToken) name request)
             )
             (liftIO . respond . fromMaybe (bodyBudgetShed replies deps))
   where
@@ -116,13 +116,12 @@ readAndRelay ::
     PublishReplies response ->
     PublishDeps ->
     Text ->
-    ServeRuntime ->
     (Int -> IO ()) ->
     OriginClient ->
     Maybe PackageName ->
     Request ->
     IO response
-readAndRelay replies deps registry rt workspace target name request =
+readAndRelay replies deps registry workspace target name request =
     boundedRead (PublishRequestBodyLimit (pubMaxRequestBytes deps)) (getRequestBodyChunk request) >>= \case
         Left _ -> pure (publishTooLarge replies deps)
         Right (_, bytes) -> case publishRequestExtras (pubAdapter deps) (requestHeaders request) of
@@ -136,7 +135,8 @@ readAndRelay replies deps registry rt workspace target name request =
                         Left refusal -> pure refusal
                         Right agreed -> do
                             outcome <- withinServeCap (ecDeadlines (ocClient target)) (progressFloor (pubLimits deps)) MetadataFetch $ do
-                                prepared <- pcPrepareTarget (publishCodec (pubAdapter deps)) (srTracing rt) target{ocChargeFullRead = workspace . scaleCharge (pcTargetReadPermille (publishCodec (pubAdapter deps)))} (pubTargetUrl deps)
+                                fullRead <- accumulatingCharge (workspace . scaleCharge (pcTargetReadPermille (publishCodec (pubAdapter deps))))
+                                prepared <- pcPrepareTarget (publishCodec (pubAdapter deps)) target{ocChargeFullRead = fullRead} (pubTargetUrl deps)
                                 case prepared of
                                     Left fault -> pure (Left fault)
                                     Right approved -> first MetadataFetch <$> publishRelay (pubAdapter deps) target{ocBaseRequest = mkBaseRequest approved} agreed body

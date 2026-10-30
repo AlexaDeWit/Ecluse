@@ -20,8 +20,8 @@ import Test.Hspec (shouldBe, shouldReturn)
 import Ecluse.E2E.Fixtures.Contracts (concreteFamily)
 import Ecluse.E2E.Fixtures.RubyGems
 import Ecluse.E2E.Harness
+import Ecluse.E2E.Harness.NativeEdge
 import Ecluse.E2E.Harness.RubyGems
-import Ecluse.E2E.Harness.RubyGemsGateway
 import Ecluse.E2E.Harness.RubyGemsRegistry
 import Ecluse.Test.Contract.Ecosystem (FamilyFixture)
 import Ecluse.Test.Contract.Phase (timedFixture)
@@ -49,14 +49,14 @@ rubyPublicationFamily :: FamilyFixture PublicationFixture
 rubyPublicationFamily = concreteFamily rubyPublicationFixture $ \recorder action plane ->
     timedFixture recorder withRubyRegistry $ \registry ->
         withStubFault plane (RubyGemsBackend (rubyRegistryPort registry) False) $
-            withObservedRubyProxy rubyPublicationConfig plane $ \observed -> do
+            withObservedNativeProxy rubyPublicationConfig plane $ \observed -> do
                 releases <- loadRubyReleases
                 accepted <- rubyRelease releases "ecluse-fixture-firstparty" "1.0.0" "ruby"
                 refused <- rubyRelease releases "ecluse-fixture-sentinel" "1.0.0" "ruby"
                 retained <- rubyRelease releases "ecluse-fixture-firstparty" "2.0.0" "ruby"
                 action (PublicationFixture "1.0.0" (driver observed registry accepted) (driver observed registry refused) (yankDriver observed registry retained))
 
-driver :: ObservedRubyProxy -> RubyRegistry -> RubyRelease -> PublicationDriver
+driver :: ObservedNativeProxy -> RubyRegistry -> RubyRelease -> PublicationDriver
 driver observed registry release =
     PublicationDriver
         { publicationRun = publishObserved observed registry release
@@ -72,10 +72,10 @@ driver observed registry release =
         , publicationSettle = pass
         }
   where
-    proxy = rubyProxy observed
+    proxy = observedProxy observed
     versions = rubyRegistryVersions registry "rubygems-private" (releaseName release)
 
-yankDriver :: ObservedRubyProxy -> RubyRegistry -> RubyRelease -> NonUploadDriver
+yankDriver :: ObservedNativeProxy -> RubyRegistry -> RubyRelease -> NonUploadDriver
 yankDriver observed registry release =
     NonUploadDriver
         { nonUploadRelease = publishObserved observed registry release
@@ -89,17 +89,17 @@ yankDriver observed registry release =
         }
 
 -- RubyGems yank prints only the response body and exits zero on an empty 404.
-yankObserved :: ObservedRubyProxy -> RubyRegistry -> RubyRelease -> IO ClientResult
+yankObserved :: ObservedNativeProxy -> RubyRegistry -> RubyRelease -> IO ClientResult
 yankObserved observed registry release = do
-    before <- rubyTraffic observed
+    before <- nativeTraffic observed
     headersBefore <- readTVarIO (rubyRegistryHeaders registry)
     native <- withRubyProject currentBundler proxy (e2eBaseUrl proxy <> "/rubygems/") Nothing $ \project ->
         rubyGemCommand project rubyRegistryToken ["yank", toString (releaseName release), "--version", toString (releaseVersion release)]
     crExit native `shouldBe` ExitSuccess
     response <- proxyRequest "DELETE" [("Authorization", encodeUtf8 rubyRegistryToken), ("Content-Type", "application/x-www-form-urlencoded")] body proxy path
     responseStatus response `shouldBe` 404
-    traffic <- rubyTrafficSince before <$> rubyTraffic observed
-    [(rubyRequestScheme request, rubyRequestHost request, rubyRequestMethod request, rubyRequestPath request, rubyRequestStatus request) | request <- rubyClientRequests traffic]
+    traffic <- nativeTraffic observed >>= nativeTrafficSince before
+    [(nativeRequestScheme request, nativeRequestHost request, nativeRequestMethod request, nativeRequestPath request, nativeRequestStatus request) | request <- nativeClientRequests traffic]
         `shouldBe` replicate 2 ("https", T.drop 8 (e2eBaseUrl proxy), "DELETE", path, 404)
     readTVarIO (rubyRegistryHeaders registry) `shouldReturn` headersBefore
     pure
@@ -110,19 +110,19 @@ yankObserved observed registry release = do
             , crStderr = decodeUtf8 (responseBody response)
             }
   where
-    proxy = rubyProxy observed
+    proxy = observedProxy observed
     path = "/rubygems/api/v1/gems/yank"
     body = renderSimpleQuery False [("gem_name", encodeUtf8 (releaseName release)), ("version", encodeUtf8 (releaseVersion release))]
 
-publishObserved :: ObservedRubyProxy -> RubyRegistry -> RubyRelease -> IO ClientResult
+publishObserved :: ObservedNativeProxy -> RubyRegistry -> RubyRelease -> IO ClientResult
 publishObserved observed registry release = do
-    before <- rubyTraffic observed
+    before <- nativeTraffic observed
     headersBefore <- length <$> readTVarIO (rubyRegistryHeaders registry)
     uploadsBefore <- length <$> readTVarIO (rubyRegistryUploads registry)
-    result <- rubyPublishRelease (rubyProxy observed) currentBundler release
+    result <- rubyPublishRelease (observedProxy observed) currentBundler release
     when (crExit result == ExitSuccess) $ do
-        traffic <- rubyTrafficSince before <$> rubyTraffic observed
-        [(rubyRequestMethod request, rubyRequestPath request) | request <- rubyClientRequests traffic]
+        traffic <- nativeTraffic observed >>= nativeTrafficSince before
+        [(nativeRequestMethod request, nativeRequestPath request) | request <- nativeClientRequests traffic]
             `shouldBe` [("POST", "/rubygems/api/v1/gems")]
         target <- drop headersBefore <$> readTVarIO (rubyRegistryHeaders registry)
         [(host, method, path, lookup "Authorization" headers, lookup "OTP" headers) | (host, method, path, headers) <- target]

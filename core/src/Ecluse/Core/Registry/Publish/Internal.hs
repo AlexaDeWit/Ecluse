@@ -20,10 +20,11 @@ import Data.JsonStream.Lexer (Cursor)
 import Network.HTTP.Client (Request)
 
 import Ecluse.Core.Credential (ClientCredential)
+import Ecluse.Core.Deadline (Deadlines)
 import Ecluse.Core.Package (PackageInfo, PackageName)
 import Ecluse.Core.Registry (BodyOutcome, FetchFault (FetchBoundExceeded, FetchUrlUnformable), ParseError, PublishError (PublishError), PublishFault (PublishFetch, PublishRejected), PublishRelayResponse, UrlFormationError)
 import Ecluse.Core.Registry.Exchange (accumulatingCharge, boundedExchange, boundedRelay, formThen, withSuccessBody)
-import Ecluse.Core.Registry.Exchange.Types (ExchangeClient)
+import Ecluse.Core.Registry.Exchange.Types (ExchangeClient (ecDeadlines))
 import Ecluse.Core.Registry.Json.Walk (Step, readJsonWalk)
 import Ecluse.Core.Registry.JsonStream (StreamResult (streamValue))
 import Ecluse.Core.Registry.Metadata (Manifest (manifestInfo), MetadataError (..), VersionDoc)
@@ -58,14 +59,14 @@ newtype PreparedMirrorUpload = PreparedMirrorUpload
 data MirrorCompanion = MirrorCompanion
     { mcLocation :: ExpectedMirrorFile -> Text -> Either PublishFault Text
     -- ^ Derive a companion location from an authorised artifact location.
-    , mcValidate :: Limits -> (Int -> IO ()) -> MirrorInventory -> ExpectedMirrorFile -> ByteString -> IO (Either PublishFault ByteString)
+    , mcValidate :: Deadlines -> Limits -> (Int -> IO ()) -> MirrorInventory -> ExpectedMirrorFile -> ByteString -> IO (Either PublishFault ByteString)
     -- ^ Validate native facts and return the original bounded bytes.
     }
 
 -- | The codec owns source and upload metadata while the worker owns whole-version orchestration.
 data PublishCodec = forall source metadata. PublishCodec
     { pcPrepareSource :: PackageName -> Version -> VersionDoc -> Either PublishFault (MirrorInventory, source)
-    , pcPrepareUpload :: Limits -> (Int -> IO ()) -> MirrorInventory -> source -> ExpectedMirrorFile -> VerifiedArtifactBytes -> IO (Either PublishFault (MirrorUploadData metadata))
+    , pcPrepareUpload :: Deadlines -> Limits -> (Int -> IO ()) -> MirrorInventory -> source -> ExpectedMirrorFile -> VerifiedArtifactBytes -> IO (Either PublishFault (MirrorUploadData metadata))
     , pcMirrorCompanion :: Maybe MirrorCompanion
     , pcNativeComplete :: PackageName -> Version -> PackageInfo -> Bool
     -- ^ Atomic native inventories may prove completion without retained external source state.
@@ -75,7 +76,7 @@ data PublishCodec = forall source metadata. PublishCodec
     , pcProbeRequest :: Text -> Maybe ClientCredential -> PackageName -> Either UrlFormationError Request
     , pcVersionListWalk :: Maybe (Limits -> Cursor -> Step VersionListState)
     -- ^ The protocol maintenance caller uses this cheaper inventory where the adapter supplies one.
-    , pcPrepareTarget :: TracingPort -> OriginClient -> RegistryUrl -> IO (Either MetadataError RegistryUrl)
+    , pcPrepareTarget :: OriginClient -> RegistryUrl -> IO (Either MetadataError RegistryUrl)
     -- ^ Prepare only after the role credential exists. Discovery cannot widen the approved upload root.
     , pcPublishRequest :: Text -> Maybe ClientCredential -> PublishPlan -> MirrorUploadData metadata -> Either PublishFault Request
     , pcPublishOutcome :: Int -> ByteString -> Either PublishFault ()
@@ -112,7 +113,7 @@ newMirrorPublish transport readTarget uploadTarget PublishCodec{pcPrepareSource,
                     , pmvPrepareUploadAction = \charge file bytes -> do
                         peak <- newIORef 0
                         let pay amount = modifyIORef' peak (max amount) >> charge amount
-                        prepared <- pcPrepareUpload (ptLimits transport) pay inventory source file bytes
+                        prepared <- pcPrepareUpload (ecDeadlines (ptClient transport)) (ptLimits transport) pay inventory source file bytes
                         retained <- readIORef peak
                         pure (PreparedMirrorUpload . publishUpload transport readTarget uploadTarget (charge . (+ retained) . scaleCharge pcTargetReadPermille) pcPrepareTarget pcPublishRequest pcPublishOutcome <$> prepared)
                     }
@@ -141,12 +142,12 @@ fetchVersionList client limits walk request =
   where
     versions streamed = streamValue streamed >>= finishVersionList
 
-publishUpload :: MirrorTransport -> RegistryUrl -> RegistryUrl -> (Int -> IO ()) -> (TracingPort -> OriginClient -> RegistryUrl -> IO (Either MetadataError RegistryUrl)) -> (Text -> Maybe ClientCredential -> PublishPlan -> MirrorUploadData metadata -> Either PublishFault Request) -> (Int -> ByteString -> Either PublishFault ()) -> MirrorUploadData metadata -> PublishPlan -> IO (Either PublishFault ())
+publishUpload :: MirrorTransport -> RegistryUrl -> RegistryUrl -> (Int -> IO ()) -> (OriginClient -> RegistryUrl -> IO (Either MetadataError RegistryUrl)) -> (Text -> Maybe ClientCredential -> PublishPlan -> MirrorUploadData metadata -> Either PublishFault Request) -> (Int -> ByteString -> Either PublishFault ()) -> MirrorUploadData metadata -> PublishPlan -> IO (Either PublishFault ())
 publishUpload transport readTarget target charge prepare request outcome upload plan = do
     credential <- ptMintCredential transport
     pay <- accumulatingCharge charge
     let origin = (originClient (ptLimits transport) (ptClient transport) readTarget credential){ocChargeFullRead = pay}
-    prepared <- prepare (ptTracing transport) origin target
+    prepared <- prepare origin target
     case prepared of
         Left fault -> pure (Left (publishTargetFault fault))
         Right approved ->

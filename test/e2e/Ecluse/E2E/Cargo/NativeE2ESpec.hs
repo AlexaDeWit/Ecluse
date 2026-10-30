@@ -22,8 +22,8 @@ import Ecluse.E2E.Fixtures.Cargo
 import Ecluse.E2E.Fixtures.Contracts (ConcreteFixture (..))
 import Ecluse.E2E.Harness
 import Ecluse.E2E.Harness.Cargo
-import Ecluse.E2E.Harness.CargoGateway
 import Ecluse.E2E.Harness.CargoRegistry
+import Ecluse.E2E.Harness.NativeEdge
 import Ecluse.Test.Contract.Catalogue (caseLabel)
 import Ecluse.Test.Contract.Phase (timedFixture)
 import Ecluse.Test.Contract.Runner (DeclaredGroup (..))
@@ -39,28 +39,28 @@ cargoNativeContract fixture = DeclaredGroup (fixtureMetadata fixture) $ \recorde
         it (label "current-client" "builds, installs and publishes with the current Cargo client and requires trusted TLS") (clientCase currentCargo False)
         it (label "floor-client" "builds, installs and publishes with Cargo 1.74 and requires trusted TLS") (clientCase floorCargo True)
         it (label "asset-routing" "rewrites discovery and observes every native archive at the product and public upstream") $ \plane ->
-            withObservedCargoProxy defaultE2EConfig plane $ \observed -> do
+            withObservedNativeProxy defaultE2EConfig plane $ \observed -> do
                 discovery <- proxyRequest "GET" [] "" (observedProxy observed) "/cargo/config.json"
                 assertDiscovery (observedProxy observed) "/cargo" Nothing discovery
                 cargoConsumer (observedProxy observed) currentCargo $ \project -> do
-                    invocation <- observeCargo (cargoTraffic observed) project ["build"]
+                    invocation <- observeCargo (nativeTraffic observed) project ["build"]
                     void (shouldSucceed (cargoInvocationClient invocation))
                     assertCargoRouting (cargoInvocationTraffic invocation)
                     assertCargoAssets project (cargoInvocationTraffic invocation)
         it (label "metadata-no-archives" "serves default policy metadata without requesting archive evidence") $ \plane ->
-            withObservedCargoProxy defaultE2EConfig plane $ \observed -> do
+            withObservedNativeProxy defaultE2EConfig plane $ \observed -> do
                 proxyStatus (observedProxy observed) ("/cargo/" <> cargoShard cargoRoot) `shouldReturn` 200
-                traffic <- cargoTraffic observed
-                filter (T.isSuffixOf ".crate" . cargoRequestPath) (cargoUpstreamRequests traffic) `shouldBe` []
+                traffic <- nativeTraffic observed
+                filter (T.isSuffixOf ".crate" . nativeRequestPath) (nativeUpstreamRequests traffic) `shouldBe` []
         it (label "denial-control" "denies both native installation and a direct archive request without fetching archive bytes") $ \plane ->
-            withObservedCargoProxy cargoDeniedConfig plane $ \observed -> do
-                before <- cargoTraffic observed
+            withObservedNativeProxy cargoDeniedConfig plane $ \observed -> do
+                before <- nativeTraffic observed
                 cargoConsumer (observedProxy observed) currentCargo $ \project -> void (runCargo project ["build"] >>= shouldFail)
                 proxyStatus (observedProxy observed) (cargoArchiveRoute cargoRoot cargoVersion) `shouldReturn` 403
-                after <- cargoTraffic observed
-                filter (T.isSuffixOf ".crate" . cargoRequestPath) (drop (length (cargoUpstreamRequests before)) (cargoUpstreamRequests after)) `shouldBe` []
+                after <- nativeTraffic observed
+                filter (T.isSuffixOf ".crate" . nativeRequestPath) (drop (length (nativeUpstreamRequests before)) (nativeUpstreamRequests after)) `shouldBe` []
         it (label "features" "retains renamed dependencies, default features and forwarded namespaced features") $ \plane ->
-            withObservedCargoProxy defaultE2EConfig plane $ \observed -> cargoConsumer (observedProxy observed) currentCargo $ \project -> do
+            withObservedNativeProxy defaultE2EConfig plane $ \observed -> cargoConsumer (observedProxy observed) currentCargo $ \project -> do
                 void (runCargo project ["build"] >>= shouldSucceed)
                 ordinary <- cargoRun project [] >>= shouldSucceed
                 T.strip (crStdout ordinary) `shouldBe` cargoExpectedOutput False False
@@ -71,7 +71,7 @@ cargoNativeContract fixture = DeclaredGroup (fixtureMetadata fixture) $ \recorde
                 cargoPackageDependencies root `shouldSatisfy` any (\dependency -> cargoDependencyName dependency == "ecluse-e2e-leaf" && cargoDependencyRename dependency == Just "renamed_leaf" && not (cargoDependencyDefaults dependency) && cargoDependencyFeatures dependency == ["base"])
                 cargoPackageDependencies root `shouldSatisfy` any (\dependency -> cargoDependencyName dependency == "ecluse-e2e-extra" && cargoDependencyOptional dependency && not (cargoDependencyDefaults dependency))
         it (label "targets" "retains target conditions and selects native graph edges for each declared platform") $ \plane ->
-            withObservedCargoProxy defaultE2EConfig plane $ \observed -> cargoConsumer (observedProxy observed) currentCargo $ \project -> do
+            withObservedNativeProxy defaultE2EConfig plane $ \observed -> cargoConsumer (observedProxy observed) currentCargo $ \project -> do
                 void (cargoResolve project [] >>= shouldSucceed)
                 unix <- readGraph project ["--filter-platform", "x86_64-unknown-linux-gnu"]
                 windows <- readGraph project ["--filter-platform", "x86_64-pc-windows-gnu"]
@@ -83,7 +83,7 @@ cargoNativeContract fixture = DeclaredGroup (fixtureMetadata fixture) $ \recorde
                 activeDependencies cargoRoot windows `shouldSatisfy` elem "ecluse_e2e_windows"
                 activeDependencies cargoRoot windows `shouldSatisfy` notElem "ecluse_e2e_unix"
         it (label "lock-checksums" "retains native source identities and every exact archive checksum in Cargo.lock") $ \plane ->
-            withObservedCargoProxy defaultE2EConfig plane $ \observed -> cargoConsumer (observedProxy observed) floorCargo $ \project -> do
+            withObservedNativeProxy defaultE2EConfig plane $ \observed -> cargoConsumer (observedProxy observed) floorCargo $ \project -> do
                 void (runCargo project ["build"] >>= shouldSucceed)
                 releases <- cargoFixtureReleases
                 locked <- cargoLock project >>= either (fail . toString) pure
@@ -96,7 +96,7 @@ cargoNativeContract fixture = DeclaredGroup (fixtureMetadata fixture) $ \recorde
             let row = case cargoIndexRecord root of Object fields -> Object (KeyMap.insert "rust_version" (String "99.0") fields); other -> other
             writeCargoRegistry (gdpWorkDir plane </> "cargo") (stubUrl CargoPublic) Nothing False releases
             writeFileLBS (gdpWorkDir plane </> "cargo" </> toString (cargoShard cargoRoot)) (encode row <> "\n")
-            for_ [currentCargo, floorCargo] $ \toolchain -> withObservedCargoProxy defaultE2EConfig plane $ \observed -> cargoConsumer (observedProxy observed) toolchain $ \project -> do
+            for_ [currentCargo, floorCargo] $ \toolchain -> withObservedNativeProxy defaultE2EConfig plane $ \observed -> cargoConsumer (observedProxy observed) toolchain $ \project -> do
                 rows <- cargoReadIndex (observedProxy observed) "/cargo/" cargoRoot
                 map (KeyMap.lookup "rust_version") rows `shouldBe` [Just (String "99.0")]
                 result <- runCargo project ["build"] >>= shouldFail
@@ -114,13 +114,13 @@ cargoNativeContract fixture = DeclaredGroup (fixtureMetadata fixture) $ \recorde
 
 clientCase :: CargoToolchain -> Bool -> GlobalDataPlane -> IO ()
 clientCase toolchain floorExpected plane = do
-    withObservedCargoProxy defaultE2EConfig plane $ \observed -> do
+    withObservedNativeProxy defaultE2EConfig plane $ \observed -> do
         cargoConsumer (observedProxy observed) toolchain $ \project -> do
             (client, compiler) <- cargoVersions project
             void (shouldSucceed client)
             void (shouldSucceed compiler)
             when floorExpected (crStdout client `shouldSatisfy` T.isPrefixOf "cargo 1.74.")
-            invocation <- observeCargo (cargoTraffic observed) project ["build"]
+            invocation <- observeCargo (nativeTraffic observed) project ["build"]
             void (shouldSucceed (cargoInvocationClient invocation))
             assertCargoRouting (cargoInvocationTraffic invocation)
             assertCargoAssets project (cargoInvocationTraffic invocation)
@@ -133,19 +133,19 @@ clientCase toolchain floorExpected plane = do
         untrustedCargo toolchain observed
     nativePublication toolchain plane
 
-untrustedCargo :: CargoToolchain -> ObservedCargoProxy -> IO ()
+untrustedCargo :: CargoToolchain -> ObservedNativeProxy -> IO ()
 untrustedCargo toolchain observed = cargoConsumer (observedProxy observed) toolchain $ \project -> do
     systemCa <- maybe (fail "the controlled Cargo environment lacks the system CA bundle") pure (lookup "NIX_SSL_CERT_FILE" (cargoEnvironment project))
     let untrusted = project{cargoEnvironment = ("CARGO_HTTP_CAINFO", systemCa) : filter ((/= "CARGO_HTTP_CAINFO") . fst) (cargoEnvironment project)}
-    before <- cargoTraffic observed
+    before <- nativeTraffic observed
     result <- runCargo untrusted ["build"] >>= shouldFail
     (crStdout result <> crStderr result) `shouldSatisfy` T.isInfixOf "certificate"
-    cargoTraffic observed `shouldReturn` before
+    nativeTraffic observed `shouldReturn` before
 
 nativePublication :: CargoToolchain -> GlobalDataPlane -> IO ()
 nativePublication toolchain plane = withCargoRegistry $ \registry ->
     withStubFault plane (CargoBackend (registryPort registry) False) $
-        withObservedCargoProxy cargoPublicationConfig plane $ \observed -> do
+        withObservedNativeProxy cargoPublicationConfig plane $ \observed -> do
             void (cargoPublishFixture (observedProxy observed) toolchain cargoPublishName >>= shouldSucceed)
             received <- readTVarIO (observedUploads observed)
             relayed <- readTVarIO (registryUploads registry)
@@ -160,10 +160,10 @@ nativePublication toolchain plane = withCargoRegistry $ \registry ->
             files <- cargoRegistryFiles registry
             stored <- maybe (fail "the destination omitted the native publication") pure (Map.lookup ("cargo-private", cargoPublishName, cargoVersion) files)
             storedArchive stored `shouldBe` uploadArchive frame
-            traffic <- cargoTraffic observed
-            let uploads = filter ((== "PUT") . cargoRequestMethod) (cargoClientRequests traffic)
-            map cargoRequestPath uploads `shouldBe` ["/cargo/private/api/v1/crates/new"]
-            map cargoRequestScheme uploads `shouldBe` ["https"]
+            traffic <- nativeTraffic observed
+            let uploads = filter ((== "PUT") . nativeRequestMethod) (nativeClientRequests traffic)
+            map nativeRequestPath uploads `shouldBe` ["/cargo/private/api/v1/crates/new"]
+            map nativeRequestScheme uploads `shouldBe` ["https"]
 
 readGraph :: CargoProject -> [String] -> IO CargoGraph
 readGraph project arguments = cargoMetadata project arguments >>= shouldSucceed >>= either (fail . toString) pure . cargoGraph
@@ -189,18 +189,18 @@ assertDiscovery proxy view expectedApi response = do
 privateConfig :: E2EConfig
 privateConfig = defaultE2EConfig{ecExtraEnv = [("ECLUSE_MOUNTS__CARGO__PRIVATE_UPSTREAM__REGISTRY__URL", stubUrl CargoPrivate)]}
 
-withPrivateRegistry :: GlobalDataPlane -> CargoRegistryFault -> (CargoRegistry -> ObservedCargoProxy -> IO a) -> IO a
+withPrivateRegistry :: GlobalDataPlane -> CargoRegistryFault -> (CargoRegistry -> ObservedNativeProxy -> IO a) -> IO a
 withPrivateRegistry plane fault action = withCargoRegistry $ \registry -> do
     leaf <- cargoLeafRelease "ecluse-e2e-private" cargoVersion
     seedCargoRegistry registry "cargo-private" [leaf]
     setCargoRegistryFault registry fault
     withStubFault plane (CargoBackend (registryPort registry) False) $
-        withObservedCargoProxy privateConfig plane (action registry)
+        withObservedNativeProxy privateConfig plane (action registry)
 
 authenticationCase :: CargoRegistryFault -> GlobalDataPlane -> IO ()
 authenticationCase fault plane = withPrivateRegistry plane fault $ \registry observed -> do
     cargoPrivateConsumer (observedProxy observed) currentCargo "ecluse-e2e-private" cargoVersion $ \project -> do
-        invocation <- observeCargo (cargoTraffic observed) project ["build"]
+        invocation <- observeCargo (nativeTraffic observed) project ["build"]
         void (shouldSucceed (cargoInvocationClient invocation))
         assertCargoViewRouting "/cargo/private" "cargo-private" (cargoInvocationTraffic invocation)
         assertCargoAssets project (cargoInvocationTraffic invocation)
@@ -228,7 +228,7 @@ privateNoPublic plane = withPrivateRegistry plane CargoRegistryHealthy $ \_ obse
     proxyStatus (observedProxy observed) ("/cargo/private/" <> cargoShard cargoRoot) `shouldReturn` 404
     (filter ((== CargoPublic) . srRoute) <$> stubReadsNow plane) `shouldReturn` []
     let config = privateConfig{ecExtraEnv = ecExtraEnv privateConfig <> [("ECLUSE_MOUNTS__CARGO__FIRST_PARTY", "ecluse-e2e-build")]}
-    withObservedCargoProxy config plane $ \firstPartyProxy -> do
+    withObservedNativeProxy config plane $ \firstPartyProxy -> do
         before <- stubReadsNow plane
         proxyStatus (observedProxy firstPartyProxy) ("/cargo/" <> cargoShard "ecluse-e2e-build") `shouldReturn` 404
         stubReadsNow plane `shouldReturn` before
@@ -257,7 +257,7 @@ discoveryViews plane = withPrivateRegistry plane CargoRegistryHealthy $ \registr
 
 publicationFraming :: GlobalDataPlane -> IO ()
 publicationFraming plane = withCargoRegistry $ \registry -> withStubFault plane (CargoBackend (registryPort registry) False) $
-    withObservedCargoProxy cargoPublicationConfig plane $ \observed -> do
+    withObservedNativeProxy cargoPublicationConfig plane $ \observed -> do
         let proxy = observedProxy observed
         discovery <- proxyRequest "GET" [("Authorization", encodeUtf8 cargoRegistryToken)] "" proxy "/cargo/private/config.json"
         assertDiscovery proxy "/cargo/private" (Just (e2eBaseUrl proxy <> "/cargo/private")) discovery
@@ -284,7 +284,7 @@ foreignRegistry plane = for_ [currentCargo, floorCargo] $ \toolchain ->
             leaf <- cargoLeafRelease "ecluse-e2e-leaf" cargoVersion
             seedCargoRegistry registry "cargo-private" [leaf]
         withStubFault plane (CargoBackend (registryPort registry) False) $
-            withObservedCargoProxy config plane $ \observed -> do
+            withObservedNativeProxy config plane $ \observed -> do
                 let proxy = observedProxy observed
                     source = "sparse+" <> e2eBaseUrl proxy <> (if sameRegistry then "/cargo/private/" else "/cargo/")
                     spec = CargoCrate name cargoVersion "../foreign" [] (Object mempty) (Object mempty) ["Cargo.toml", "README.md", "src/lib.rs", "build.rs"]
@@ -323,7 +323,7 @@ foreignRegistry plane = for_ [currentCargo, floorCargo] $ \toolchain ->
                 registries `shouldBe` [if sameRegistry then Nothing else Just (String source)]
                 cargoPrivateConsumer proxy toolchain name cargoVersion $ \project -> do
                     unless sameRegistry (addForeign project source)
-                    invocation <- observeCargo (cargoTraffic observed) project ["build"]
+                    invocation <- observeCargo (nativeTraffic observed) project ["build"]
                     void (shouldSucceed (cargoInvocationClient invocation))
                     assertCargoViewRouting "/cargo/private" "cargo-private" (cargoInvocationTraffic invocation)
                     unless sameRegistry (assertCargoViewRouting "/cargo" "cargo-upstream" (cargoInvocationTraffic invocation))
@@ -364,10 +364,10 @@ publicTokenControl plane = withCargoRegistry $ \registry -> do
     releases <- cargoFixtureReleases
     seedCargoRegistry registry "cargo-upstream" releases
     withStubFault plane (CargoPublicBackend (registryPort registry)) $
-        withObservedCargoProxy config plane $ \observed -> do
+        withObservedNativeProxy config plane $ \observed -> do
             let index = "sparse+" <> e2eBaseUrl (observedProxy observed) <> "/cargo/"
             withCargoProject currentCargo CargoReplacement (observedProxy observed) index (Just cargoRegistryToken) $ \project -> do
-                invocation <- observeCargo (cargoTraffic observed) project ["build"]
+                invocation <- observeCargo (nativeTraffic observed) project ["build"]
                 void (shouldSucceed (cargoInvocationClient invocation))
                 assertCargoRouting (cargoInvocationTraffic invocation)
                 assertCargoAssets project (cargoInvocationTraffic invocation)

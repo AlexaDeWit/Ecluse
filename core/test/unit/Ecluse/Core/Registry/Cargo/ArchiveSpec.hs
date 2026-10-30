@@ -1,7 +1,6 @@
 -- SPDX-FileCopyrightText: 2026 Alexandra de Wit
 --
 -- SPDX-License-Identifier: MIT
-{-# LANGUAGE ImportQualifiedPost #-}
 
 -- | Verified native Cargo archives exercise complete traversal and selected text retention.
 module Ecluse.Core.Registry.Cargo.ArchiveSpec (spec) where
@@ -15,14 +14,15 @@ import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as BSL
 import Data.Set qualified as Set
 import Test.Hspec
-import UnliftIO.Exception (throwIO)
 
 import Ecluse.Core.Package.Hash (sha256Hex)
 import Ecluse.Core.Registry (ParseError (..))
 import Ecluse.Core.Registry.Cargo.Archive
 import Ecluse.Core.Registry.Cargo.Manifest (publishMetadataValue)
 import Ecluse.Core.Security.Limits (Limits (..), defaultLimits)
+import Ecluse.Server.Admission.Support (ChargeRefused (..), refuseCharge)
 import Ecluse.Test.Registry.Archive (paxRecord, tarBytes)
+import Ecluse.Test.Registry.Cargo.Fixtures (cargoCrateArchive)
 import Ecluse.Test.Support (expectRight)
 
 spec :: Spec
@@ -35,7 +35,7 @@ spec = do
         it "checks compressed SHA-256 before allocating decoder workspace" $ do
             bytes <- fixture [("Cargo.toml", manifest)]
             requests <- newIORef ([] :: [Int])
-            result <- inspectCargoArchive defaultLimits (\wanted -> modifyIORef' requests (wanted :)) "example" "1.2.3" (BS.replicate 64 48 & decodeUtf8) bytes
+            result <- inspectCargoArchive defaultLimits (\wanted -> modifyIORef' requests (wanted :)) "example" "1.2.3" (Just (BS.replicate 64 48 & decodeUtf8)) bytes
             void result `shouldBe` Left (ParseError "Cargo compressed archive disagrees with its admitted SHA-256")
             readIORef requests `shouldReturn` []
         it "uses only the effective manifest and enumerates later build scripts" $ do
@@ -115,13 +115,12 @@ spec = do
             b `shouldBe` a
         it "propagates a resource charge refusal as a fault" $ do
             bytes <- fixture [("Cargo.toml", manifest)]
-            let refuse _ = throwIO ChargeRefused
-            inspectCargoArchive defaultLimits refuse "example" "1.2.3" (sha256Hex bytes) bytes `shouldThrow` (== ChargeRefused)
+            inspectCargoArchive defaultLimits refuseCharge "example" "1.2.3" (Just (sha256Hex bytes)) bytes `shouldThrow` (== ChargeRefused)
     describe "cargoPublicationMetadata" $ do
         it "preserves publication claims and their reservation when README capture is disabled" $ do
             bytes <- fixture [("Cargo.toml", manifest <> "readme=false\nlicense='MIT'\n"), ("README.md", BS.singleton 255)]
             retained <- newIORef 0
-            archive <- inspectCargoArchive defaultLimits (writeIORef retained) "example" "1.2.3" (sha256Hex bytes) bytes >>= expectRight
+            archive <- inspectCargoArchive defaultLimits (writeIORef retained) "example" "1.2.3" (Just (sha256Hex bytes)) bytes >>= expectRight
             held <- readIORef retained
             held `shouldSatisfy` (> 0)
             payments <- newIORef ([] :: [Int])
@@ -140,7 +139,7 @@ spec = do
                 _ -> expectationFailure "Cargo publication is not an object"
             paid <- readIORef payments
             paid `shouldSatisfy` (\costs -> not (null costs) && all (>= held) costs)
-            cargoPublicationMetadata defaultLimits (const (throwIO ChargeRefused)) archive `shouldThrow` (== ChargeRefused)
+            cargoPublicationMetadata defaultLimits refuseCharge archive `shouldThrow` (== ChargeRefused)
         it "reads a selected README both before and after Cargo.toml" $
             for_ [[("README.md", "readme first"), ("Cargo.toml", manifest)], [("Cargo.toml", manifest), ("README.md", "readme first")]] $ \entries -> do
                 bytes <- fixture entries
@@ -183,7 +182,7 @@ spec = do
             publishMetadataValue checked `shouldBe` publishMetadataValue metadata
             paid <- readIORef payments
             paid `shouldSatisfy` (\costs -> length costs == 1 && all (> 0) costs)
-            cargoPublicationAgreement defaultLimits (const (throwIO ChargeRefused)) archive source metadata `shouldThrow` (== ChargeRefused)
+            cargoPublicationAgreement defaultLimits refuseCharge archive source metadata `shouldThrow` (== ChargeRefused)
         it "refuses a source identity disagreement after archive and publication preparation" $ do
             bytes <- fixture [("Cargo.toml", manifest)]
             archive <- inspect defaultLimits bytes >>= expectRight
@@ -195,22 +194,17 @@ manifest :: ByteString
 manifest = "[package]\nname='example'\nversion='1.2.3'\n"
 
 fixture :: [(FilePath, ByteString)] -> IO ByteString
-fixture entries = compress <$> tarBytes [("example-1.2.3/" <> path, content) | (path, content) <- entries]
+fixture = cargoCrateArchive "example" "1.2.3"
 
 compress :: BSL.ByteString -> ByteString
 compress = BSL.toStrict . GZip.compress
 
 inspect :: Limits -> ByteString -> IO (Either ParseError CargoArchiveMetadata)
-inspect limits bytes = inspectCargoArchive limits (const (pure ())) "example" "1.2.3" (sha256Hex bytes) bytes
+inspect limits bytes = inspectCargoArchive limits (const (pure ())) "example" "1.2.3" (Just (sha256Hex bytes)) bytes
 
 peakCharge :: ByteString -> IO Int
 peakCharge bytes = do
     peak <- newIORef 0
     let charge wanted = modifyIORef' peak (max wanted)
-    void (inspectCargoArchive defaultLimits charge "example" "1.2.3" (sha256Hex bytes) bytes >>= expectRight)
+    void (inspectCargoArchive defaultLimits charge "example" "1.2.3" (Just (sha256Hex bytes)) bytes >>= expectRight)
     readIORef peak
-
-data ChargeRefused = ChargeRefused
-    deriving stock (Eq, Show)
-
-instance Exception ChargeRefused

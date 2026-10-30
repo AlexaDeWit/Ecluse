@@ -47,7 +47,8 @@ import Ecluse.Core.Registry (
     renderUrlFormationError,
  )
 import Ecluse.Core.Registry.Adapter.Capability (AdapterArtifact (artifactByUrl))
-import Ecluse.Core.Registry.InstallEvidence (readInstallArtifact)
+import Ecluse.Core.Registry.Exchange.Types (ExchangeClient (ecDeadlines))
+import Ecluse.Core.Registry.InstallEvidence (anonymousInstallArtifactRead)
 import Ecluse.Core.Registry.Metadata (
     MetadataError (..),
     VersionDoc (vdDetails),
@@ -67,11 +68,11 @@ import Ecluse.Core.Registry.Publish (
     publishPrepared,
  )
 import Ecluse.Core.Registry.Request (sidecarUrl)
-import Ecluse.Core.Rules.Effectful (ReadFault (ReadFault, rfDetail))
+import Ecluse.Core.Rules.Effectful (ReadFault (rfDetail))
 import Ecluse.Core.Rules.Install
 import Ecluse.Core.Rules.Outage (logSkippedCheckEvidence)
 import Ecluse.Core.Rules.Render (renderDecision, renderInability, renderReason)
-import Ecluse.Core.Rules.Types (Decision (Admitted, Blocked, BlockedByDefault, Undecidable), Inability (EvaluationFailed, InstallSignalUnread), Transience (WillResolve, WontResolve), identityEvidence, mkEvalContext, skippedChecks)
+import Ecluse.Core.Rules.Types (Decision (Admitted, Blocked, BlockedByDefault, Undecidable), Transience (WillResolve, WontResolve), identityEvidence, mkEvalContext, skippedChecks)
 import Ecluse.Core.Security (Limits (maxMetadataBytes, maxMirrorArtifactBytes), authorityLabel, hostPortAddress)
 import Ecluse.Core.Security.Egress (RegistryUrl, registryUrlText)
 import Ecluse.Core.Server.Path (Filename, mkFilename, unFilename)
@@ -287,21 +288,19 @@ withWorkerInstallReads :: WorkerStateBudget -> WorkerPolicy -> ((PackageDetails 
 withWorkerInstallReads charge policy use = withRunInIO $ \run -> do
     client <- run (asks wrClient)
     control <- run (asks wrPublicControl)
-    evidenceReads <- case wpInstallEvidence policy of
-        Nothing -> pure (const (pure Nothing))
-        Just provider ->
-            newInstallEvidenceReads
-                provider
+    evidenceReads <-
+        installEvidenceReads
+            (wpInstallEvidence policy)
+            ( pure
                 InstallEvidenceContext
                     { ieLimits = wpArtifactLimits policy
                     , ieRole = InstallWorkerReadmission
-                    , ieReadArtifact = \bounded artifact pay -> case sourceLocation policy artifact of
-                        Left _ -> pure (Left (ReadFault WontResolve EvaluationFailed InstallSignalUnread))
-                        Right url -> readInstallArtifact ((wpArtifactLimits policy){maxMirrorArtifactBytes = min (maxMirrorArtifactBytes (wpArtifactLimits policy)) (maxMirrorArtifactBytes bounded)}) client (Controlled control WorkerArtifact) (artifactByUrl (wpArtifact policy) Nothing (registryUrlText url)) pay
+                    , ieReadArtifact = anonymousInstallArtifactRead (wpArtifactLimits policy) client (Controlled control WorkerArtifact) (wpArtifact policy) (rightToMaybe . sourceLocation policy)
                     , ieBudget = InstallEvidenceBudget (\action -> Just <$> action (wsbArtifacts charge) (wsbArchive charge))
                     , ieFlightBudget = wsbEvidenceFlight charge
                     , ieDiagnostic = run . logFM ErrorS . ls . renderInability . rfDetail
                     }
+            )
     run (use evidenceReads)
 
 reevaluatePolicy :: (PackageDetails -> IO (Maybe InstallEvidenceRead)) -> WorkerStateBudget -> WorkerPolicy -> MirrorJob -> WorkerM (Either JobOutcome Readmitted)
@@ -534,9 +533,10 @@ retainPending charge policy job inventory file locations record = do
                     either throwError pure (sourceLocation policy (expectedArtifact file){artUrl = url})
                 let limits = (wmsLimits binding){maxMirrorArtifactBytes = maxMetadataBytes (wmsLimits binding)}
                 bytes <- fetchLocations (wsbCompanions charge) limits policy candidates
+                deadlines <- asks (ecDeadlines . wrClient)
                 checked <- case native of
                     Nothing -> pure bytes
-                    Just companion -> publishAction job (liftIO (mcValidate companion limits (wsbCompanions charge) inventory file bytes))
+                    Just companion -> publishAction job (liftIO (mcValidate companion deadlines limits (wsbCompanions charge) inventory file bytes))
                 verified <- either (throwError . stateOutcome) pure (verifySourceCompanionBytes (wmsLimits binding) (inventoryReadData inventory) file checked)
                 stateAction (retainCompanion charge binding (jobVersion job) verified record)
         _ -> pure record
