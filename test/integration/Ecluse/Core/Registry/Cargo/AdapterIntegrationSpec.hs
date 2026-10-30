@@ -233,7 +233,8 @@ isolationSpec = describe "native source isolation" $ do
                     lookup "WWW-Authenticate" (simpleHeaders refused) `shouldBe` ("Cargo" <$ guard (status == status401))
                 calls <- privateCalls proxy
                 map (headerValue "Authorization") calls `shouldSatisfy` elem (Just "refused")
-                map (headerValue "Authorization") <$> publicCalls proxy >>= (`shouldSatisfy` all isNothing)
+                publicTokens <- map (headerValue "Authorization") <$> publicCalls proxy
+                publicTokens `shouldSatisfy` all isNothing
     native "015" "serves declared first-party names from the private origin alone" $ do
         withCargoProxy defaultReply defaultReply $ \proxy -> do
             let app = proxyWith proxy (\deps -> deps{pdFirstParty = const True})
