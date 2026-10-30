@@ -16,6 +16,7 @@ module Ecluse.Core.Registry.Cargo.Manifest (
     parseRustRelease,
     publishMetadataValue,
     cratesIoIndex,
+    unstableDependencyFields,
     usesUnstableDependencyField,
 ) where
 
@@ -369,9 +370,13 @@ dependency target kind alias value = do
 cratesIoIndex :: Text
 cratesIoIndex = "https://github.com/rust-lang/crates.io-index"
 
--- | Nightly @-Z bindeps@ and public-dependency fields, by presence. Mirrored index rows and first-party uploads both refuse them.
+-- | Nightly @-Z bindeps@ and public-dependency fields. Mirrored index rows and first-party uploads both refuse them.
+unstableDependencyFields :: [Key.Key]
+unstableDependencyFields = ["artifact", "bindep_target", "lib", "public"]
+
+-- | Whether a dependency carries any of 'unstableDependencyFields', by presence.
 usesUnstableDependencyField :: KeyMap.KeyMap Value -> Bool
-usesUnstableDependencyField fields = any (`KeyMap.member` fields) ["artifact", "bindep_target", "lib", "public"]
+usesUnstableDependencyField fields = any (`KeyMap.member` fields) unstableDependencyFields
 
 indexDependency :: Value -> Either ParseError Value
 indexDependency (Object fields) = do
