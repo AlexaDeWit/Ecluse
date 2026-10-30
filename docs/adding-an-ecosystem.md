@@ -154,8 +154,10 @@ Name the requirement once, beside the format's read data, and reference that val
 The [adapter registry spec](../core/test/unit/Ecluse/Core/Registry/AdapterSpec.hs) holds the two equal for every registered durable adapter.
 Boot refuses a mirror target whose codec prepares native companions where the declaration requires none, or omits them where it requires them.
 `UploadEndpointRequirement` declares whether both write targets upload at the read root or at a separate `uploadUrl`.
+The configuration load reads it to require `uploadUrl` or refuse it.
 `UploadIdentityRequirement` declares token-only or named identity for static credentials.
-Composition uses these declarations for worker wiring and boot checks, without switching on ecosystem names.
+Composition reads it for its boot checks.
+Neither switches on ecosystem names.
 A store that asks for service credentials its own way gains one row for the ecosystem, for CodeArtifact in [Credential.CodeArtifact.Presentation](../runtime/src/Ecluse/Runtime/Credential/CodeArtifact/Presentation.hs).
 Composition gains no branch for it.
 Use `relayPublishRequest` in [Publish](../core/src/Ecluse/Core/Registry/Publish/Internal.hs) to retain native replies under metadata and progress limits.

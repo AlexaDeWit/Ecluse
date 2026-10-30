@@ -578,7 +578,7 @@ Artifact counts include every nonblank row before projection.
 RubyGems supplies no supported deprecation flag or scope. Native builds are normal installation behaviour.
 Compact Index `/info` omits a yanked version instead of flagging it, so public reads and the mirror worker never see a yanked gem.
 The global `/versions` removal marker is the only yank fact, and no serve, mirror or Dredger path reads it.
-The adapter blocks `DenyIfYanked`, `DenyIfDeprecated`, `AllowScope`, and `DenyInstallTimeExecution` through typed rule capabilities.
+The adapter blocks `DenyIfYanked`, `DenyIfDeprecated`, `AllowScope`, `DenyInstallTimeExecution`, and `DenyExternalDependencies` through typed rule capabilities.
 No policy-only archive fetch or execution-evidence cache follows from unknown installation metadata.
 Bounded archive interpretation remains necessary for publication and mirroring.
 
