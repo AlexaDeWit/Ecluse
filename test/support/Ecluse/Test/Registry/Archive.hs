@@ -4,7 +4,7 @@
 {-# LANGUAGE ImportQualifiedPost #-}
 
 -- | Native tar fixtures shared across registry ecosystems.
-module Ecluse.Test.Registry.Archive (tarBytes, paxRecord) where
+module Ecluse.Test.Registry.Archive (tarBytes, tarEntries, regular, pax, paxRecord) where
 
 import Codec.Archive.Tar qualified as Tar
 import Codec.Archive.Tar.Entry qualified as Tar
@@ -14,11 +14,23 @@ import Ecluse.Test.Support (expectRight)
 
 -- | Build tar headers and payload framing with the native tar writer.
 tarBytes :: [(FilePath, ByteString)] -> IO BSL.ByteString
-tarBytes entries = Tar.write <$> traverse entry entries
-  where
-    entry (path, bytes) = do
-        tarPath <- expectRight (Tar.toTarPath False path)
-        pure (Tar.fileEntry tarPath (BSL.fromStrict bytes))
+tarBytes entries = Tar.write <$> traverse (uncurry regular) entries
+
+-- | Read every entry of a tar stream in order, failing the test on a malformed stream.
+tarEntries :: BSL.ByteString -> IO [Tar.Entry]
+tarEntries = Tar.foldEntries (\entry rest -> (entry :) <$> rest) (pure []) (fail . show) . Tar.read
+
+-- | One regular file. A path over 100 bytes splits into a ustar prefix and name.
+regular :: FilePath -> ByteString -> IO Tar.Entry
+regular path bytes = do
+    name <- expectRight (Tar.toTarPath False path)
+    pure (Tar.fileEntry name (BSL.fromStrict bytes))
+
+-- | One extended header of the given type flag, such as PAX @x@ or @g@, over raw records.
+pax :: Char -> BSL.ByteString -> IO Tar.Entry
+pax code bytes = do
+    path <- expectRight (Tar.toTarPath False "PaxHeaders/entry")
+    pure (Tar.simpleEntry path (Tar.OtherEntryType code bytes (BSL.length bytes)))
 
 -- | Frame one POSIX pax attribute with its decimal byte count.
 paxRecord :: ByteString -> BSL.ByteString

@@ -20,7 +20,7 @@ import UnliftIO.Exception (throwIO)
 import Ecluse.Core.Registry.PyPI.Archive.Tar (extractTar)
 import Ecluse.Core.Security.Limits (Limits (..), defaultLimits)
 import Ecluse.Test.Package (pypiVersion, unscopedPyPI)
-import Ecluse.Test.Registry.Archive (paxRecord, tarBytes)
+import Ecluse.Test.Registry.Archive (pax, paxRecord, regular, tarBytes)
 import Ecluse.Test.Registry.JsonStream (byteChunks)
 import Ecluse.Test.Registry.PyPI.Archive (metadata)
 import Ecluse.Test.Support (expectRight)
@@ -211,21 +211,11 @@ spec = describe "extractTar" $ do
 readChunks :: Limits -> [ByteString] -> IO (Either ParseError ByteString)
 readChunks limits chunks = extractTar limits (const (pure ())) (unscopedPyPI "example") (pypiVersion "1") ($ yieldMany chunks)
 
-regular :: FilePath -> ByteString -> IO Tar.Entry
-regular path bytes = do
-    name <- expectRight (Tar.toTarPath False path)
-    pure (Tar.fileEntry name (BSL.fromStrict bytes))
-
 link :: Bool -> FilePath -> FilePath -> IO Tar.Entry
 link symbolic path target = do
     name <- expectRight (Tar.toTarPath False path)
     destination <- maybe (fail "invalid fixture link") pure (Tar.toLinkTarget target)
     pure (Tar.simpleEntry name (if symbolic then Tar.SymbolicLink destination else Tar.HardLink destination))
-
-pax :: Char -> BSL.ByteString -> IO Tar.Entry
-pax code bytes = do
-    path <- expectRight (Tar.toTarPath False "PaxHeaders/entry")
-    pure (Tar.simpleEntry path (Tar.OtherEntryType code bytes (BSL.length bytes)))
 
 zeroSizeHeader :: ByteString -> ByteString
 zeroSizeHeader header = checksumHeader (BS.take 124 header <> "00000000000\NUL" <> BS.drop 136 header)
