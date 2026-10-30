@@ -379,7 +379,9 @@ so one caller's read never answers another's.
 
 A `publish` forwards the publisher's own token the same way. You can instead set a static
 publication token under the publication target's tag
-(`ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET__CODE_ARTIFACT__TOKEN`). Écluse then authenticates the
+(`ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET__CODE_ARTIFACT__TOKEN`). Store the bare secret: the
+target's declared backend decides how Écluse presents it, as it does for the mirror worker's token
+([protocol support](@/docs/protocol-support.md)). Écluse then authenticates the
 edge token and replaces it with the static publication token on every publish, so the publication
 target never receives the edge token. Every holder of the edge token can then send any upload the
 relay forwards, within the configured first-party scopes and what the static token permits, so

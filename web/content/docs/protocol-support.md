@@ -256,8 +256,9 @@ Native builds remain allowed. RubyGems blocks active `DenyInstallTimeExecution`,
 Unknown installation metadata does not prove that an archive executes no code.
 
 Private reads preserve the caller's complete Basic credential pair.
-Publication uses the complete native API-key header value and an optional validated `OTP` header.
-A declared CodeArtifact service role uses Basic with username `aws` for reads and Bearer for publication.
+A caller's publication keeps its complete native API-key header value and an optional validated `OTP` header.
+On a `codeArtifact` store, Écluse's own tokens read with Basic and username `aws` and publish with Bearer.
+That covers the mirror worker's token and a static `publicationTarget` token, so store the bare secret in either one.
 The backend declaration selects this presentation, not a hostname guess.
 Static publication credentials retain the required edge-token guard.
 

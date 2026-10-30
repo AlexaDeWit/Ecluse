@@ -70,6 +70,7 @@ Use them where their HTTP contracts fit. A new protocol need not negotiate gzip 
 
 The [credential mapping](../core/src/Ecluse/Core/Registry/Request.hs) names the header and native token encoding.
 The common pipeline does not impose npm's bearer scheme or PyPI's basic scheme on another ecosystem.
+Render a service credential through the `ServicePresentation` the codec and relay receive, so a store that declares its own mechanism applies to the new ecosystem too.
 Keep caller authorisation separate from service credentials used for mirror or maintenance operations.
 Never expand credential authority to satisfy a missing backend operation.
 
@@ -155,6 +156,8 @@ Boot refuses a mirror target whose codec prepares native companions where the de
 `UploadEndpointRequirement` declares whether both write targets upload at the read root or at a separate `uploadUrl`.
 `UploadIdentityRequirement` declares token-only or named identity for static credentials.
 Composition uses these declarations for worker wiring and boot checks, without switching on ecosystem names.
+A store that asks for service credentials its own way gains one row for the ecosystem, for CodeArtifact in [Credential.CodeArtifact.Presentation](../runtime/src/Ecluse/Runtime/Credential/CodeArtifact/Presentation.hs).
+Composition gains no branch for it.
 Use `relayPublishRequest` in [Publish](../core/src/Ecluse/Core/Registry/Publish/Internal.hs) to retain native replies under metadata and progress limits.
 
 | Responsibility | Reuse | Native work |
