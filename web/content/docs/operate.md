@@ -31,11 +31,15 @@ Logs use JSON by default. OpenTelemetry export is opt-in. Use `/livez` and `/rea
 5. Roll out compatible readers and workers in the order required by the release.
 6. Repeat the [deployment checks](@/docs/verify.md).
 
-## Two compatibility changes to check {#compatibility}
+## Compatibility changes to check {#compatibility}
 
 Advisory schema 5 uses ecosystem-specific keys such as `npm-osv-schema5.db`. Consumers do not migrate or alias schema 4 files.
 
 Queue schema 2 removes source URLs from jobs. Deploy compatible workers first and stop old workers before new producers enqueue schema 2 jobs.
+
+A PyPI `publicationTarget` now names its registry root in `url` and its upload endpoint in `uploadUrl`, as a PyPI `mirrorTarget` already does. If your `url` names the upload endpoint, such as `https://first-party.internal/legacy/`, move that address to `uploadUrl` and set `url` to the registry root. On CodeArtifact, both can name `/pypi/{repository}/`. `ecluse proxy` refuses to boot until `uploadUrl` is set, and `check-config` names the refusal.
+
+An npm or RubyGems `mirrorTarget` or `publicationTarget` that sets `uploadUrl` now refuses at load, because those protocols derive the upload address from `url`. Remove the key, and check that `url` names the registry you write to.
 
 A rollback must account for queued messages and advisory data, as well as the container image.
 
