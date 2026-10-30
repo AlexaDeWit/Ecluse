@@ -146,8 +146,11 @@ Do not add a dormant codec or publish helper without an active caller.
 
 Declare `AdapterPublish.publishMirrorRequirements`, `publishUploadEndpoint` and `publishIdentity` in [Adapter.Capability](../core/src/Ecluse/Core/Registry/Adapter/Capability.hs).
 `MirrorRequirements` selects cached or charged worker reads and native or durable version state.
-Durable version state carries the format's [MirrorDocuments](../core/src/Ecluse/Core/Mirror/Documents.hs): the restore, ordering, entry rekeying and listing assembly of managed documents, and which files need a retained companion.
+Durable version state carries the format's [MirrorDocuments](../core/src/Ecluse/Core/Mirror/Documents.hs): the restore, ordering, entry rekeying and listing assembly of managed documents, and the format's companion requirement.
 Composition binds them to the mount's mirror view, which names no ecosystem.
+Mirror state applies the companion requirement of retained read data through `readDataCompanions` in [MirrorUpload](../core/src/Ecluse/Core/Registry/MirrorUpload/Internal.hs).
+Name the requirement once, beside the format's read data, and reference that value from both `readDataCompanions` and the declaration.
+The [adapter registry spec](../core/test/unit/Ecluse/Core/Registry/AdapterSpec.hs) holds the two equal for every registered durable adapter.
 Boot refuses a mirror target whose codec prepares native companions where the declaration requires none, or omits them where it requires them.
 `UploadEndpointRequirement` declares whether both write targets upload at the read root or at a separate `uploadUrl`.
 `UploadIdentityRequirement` declares token-only or named identity for static credentials.
