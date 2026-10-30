@@ -59,7 +59,7 @@ cargoNativeFixture =
             "cargo"
             [ Case ("cargo/native/" <> name) ["cargo/native"]
             | name <-
-                ["current-client", "floor-client", "asset-routing", "metadata-no-archives", "denial-control", "features", "targets", "lock-checksums", "msrv", "discovery-views", "private-no-public", "raw-auth", "private-auth-required", "public-token-control", "private-anonymous", "publication-framing", "foreign-registry"]
+                ["current-client", "floor-client", "asset-routing", "metadata-no-archives", "denial-control", "features", "targets", "lock-checksums", "msrv", "local-discovery", "merged-private", "raw-auth", "private-auth-required", "public-token-control", "placeholder-token", "publication-framing", "dependency-sources", "publisher-configuration"]
             ]
             ["read", "mirror", "publication", "client-install"]
             ["docker", "image", "openssl", "cargo", "cargo-1.74", "rustc"]

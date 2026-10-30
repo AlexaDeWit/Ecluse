@@ -43,13 +43,13 @@ type CargoCoordinates = [(Text, Text)]
 cargoCoordinates :: CargoCoordinates
 cargoCoordinates = sort [(crateName spec, crateVersion spec) | spec <- cargoCrates]
 
--- | Durable mirror state uses the ordinary S3 emulator and separate native store roles.
+-- | Durable mirror state uses the ordinary S3 emulator. The private upstream reads the mirror target, as it must include it.
 cargoMirrorConfig :: E2EConfig
 cargoMirrorConfig =
     defaultE2EConfig
         { ecExtraEnv =
             [ ("ECLUSE_MIRROR_STATE__URL", "s3://" <> advisoryBucket <> "/cargo-mirror")
-            , ("ECLUSE_MOUNTS__CARGO__PRIVATE_UPSTREAM__REGISTRY__URL", stubUrl CargoPrivate)
+            , ("ECLUSE_MOUNTS__CARGO__PRIVATE_UPSTREAM__REGISTRY__URL", stubUrl CargoMirror)
             , ("ECLUSE_MOUNTS__CARGO__MIRROR_TARGET__REGISTRY__URL", stubUrl CargoMirror)
             , ("ECLUSE_MOUNTS__CARGO__MIRROR_TARGET__REGISTRY__UPLOAD_URL", T.dropWhileEnd (== '/') (stubUrl CargoMirror))
             , ("ECLUSE_MOUNTS__CARGO__MIRROR_TARGET__REGISTRY__TOKEN", cargoRegistryToken)
