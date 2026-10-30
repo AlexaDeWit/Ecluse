@@ -154,6 +154,14 @@ spec = do
                 simpleStatus response `shouldBe` status502
                 LBS.toStrict (simpleBody response) `shouldSatisfy` BS.isInfixOf "5,000"
                 map fst <$> readIORef hits `shouldReturn` [["private", "versions"]]
+        for_ [status401, status403] $ \refused ->
+            it ("answers a private directory refusal " <> show refused <> " with a local 403 before any public read") $
+                withDirectorySources $ \runtime binding hits privateStatus -> do
+                    writeIORef privateStatus refused
+                    response <- capture runtime binding "GET" "/versions" []
+                    simpleStatus response `shouldBe` status403
+                    lookup "WWW-Authenticate" (simpleHeaders response) `shouldBe` Nothing
+                    map fst <$> readIORef hits `shouldReturn` [["private", "versions"]]
         for_ [status206, status304] $ \originStatus ->
             it ("rejects an unsolicited directory response with " <> show originStatus) $
                 withDirectorySources $ \runtime binding _ privateStatus -> do
@@ -167,6 +175,20 @@ spec = do
                 simpleStatus response `shouldBe` status200
                 simpleBody response `shouldBe` fromStrict original
                 map fst <$> readIORef hits `shouldReturn` [["info", "ecluse-fixture-root"]]
+
+    describe "native private refusals" $ do
+        for_ ["GET", "HEAD"] $ \method ->
+            it ("answers a private archive 401 with a local 403 for " <> show method) $
+                withNativeArchive status401 $ \runtime binding _ -> do
+                    response <- capture runtime binding method "/gems/ecluse-fixture-root-1.0.0.gem" []
+                    simpleStatus response `shouldBe` status403
+                    lookup "WWW-Authenticate" (simpleHeaders response) `shouldBe` Nothing
+        it "answers a private compact specification 401 with a local 403" $
+            withCoordinateSources (PrivateCompactSource status401) $ \runtime binding hits _ -> do
+                response <- capture runtime binding "GET" "/quick/Marshal.4.8/acme-1-1.0.gemspec.rz" []
+                simpleStatus response `shouldBe` status403
+                lookup "WWW-Authenticate" (simpleHeaders response) `shouldBe` Nothing
+                readIORef hits >>= (`shouldSatisfy` elem ["private", "quick", "Marshal.4.8", "acme-1-1.0.gemspec.rz"])
 
     describe "examined per-gem source documents" $ do
         for_ [False, True] $ \warm ->
@@ -205,7 +227,7 @@ spec = do
                         writeIORef privateStatus refused
                         let cap = BS.length (fst (coordinateListings coordinateBudgetHeader release)) - 1
                         denied <- capture runtime (metadataByteCap cap binding) method "/info/acme-1" []
-                        simpleStatus denied `shouldBe` refused
+                        simpleStatus denied `shouldBe` status403
                         readIORef hits `shouldReturn` [["private", "info", "acme-1"]]
         for_ ["GET", "HEAD"] $ \method ->
             it ("does not use a cached public document for owned private absence for " <> show method) $ do
@@ -241,7 +263,7 @@ spec = do
                         response <- capture runtime binding method path []
                         simpleStatus response `shouldBe` status404
                         readIORef hits `shouldReturn` [["private", "info", "acme"]]
-        for_ [(status401, status401), (status403, status403), (status502, status503), (status503, status503)] $ \(upstream, expected) ->
+        for_ [(status401, status403), (status403, status403), (status502, status503), (status503, status503)] $ \(upstream, expected) ->
             for_ ["GET", "HEAD"] $ \method ->
                 for_ ["/gems/acme-1-1.0.gem", "/quick/Marshal.4.8/acme-1-1.0.gemspec.rz"] $ \path ->
                     it ("preserves an owned candidate refusal " <> show upstream <> " for " <> show method <> " " <> show path) $
@@ -357,7 +379,7 @@ spec = do
                         response <- capture runtime binding method path []
                         simpleStatus response `shouldBe` status503
                         sort <$> readIORef hits `shouldReturn` coordinatePrivateMetadataReads
-                for_ [(status401, status401), (status403, status403), (status502, status503), (status503, status503)] $ \(upstream, expected) ->
+                for_ [(status401, status403), (status403, status403), (status502, status503), (status503, status503)] $ \(upstream, expected) ->
                     it ("preserves the actual private refusal beside an all-denied public source for " <> show (upstream, method, path)) $
                         withCoordinateSources (PublicDeniedPrivateCandidateSource upstream) $ \runtime binding hits _ -> do
                             response <- capture runtime binding method path []
@@ -537,7 +559,11 @@ withDirectoryBodies publicBody privateBody use = do
             use runtime binding{bindingPackumentDeps = deps{pdReadSourceSelection = MergePrivateAndPublic}} hits privateStatus
 
 withNative :: (ServeRuntime -> MountBinding -> IORef [([Text], [Header])] -> IO a) -> IO a
-withNative use = do
+withNative = withNativeArchive status200
+
+-- | Serve the native fixtures with the given archive status.
+withNativeArchive :: Status -> (ServeRuntime -> MountBinding -> IORef [([Text], [Header])] -> IO a) -> IO a
+withNativeArchive archiveStatus use = do
     root <- BS.readFile "test/fixtures/rubygems/info/ecluse-fixture-root"
     leaf <- BS.readFile "test/fixtures/rubygems/info/ecluse-fixture-leaf"
     compact <- BS.readFile "test/fixtures/rubygems/quick/Marshal.4.8/ecluse-fixture-root-1.0.0.gemspec.rz"
@@ -550,7 +576,7 @@ withNative use = do
                 ["versions"] -> respond (responseLBS status200 [] "---\necluse-fixture-leaf 1.0.0 \necluse-fixture-root 1.0.0 \n")
                 ["info", name] | Just body <- Map.lookup name fixtures -> respond (responseLBS status200 [] (fromStrict body))
                 ["quick", "Marshal.4.8", "ecluse-fixture-root-1.0.0.gemspec.rz"] -> respond (responseLBS status200 [] (fromStrict compact))
-                ["gems", "ecluse-fixture-root-1.0.0.gem"] -> respond (responseLBS status200 [] (fromStrict archive))
+                ["gems", "ecluse-fixture-root-1.0.0.gem"] -> respond (responseLBS archiveStatus [] (if archiveStatus == status200 then fromStrict archive else ""))
                 _ -> respond (responseLBS status404 [] "")
     testWithApplication (pure upstream) $ \port -> do
         let origin = loopbackRegistryUrl ("http://localhost:" <> show port)
@@ -576,6 +602,7 @@ data CoordinateSources
     | InvalidInventoryCandidateSource
     | MixedPublicIntegrityCandidateSource
     | MixedTrustedIntegrityCandidateSource
+    | PrivateCompactSource Status
 
 withAmbiguousNative :: Status -> (ServeRuntime -> MountBinding -> IORef [[Text]] -> RubyRelease -> IO a) -> IO a
 withAmbiguousNative = withCoordinateSources . OwnedCandidateSource
@@ -610,15 +637,19 @@ withCoordinateSourceHeader header sources use = do
                     PublicDeniedPrivateCandidateSource status -> answer status ""
                     MixedPublicIntegrityCandidateSource -> answer status200 admitted
                     MixedTrustedIntegrityCandidateSource -> answer status200 recent
+                    PrivateCompactSource _ -> answer status200 admitted
                     _ -> answer status404 ""
                 ["public", "info", "acme"] -> case sources of
                     OwnedCandidateSource _ -> answer status200 recent
                     PublicCandidateSource -> answer status200 recent
                     CachedDeniedCandidateSource _ -> answer status200 recent
                     _ -> answer status404 ""
-                ["public", "info", "acme-1"] -> answer status200 (case sources of PublicMixedCandidateSource -> mixed; MixedPolicyCandidateSource -> recent; CachedDeniedCandidateSource _ -> recent; PublicDeniedPrivateCandidateSource _ -> recent; CheckedEmptyCandidateSource -> "---\n"; InvalidInventoryCandidateSource -> "---\n2.0 |checksum:invalid\n"; MixedPublicIntegrityCandidateSource -> mixed; _ -> admitted)
+                ["public", "info", "acme-1"] -> answer status200 (case sources of PublicMixedCandidateSource -> mixed; MixedPolicyCandidateSource -> recent; CachedDeniedCandidateSource _ -> recent; PublicDeniedPrivateCandidateSource _ -> recent; CheckedEmptyCandidateSource -> "---\n"; PrivateCompactSource _ -> "---\n"; InvalidInventoryCandidateSource -> "---\n2.0 |checksum:invalid\n"; MixedPublicIntegrityCandidateSource -> mixed; _ -> admitted)
                 ["public", "gems", "acme-1-1.0.gem"] -> respond (responseLBS status200 [("Content-Length", show (BS.length (releaseArchive release)))] (fromStrict (releaseArchive release)))
                 ["public", "quick", "Marshal.4.8", "acme-1-1.0.gemspec.rz"] -> answer status200 (releaseCompact release)
+                ["private", "quick", "Marshal.4.8", "acme-1-1.0.gemspec.rz"] -> case sources of
+                    PrivateCompactSource status -> answer status ""
+                    _ -> answer status404 ""
                 _ -> answer status404 ""
     testWithApplication (pure upstream) $ \port -> do
         let base = "http://localhost:" <> show port
@@ -631,6 +662,7 @@ withCoordinateSourceHeader header sources use = do
                 InvalidInventoryCandidateSource -> Just privateBase
                 MixedPublicIntegrityCandidateSource -> Just privateBase
                 MixedTrustedIntegrityCandidateSource -> Just privateBase
+                PrivateCompactSource _ -> Just privateBase
                 _ -> Nothing
             privateBase = loopbackRegistryUrl (base <> "/private/")
             firstParty = case sources of OwnedCandidateSource _ -> rubyGemsFirstPartyName (owned :| []); _ -> const False
