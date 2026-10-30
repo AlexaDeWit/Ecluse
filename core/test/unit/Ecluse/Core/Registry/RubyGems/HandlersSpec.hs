@@ -173,6 +173,12 @@ spec = do
                     simpleStatus response `shouldBe` status403
                     lookup "WWW-Authenticate" (simpleHeaders response) `shouldBe` Nothing
                     map fst <$> readIORef hits `shouldReturn` [["private", "versions"]]
+        for_ [status500, status503] $ \failed ->
+            it ("refuses discovery with 503 after private directory " <> show failed <> ", without reading the public directory") $
+                withDirectorySources $ \runtime binding hits privateStatus -> do
+                    writeIORef privateStatus failed
+                    simpleStatus <$> capture runtime binding "GET" "/versions" [] `shouldReturn` status503
+                    map fst <$> readIORef hits `shouldReturn` [["private", "versions"]]
         it "fails private discovery on a malformed private row before any public read" $
             withDirectoryBodies "---\npublic-gem 1.0 \n" "---\nprivate-gem 1.0 \nbroken\n" $ \runtime binding hits _ -> do
                 simpleStatus <$> capture runtime binding "GET" "/versions" [] `shouldReturn` status502
