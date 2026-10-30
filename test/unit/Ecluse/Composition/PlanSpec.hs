@@ -93,8 +93,9 @@ spec = describe "resolveBootPlan" $ do
                        ]
                 <> mountPostureLines config
                 <> [ "rule boot order for mount npm:"
-                   , "rule 1: DenyInstallTimeExecution (precedence 300, applies at admission only)"
-                   , "rule 2: AllowIfOlderThan (precedence 100, applies at admission and revocation)"
+                   , "rule 1: DenyExternalDependencies (precedence 300, applies at admission only)"
+                   , "rule 2: DenyInstallTimeExecution (precedence 300, applies at admission only)"
+                   , "rule 3: AllowIfOlderThan (precedence 100, applies at admission and revocation)"
                    ]
                 <> advisoryAgeLines config
                 <> advisoryEpssLines config
@@ -111,8 +112,9 @@ spec = describe "resolveBootPlan" $ do
             fmap (filter (T.isPrefixOf "rule ") . bpLines) (brOutcome (resolveBootPlan role (bootInputsFor envVars Nothing config noCeiling)))
                 `shouldBe` Right
                     [ "rule boot order for mount npm:"
-                    , "rule 1: DenyInstallTimeExecution (precedence 300, applies at admission only)"
-                    , "rule 2: AllowIfOlderThan (precedence 100, applies at admission and revocation)"
+                    , "rule 1: DenyExternalDependencies (precedence 300, applies at admission only)"
+                    , "rule 2: DenyInstallTimeExecution (precedence 300, applies at admission only)"
+                    , "rule 3: AllowIfOlderThan (precedence 100, applies at admission and revocation)"
                     , "rule boot order for mount pypi:"
                     , "rule 1: DenyByIdentity (precedence 400, applies at admission only)"
                     , "rule 2: AllowIfOlderThan (precedence 100, applies at admission and revocation)"

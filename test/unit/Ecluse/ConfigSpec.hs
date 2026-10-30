@@ -122,7 +122,7 @@ spec = do
             it ("denies install scripts on the active npm mount with " <> label) $ do
                 cfg <- configFor doc
                 fmap (map (ruleName . prRule) . mountPolicy) (Map.lookup Npm (configMounts cfg))
-                    `shouldBe` Just ["DenyInstallTimeExecution", "AllowIfOlderThan"]
+                    `shouldBe` Just ["DenyExternalDependencies", "DenyInstallTimeExecution", "AllowIfOlderThan"]
                 decideOn cfg Npm (scriptEvidence Npm) >>= (\decision -> blockedBy decision `shouldBe` Just "DenyInstallTimeExecution")
                 fmap (map (ruleName . prRule) . revocationRules . mountPolicy) (Map.lookup Npm (configMounts cfg))
                     `shouldBe` Just ["AllowIfOlderThan"]
@@ -137,7 +137,7 @@ spec = do
         it "disables the npm default in the document or environment" $
             for_ [configFor "{\"mounts\":{\"npm\":{\"rules\":{\"deny-scripts\":{\"enabled\":false}}}}}", expectConfig (pubUrlEnv <> [("ECLUSE_MOUNTS__NPM__RULES", "{\"deny-scripts\":{\"enabled\":false}}")]) Nothing] $ \load -> do
                 cfg <- load
-                Map.map limitedRules (configMounts cfg) `shouldBe` Map.singleton Npm []
+                Map.map limitedRules (configMounts cfg) `shouldBe` Map.singleton Npm ["DenyExternalDependencies"]
                 decideOn cfg Npm (scriptEvidence Npm) >>= (\decision -> admittedBy decision `shouldBe` Just "AllowIfOlderThan")
 
         it "admits a named npm package with a pin above the deny's precedence" $ do
@@ -146,13 +146,13 @@ spec = do
 
         it "widens the shipped npm deny from the operator layer" $ do
             cfg <- configFor "{\"mounts\":{\"npm\":{\"rules\":{\"deny-scripts\":{\"appliesTo\":[\"admission\",\"revocation\"]}}}}}"
-            Map.map limitedRules (configMounts cfg) `shouldBe` Map.singleton Npm []
+            Map.map limitedRules (configMounts cfg) `shouldBe` Map.singleton Npm ["DenyExternalDependencies"]
             fmap (map (ruleName . prRule) . revocationRules . mountPolicy) (Map.lookup Npm (configMounts cfg))
                 `shouldBe` Just ["DenyInstallTimeExecution", "AllowIfOlderThan"]
 
         it "keeps the shipped mount layer above a shared entry of the same name" $ do
             cfg <- configFor "{\"rules\":{\"deny-scripts\":{\"type\":\"DenyInstallTimeExecution\",\"appliesTo\":[\"admission\",\"revocation\"]}},\"mounts\":{\"npm\":{\"enabled\":true}}}"
-            Map.map limitedRules (configMounts cfg) `shouldBe` Map.singleton Npm ["DenyInstallTimeExecution"]
+            Map.map limitedRules (configMounts cfg) `shouldBe` Map.singleton Npm ["DenyExternalDependencies", "DenyInstallTimeExecution"]
 
         it "refuses disabling the npm-only name in the shared list or the PyPI mount" $ do
             loadConfig [] (Just "{\"rules\":{\"deny-scripts\":{\"enabled\":false}}}")
@@ -176,6 +176,22 @@ spec = do
         it "refuses a different type under the shipped npm name" $
             loadConfig pubUrlEnv (Just "{\"mounts\":{\"npm\":{\"rules\":{\"deny-scripts\":{\"type\":\"DenyByIdentity\",\"identity\":\"thing\"}}}}}")
                 `shouldBe` Left [PolicyErrors [MalformedRule "deny-scripts" "\"type\" \"DenyByIdentity\" does not match the default rule it patches"]]
+
+        it "disables the shipped dependency deny under the npm mount, keeping the script deny" $ do
+            cfg <- configFor "{\"mounts\":{\"npm\":{\"rules\":{\"deny-external-dependencies\":{\"enabled\":false}}}}}"
+            Map.map limitedRules (configMounts cfg) `shouldBe` Map.singleton Npm ["DenyInstallTimeExecution"]
+            fmap (map (ruleName . prRule) . mountPolicy) (Map.lookup Npm (configMounts cfg))
+                `shouldBe` Just ["DenyInstallTimeExecution", "AllowIfOlderThan"]
+
+        it "refuses disabling the shipped dependency deny in the shared list, naming the npm remedy" $ do
+            loadConfig [] (Just "{\"rules\":{\"deny-external-dependencies\":{\"enabled\":false}}}")
+                `shouldBe` Left [SharedPolicyErrors [SuppressUnknownRule "deny-external-dependencies"]]
+            first (map renderConfigError) (loadConfig [("ECLUSE_RULES", "{\"deny-external-dependencies\":{\"enabled\":false}}")] Nothing)
+                `shouldBe` Left ["rule \"deny-external-dependencies\" disables a rule that no default defines. Disable the shipped npm default with enabled: false under mounts.npm.rules (ECLUSE_MOUNTS__NPM__RULES) instead.\n"]
+
+        it "refuses a different type under the shipped dependency deny's name" $
+            loadConfig pubUrlEnv (Just "{\"mounts\":{\"npm\":{\"rules\":{\"deny-external-dependencies\":{\"type\":\"DenyInstallTimeExecution\"}}}}}")
+                `shouldBe` Left [PolicyErrors [MalformedRule "deny-external-dependencies" "\"type\" \"DenyInstallTimeExecution\" does not match the default rule it patches"]]
 
     describe "configuration type error paths" $ do
         forM_

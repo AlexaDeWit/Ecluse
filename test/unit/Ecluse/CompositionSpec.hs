@@ -184,10 +184,10 @@ planMountsSpec = describe "resolveBootWiring (config-driven serving)" $ do
         planFrom staticEnvVars Nothing >>= \case
             Right [binding] -> do
                 let deps = bindingPackumentDeps binding
-                map prepName (bootOrder (pdRules deps)) `shouldBe` ["DenyInstallTimeExecution", "AllowIfOlderThan"]
+                map prepName (bootOrder (pdRules deps)) `shouldBe` ["DenyExternalDependencies", "DenyInstallTimeExecution", "AllowIfOlderThan"]
                 cfg <- expectConfig staticEnvVars Nothing
                 fmap (renderBootOrder . mountPolicy) (Map.lookup Npm (configMounts cfg))
-                    `shouldBe` Just ["rule 1: DenyInstallTimeExecution (precedence 300, applies at admission only)", "rule 2: AllowIfOlderThan (precedence 100, applies at admission and revocation)"]
+                    `shouldBe` Just ["rule 1: DenyExternalDependencies (precedence 300, applies at admission only)", "rule 2: DenyInstallTimeExecution (precedence 300, applies at admission only)", "rule 3: AllowIfOlderThan (precedence 100, applies at admission and revocation)"]
             other -> expectationFailure ("expected one binding, got " <> show (fmap length other))
 
     it "wires a deny limited to admission into each mount's gate, for npm and for PyPI" $ do

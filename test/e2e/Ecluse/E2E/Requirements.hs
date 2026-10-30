@@ -16,7 +16,7 @@ obligations =
         "npm/install"
         Supported
         ["read", "mirror", "client-install"]
-        ["npm/install/default-denial", "npm/install/lifecycle-script-control", "npm/install/deprecation-relay", "npm/install/deprecation-negative-control", "npm/install/integrity-refusal", "npm/install/head-no-effect", "npm/install/metadata-preservation", "npm/install/latest-preservation", "npm/install/publication-unconfigured", "npm/install/mal-forced-source-required", "npm/install/mal-manual-source-required"]
+        ["npm/install/default-denial", "npm/install/external-dependency-denial", "npm/install/lifecycle-script-control", "npm/install/deprecation-relay", "npm/install/deprecation-negative-control", "npm/install/integrity-refusal", "npm/install/head-no-effect", "npm/install/metadata-preservation", "npm/install/latest-preservation", "npm/install/publication-unconfigured", "npm/install/mal-forced-source-required", "npm/install/mal-manual-source-required"]
     , Obligation
         "npm/mirror"
         "npm/registry"
