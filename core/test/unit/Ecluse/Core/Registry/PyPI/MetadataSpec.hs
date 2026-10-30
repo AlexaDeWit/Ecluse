@@ -47,7 +47,7 @@ import Ecluse.Test.Json (encodeStrict)
 import Ecluse.Test.Package (defaultMinIntegrity, pypiVersion, requestsName, unsafeFilename)
 import Ecluse.Test.Package.Admission (admitArtifactWithEvidence)
 import Ecluse.Test.Registry.Metadata.Fetch (heldWorkspacePayments, heldWorkspacePeak)
-import Ecluse.Test.Registry.PyPI (filesNamed, simpleFile, simpleIndex, simpleIndexWith, withFileKeys)
+import Ecluse.Test.Registry.PyPI (denseIndex, filesNamed, simpleFile, simpleIndex, simpleIndexWith, withFileKeys)
 import Ecluse.Test.Registry.PyPI.Metadata (projectPyPIChunks, projectPyPIIndex, projectPyPIVersion, simpleValue)
 import Ecluse.Test.Rules (admittedBy, atDefaultPrecedence, evalRules, inertRuleDeps)
 import Ecluse.Test.Support (expectRight)
@@ -116,8 +116,7 @@ entryFloorSpec = describe "the full-read entry floor" $ do
     pypiBase = "https://pypi.org/simple"
     files = 150
     drops = 400
-    file at = "{\"filename\":\"x" <> at <> "\",\"url\":\"https://files.pythonhosted.org/x" <> at <> "\"}"
-    denseBody = "{\"meta\":{\"api-version\":\"1.1\"},\"name\":\"requests\",\"files\":[" <> BS.intercalate "," [file (show at) | at <- [1 .. files :: Int]] <> "],\"versions\":[" <> BS.intercalate "," (replicate drops "7") <> "]}"
+    denseBody = denseIndex files drops
     denseShortfall = entryFloorBytes * (files + drops) - scaleCharge (cfFullReadPermille pypiChargeFactors) (BS.length denseBody)
 
 indexSpec :: Spec
