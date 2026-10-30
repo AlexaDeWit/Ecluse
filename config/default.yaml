@@ -69,16 +69,19 @@ queue:
 
 limits:
   # Structural policy limits stay independent of the memory and CPU controls.
+  # The RubyGems /versions directory reads neither count key below. A fixed ceiling of
+  # 2,000,000 gem names in code bounds it, maxResponseBytes bounds its rows, and raising
+  # the ceiling takes a release.
   # maxVersionCount counts every source npm version. PyPI full reads count distinct
   # releases, while selected reads count all source file positions, including skips.
   # Cargo full and selected reads count every nonblank source index record, including invalid records.
-  # RubyGems full reads count distinct raw versions. Selected reads count every
+  # RubyGems /info full reads count distinct raw versions. Selected reads count every
   # nonblank artifact position, including skipped and malformed rows.
   maxVersionCount: 1000000
   # Valid retained npm artifacts and full-read PyPI distribution files. The selected
   # PyPI path uses maxVersionCount's source-file bound instead of a separate check.
   # Cargo full and selected reads count every valid projected archive before version selection.
-  # RubyGems counts every nonblank artifact row before parsing or version selection.
+  # RubyGems /info reads count every nonblank artifact row before parsing or version selection.
   # This counts files. maxArtifactBytes below bounds worker artifact bodies.
   maxArtifactCount: 1000000
   # Nesting in retained metadata fields and Cargo records. Skipped npm/PyPI fields do not use this limit.

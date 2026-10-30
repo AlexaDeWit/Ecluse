@@ -216,6 +216,8 @@ Private access refusal does not authorise public substitution.
 HEAD authorises and checks availability without reading or hashing an archive body, and never enqueues mirroring.
 
 The public `/versions` directory adds a global transfer and refresh cost before per-gem acquisition.
+The public and private directories each accept at most 2,000,000 distinct gem names, and a directory past that ceiling fails its read.
+The ceiling is fixed in Écluse and independent of `limits.maxVersionCount` and `limits.maxArtifactCount`, which bound per-gem `/info` reads.
 Private discovery uses current caller credentials and remains outside public shared retention.
 Private directory failure remains a failure rather than a public-only or stale conditional response.
 Detailed metadata acquisition stays on demand. There is no full specification index, unfiltered fallback, or client yank relay.
