@@ -359,7 +359,8 @@ dependencySources plane = for_ [currentCargo, floorCargo] $ \toolchain ->
                     assertCargoAssets project (cargoInvocationTraffic invocation)
                     graph <- readGraph project []
                     package <- nativePackage name graph
-                    map cargoDependencyRegistry (cargoPackageDependencies package) `shouldBe` [Nothing]
+                    -- cargo metadata reads the packaged manifest, where cargo package turned registry = "ecluse-test" into its index.
+                    map cargoDependencyRegistry (cargoPackageDependencies package) `shouldBe` [if named then Just ("sparse+" <> e2eBaseUrl proxy <> "/cargo/") else Nothing]
                     map cargoDependencyRename (cargoPackageDependencies package) `shouldBe` [Just "renamed_leaf"]
                     void (runCargo project ["build", "--features", toString (name <> "/forwarded")] >>= shouldSucceed)
                 files <- cargoRegistryFiles registry
