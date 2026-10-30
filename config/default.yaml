@@ -580,7 +580,8 @@ mounts:
   # Compact specifications and .gem downloads stay under this mount. No full specification index is served.
   # Native publication posts the original built .gem to /api/v1/gems below the target root.
   # Reads preserve caller Basic pairs. Publication preserves the raw API key and optional OTP.
-  # Declared CodeArtifact service roles use Basic aws reads and Bearer publication.
+  # A static publicationTarget token is the bare secret. On codeArtifact, the mirror worker's
+  # token and that static token read with Basic aws and publish as Bearer.
   # Mirroring requires mirrorState.url and retains every supported platform artifact,
   # original compact specifications and source facts. Preserve that state across restarts.
   # DenyInstallTimeExecution: RubyGems native builds are normal installation behaviour. This rule is unsupported for the ecosystem.
