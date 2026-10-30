@@ -29,6 +29,8 @@ module Ecluse.Core.Server.MemoryModel.Calibration (
     EntryFigures (..),
     entryFloor,
     denseFigures,
+    releaseFloor,
+    minimalBodyFigures,
 ) where
 
 import Data.Map.Strict qualified as Map
@@ -385,7 +387,7 @@ data EntryFigures = EntryFigures
     , entryHeld :: Rational
     }
 
--- | Cover the largest dense figure with a 25% margin, rounded up to 64 bytes.
+-- | Cover the largest figure with a 25% margin, rounded up to 64 bytes.
 entryFloor :: Map Text EntryFigures -> Integer
 entryFloor figures = 64 * ceiling (foldl' max 0 [figure | dense <- Map.elems figures, figure <- [entryReadPeak dense, entryHeld dense]] * 5 / 256)
 
@@ -401,4 +403,17 @@ denseFigures =
         , ("pypi/versions", EntryFigures (1765608 % 10001) (1765608 % 10001))
         , ("pypi/alternate-locations", EntryFigures (746192 % 10001) (697000 % 10001))
         , ("pypi/tracks", EntryFigures (745520 % 10001) (696984 % 10001))
+        ]
+
+-- | The floor npm versions and PyPI files pay: the entry rule over every dense and minimal-body figure.
+releaseFloor :: Integer
+releaseFloor = entryFloor (denseFigures <> minimalBodyFigures)
+
+-- | Figures for versions and files with the smallest valid body, which outweigh every dense figure.
+minimalBodyFigures :: Map Text EntryFigures
+minimalBodyFigures =
+    -- Measured as the dense figures were, where two runs gave the same held bytes and read peaks within 0.01%.
+    Map.fromList
+        [ ("npm/minimal-versions", EntryFigures (8444784 % 10000) (6578904 % 10000))
+        , ("pypi/minimal-files", EntryFigures (8853320 % 10000) (8560928 % 10000))
         ]

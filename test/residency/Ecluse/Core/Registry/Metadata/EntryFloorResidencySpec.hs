@@ -24,10 +24,12 @@ import Ecluse.Core.Registry.Metadata (Manifest (manifestRetainedEntries))
 import Ecluse.Core.Registry.Metadata.EntryFloor (entryFloorCharge)
 import Ecluse.Core.Server.Admission.Budget (scaleCharge)
 import Ecluse.Core.Server.Admission.Types (ChargeFactors (cfFullReadPermille, cfKeptPermille))
-import Ecluse.Core.Server.MemoryModel.Calibration (EntryFigures (..), denseFigures, heldLimit, readPeakLimit)
+import Ecluse.Core.Server.MemoryModel.Calibration (EntryFigures (..), denseFigures, heldLimit, minimalBodyFigures, readPeakLimit)
 import Ecluse.Core.Server.MemoryModel.Probe (ListingPeaks (..), SingleListing (..), measurePathInChild)
 import Ecluse.Core.Server.MemoryModel.ProbeMode qualified as Mode
 import Ecluse.Test.Registry.Metadata.Fetch (heldWorkspacePeak)
+import Ecluse.Test.Registry.Npm (minimalPackument)
+import Ecluse.Test.Registry.PyPI (minimalIndex)
 import Ecluse.Test.Server.Mount (requiredAdapter)
 import Ecluse.Test.Support (expectRight)
 
@@ -41,7 +43,7 @@ data Dense = Dense
 -- | The read's peak and what it holds once read, against the floor and against each figure's limit.
 spec :: Spec
 spec = describe "dense listing live bytes" $
-    for_ denseListings $ \dense ->
+    for_ (denseListings <> minimalBodies) $ \dense ->
         it (toString (label dense)) $ withSystemTempDirectory "ecluse-dense-listing" $ \directory -> do
             let path = directory </> "dense.json"
                 bytes = denseDocument dense entries
@@ -59,7 +61,7 @@ spec = describe "dense listing live bytes" $
             retained `shouldSatisfy` (>= entries)
             readRise `shouldSatisfy` (<= toInteger (max (scaleCharge (cfFullReadPermille factors) size) (entryFloorCharge retained)))
             heldRise `shouldSatisfy` (<= toInteger (max (scaleCharge (cfKeptPermille factors) size) (entryFloorCharge retained)))
-            figures <- maybe (fail "no dense listing figures") pure (Map.lookup (label dense) denseFigures)
+            figures <- maybe (fail "no dense listing figures") pure (Map.lookup (label dense) (denseFigures <> minimalBodyFigures))
             (1000 * readRise) `shouldSatisfy` (<= readPeakLimit (entryReadPeak figures) * toInteger retained + 1000 * tolerance)
             (1000 * heldRise) `shouldSatisfy` (<= heldLimit (entryHeld figures) * toInteger retained + 1000 * tolerance)
 
@@ -94,6 +96,13 @@ denseListings =
             )
     index members = render ("{\"meta\":{\"api-version\":\"1.1\"},\"name\":\"thing\"," <> members <> "}")
     validFile = "{\"filename\":\"thing-1.0.0.tar.gz\",\"url\":\"https://files.pythonhosted.org/thing-1.0.0.tar.gz\"}"
+
+-- Versions and files with the smallest valid body, which hold more for each entry than any dense form.
+minimalBodies :: [Dense]
+minimalBodies =
+    [ Dense Npm "minimal-versions" minimalPackument
+    , Dense PyPI "minimal-files" minimalIndex
+    ]
 
 label :: Dense -> Text
 label dense = ecosystemName (denseEcosystem dense) <> "/" <> denseKind dense
