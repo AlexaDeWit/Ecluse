@@ -137,7 +137,7 @@ uploadClaims limits charge registry body = do
                         checkDependencyRegistries [publication] (Body.uploadMetadata upload)
                         pure [Body.uploadName upload]
 
--- | The mount's own sparse index, which a null upload dependency source also names.
+-- The mount's own sparse index, which a null upload dependency source also names.
 sparseRegistry :: Text -> Text
 sparseRegistry registry = "sparse+" <> T.dropWhileEnd (== '/') registry <> "/"
 
