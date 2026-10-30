@@ -69,6 +69,13 @@ assumptions:
     threats:
       - 0ec10e5e-0000-4000-8000-00000000010f
     appliesToModel: false
+  - id: as-availability-follows-private-upstream
+    prose: "Écluse availability follows the private upstream's. A private outage stops every build through the mount, purely public dependencies included, because a failed private read refuses the request rather than serving public content. Readiness stays lenient about public reachability. The owner accepts this residual."
+    status: valid
+    threats:
+      - 86831e7c-7191-4076-b8fb-6375d77b3855
+      - 0ec10e5e-0000-4000-8000-000000000102
+    appliesToModel: false
   - id: as-collapsed-topology-operator-choice
     prose: "The deployment guide recommends three registries, each governed on its own: a first-party store, a public-derived mirror store, and a pull-through read endpoint that unions the other two at the registry level. Écluse supports collapsing these roles onto fewer stores, down to one, and the guide discourages it. An operator who collapses them gives up the separation of first-party and public-derived inventory, per-store policy, and the Dredger's automated pruning, and accepts that residual against their own threat tolerance. The collapse weakens auditability and defence in depth. It does not remove the admission gate."
     status: valid
@@ -1113,7 +1120,7 @@ elements:
     name: |-
       Authorised private
       metadata and bytes
-    description: The private endpoint returns discovery, metadata, or package bytes after authorising the caller credential forwarded by the proxy. Private preparation and reads remain request-local without shared retention or single-flight.
+    description: The private endpoint returns discovery, metadata, or package bytes after authorising the caller credential forwarded by the proxy. Private preparation and reads remain request-local without shared retention or single-flight. A failed read refuses the request, and a 404 still lets public content serve.
     outOfScope: false
     reasonOutOfScope: ""
     protocol: HTTPS
@@ -1627,7 +1634,8 @@ elements:
       PyPI: select the file and any companion from authorised metadata and the managed inventory proof.
       Cargo: select the exact archive using current authorised discovery and retained source proof for managed copies.
       RubyGems: select the exact raw version and platform from admitted rows or a complete authorised managed inventory.
-      First-party names never fall back to public. Only admitted public artifact GETs enqueue mirroring.
+      First-party names never fall back to public, and no name falls back after a failed private read.
+      Only admitted public artifact GETs enqueue mirroring.
   - kind: flow
     id: publication-request
     name: |-
@@ -1793,7 +1801,7 @@ mitigations:
       - a883d9d9-0aa3-4a27-9653-cae0424abdba
   - id: mit-request-coalescing
     title: Single-flight requests, the upstream progress floor, and request timeout
-    prose: Single-flight joins eligible concurrent reads or renders for the same key onto one active computation, independently of retention. The local provider retains no full metadata, but active full reads still coalesce. Selected-version and assembled-response retention remain available through that provider. A per-request timeout limits each request. Every transfer over a registry protocol, the artifact stream relayed to a client included, keeps a progress floor of request and response body bytes together, at least `limits.minProgressBytes` (1 MiB by default) within each `limits.progressWindow` seconds (10 by default) spent waiting on the upstream. A transfer below the floor, a silent one included, fails with the transport timeout, and its connection closes rather than returning to the pool. Each upstream exchange of a served request also ends at the request timeout less a fixed 10-second margin, so a slow fetch fails before the request timeout, and the requests coalesced onto it receive the same fault and release their admission. The mirror worker and the Dredger have no such cap. The timeout is a transport fault like any other, and a private read that fails this way for a name that is not first-party falls back to the rule-gated public document, as any private transport fault does. Distinct keys do not coalesce, and useful results still occupy memory until their consumers release them. Companion public metadata reads use the selected-version provider. Companion relays retain the same progress floor and bracketed upstream connection lifetime.
+    prose: Single-flight joins eligible concurrent reads or renders for the same key onto one active computation, independently of retention. The local provider retains no full metadata, but active full reads still coalesce. Selected-version and assembled-response retention remain available through that provider. A per-request timeout limits each request. Every transfer over a registry protocol, the artifact stream relayed to a client included, keeps a progress floor of request and response body bytes together, at least `limits.minProgressBytes` (1 MiB by default) within each `limits.progressWindow` seconds (10 by default) spent waiting on the upstream. A transfer below the floor, a silent one included, fails with the transport timeout, and its connection closes rather than returning to the pool. Each upstream exchange of a served request also ends at the request timeout less a fixed 10-second margin, so a slow fetch fails before the request timeout, and the requests coalesced onto it receive the same fault and release their admission. The mirror worker and the Dredger have no such cap. The timeout is a transport fault like any other, and a private read that fails this way refuses the request with 503, as any private transport fault does. Distinct keys do not coalesce, and useful results still occupy memory until their consumers release them. Companion public metadata reads use the selected-version provider. Companion relays retain the same progress floor and bracketed upstream connection lifetime.
     status: implemented
     threats:
       - 0ec10e5e-0000-4000-8000-000000000102
@@ -1965,7 +1973,7 @@ mitigations:
       - 0ec10e5e-0000-4000-8000-00000000010b
   - id: mit-private-refusal-stops-read
     title: Private refusal stops the read
-    prose: "Private authentication or authorisation refusal never permits public substitution. npm, PyPI and RubyGems map private 401 or 403 to local 403 before parsing the error body. Cargo preserves native 401 with a Cargo challenge for credential-provider retry. A true 403 remains refusal. A private 404 permits public fallback only for non-first-party packages."
+    prose: "Private authentication or authorisation refusal never permits public substitution. npm, PyPI and RubyGems map private 401 or 403 to local 403 before parsing the error body. Cargo preserves native 401 with a Cargo challenge for credential-provider retry. A true 403 remains refusal. A private 404 permits public fallback only for non-first-party packages, and any other private read failure refuses the request."
     status: implemented
     threats:
       - 0ec10e5e-0000-4000-8000-00000000010b
@@ -1975,6 +1983,12 @@ mitigations:
     status: implemented
     threats:
       - 0ec10e5e-0000-4000-8000-000000000126
+  - id: mit-private-failure-refuses
+    title: A failing private upstream refuses the request
+    prose: "A configured privateUpstream whose read fails refuses listings, metadata and artifact decisions on every ecosystem with 503, for every name. A failed read is a transport error, a timeout, a 5xx, a 429 backoff, a redirect Écluse does not follow or another unexpected status, or a private document that cannot be decoded or exceeds its bound. A private 404 lets admitted public content serve, a private 401 or 403 still refuses, and a public outage with a healthy private side still serves the private-only union. First-party declarations cannot close this gap, because most registries give no reliable mechanism to establish a complete first-party naming system, and a missed name fails silently."
+    status: implemented
+    threats:
+      - 86831e7c-7191-4076-b8fb-6375d77b3855
   - id: mit-dredger-named-deny
     title: Deletion only on a named decisive deny
     prose: "The Dredger deletes a version only when a named rule denies it decisively. It evaluates the mount's rules that apply at revocation, which the composition root selects in one place, and it never reads a rule limited to admission. The load admits that limit on a deny alone and refuses a rule that applies at revocation alone, so on the same evidence the Dredger never deletes a version the gate admits. Deny-by-default and unvettable results keep the version. Identity-only evidence, a listed version with no readable metadata, goes to that same rule set: any rule that decides from name and version can condemn the version, such as a bare-name `DenyByIdentity`, `DenyIfCve`, or `DenyIfEpss`, and a rule that needs a fact the evidence lacks keeps the version. Rule precedence and every deletion guard still apply. If removing an allow exposes a winning deny that applies at revocation, normal pruning applies, and later cycles reconcile eligible late publications under current evidence. CodeArtifact supplies Cargo physical version deletion through the existing maintenance interface. A generic Cargo yank leaves archive bytes and cannot satisfy that capability. Deterministic native fixtures establish integration, not live AWS fidelity."
@@ -2826,4 +2840,17 @@ threats:
       - public-listing
       - public-artifact
       - bc70f625-f86a-405c-97a1-8b0fb156965f
-lastIssuedThreatNumber: 122
+  - id: 86831e7c-7191-4076-b8fb-6375d77b3855
+    number: 123
+    title: Private-namespace shadowing during a private outage
+    category:
+      methodology: STRIDE
+      category: spoofing
+    severity: high
+    status: mitigated
+    description: "A private package whose name the operator has not declared first-party can share its name with a public package. While the private read succeeds, the private copy shadows its public namesake. When the private read fails, a merge that serves whatever resolved replaces the private package with the public one once that version passes the rules, so builds switch packages silently. This is a dependency-confusion path: an attacker who registers the private name publicly then needs only a failed private read to reach the build."
+    elements:
+      - 0ec10e5e-0000-4000-8000-000000000041
+      - public-listing
+      - public-artifact
+lastIssuedThreatNumber: 123
