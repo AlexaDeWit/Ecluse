@@ -11,6 +11,8 @@ module Ecluse.Test.Registry.Npm.Publish (
     npmProvenanceRelease,
     npmDeprecateDocument,
     npmStarDocument,
+    npmDependentRelease,
+    npmExternalDependencyRefusal,
 ) where
 
 import Data.Aeson (Value (Null), encode, object, (.=))
@@ -57,6 +59,15 @@ npmDeprecateDocument message =
 npmStarDocument :: LByteString
 npmStarDocument = "{\"users\":{\"e2e-user\":true}}"
 
+-- | An @npm publish@ of @\@acme/widget@ 2.0.0 whose version document also carries the given members.
+npmDependentRelease :: [Pair] -> LByteString
+npmDependentRelease extra = releaseDocumentWith (releaseManifestWith widget extra) widget widget latestTag []
+
+-- | The @400@ reason for a release whose dependency in the field names the source kind, such as @a git source@.
+npmExternalDependencyRefusal :: Text -> Text -> Text -> Text
+npmExternalDependencyRefusal dependency field kind =
+    "the publish body's dependency '" <> dependency <> "' in " <> field <> " names " <> kind <> ", which a client would fetch from outside this proxy: depend on a version this proxy serves"
+
 widget :: Text
 widget = "@acme/widget"
 
@@ -64,19 +75,22 @@ latestTag :: Value
 latestTag = object ["latest" .= ("2.0.0" :: Text)]
 
 releaseDocument :: Text -> Text -> Text -> Value -> [Pair] -> LByteString
-releaseDocument documentId documentName versionName tags extraAttachments =
+releaseDocument documentId documentName versionName = releaseDocumentWith (releaseManifestWith versionName []) documentId documentName
+
+releaseDocumentWith :: Value -> Text -> Text -> Value -> [Pair] -> LByteString
+releaseDocumentWith manifest documentId documentName tags extraAttachments =
     encode . object $
         [ "_id" .= documentId
         , "name" .= documentName
         , "dist-tags" .= tags
-        , "versions" .= object ["2.0.0" .= releaseManifest versionName]
+        , "versions" .= object ["2.0.0" .= manifest]
         , "access" .= Null
         , "_attachments" .= object ((Key.fromText (documentName <> "-2.0.0.tgz") .= tarballAttachment) : extraAttachments)
         ]
 
-releaseManifest :: Text -> Value
-releaseManifest versionName =
-    object
+releaseManifestWith :: Text -> [Pair] -> Value
+releaseManifestWith versionName extra =
+    object $
         [ "name" .= versionName
         , "version" .= ("2.0.0" :: Text)
         , "files" .= ["package.json" :: Text]
@@ -91,6 +105,7 @@ releaseManifest versionName =
                 , "tarball" .= ("http://127.0.0.1:48731/" <> versionName <> "/-/" <> versionName <> "-2.0.0.tgz")
                 ]
         ]
+            <> extra
 
 tarballAttachment :: Value
 tarballAttachment =
