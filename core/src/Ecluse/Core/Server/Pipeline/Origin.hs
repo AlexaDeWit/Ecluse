@@ -90,7 +90,9 @@ data OriginResult
       OriginNameMismatch
     | -- | The origin answered 404, so it holds no such package. It degrades to no contribution.
       OriginNotFound
-    | -- | The origin was not read: unreachable, faulting, or undecodable. It degrades to no contribution.
+    | {- | The origin was not read: unreachable, faulting, or undecodable. A public one contributes
+      nothing, and a private one refuses the request.
+      -}
       OriginUnresolved
     | -- | Public reads are suspended until the authority cooldown expires.
       OriginCooling RetryAfter

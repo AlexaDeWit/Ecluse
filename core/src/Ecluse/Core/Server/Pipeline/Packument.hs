@@ -2,7 +2,9 @@
 --
 -- SPDX-License-Identifier: MIT
 
--- | Merge authorised private metadata with admitted public versions. First-party names use only private metadata.
+{- | Merge authorised private metadata with admitted public versions. First-party names use only
+private metadata, and a private read that fails refuses every name.
+-}
 module Ecluse.Core.Server.Pipeline.Packument (
     PackumentReplies (..),
     DocumentRejectionObserver (..),
@@ -327,8 +329,11 @@ serveAdmittedPackument serving clientToken = do
                 concurrently
                     ( do
                         private <- readPrivate serving clientToken
+                        -- An access refusal or an unread private origin refuses before mirror state matters.
                         checked <- case private of
                             OriginAuthorisationFailure _ -> pure (Right Nothing)
+                            OriginUnresolved -> pure (Right Nothing)
+                            OriginCooling _ -> pure (Right Nothing)
                             _ -> liftIO (validateMirrorProject mirror (psvTicket serving) (psvName serving))
                         pure (private, checked)
                     )
@@ -372,6 +377,7 @@ serveMergedPackument ::
 serveMergedPackument serving evalCtx record privResult pubResult
     | OriginBudgetExceeded fault <- privResult = budgetRefused fault
     | OriginBudgetExceeded fault <- pubResult = budgetRefused fault
+    | Just MissUnresolved <- originMiss privResult = privateUnresolved serving evalCtx privResult pubResult
     | Just absent <- psvAbsent serving
     , isNothing record
     , not (pdFirstParty (psvDeps serving) (psvName serving))
@@ -394,7 +400,7 @@ serveMergedPackument serving evalCtx record privResult pubResult
             if not covered || fmap (infoVersions . manifestInfo) managedManifest /= fmap (infoVersions . srcInfo) managed
                 then mirrorUnavailableWithRetry serving (case pubResult of OriginCooling retry -> Just retry; _ -> Nothing)
                 else case originMiss privResult of
-                    Just miss | pdFirstParty deps name -> firstPartyMissed serving miss
+                    Just MissAbsent | pdFirstParty deps name -> firstPartyMissed serving MissAbsent
                     _ -> case packumentPlan sources trustedVersions (paDeniedEvidence public) of
                         Just plan -> do
                             liftIO $ do
@@ -679,6 +685,13 @@ neededUpstreamUnavailable = Reject (Rejection (Unavailable (WillResolve Nothing)
 
 upstreamInvalidDecision :: ServeDecision
 upstreamInvalidDecision = Reject (Rejection UpstreamInvalid "an upstream returned a packument for a different package")
+
+-- A private origin that was not read refuses every name, so no public namesake stands in for a
+-- private package. A failed public leg adds its own decision, as when neither leg resolves.
+privateUnresolved :: PackumentServing response -> EvalContext -> OriginResult -> OriginResult -> Handler response
+privateUnresolved serving evalCtx privResult pubResult
+    | pdFirstParty (psvDeps serving) (psvName serving) = firstPartyMissed serving MissUnresolved
+    | otherwise = noServeableVersions serving (ctxAdvisoryEtag evalCtx) [] (collectDecisions privResult pubResult [])
 
 firstPartyMissed :: PackumentServing response -> OriginMiss -> Handler response
 firstPartyMissed serving miss = do
