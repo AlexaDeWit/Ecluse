@@ -43,7 +43,7 @@ Public files must satisfy the artifact host and integrity requirements. The defa
 
 Files that fail these checks disappear from listings. A release disappears when no eligible file remains. An allow rule does not waive those checks.
 
-PyPI, Cargo, and RubyGems do not support the npm scope, deprecation, or install-execution rule types, and npm and RubyGems do not support the yank rule type. An active incompatible rule prevents that mount from starting. The [rule policy](@/docs/configuration.md#rule-policy) lists each blocked type and its reason.
+PyPI, Cargo, and RubyGems do not support the npm scope, deprecation, install-execution, or external-dependency rule types, and npm and RubyGems do not support the yank rule type. An active incompatible rule prevents that mount from starting. The [rule policy](@/docs/configuration.md#rule-policy) lists each blocked type and its reason.
 
 {{ task_link(path="@/docs/exceptions.md", title="Allow a specific version", description="Choose the override deliberately and inspect its effect.") }}
 

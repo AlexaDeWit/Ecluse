@@ -388,7 +388,8 @@ consumes. Adapters map their protocols into this shared model. Four principles g
   determine. Boot checks each active mount's resolved policy and accumulates every blocked entry
   beside independent refusals. The engine still evaluates only core evidence.
 - **Signal availability is explicit.** A signal the adapter has not determined, or cannot
-  determine cheaply, has its own representation (`CodeExecUnknown`, `Nothing`).
+  determine cheaply, has its own representation (`CodeExecUnknown`, `DependencySourcesUnknown`,
+  `Nothing`).
   A pure rule then yields no decision rather than guessing, and an effectful rule can resolve it
   later.
 - **The policy model holds the facts that rules and admission need.** Installation fields
@@ -406,7 +407,7 @@ consumes. Adapters map their protocols into this shared model. Four principles g
 | **Install-time code execution** | `CodeExecSignal = NoCodeOnInstall \| RunsCodeOnInstall reason \| CodeExecUnknown`. | Unifies npm install scripts, PyPI sdist builds, and RubyGems native extensions. Cargo and RubyGems retain `CodeExecUnknown` and block the unsupported execution-denial rule at boot. |
 | **Availability** | `Availability = Available \| Deprecated \| Yanked`, a flag with no text. | npm deprecates whole versions. npm and RubyGems drop a removed or yanked version from their metadata instead of flagging it, so both block the yank deny at boot. PyPI yanks individual files, so a release reads as `Yanked` only when every file of it is. |
 | **Artifacts** | A version owns `NonEmpty Artifact`. Each carries its entry key, file name, location, algorithm-tagged `Hash`es, and size. | npm has one tarball, PyPI an sdist plus many wheels, and RubyGems one gem per platform. |
-| **Dependency sources** | `DependencySources = RegistryDependencies \| FetchesOutsideRegistry reason`. | A git or URL dependency installs straight from its source and never receives a verdict of its own, so the deny judges the version that names it. npm reads `dependencies`, `optionalDependencies` and `peerDependencies` in both read forms. PyPI, Cargo and RubyGems project `RegistryDependencies`, because their public registries refuse such dependencies at upload or a dependency there names no source. |
+| **Dependency sources** | `DependencySources = RegistryDependencies \| FetchesOutsideRegistry reason \| DependencySourcesUnknown`. | A git or URL dependency installs straight from its source and never receives a verdict of its own, so the deny judges the version that names it. npm reads `dependencies`, `optionalDependencies` and `peerDependencies` in both read forms. PyPI, Cargo and RubyGems retain `DependencySourcesUnknown` and block the dependency deny at boot. |
 | **Dependencies** | The relationships themselves are retained for installation, outside the typed policy model. | Each dependency receives its own verdict when the client fetches it. npm retains supported dependency relationships in its installation representation. Only where a dependency installs from enters the rules vocabulary, as its dependency sources. |
 
 The types live in [`Ecluse.Core.Package`](../../core/src/Ecluse/Core/Package.hs),

@@ -266,11 +266,11 @@ An unheld or missing status produces diagnostic-only evidence and keeps the nati
 | Cargo CodeArtifact maintenance | Physical deletion through deterministic native fixtures. A generic registry's yank API does not provide deletion. No live AWS fidelity claim. |
 | Hosted incremental PyPI copying | Supported under [#1639](https://github.com/AlexaDeWit/Ecluse/issues/1639). Contracts require a complete authorised served view or explicit unavailability, retry/restart, and offline completion. |
 | Filesystem or S3 package storage | Planned under [#1239](https://github.com/AlexaDeWit/Ecluse/issues/1239). Future contracts require committed completion visibility, interrupted writes, failed markers, restart, concurrent publication, and direct-read/listing invisibility. |
-| PyPI scope allow and install-time execution denial | Refused because the adapter blocks those rule types. Existing boot and capability tests keep the reasons explicit. |
+| PyPI scope allow, install-time execution denial, and external-dependency denial | Refused because the adapter blocks those rule types. Existing boot and capability tests keep the reasons explicit. |
 | RubyGems Compact Index reads, mirroring, and publication | Bundler 2.6.9 and 4.0.23. Keep `/versions` discovery, on-demand `/info` metadata, archive SHA-256 values, complete platform mirrors with original-source durable state, and native publication. See the [protocol reference](https://ecluse-proxy.com/docs/protocol-support/#rubygems). |
 | RubyGems CodeArtifact maintenance | Inventory and physical deletion through deterministic native fixtures. A native yank is not deletion. No live AWS fidelity claim. |
-| RubyGems install-time execution denial, yank, scope allow, and deprecation rules | Refused because the adapter blocks those rule types. Existing boot and capability tests keep the reasons explicit. |
-| Cargo install-time execution denial, scope allow, and deprecation rules | Refused because the adapter blocks those rule types. Existing boot and capability tests keep the reasons explicit. |
+| RubyGems install-time execution denial, yank, external-dependency, scope allow, and deprecation rules | Refused because the adapter blocks those rule types. Existing boot and capability tests keep the reasons explicit. |
+| Cargo install-time execution denial, external-dependency, scope allow, and deprecation rules | Refused because the adapter blocks those rule types. Existing boot and capability tests keep the reasons explicit. |
 | Missing external service in smoke | Unavailable evidence, never a passing conformance result. Deterministic mirrors remain gating. |
 | Missing image, client, ownership, or Docker in required E2E | Failed setup. Pending or absent cases cannot satisfy the execution audit. |
 
