@@ -179,9 +179,15 @@ Retained fields reflect first admission. Écluse does not continuously synchroni
 Native publication checks length framing, archive root, manifest identity, and version before discovery or writes.
 Dependency inventories, aliases, kinds, targets, registry sources, version requirements, and dependency features must agree with the effective archived manifest.
 Package feature graphs, native-library `links` declarations, and the optional minimum Rust version must also agree, allowing native normalisation.
+Upload dependencies must not carry the `artifact`, `bindep_target`, `lib`, or `public` fields of unstable Cargo features such as nightly `-Z bindeps`.
+Écluse refuses such an upload with `400`, as mirroring refuses index rows that carry them.
 Target comparison parses native cfg expressions under the configured nesting limit, including final commas in `all` and `any` lists.
 Registry comparison uses native logical identities, preserving source kinds and sparse registry paths.
 A null upload dependency registry identifies the selected private view. An absent manifest registry identifies crates.io.
+Every dependency, development and build dependencies included, must come from crates.io or from Écluse's `/cargo/` or `/cargo/private/` index under `server.publicUrl`.
+Écluse refuses a dependency from any other registry with `400` and names it.
+Publish that dependency through Écluse first, then depend on Écluse's copy.
+Écluse does not check crates that reach the private upstream by other means.
 Descriptive and additive metadata need not match the manifest. Accepted uploads retain their original bytes.
 The sparse read root and approved upload API root remain distinct.
 Discovery must advertise the exact approved API authority and base path before Écluse attaches the publication credential.
