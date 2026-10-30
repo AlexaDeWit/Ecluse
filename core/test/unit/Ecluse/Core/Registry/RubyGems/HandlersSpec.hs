@@ -32,8 +32,7 @@ import Ecluse.Core.Registry.RubyGems.Project (projectName)
 import Ecluse.Core.Registry.RubyGems.Route (rubyGemsRouter)
 import Ecluse.Core.Rules (PreparedRule (prepEval), RuleEval (PerPackage, PerVersion), prepare)
 import Ecluse.Core.Rules.Types (FailureAlignment (FailDeny), Inability (NoDatabaseLoaded), Rule (AllowIfOlderThan), RuleEvidence (evVersion), RuleVerdict (CannotVet))
-import Ecluse.Core.Security (Limits (..))
-import Ecluse.Core.Security (authorityLabel)
+import Ecluse.Core.Security (Limits (..), authorityLabel)
 import Ecluse.Core.Security.Egress (RegistryUrl, registryUrlText)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Core.Server.Admission (newServeAdmissionTuned)
@@ -255,7 +254,8 @@ spec = do
 
     describe "directory observability" $ do
         it "records one serve decision for each directory reply" $ do
-            let decided bodies status adjust serve = do
+            let decided :: (LByteString, LByteString) -> Status -> (IORef Status -> IORef Status -> IO ()) -> (ServeRuntime -> MountBinding -> IO Status) -> IO [Metric.Decision]
+                decided bodies status adjust serve = do
                     (port, decisions) <- recordingMetricsPort
                     uncurry withDirectoryFaults bodies $ \original binding _ privateStatus publicStatus -> do
                         let runtime = original{srMetrics = port}
