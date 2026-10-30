@@ -49,7 +49,7 @@ Any other status includes a `5xx`, a `429`, and a redirect, which Écluse does n
 
 A private package whose name you have not declared first-party can share its name with a public package. If Écluse served public content while the private read failed, the public package would replace the private one as soon as its version passed your rules, and builds would switch packages without notice. Declaring every private name cannot close that gap reliably, because most registries give no complete list of first-party names.
 
-So the mount's availability follows the private registry's. A private outage stops every build through the mount, including builds that need only public packages. A public outage with a healthy private registry still serves the private versions. Écluse logs each failed read with its cause.
+So the mount's availability follows the private registry's. A private outage stops every build through the mount, including builds that need only public packages. A public outage with a healthy private registry still serves the private versions. Écluse logs each failed private metadata read with its cause.
 
 ## First-party names stay private {#names}
 
