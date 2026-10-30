@@ -51,7 +51,7 @@ spec = describe "adapterFor (the ecosystem adapter registry)" $ do
             `shouldBe` Just
                 ( Map.fromList
                     [ (DenyInstallTimeExecutionType, "Cargo's sparse index does not declare build scripts or procedural macros. This rule is unsupported for the ecosystem.")
-                    , (DenyExternalDependenciesType, "The Cargo adapter does not read where a crate's dependencies install from.")
+                    , (DenyExternalDependenciesType, "The Cargo adapter does not project where a public crate's dependencies install from into rule evidence.")
                     , (DenyIfDeprecatedType, "Cargo's sparse index supplies no deprecation flag.")
                     , (AllowScopeType, "Cargo package names have no scope.")
                     ]
