@@ -384,7 +384,7 @@ one:
 | `DenyIfDeprecated` | No | Denies a version carrying the npm deprecation flag, including whole packages and release lines. | None |
 | `DenyIfYanked` | No | Denies a yanked Cargo version or a PyPI release whose every file is yanked. | None |
 | `DenyInstallTimeExecution` | npm only | `deny-scripts` denies npm install scripts at admission. Stored copies stay. | None |
-| `DenyExternalDependencies` | npm only | `deny-external-dependencies` denies a public npm version whose `dependencies`, `optionalDependencies` or `peerDependencies` name a git source, a remote tarball URL or an unsupported scheme such as `jsr:`, at admission. Stored copies stay. | None |
+| `DenyExternalDependencies` | npm only | `deny-external-dependencies` denies a public npm version whose `dependencies`, `optionalDependencies` or `peerDependencies` name a git source, a remote tarball URL or an unsupported scheme such as `jsr:`, at admission. Stored copies stay. On Cargo, an entry you add denies a public crate whose normal or build dependency names a registry other than crates.io. | None |
 | `DenyIfKnownMalicious` | With `advisories.url` | Denies affected versions named by an active primary `MAL-` advisory. Named `deny-known-malicious`, precedence 300, both phases. | `onUnavailable` |
 | `AllowByIdentity` | No | Admits a package or `package@version`, and a bare name matches every version. It overrides scored advisory denies. Override MAL denial with precedence above 300. | `identity` |
 | `DenyIfCve` | No | Denies a version that a synced advisory marks as affected at or above a CVSS threshold. | `minCvss` (0-10), `onUnavailable` |
@@ -442,7 +442,15 @@ fetch from outside Écluse. Only a registry range or dist-tag, an `npm:` alias, 
 `user@host:path` address), a remote tarball URL (`http:` or `https:`), and every other scheme, such
 as pnpm's `jsr:` or one a client adds later, trigger it. It reads the specs the packument already
 carries, so it adds no fetch. `devDependencies`, which consumers do not install, do not trigger it.
-PyPI, Cargo and RubyGems block the type at boot, as the table of blocked types below lists.
+PyPI and RubyGems block the type at boot, as the table of blocked types below lists.
+
+The Cargo mount ships no `deny-external-dependencies` entry. An entry you add under shared `rules`
+or `mounts.cargo.rules` denies a public crate whose index row names a registry other than crates.io
+for a normal or build dependency, which a client would fetch from directly. A null registry, which
+names the index the row came from, either crates.io spelling and every development dependency pass.
+crates.io refuses such crates at upload, so the entry acts on a `publicUpstream` other than
+crates.io. The index reader knows no address for Écluse, so a row that names Écluse's own index by
+URL is denied too.
 
 Disable either default under `mounts.npm.rules`, or admit a named package with an `AllowByIdentity`
 pin whose explicit `precedence` is above 300:
@@ -488,7 +496,6 @@ The following types are blocked:
 | pypi | `DenyIfDeprecated` | The PyPI adapter supplies no deprecation flag. |
 | pypi | `AllowScope` | A PyPI project name has no scope, so this rule can never match one. |
 | cargo | `DenyInstallTimeExecution` | Cargo's sparse index does not declare build scripts or procedural macros. This rule is unsupported for the ecosystem. |
-| cargo | `DenyExternalDependencies` | The Cargo adapter does not project where a public crate's dependencies install from into rule evidence. |
 | cargo | `AllowScope` | Cargo package names have no scope. |
 | cargo | `DenyIfDeprecated` | Cargo's sparse index supplies no deprecation flag. |
 | rubygems | `DenyInstallTimeExecution` | RubyGems native builds are normal installation behaviour. This rule is unsupported for the ecosystem. |
