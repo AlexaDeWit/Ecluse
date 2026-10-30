@@ -24,7 +24,7 @@ import Ecluse.Core.Registry.MirrorUpload (expectedArtifact, inventoryFiles, veri
 import Ecluse.Core.Registry.Origin (OriginClient (..), ocBaseUrl, originClient)
 import Ecluse.Core.Registry.Publish (MirrorPublish (..), MirrorTransport (..), PublishPlan (..), newMirrorPublish, pmvInventory, pmvPrepareUpload, publishPrepared)
 import Ecluse.Core.Registry.PyPI.Document (simpleFiles)
-import Ecluse.Core.Registry.PyPI.Metadata (pypiMirrorRead, pypiRead)
+import Ecluse.Core.Registry.PyPI.Metadata (pypiMirrorRead)
 import Ecluse.Core.Registry.PyPI.Publish (pypiPublishCodec)
 import Ecluse.Core.Registry.PyPI.Request (artifactRequestByUrl)
 import Ecluse.Core.Registry.Request (nativePresentation)
@@ -36,7 +36,7 @@ import Ecluse.Test.Contract.PackageStore.Provider
 import Ecluse.Test.Contract.PackageStore.PyPI.Fixtures
 import Ecluse.Test.Package (hexSha256Of, pypiVersion, unscopedPyPI)
 import Ecluse.Test.Port (passthroughTracingPort)
-import Ecluse.Test.Registry.PyPI.Metadata (projectPyPIIndex)
+import Ecluse.Test.Registry.PyPI.Metadata (projectPyPIIndex, pypiRead)
 import Ecluse.Test.Registry.PyPI.Multipart (decodeUpload)
 import Ecluse.Test.Stub (Captured (..), headerValue)
 

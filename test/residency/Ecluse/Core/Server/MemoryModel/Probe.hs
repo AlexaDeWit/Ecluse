@@ -67,11 +67,9 @@ import Ecluse.Core.Registry.Metadata (Manifest (..), MetadataError (MetadataUnde
 import Ecluse.Core.Registry.Metadata.Fetch (readManifest, readVersion)
 import Ecluse.Core.Registry.Metadata.Fetch.Types (Body, EcosystemRead, ReadTerms (..))
 import Ecluse.Core.Registry.Npm.Adapter (npmAdapter)
-import Ecluse.Core.Registry.Npm.Metadata (npmRead)
 import Ecluse.Core.Registry.Npm.Project qualified as Npm
 import Ecluse.Core.Registry.Npm.VersionListReader (npmVersionListWalk)
 import Ecluse.Core.Registry.PyPI.Adapter (pypiAdapter)
-import Ecluse.Core.Registry.PyPI.Metadata (pypiRead)
 import Ecluse.Core.Registry.PyPI.Project qualified as PyPI
 import Ecluse.Core.Registry.RubyGems.Metadata (gemReadWith)
 import Ecluse.Core.Registry.RubyGems.Project qualified as RubyGemsProject
@@ -98,7 +96,9 @@ import Ecluse.Test.Registry.Cargo.Metadata (cargoRead)
 import Ecluse.Test.Registry.Metadata.Fetch (captureManifest, heldBody, sourceBody)
 import Ecluse.Test.Registry.Metadata.Projection (projectMetadata)
 import Ecluse.Test.Registry.Metadata.Rendering (MetadataRendering (..), renderingOf)
+import Ecluse.Test.Registry.Npm.Metadata (npmRead)
 import Ecluse.Test.Registry.Npm.Project (parsePackageInfoFromValue)
+import Ecluse.Test.Registry.PyPI.Metadata (pypiRead)
 import Ecluse.Test.Registry.PyPI.Project (projectSimpleIndexFromValue)
 import Ecluse.Test.Server.Cache (diagnosticDocumentValue, weighCacheEntry)
 import Ecluse.Test.Snapshot (digestOf, untaggedRead)

@@ -4,6 +4,7 @@
 
 -- | PyPI fixtures pass through the production extraction and projection, and documents convert to and from JSON.
 module Ecluse.Test.Registry.PyPI.Metadata (
+    pypiRead,
     projectPyPIIndex,
     projectPyPIVersion,
     projectPyPIChunks,
@@ -22,15 +23,20 @@ import Ecluse.Core.Package.Entry (EntryKey (ArrayEntry))
 import Ecluse.Core.Registry.Json.Writer (newWriter)
 import Ecluse.Core.Registry.JsonStream (StreamResult)
 import Ecluse.Core.Registry.Metadata (MetadataError (MetadataBoundExceeded))
+import Ecluse.Core.Registry.Metadata.Fetch.Types (EcosystemRead)
 import Ecluse.Core.Registry.PyPI.Document (SimpleDocument, simpleDocument, simpleEnvelope, simpleFiles)
 import Ecluse.Core.Registry.PyPI.FileWriter (fileWriter)
-import Ecluse.Core.Registry.PyPI.Metadata (PyPIFullRead, projectPyPIStream, pypiIndexWalk, pypiPackedWalk)
+import Ecluse.Core.Registry.PyPI.Metadata (PyPIFullRead, projectPyPIStream, pypiIndexWalk, pypiPackedWalk, pypiReadWith)
 import Ecluse.Core.Registry.PyPI.Reader (fileUniqueFields)
 import Ecluse.Core.Registry.PyPI.Streaming (PyPIRead (..))
 import Ecluse.Core.Registry.PyPI.StreamingProjection (PyPIProjection)
 import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), Limits (maxMetadataBytes))
 import Ecluse.Core.Version (Version, renderVersion)
 import Ecluse.Test.Registry.JsonStream (testTable, walkJsonChunks, walkWritingChunks)
+
+-- | The production PyPI read with no full-read workspace charge, for reads that hold no admission ticket.
+pypiRead :: EcosystemRead
+pypiRead = pypiReadWith (const pass)
 
 -- | Project a complete fixture through the same compact extraction as an HTTP response.
 projectPyPIIndex :: Limits -> PackageName -> ByteString -> Either MetadataError (PackageInfo, SimpleDocument)
