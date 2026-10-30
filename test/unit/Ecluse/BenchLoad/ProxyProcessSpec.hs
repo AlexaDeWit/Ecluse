@@ -24,6 +24,7 @@ import UnliftIO.Temporary (withSystemTempDirectory)
 
 import Ecluse.BenchLoad.Advisories (advisoryDenyRules)
 import Ecluse.BenchLoad.AdvisoryStore (AdvisoryObject (AdvisoryObject))
+import Ecluse.BenchLoad.Cargo.CopyState (copyStateSettings)
 import Ecluse.BenchLoad.Pod (PodShape (Limited, MemoryOnly, Unlimited), ProxyTuning (..), noTuning)
 import Ecluse.BenchLoad.ProxyProcess (
     AdvisoryFeed (AdvisoryFeed),
@@ -221,14 +222,14 @@ environmentSpec = describe "proxyEnvironment" $ do
             lookup "ECLUSE_MIRROR_STATE__URL" environment `shouldBe` Nothing
             filter (("__MIRROR_TARGET__" `isInfixOf`) . fst) environment `shouldBe` []
     it "overrides only the public hostname with or without durable state" $
-        for_ [Nothing, Just 9003] $ \statePort -> do
-            let pinned = (proxySettings PyPI 3600){psPublicHost = Just "127.0.0.2", psMirrorStatePort = statePort}
+        for_ [(ecosystem, statePort) | ecosystem <- [Npm, PyPI, Cargo, RubyGems], statePort <- [Nothing, Just 9003]] $ \(ecosystem, statePort) -> do
+            let pinned = (proxySettings ecosystem 3600){psPublicHost = Just "127.0.0.2", psMirrorStatePort = statePort}
                 environment = proxyEnvironment pinned Unlimited 3 "/tmp/proxy" (8080, 8081, 8082) 9001 (Just 9002) []
-            lookup "ECLUSE_MOUNTS__PYPI__PUBLIC_UPSTREAM__REGISTRY__URL" environment `shouldBe` Just "https://127.0.0.2:9001"
-            lookup "ECLUSE_MOUNTS__PYPI__PRIVATE_UPSTREAM__REGISTRY__URL" environment `shouldBe` Just "https://localhost:9002"
-            lookup "ECLUSE_MOUNTS__PYPI__MIRROR_TARGET__REGISTRY__URL" environment `shouldBe` ("https://localhost:9002" <$ statePort)
+            lookup (registryKey ecosystem "PUBLIC_UPSTREAM" "URL") environment `shouldBe` Just "https://127.0.0.2:9001"
+            lookup (registryKey ecosystem "PRIVATE_UPSTREAM" "URL") environment `shouldBe` Just "https://localhost:9002"
+            lookup (registryKey ecosystem "MIRROR_TARGET" "URL") environment `shouldBe` ("https://localhost:9002" <$ statePort)
     it "keeps Cargo public discovery on localhost and trusted mirror identities on the same literal address" $ do
-        let managed = (proxySettings Cargo 3600){psMirrorStatePort = Just 9003}
+        let managed = copyStateSettings 9003 (proxySettings Cargo 3600)
             environment = proxyEnvironment managed Unlimited 3 "/tmp/proxy" (8080, 8081, 8082) 9001 (Just 9002) []
         lookup "ECLUSE_MOUNTS__CARGO__PUBLIC_UPSTREAM__REGISTRY__URL" environment `shouldBe` Just "https://localhost:9001"
         lookup "ECLUSE_MOUNTS__CARGO__PRIVATE_UPSTREAM__REGISTRY__URL" environment `shouldBe` Just "https://127.0.0.1:9002"
@@ -237,13 +238,12 @@ environmentSpec = describe "proxyEnvironment" $ do
         case loadConfig environment Nothing of
             Left errors -> expectationFailure (toString (unlines (map renderConfigError errors)))
             Right config -> void (expectPlanFor (BootMirrorPipeline ServeAndMirror) environment Nothing config noCeiling)
-    it "keeps a Cargo public hostname override separate from its trusted mirror address" $
-        for_ [Nothing, Just 9003] $ \statePort -> do
-            let pinned = (proxySettings Cargo 3600){psPublicHost = Just "127.0.0.2", psMirrorStatePort = statePort}
-                environment = proxyEnvironment pinned Unlimited 3 "/tmp/proxy" (8080, 8081, 8082) 9001 (Just 9002) []
-            lookup "ECLUSE_MOUNTS__CARGO__PUBLIC_UPSTREAM__REGISTRY__URL" environment `shouldBe` Just "https://127.0.0.2:9001"
-            lookup "ECLUSE_MOUNTS__CARGO__PRIVATE_UPSTREAM__REGISTRY__URL" environment `shouldBe` Just "https://127.0.0.1:9002"
-            lookup "ECLUSE_MOUNTS__CARGO__MIRROR_TARGET__REGISTRY__URL" environment `shouldBe` ("https://127.0.0.1:9002" <$ statePort)
+    it "keeps a Cargo public hostname override separate from its trusted mirror address" $ do
+        let pinned = (copyStateSettings 9003 (proxySettings Cargo 3600)){psPublicHost = Just "127.0.0.2"}
+            environment = proxyEnvironment pinned Unlimited 3 "/tmp/proxy" (8080, 8081, 8082) 9001 (Just 9002) []
+        lookup "ECLUSE_MOUNTS__CARGO__PUBLIC_UPSTREAM__REGISTRY__URL" environment `shouldBe` Just "https://127.0.0.2:9001"
+        lookup "ECLUSE_MOUNTS__CARGO__PRIVATE_UPSTREAM__REGISTRY__URL" environment `shouldBe` Just "https://127.0.0.1:9002"
+        lookup "ECLUSE_MOUNTS__CARGO__MIRROR_TARGET__REGISTRY__URL" environment `shouldBe` Just "https://127.0.0.1:9002"
     it "sets no mirror uploadUrl where the protocol uploads below its url" $
         for_ [Npm, RubyGems] $ \ecosystem -> do
             let managed = (proxySettings ecosystem 3600){psMirrorStatePort = Just 9003}

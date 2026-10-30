@@ -134,6 +134,7 @@ pypiPrivateCopy =
         , pcUrl = indexUrl
         , pcPreflight = traverse_ (void . checkedIndex) . ordNub
         , pcHerdPackage = herdPackage
+        , pcManagedState = Nothing
         }
 
 revalidateScenario :: Scenario

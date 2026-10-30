@@ -10,8 +10,6 @@ module Ecluse.BenchLoad.ProxyProcess (
     AdvisoryFeed (..),
     advisoryBucket,
     mirrorStateBucket,
-    copyStatePublicHost,
-    copyStatePrivateHost,
     podShapeFromEnv,
     serveProxyFlag,
     proxyEnvironment,
@@ -123,7 +121,7 @@ import Ecluse.BenchLoad.Pod (
 import Ecluse.BenchLoad.RtsProbe (rtsStatsFlag)
 import Ecluse.BenchLoad.RtsWindow (Collection (MajorCollection), RtsSnapshot, collectionName)
 import Ecluse.BenchLoad.Verdict (ProxyEnding, classifyEnding)
-import Ecluse.Core.Ecosystem (Ecosystem (Cargo, Npm, PyPI, RubyGems), ecosystemName)
+import Ecluse.Core.Ecosystem (Ecosystem, ecosystemName)
 import Ecluse.Core.Registry.Adapter (uploadEndpointFor)
 import Ecluse.Core.Registry.Adapter.Capability (UploadEndpointRequirement (ExplicitUploadEndpoint))
 import Ecluse.Core.Server.Encoding (MetadataCompression (IdentityOnly))
@@ -170,21 +168,14 @@ proxySettings ecosystem ttl =
         , psMaxResponseBytes = Nothing
         , psServeMaxInFlight = Nothing
         , psPublicConnections = Nothing
-        , psPublicHost = publicHost
-        , psPrivateHost = privateHost
+        , psPublicHost = Nothing
+        , psPrivateHost = Nothing
         , psPrivateConnections = Nothing
         , psClock = Nothing
         , psMirrorStatePort = Nothing
         , psAdvisories = Nothing
         , psTuning = noTuning
         }
-  where
-    -- Cargo's private-copy state fixture reads its public sources and keys its private records by these hosts.
-    (publicHost, privateHost) = case ecosystem of
-        Npm -> (Nothing, Nothing)
-        PyPI -> (Nothing, Nothing)
-        Cargo -> (Just copyStatePublicHost, Just copyStatePrivateHost)
-        RubyGems -> (Nothing, Nothing)
 
 -- | The loopback object store serving the advisory database, and the named rules the policy adds to read it.
 data AdvisoryFeed = AdvisoryFeed
@@ -197,14 +188,6 @@ data AdvisoryFeed = AdvisoryFeed
 -- | The bucket holding the managed-read fixture's project record.
 mirrorStateBucket :: Text
 mirrorStateBucket = "ecluse-bench-mirror-state"
-
--- | The public upstream host a native private-copy state fixture reads its sources from.
-copyStatePublicHost :: Text
-copyStatePublicHost = "localhost"
-
--- | The private upstream host a native private-copy state fixture keys its records by.
-copyStatePrivateHost :: Text
-copyStatePrivateHost = "127.0.0.1"
 
 -- | The pod shape in @BENCH_LOAD_POD@, unlimited when unset.
 podShapeFromEnv :: IO PodShape
