@@ -30,7 +30,7 @@ import Ecluse.Core.Registry.Cargo.Credential (cargoCredential)
 import Ecluse.Core.Registry.Cargo.Discovery (cargoDiscovery, discoveryApi)
 import Ecluse.Core.Registry.Cargo.Document (cargoRecords)
 import Ecluse.Core.Registry.Cargo.Manifest (CargoPublishMetadata, checkDependencyRegistries, publishMetadataValue)
-import Ecluse.Core.Registry.Cargo.Metadata (prepareCargoRead)
+import Ecluse.Core.Registry.Cargo.Metadata (prepareCargoRead, prepareCargoReadAs)
 import Ecluse.Core.Registry.Cargo.Mirror (cargoMirrorDocuments)
 import Ecluse.Core.Registry.Cargo.Project (projectName)
 import Ecluse.Core.Registry.Cargo.Publish.Body qualified as Body
@@ -41,7 +41,7 @@ import Ecluse.Core.Registry.MirrorUpload
 import Ecluse.Core.Registry.MirrorUpload.Internal (checkedMirrorUploadData)
 import Ecluse.Core.Registry.Origin (OriginClient (ocLimits, ocToken), originBaseUrl)
 import Ecluse.Core.Registry.Publish (PublishCodec (..), relayPublishRequest)
-import Ecluse.Core.Registry.Request (apiEndpoint, attachCredential, joinPath, metadataGet, parseRequestEither)
+import Ecluse.Core.Registry.Request (CredentialMapping, ServicePresentation, StoreOperation (StoreRead, StoreWrite), apiEndpoint, attachCredential, joinPath, metadataGet, parseRequestEither, presentedMapping)
 import Ecluse.Core.Registry.ServedDocument (stringField)
 import Ecluse.Core.Security.Egress (RegistryUrl, registryUrlText)
 import Ecluse.Core.Security.Limits (Limits (maxMetadataBytes))
@@ -55,7 +55,7 @@ cargoPublish factors =
     AdapterPublish
         { publishCredential = cargoCredential
         , publishRequestExtras = const (Right NoPublishExtras)
-        , publishRelay = \origin name body -> relayPublishRequest origin (relayRequest origin name body)
+        , publishRelay = \presentation origin name body -> relayPublishRequest origin (relayRequest (presentedMapping presentation StoreWrite cargoCredential) origin name body)
         , publishUploadClaims = uploadClaims
         , publishCodec = cargoPublishCodec factors
         , publishMirrorRequirements = MirrorRequirements (NativeChargedWorkerRead prepareCargoRead) (DurableVersionState cargoMirrorDocuments)
@@ -64,8 +64,8 @@ cargoPublish factors =
         }
 
 -- | A native archive proves physical presence only. Completion also requires the retained crates.io row.
-cargoPublishCodec :: ChargeFactors -> PublishCodec
-cargoPublishCodec factors =
+cargoPublishCodec :: ChargeFactors -> ServicePresentation -> PublishCodec
+cargoPublishCodec factors presentation =
     PublishCodec
         { pcPrepareSource = \name version doc -> do
             source <- maybeToRight (PublishSourceUnavailable "Cargo snapshot has no paired source index") (vdRaw doc >>= snd cargoCached)
@@ -77,16 +77,18 @@ cargoPublishCodec factors =
         , pcPrepareUpload = prepareUpload
         , pcMirrorCompanion = Nothing
         , pcNativeComplete = \_ _ _ -> False
-        , pcTargetRead = prepareCargoRead
+        , pcTargetRead = prepareCargoReadAs readAs
         , pcTargetReadPermille = cfFullReadPermille factors
-        , pcProbeRequest = \target token name -> metadataGet cargoCredential token "text/plain" <$> (joinPath target (cargoIndexPath name) >>= parseRequestEither)
+        , pcProbeRequest = \target token name -> metadataGet readAs token "text/plain" <$> (joinPath target (cargoIndexPath name) >>= parseRequestEither)
         , pcVersionListWalk = Nothing
-        , pcPrepareTarget = preparePublishTarget
+        , pcPrepareTarget = preparePublishTarget readAs
         , pcPublishRequest = \target credential _ upload -> do
             body <- first (PublishSourceUnavailable . parseErrorMessage) (Body.encodeUpload (publishMetadataValue (uploadMetadata upload)) (uploadBytes upload))
-            first (PublishFetch . FetchUrlUnformable) (bodyRequest target credential (RequestBodyLBS body))
+            first (PublishFetch . FetchUrlUnformable) (bodyRequest (presentedMapping presentation StoreWrite cargoCredential) target credential (RequestBodyLBS body))
         , pcPublishOutcome = classifyPublish
         }
+  where
+    readAs = presentedMapping presentation StoreRead cargoCredential
 
 prepareUpload :: Deadlines -> Limits -> (Int -> IO ()) -> MirrorInventory -> Value -> ExpectedMirrorFile -> VerifiedArtifactBytes -> IO (Either PublishFault (MirrorUploadData CargoPublishMetadata))
 prepareUpload deadlines limits charge inventory row file verified =
@@ -143,25 +145,25 @@ sparseRegistry :: Text -> Text
 sparseRegistry registry = "sparse+" <> T.dropWhileEnd (== '/') registry <> "/"
 
 -- | Discovery cannot grant an API root. The complete configured base path must agree before a token is attached.
-preparePublishTarget :: OriginClient -> RegistryUrl -> IO (Either MetadataError RegistryUrl)
-preparePublishTarget origin approved = do
-    discovered <- cargoDiscovery origin
+preparePublishTarget :: CredentialMapping -> OriginClient -> RegistryUrl -> IO (Either MetadataError RegistryUrl)
+preparePublishTarget readAs origin approved = do
+    discovered <- cargoDiscovery readAs origin
     pure $ do
         discovery <- discovered
         advertised <- maybeToRight MetadataUndecodable (discoveryApi discovery)
         unless (T.dropWhileEnd (== '/') advertised == T.dropWhileEnd (== '/') (registryUrlText approved)) (Left MetadataUndecodable)
         pure approved
 
-relayRequest :: OriginClient -> PackageName -> PublishRequestBody -> Either UrlFormationError Request
-relayRequest origin name body = do
+relayRequest :: CredentialMapping -> OriginClient -> PackageName -> PublishRequestBody -> Either UrlFormationError Request
+relayRequest writeAs origin name body = do
     upload <- first (const (UnparseableUrl "Cargo relay body is not a valid native upload")) (Body.decodeUpload (ocLimits origin) (publishBodyBytes body))
     unless (projectName (Body.uploadName upload) == Right name) (Left (UnparseableUrl "Cargo relay name differs from the authorised package"))
-    bodyRequest (originBaseUrl origin) (ocToken origin) (RequestBodyBS (publishBodyBytes body))
+    bodyRequest writeAs (originBaseUrl origin) (ocToken origin) (RequestBodyBS (publishBodyBytes body))
 
-bodyRequest :: Text -> Maybe ClientCredential -> RequestBody -> Either UrlFormationError Request
-bodyRequest target credential body = do
+bodyRequest :: CredentialMapping -> Text -> Maybe ClientCredential -> RequestBody -> Either UrlFormationError Request
+bodyRequest writeAs target credential body = do
     base <- apiEndpoint (UnparseableUrl "Cargo API root must not contain a query or fragment") target "api/v1/crates/new"
-    pure . attachCredential cargoCredential credential $
+    pure . attachCredential writeAs credential $
         base
             { method = "PUT"
             , requestHeaders = [(hContentType, "application/octet-stream"), (hAccept, "application/json")]

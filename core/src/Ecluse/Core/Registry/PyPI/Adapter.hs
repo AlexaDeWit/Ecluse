@@ -17,7 +17,7 @@ import Network.HTTP.Client (Request (method, requestBody, requestHeaders), Reque
 import Network.HTTP.Types (hContentType)
 
 import Ecluse.Core.Registry.Metadata.Fetch.Preparation (staticRead)
-import Ecluse.Core.Registry.Request (attachCredential, parseRequestEither)
+import Ecluse.Core.Registry.Request (StoreOperation (StoreWrite), attachCredential, parseRequestEither, presentedMapping)
 
 import Ecluse.Core.Ecosystem (Ecosystem (PyPI))
 import Ecluse.Core.Registry.Adapter.Capability (
@@ -97,12 +97,12 @@ pypiPublish =
     AdapterPublish
         { publishCredential = pypiCredential
         , publishRequestExtras = const (Right NoPublishExtras)
-        , publishRelay = \origin _ body ->
+        , publishRelay = \presentation origin _ body ->
             relayPublishRequest
                 origin
                 ( do
                     base <- parseRequestEither (originBaseUrl origin)
-                    pure . attachCredential pypiCredential (ocToken origin) $
+                    pure . attachCredential (presentedMapping presentation StoreWrite pypiCredential) (ocToken origin) $
                         base
                             { method = "POST"
                             , requestHeaders = maybeToList (fmap (hContentType,) (publishBodyContentType body)) <> requestHeaders base

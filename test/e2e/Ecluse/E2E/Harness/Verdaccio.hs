@@ -48,6 +48,7 @@ import Ecluse.Core.Registry.Npm.Maintenance (npmMaintenance)
 import Ecluse.Core.Registry.Npm.Metadata (npmRead)
 import Ecluse.Core.Registry.Npm.Publish (npmPublishCodec)
 import Ecluse.Core.Registry.Origin (originClient)
+import Ecluse.Core.Registry.Request (nativePresentation)
 import Ecluse.Core.Security (defaultLimits)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.E2E.Harness.Npm (npmArtifactPath)
@@ -212,7 +213,7 @@ withVerdaccioObservation e2e action = do
             ProtocolRead
                 { prOrigin = origin
                 , prListing = listing
-                , prCodec = npmPublishCodec
+                , prCodec = npmPublishCodec nativePresentation
                 , prReadManifest = fmap (first storeFaultOfMetadata) . fetchManifest npmRead passthroughTracingPort origin
                 , prBackendName = "verdaccio"
                 , prPermitDeletion = False

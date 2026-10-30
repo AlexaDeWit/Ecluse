@@ -64,6 +64,7 @@ import Ecluse.Config (
     sbTag,
     unUrl,
  )
+import Ecluse.Config.Target (storePresentation)
 import Ecluse.Core.Credential (CredentialProvider)
 import Ecluse.Core.Credential.Refresh (CredentialReporters)
 import Ecluse.Core.Ecosystem (Ecosystem, prefixFor)
@@ -76,6 +77,7 @@ import Ecluse.Core.Registry.Adapter (
     adapterPublish,
  )
 import Ecluse.Core.Registry.Adapter.Capability (AdapterArtifact (artifactHosts))
+import Ecluse.Core.Registry.Request (ServicePresentation, nativePresentation)
 import Ecluse.Core.Registry.Cargo.FirstParty (cargoFirstPartyName)
 import Ecluse.Core.Registry.Npm.Publish (npmPublishAllowed)
 import Ecluse.Core.Registry.PyPI.FirstParty (pypiFirstPartyName)
@@ -274,6 +276,7 @@ publishDepsFor adapter app limits publishBudget helpMessage publication = do
             , pubTargetUrl = publicationTargetUrl (vpubTarget publication)
             , pubAllowed = firstPartyName (vpubFirstParty publication)
             , pubStaticCredential = vpubStaticCredential publication
+            , pubStaticPresentation = nativePresentation
             , pubInboundToken = srvAuthToken (cfgServer app)
             , pubMaxRequestBytes = fromMaybe (pbMaxRequestBytes budget) (vpubMaxRequestBytes publication)
             , pubLimits = limits{maxPublishRequestBytes = fromMaybe (pbMaxRequestBytes budget) (vpubMaxRequestBytes publication)}
@@ -299,8 +302,8 @@ data PublishTarget = PublishTarget
     -- ^ The mirror-target endpoint the worker publishes approved artifacts to.
     , ptUploadUrl :: RegistryUrl
     -- ^ The exact native upload endpoint, independently configured from the read root.
-    , ptBackendTag :: StoreTag
-    -- ^ The declared backend selects native service credential presentation.
+    , ptPresentation :: ServicePresentation
+    -- ^ How the mirror target's store asks for the write token on reads and writes.
     , ptUsername :: Maybe Text
     -- ^ The backend credential convention retained beside the refreshing secret provider.
     , ptCredentials :: CredentialProvider
@@ -332,7 +335,7 @@ publishTargetFor providers mount = do
                     { ptEcosystem = mountEcosystem mount
                     , ptMirrorUrl = mtUrl target
                     , ptUploadUrl = mtUploadUrl target
-                    , ptBackendTag = sbTag (mtBackend target)
+                    , ptPresentation = storePresentation (sbTag (mtBackend target)) (mountEcosystem mount)
                     , ptUsername = mtUsername target
                     , ptCredentials = provider
                     }

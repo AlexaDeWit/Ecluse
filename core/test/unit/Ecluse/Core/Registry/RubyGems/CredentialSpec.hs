@@ -12,7 +12,7 @@ import Test.Hspec (Spec, describe, it, shouldBe, shouldSatisfy)
 
 import Ecluse.Core.Credential (ClientCredential (ClientCredential), bareCredential, mkSecret)
 import Ecluse.Core.Registry.Adapter.Capability (PublishExtras (..))
-import Ecluse.Core.Registry.Request (attachCredential, credentialRecover)
+import Ecluse.Core.Registry.Request (AuthMechanism (AuthBasic, AuthBearer), StoreOperation (StoreRead, StoreWrite), attachCredential, credentialRecover, declaredPresentation, presentedMapping)
 import Ecluse.Core.Registry.RubyGems.Credential
 import Ecluse.Test.Support (parseRequestOrFail)
 
@@ -37,11 +37,14 @@ spec = do
                 `shouldBe` Just (bareCredential (mkSecret "native\tkey"))
             for_ ["native\x01key", "native\xC3\xA9\&key"] $ \value ->
                 credentialRecover rubyPublishCredential [("Authorization", value)] `shouldBe` Nothing
-        it "uses declared CodeArtifact service presentations and pins redirects" $ do
+        it "renders a store-declared Bearer write beside the Basic read and pins redirects" $ do
             request <- parseRequestOrFail "https://registry.test/ruby/repository"
             let key = Just (bareCredential (mkSecret "secret"))
-                reading = attachCredential rubyReadCredential (Just (ClientCredential (Just "aws") (mkSecret "secret"))) request
-                writing = attachCredential rubyCodeArtifactPublishCredential key request
+                declared = declaredPresentation $ \case
+                    StoreRead -> AuthBasic
+                    StoreWrite -> AuthBearer
+                reading = attachCredential (presentedMapping declared StoreRead rubyReadCredential) (Just (ClientCredential (Just "aws") (mkSecret "secret"))) request
+                writing = attachCredential (presentedMapping declared StoreWrite rubyPublishCredential) key request
             lookup "Authorization" (Client.requestHeaders reading) `shouldBe` Just "Basic YXdzOnNlY3JldA=="
             lookup "Authorization" (Client.requestHeaders writing) `shouldBe` Just "Bearer secret"
             Client.redirectCount reading `shouldBe` 0

@@ -27,6 +27,7 @@ import Ecluse.Core.Registry.PyPI.Document (simpleFiles)
 import Ecluse.Core.Registry.PyPI.Metadata (pypiMirrorRead, pypiRead)
 import Ecluse.Core.Registry.PyPI.Publish (pypiPublishCodec)
 import Ecluse.Core.Registry.PyPI.Request (artifactRequestByUrl)
+import Ecluse.Core.Registry.Request (nativePresentation)
 import Ecluse.Core.Security (BodyLimit (MirrorArtifactBodyLimit), defaultLimits)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Core.Version (Version, canonicalPep440, renderVersion)
@@ -70,7 +71,7 @@ withPyPISession maintenance use = do
   where
     build boundary base exchanges = do
         let origin = originClient defaultLimits exchanges (loopbackRegistryUrl base) (Just credential)
-            publisher = newMirrorPublish (MirrorTransport exchanges (pure (Just credential)) defaultLimits passthroughTracingPort) (ocBaseUrl origin) (loopbackRegistryUrl (base <> "/legacy/")) pypiPublishCodec
+            publisher = newMirrorPublish (MirrorTransport exchanges (pure (Just credential)) defaultLimits passthroughTracingPort) (ocBaseUrl origin) (loopbackRegistryUrl (base <> "/legacy/")) (pypiPublishCodec nativePresentation)
         store <- maintenance origin boundary
         pure (storeOperations packageName pypiVersion (readRelease origin) (writeRelease publisher) store)
 

@@ -48,6 +48,7 @@ import Ecluse.Core.Registry.Npm.Publish qualified as NpmPublish
 import Ecluse.Core.Registry.PyPI.Adapter (pypiAdapter, pypiPublish)
 import Ecluse.Core.Registry.PyPI.Project (canonicalName)
 import Ecluse.Core.Registry.PyPI.Publish.Multipart (pypiFileUploadOnly)
+import Ecluse.Core.Registry.Request (nativePresentation)
 import Ecluse.Core.Security (defaultLimits, maxMetadataBytes, maxPublishRequestBytes)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Core.Server.Admission.Bytes (ByteAdmission, newByteAdmission, newByteAdmissionTuned)
@@ -81,6 +82,7 @@ publishDepsAt targetPort staticToken bodyBudget =
         , pubTargetUrl = loopbackRegistryUrl ("http://127.0.0.1:" <> show targetPort)
         , pubAllowed = NpmPublish.npmPublishAllowed [mkScope "acme"]
         , pubStaticCredential = bareCredential <$> staticToken
+        , pubStaticPresentation = nativePresentation
         , pubMaxRequestBytes = 26214400
         , pubInboundToken = Nothing
         , pubLimits = defaultLimits{maxPublishRequestBytes = 26214400}

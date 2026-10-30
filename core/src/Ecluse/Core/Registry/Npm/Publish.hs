@@ -52,15 +52,17 @@ import Ecluse.Core.Registry (
 import Ecluse.Core.Registry.CachedDocument (npmCached)
 import Ecluse.Core.Registry.JsonStream (isJsonSpace)
 import Ecluse.Core.Registry.Metadata (VersionDoc (vdRaw))
-import Ecluse.Core.Registry.Metadata.Fetch.Preparation (staticRead)
+import Ecluse.Core.Registry.Metadata.Fetch.Preparation (presentedRead, staticRead)
 import Ecluse.Core.Registry.MirrorUpload
 import Ecluse.Core.Registry.MirrorUpload.Internal (checkedMirrorUploadData)
+import Ecluse.Core.Registry.Npm.Credential (npmCredential)
 import Ecluse.Core.Registry.Npm.DependencySource (externalDependencyOf, renderExternalDependency)
 import Ecluse.Core.Registry.Npm.Metadata (npmChargeFactors, npmRead)
 import Ecluse.Core.Registry.Npm.Project qualified as Project
 import Ecluse.Core.Registry.Npm.Request (MetadataForm (Abbreviated), jsonPutRequest, metadataRequest, packageUrl)
 import Ecluse.Core.Registry.Npm.VersionListReader (npmVersionListWalk)
 import Ecluse.Core.Registry.Publish (PublishCodec (..), PublishPlan (ppLatest))
+import Ecluse.Core.Registry.Request (CredentialMapping, ServicePresentation, StoreOperation (StoreRead, StoreWrite), presentedMapping, presentedRequest)
 import Ecluse.Core.Registry.ServedDocument (objectField)
 import Ecluse.Core.Registry.VersionList (collectVersionList, emptyVersionList)
 import Ecluse.Core.Server.Admission.Types (ChargeFactors (cfFullReadPermille))
@@ -93,21 +95,23 @@ prepareNpmUpload inventory metadata@(NpmUploadMetadata fields) file verified = d
     checkedMirrorUploadData inventory file verified metadata
 
 -- | npm uses its ordinary bounded metadata reader and one immutable tarball upload per version.
-npmPublishCodec :: PublishCodec
-npmPublishCodec =
+npmPublishCodec :: ServicePresentation -> PublishCodec
+npmPublishCodec presentation =
     PublishCodec
         { pcPrepareSource = prepareNpmSource
         , pcPrepareUpload = \_ _ _ inventory metadata file bytes -> pure (prepareNpmUpload inventory metadata file bytes)
         , pcMirrorCompanion = Nothing
         , pcNativeComplete = nativeNpmComplete
-        , pcTargetRead = staticRead npmRead
+        , pcTargetRead = presentedRead readAs (staticRead npmRead)
         , pcTargetReadPermille = cfFullReadPermille npmChargeFactors
-        , pcProbeRequest = \targetUrl credential -> metadataRequest targetUrl credential Abbreviated
+        , pcProbeRequest = \targetUrl credential name -> presentedRequest readAs credential (\anonymous -> metadataRequest targetUrl anonymous Abbreviated name)
         , pcVersionListWalk = Just (\limits -> npmVersionListWalk limits (collectVersionList limits) emptyVersionList)
         , pcPrepareTarget = \_ target -> pure (Right target)
-        , pcPublishRequest = npmPublishRequestFor
+        , pcPublishRequest = npmPublishRequestFor (presentedMapping presentation StoreWrite npmCredential)
         , pcPublishOutcome = \status _ -> classifyPublish status
         }
+  where
+    readAs = presentedMapping presentation StoreRead npmCredential
 
 nativeNpmComplete :: PackageName -> Version -> PackageInfo -> Bool
 nativeNpmComplete name version info = fromMaybe False $ do
@@ -122,10 +126,10 @@ nativeNpmComplete name version info = fromMaybe False $ do
             pure (all (isJust . canonicalHashValue) hashes && isJust (canonicalHashValue (authoritativeDigest hashes)))
         _ -> Nothing
 
-npmPublishRequestFor :: Text -> Maybe ClientCredential -> PublishPlan -> MirrorUploadData NpmUploadMetadata -> Either PublishFault Request
-npmPublishRequestFor targetUrl credential plan uploadData =
-    first (PublishFetch . FetchUrlUnformable) $
-        publishRequest targetUrl credential (inventoryPackage (uploadInventory uploadData)) (npmPublishDocument plan uploadData)
+npmPublishRequestFor :: CredentialMapping -> Text -> Maybe ClientCredential -> PublishPlan -> MirrorUploadData NpmUploadMetadata -> Either PublishFault Request
+npmPublishRequestFor writeAs targetUrl credential plan uploadData =
+    first (PublishFetch . FetchUrlUnformable) . presentedRequest writeAs credential $ \anonymous ->
+        publishRequest targetUrl anonymous (inventoryPackage (uploadInventory uploadData)) (npmPublishDocument plan uploadData)
 
 strongestSriValue :: MirrorArtifact -> Maybe Text
 strongestSriValue artifact = do

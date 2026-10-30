@@ -20,6 +20,7 @@ import Ecluse.Core.Registry.Origin (OriginClient (ocChargeFullRead, ocToken))
 import Ecluse.Core.Registry.Publish (PublishCodec (pcPrepareTarget, pcTargetReadPermille))
 import Ecluse.Core.Registry.RubyGems.Credential (rubyOtpHeaders, rubyPublishCredential, rubyPublishExtras, rubyReadCredential)
 import Ecluse.Core.Registry.RubyGems.Route (rubyGemsRouter)
+import Ecluse.Core.Registry.Request (nativePresentation)
 import Ecluse.Core.Security (defaultLimits)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Core.Server.Admission (newServeAdmissionTuned, withServeAdmission)
@@ -131,7 +132,7 @@ withMount runtime budget adjust static use = do
                     { publishCredential = rubyPublishCredential
                     , publishRequestExtras = rubyPublishExtras
                     , publishUploadClaims = \_ _ _ _ -> pure (Right ["widget"])
-                    , publishRelay = \origin _ body -> do
+                    , publishRelay = \_ origin _ body -> do
                         modifyIORef' observed (<> [(ocToken origin, rubyOtpHeaders (publishBodyExtras body), publishBodyBytes body)])
                         pure (Right (PublishRelayResponse 201 "created"))
                     }
@@ -141,6 +142,7 @@ withMount runtime budget adjust static use = do
                 , pubTargetUrl = loopbackRegistryUrl "http://localhost:1"
                 , pubAllowed = const True
                 , pubStaticCredential = static
+                , pubStaticPresentation = nativePresentation
                 , pubInboundToken = Just (mkSecret "edge-key")
                 , pubMaxRequestBytes = 1024
                 , pubLimits = defaultLimits
@@ -176,11 +178,10 @@ probingGates :: IORef [(Bool, Bool)] -> ServeRuntime -> AdapterPublish -> Adapte
 probingGates held runtime publish =
     publish
         { publishUploadClaims = \limits workspace registry body -> probe >> publishUploadClaims publish limits workspace registry body
-        , publishCodec = codec{pcPrepareTarget = \origin target -> probe >> pcPrepareTarget codec origin target}
-        , publishRelay = \origin name body -> probe >> publishRelay publish origin name body
+        , publishCodec = \presentation -> let codec = publishCodec publish presentation in codec{pcPrepareTarget = \origin target -> probe >> pcPrepareTarget codec origin target}
+        , publishRelay = \presentation origin name body -> probe >> publishRelay publish presentation origin name body
         }
   where
-    codec = publishCodec publish
     probe = do
         slotTaken <- isLeft <$> withServeAdmission noopMetricsPort (srAdmission runtime) pass
         charged <- (> 0) . snChargedBytes <$> meterSnapshot (srMemoryMeter runtime)
@@ -190,8 +191,8 @@ probingGates held runtime publish =
 discoveryPaying :: IORef (Maybe Int) -> ServeRuntime -> AdapterPublish -> AdapterPublish
 discoveryPaying held runtime publish =
     publish
-        { publishCodec =
-            codec
+        { publishCodec = \presentation ->
+            (publishCodec publish presentation)
                 { pcTargetReadPermille = discoveryPermille
                 , pcPrepareTarget = \origin target -> do
                     replicateM_ 3 (ocChargeFullRead origin discoveryChunk)
@@ -199,8 +200,6 @@ discoveryPaying held runtime publish =
                     pure (Right target)
                 }
         }
-  where
-    codec = publishCodec publish
 
 discoveryChunk :: Int
 discoveryChunk = 8 * 1024 * 1024

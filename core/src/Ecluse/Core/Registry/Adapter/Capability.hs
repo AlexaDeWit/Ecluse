@@ -57,7 +57,7 @@ import Ecluse.Core.Registry.Maintenance.NameSpace (NameAlphabet)
 import Ecluse.Core.Registry.Metadata.Fetch.Preparation (PrepareRead)
 import Ecluse.Core.Registry.Origin (OriginClient)
 import Ecluse.Core.Registry.Publish (PublishCodec (pcMirrorCompanion))
-import Ecluse.Core.Registry.Request (CredentialMapping)
+import Ecluse.Core.Registry.Request (CredentialMapping, ServicePresentation, nativePresentation)
 import Ecluse.Core.Registry.ServedDocument (RenderRefused)
 import Ecluse.Core.Security (Limits)
 import Ecluse.Core.Server.Admission.Types (ChargeFactors)
@@ -157,12 +157,12 @@ data AdapterPublish = AdapterPublish
     -- ^ Recover publication credentials independently from read credentials.
     , publishRequestExtras :: RequestHeaders -> Either PublishBodyFault PublishExtras
     -- ^ Admit only native publication headers before buffering the body.
-    , publishRelay :: OriginClient -> PackageName -> PublishRequestBody -> IO (Either FetchFault PublishRelayResponse)
-    -- ^ Relay a client's publish document to the target named as the origin, and return its answer.
+    , publishRelay :: ServicePresentation -> OriginClient -> PackageName -> PublishRequestBody -> IO (Either FetchFault PublishRelayResponse)
+    -- ^ Relay a client's publish document to the target named as the origin, under the target store's presentation, and return its answer.
     , publishUploadClaims :: Limits -> (Int -> IO ()) -> Text -> PublishRequestBody -> IO (Either PublishBodyFault [Text])
     -- ^ Check claims before target IO using the selected logical view base. Charge extra workspace as an absolute total.
-    , publishCodec :: PublishCodec
-    -- ^ The mirror write's document, requests, probe, and status semantics. The transport owns the manager, mint, and fault classification.
+    , publishCodec :: ServicePresentation -> PublishCodec
+    -- ^ The mirror write's document, requests, probe, and status semantics under the target store's presentation. The transport owns the manager, mint, and fault classification.
     , publishMirrorRequirements :: MirrorRequirements
     -- ^ The worker read and boot obligations for configured mirrors.
     , publishUploadEndpoint :: UploadEndpointRequirement
@@ -173,7 +173,7 @@ data AdapterPublish = AdapterPublish
 
 -- | Whether the mirror codec prepares native companions exactly where the durable declaration requires them.
 companionsAgree :: AdapterPublish -> Bool
-companionsAgree publish = isJust (pcMirrorCompanion (publishCodec publish)) == (required == Just NativeCompanions)
+companionsAgree publish = isJust (pcMirrorCompanion (publishCodec publish nativePresentation)) == (required == Just NativeCompanions)
   where
     required = mdCompanions <$> durableMirrorDocuments (mirrorStateRequirement (publishMirrorRequirements publish))
 

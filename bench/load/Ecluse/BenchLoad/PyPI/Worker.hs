@@ -23,6 +23,7 @@ import Ecluse.Core.Registry.Publish (MirrorTransport (..), newMirrorPublish)
 import Ecluse.Core.Registry.PyPI.Adapter (pypiAdapter)
 import Ecluse.Core.Registry.PyPI.Metadata (pypiMirrorRead)
 import Ecluse.Core.Registry.PyPI.Publish (pypiPublishCodec)
+import Ecluse.Core.Registry.Request (nativePresentation)
 import Ecluse.Core.Security (defaultLimits)
 import Ecluse.Core.Security.Egress (registryUrlText)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
@@ -79,7 +80,7 @@ pypiPolicy environment =
   where
     targetReadRoot = weTargetReadRoot environment
     uploadRoot = loopbackRegistryUrl (registryUrlText targetReadRoot <> "/upload")
-    publish = newMirrorPublish (MirrorTransport (weClient environment) (pure Nothing) defaultLimits passthroughTracingPort) targetReadRoot uploadRoot pypiPublishCodec
+    publish = newMirrorPublish (MirrorTransport (weClient environment) (pure Nothing) defaultLimits passthroughTracingPort) targetReadRoot uploadRoot (pypiPublishCodec nativePresentation)
     sourceOrigin = originClientOf (weSourceOrigin environment)
 
 verifyCopy :: WorkerFixture -> Int -> Int -> IO ()

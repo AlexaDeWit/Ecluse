@@ -6,7 +6,6 @@
 module Ecluse.Core.Registry.RubyGems.Publish (
     rubyPublish,
     rubyPublishCodec,
-    rubyPublishCodecWith,
     uploadClaims,
     classifyPublish,
 ) where
@@ -22,20 +21,19 @@ import Ecluse.Core.Registry (FetchFault (FetchUrlUnformable), ParseError (..), P
 import Ecluse.Core.Registry.Adapter.Capability
 import Ecluse.Core.Registry.CachedDocument (rubyGemsCached)
 import Ecluse.Core.Registry.Metadata (VersionDoc (vdRaw))
-import Ecluse.Core.Registry.Metadata.Fetch.Preparation (PrepareRead (PrepareRead), prepareRead)
-import Ecluse.Core.Registry.Metadata.Fetch.Types (EcosystemRead (..))
+import Ecluse.Core.Registry.Metadata.Fetch.Preparation (presentedRead)
 import Ecluse.Core.Registry.MirrorUpload
 import Ecluse.Core.Registry.MirrorUpload.Internal (checkedMirrorUploadData)
 import Ecluse.Core.Registry.Origin (OriginClient (ocToken), originBaseUrl)
 import Ecluse.Core.Registry.Publish (PublishCodec (..), relayPublishRequest)
-import Ecluse.Core.Registry.Request (CredentialMapping, apiEndpoint, attachCredential, metadataGet, parseRequestEither)
+import Ecluse.Core.Registry.Request (CredentialMapping, ServicePresentation, StoreOperation (StoreRead, StoreWrite), apiEndpoint, attachCredential, metadataGet, parseRequestEither, presentedMapping)
 import Ecluse.Core.Registry.RubyGems.Archive
 import Ecluse.Core.Registry.RubyGems.CompactSpec (checkGemSpecification)
 import Ecluse.Core.Registry.RubyGems.Credential
 import Ecluse.Core.Registry.RubyGems.Document (GemRow (..))
 import Ecluse.Core.Registry.RubyGems.Metadata (prepareGemRead)
 import Ecluse.Core.Registry.RubyGems.Mirror (mirrorRow, rubyGemsMirrorDocuments, rubyMirrorCompanion)
-import Ecluse.Core.Registry.RubyGems.Request (gemInfoRequestUnder, gemInfoUrl)
+import Ecluse.Core.Registry.RubyGems.Request (gemInfoUrl)
 import Ecluse.Core.Security.Limits (Limits)
 import Ecluse.Core.Server.Admission.Types (ChargeFactors (cfFullReadPermille))
 
@@ -43,7 +41,7 @@ import Ecluse.Core.Server.Admission.Types (ChargeFactors (cfFullReadPermille))
 rubyPublish :: ChargeFactors -> AdapterPublish
 rubyPublish factors =
     AdapterPublish
-        { publishRelay = \origin _ body -> relayPublishRequest origin (bodyRequest rubyPublishCredential (originBaseUrl origin) (ocToken origin) (publishBodyExtras body) (publishBodyBytes body))
+        { publishRelay = \presentation origin _ body -> relayPublishRequest origin (bodyRequest (presentedMapping presentation StoreWrite rubyPublishCredential) (originBaseUrl origin) (ocToken origin) (publishBodyExtras body) (publishBodyBytes body))
         , publishCredential = rubyPublishCredential
         , publishRequestExtras = rubyPublishExtras
         , publishUploadClaims = uploadClaims
@@ -53,13 +51,9 @@ rubyPublish factors =
         , publishIdentity = TokenIdentity
         }
 
--- | Ordinary private registries use Basic reads and literal native publication keys.
-rubyPublishCodec :: ChargeFactors -> PublishCodec
-rubyPublishCodec = rubyPublishCodecWith rubyPublishCredential
-
--- | Declared backend roles select the write credential presentation. Reads present the backend's Basic pair.
-rubyPublishCodecWith :: CredentialMapping -> ChargeFactors -> PublishCodec
-rubyPublishCodecWith writeCredential factors =
+-- | Reads present the Basic pair and writes the raw API key, unless the target store declares otherwise.
+rubyPublishCodec :: ChargeFactors -> ServicePresentation -> PublishCodec
+rubyPublishCodec factors presentation =
     PublishCodec
         { pcPrepareSource = \name version doc -> do
             source <- maybeToRight (PublishSourceUnavailable "RubyGems snapshot has no paired native source") (vdRaw doc >>= snd rubyGemsCached)
@@ -75,14 +69,16 @@ rubyPublishCodecWith writeCredential factors =
                 checkedMirrorUploadData inventory file verified checked
         , pcMirrorCompanion = Just rubyMirrorCompanion
         , pcNativeComplete = \_ _ _ -> False
-        , pcTargetRead = PrepareRead (fmap (fmap (\native -> native{erRequest = \base credential name -> attachCredential rubyReadCredential credential <$> gemInfoRequestUnder base Nothing name})) . prepareRead prepareGemRead)
+        , pcTargetRead = presentedRead readAs prepareGemRead
         , pcTargetReadPermille = cfFullReadPermille factors
-        , pcProbeRequest = \target credential name -> metadataGet rubyReadCredential credential "text/plain" <$> (gemInfoUrl target name >>= parseRequestEither)
+        , pcProbeRequest = \target credential name -> metadataGet readAs credential "text/plain" <$> (gemInfoUrl target name >>= parseRequestEither)
         , pcVersionListWalk = Nothing
         , pcPrepareTarget = \_ target -> pure (Right target)
-        , pcPublishRequest = \target credential _ upload -> first (PublishFetch . FetchUrlUnformable) (bodyRequest writeCredential target credential NoPublishExtras (uploadBytes upload))
+        , pcPublishRequest = \target credential _ upload -> first (PublishFetch . FetchUrlUnformable) (bodyRequest (presentedMapping presentation StoreWrite rubyPublishCredential) target credential NoPublishExtras (uploadBytes upload))
         , pcPublishOutcome = classifyPublish
         }
+  where
+    readAs = presentedMapping presentation StoreRead rubyReadCredential
 
 -- | Archive identity controls first-party ownership before the server forwards any bytes.
 uploadClaims :: Limits -> (Int -> IO ()) -> Text -> PublishRequestBody -> IO (Either PublishBodyFault [Text])

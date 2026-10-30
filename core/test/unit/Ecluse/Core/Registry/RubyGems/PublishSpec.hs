@@ -24,7 +24,7 @@ import Ecluse.Core.Registry.Metadata (VersionDoc (..))
 import Ecluse.Core.Registry.MirrorUpload
 import Ecluse.Core.Registry.Origin (OriginClient (ocChargeFullReadWorkspace), originClient)
 import Ecluse.Core.Registry.Publish (MirrorPublish (mpProbeInventory), MirrorTransport (..), PublishCodec (..), PublishPlan (PublishPlan), newMirrorPublish)
-import Ecluse.Core.Registry.RubyGems.Credential (rubyCodeArtifactPublishCredential)
+import Ecluse.Core.Registry.Request (AuthMechanism (AuthBasic, AuthBearer), ServicePresentation, StoreOperation (StoreRead, StoreWrite), declaredPresentation, nativePresentation)
 import Ecluse.Core.Registry.RubyGems.Document
 import Ecluse.Core.Registry.RubyGems.Project (projectName)
 import Ecluse.Core.Registry.RubyGems.Projection (projectGemRows)
@@ -51,7 +51,7 @@ spec = describe "RubyGems publication" $ do
             extras <- expectRight (publishRequestExtras publisher [("OTP", "opaque-code")])
             withExchangeClient (newManager defaultManagerSettings) $ \client -> do
                 let origin = originClient defaultLimits client (loopbackRegistryUrl (stubBaseUrl target <> "/private")) (Just (bareCredential (mkSecret "native-api-key")))
-                void (publishRelay publisher origin name (PublishRequestBody archive (Just "application/octet-stream") extras) >>= expectRight)
+                void (publishRelay publisher nativePresentation origin name (PublishRequestBody archive (Just "application/octet-stream") extras) >>= expectRight)
                 allCaptured target >>= \case
                     [written] -> do
                         capMethod written `shouldBe` "POST"
@@ -67,7 +67,7 @@ spec = describe "RubyGems publication" $ do
             name <- expectRight (projectName "ecluse-fixture-root")
             withExchangeClient (newManager defaultManagerSettings) $ \client -> do
                 let origin = (originClient defaultLimits client (loopbackRegistryUrl (stubBaseUrl target <> "/private")) (Just (bareCredential (mkSecret "native-api-key")))){ocChargeFullReadWorkspace = refuseCharge}
-                void (publishRelay publisher origin name (PublishRequestBody archive (Just "application/octet-stream") NoPublishExtras) >>= expectRight)
+                void (publishRelay publisher nativePresentation origin name (PublishRequestBody archive (Just "application/octet-stream") NoPublishExtras) >>= expectRight)
                 map capMethod <$> allCaptured target `shouldReturn` ["POST"]
 
     it "accepts native-extension builds and refuses malformed or oversized archives" $ do
@@ -91,7 +91,7 @@ spec = describe "RubyGems publication" $ do
             let archive = LBS.toStrict (Tar.write (global : entries))
             doc <- sourceVersionOf archive
             withSweeper $ \deadlines -> do
-                writer <- anonymousPublishAt deadlines (rubyPublishCodec factors) (loopbackRegistryUrl (stubBaseUrl target <> "/private"))
+                writer <- anonymousPublishAt deadlines (rubyPublishCodec factors nativePresentation) (loopbackRegistryUrl (stubBaseUrl target <> "/private"))
                 publishOnlyFile writer doc (PublishPlan (pkgVersion (vdDetails doc))) archive `shouldReturn` Right ()
             map capBody <$> allCaptured target `shouldReturn` [archive]
 
@@ -99,7 +99,7 @@ spec = describe "RubyGems publication" $ do
         archive <- readFileBS rootArchive
         doc <- sourceVersion
         let details = vdDetails doc
-        case rubyPublishCodec factors of
+        case rubyPublishCodec factors nativePresentation of
             PublishCodec{pcPrepareSource, pcPrepareUpload, pcPublishRequest, pcNativeComplete} -> do
                 (inventory, source) <- expectRight (pcPrepareSource (pkgName details) (pkgVersion details) doc)
                 file <- case inventoryFiles inventory of
@@ -117,8 +117,8 @@ spec = describe "RubyGems publication" $ do
                     _ -> expectationFailure "native publication replaced the verified byte body"
                 pcNativeComplete (pkgName details) (pkgVersion details) (PackageInfo (pkgName details) (Map.singleton "1.0.0" details) mempty []) `shouldBe` False
 
-    for_ [("declared CodeArtifact roles", rubyPublishCodecWith rubyCodeArtifactPublishCredential factors, "Bearer worker-key"), ("generic roles with username aws", rubyPublishCodec factors, "worker-key")] $ \(label, codec, expectedKey) ->
-        it ("uses Basic reads and the selected native writer mapping for " <> label) $ do
+    for_ [("a store declaring Basic reads and Bearer writes", rubyPublishCodec factors basicReadsBearerWrites, "Bearer worker-key"), ("the protocol's own presentation", rubyPublishCodec factors nativePresentation, "worker-key")] $ \(label, codec, expectedKey) ->
+        it ("presents Basic reads and the worker key's write under " <> label) $ do
             listing <- readFileBS "test/fixtures/rubygems/info/ecluse-fixture-root"
             archive <- readFileBS rootArchive
             doc <- sourceVersion
@@ -153,6 +153,12 @@ spec = describe "RubyGems publication" $ do
 
 publisher :: AdapterPublish
 publisher = rubyPublish factors
+
+-- A store that asks for Basic on reads and Bearer on writes.
+basicReadsBearerWrites :: ServicePresentation
+basicReadsBearerWrites = declaredPresentation $ \case
+    StoreRead -> AuthBasic
+    StoreWrite -> AuthBearer
 
 factors :: ChargeFactors
 factors = ChargeFactors 1000 1000 1000

@@ -699,7 +699,7 @@ companionOutcome changed companion envVars = do
     let resolve eco
             | eco == changed = fmap preparing (adapterFor eco)
             | otherwise = adapterFor eco
-        preparing adapter = adapter{adapterPublish = fmap (\publish -> publish{publishCodec = (publishCodec publish){pcMirrorCompanion = companion}}) (adapterPublish adapter)}
+        preparing adapter = adapter{adapterPublish = fmap (\publish -> publish{publishCodec = \presentation -> (publishCodec publish presentation){pcMirrorCompanion = companion}}) (adapterPublish adapter)}
     pure (first (map renderBootError) (void (snd (runVet MirrorWriter (vetBootWith resolve config)))))
 
 refusesCompanions :: Text -> Either [Text] () -> Bool

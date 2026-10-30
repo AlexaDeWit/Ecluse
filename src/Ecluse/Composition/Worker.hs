@@ -12,11 +12,10 @@ module Ecluse.Composition.Worker (
 
 import Data.Map.Strict qualified as Map
 
-import Ecluse.Composition (PublishTarget (ptBackendTag, ptCredentials, ptEcosystem, ptMirrorUrl, ptUploadUrl, ptUsername))
+import Ecluse.Composition (PublishTarget (ptCredentials, ptEcosystem, ptMirrorUrl, ptPresentation, ptUploadUrl, ptUsername))
 import Ecluse.Composition.MirrorState (MirrorStateBinding (msbStore, msbTarget))
-import Ecluse.Config (StoreTag (TagCodeArtifact))
 import Ecluse.Core.Credential (ClientCredential (ClientCredential), mintSecret)
-import Ecluse.Core.Ecosystem (Ecosystem (RubyGems), parseEcosystem)
+import Ecluse.Core.Ecosystem (Ecosystem, parseEcosystem)
 import Ecluse.Core.Registry.Adapter (adapterFor, adapterPublish)
 import Ecluse.Core.Registry.Adapter.Capability (AdapterMetadata (metadataChargeFactors, metadataRead), AdapterPublish (publishCodec, publishMirrorRequirements), MirrorRequirements (mirrorWorkerRead), WorkerMetadataRead (..))
 import Ecluse.Core.Registry.Metadata (fetchVersionDetails)
@@ -28,8 +27,6 @@ import Ecluse.Core.Registry.Publish (
     MirrorTransport (MirrorTransport, ptClient, ptLimits, ptMintCredential, ptTracing),
     newMirrorPublish,
  )
-import Ecluse.Core.Registry.RubyGems.Credential (rubyCodeArtifactPublishCredential)
-import Ecluse.Core.Registry.RubyGems.Publish (rubyPublishCodecWith)
 import Ecluse.Core.Security (Limits (maxMirrorArtifactBytes), Origin (UntrustedOrigin), thgPublicHostPort)
 import Ecluse.Core.Security.Egress (registryUrlText)
 import Ecluse.Core.Server.Admission.Meter (charge, newChargeRegion, withMemoryEntry)
@@ -100,10 +97,7 @@ mirrorPublishFor env deps targets artifactMaxBytes eco = do
     publish <- adapterPublish adapter
     let transport = mirrorTransportFor env deps target
         bounded = transport{ptLimits = (ptLimits transport){maxMirrorArtifactBytes = artifactMaxBytes}}
-        codec = case (eco, ptBackendTag target) of
-            (RubyGems, TagCodeArtifact) -> rubyPublishCodecWith rubyCodeArtifactPublishCredential (metadataChargeFactors (pdMetadata deps))
-            _ -> publishCodec publish
-    pure (newMirrorPublish bounded (ptMirrorUrl target) (ptUploadUrl target) codec, publishMirrorRequirements publish)
+    pure (newMirrorPublish bounded (ptMirrorUrl target) (ptUploadUrl target) (publishCodec publish (ptPresentation target)), publishMirrorRequirements publish)
 
 -- | Use the mount's metadata limits for mirror presence probes and publication.
 mirrorTransportFor :: Env -> PackumentDeps -> PublishTarget -> MirrorTransport
