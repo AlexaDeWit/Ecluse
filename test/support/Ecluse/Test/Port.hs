@@ -96,6 +96,8 @@ passthroughTracingPort =
         , spanPackumentGate = \_ action -> action
         , spanMetadataFetch = \_ action -> action
         , spanMetadataDecode = \_ action -> action
+        , spanDirectoryFetch = id
+        , spanDirectoryDecode = id
         }
 
 -- | A 'WorkerMetricsPort' that discards every measurement, for a spec that drives the worker loop but asserts nothing about metrics.
