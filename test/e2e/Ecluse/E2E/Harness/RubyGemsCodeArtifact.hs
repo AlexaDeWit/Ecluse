@@ -39,8 +39,8 @@ import Ecluse.E2E.Harness.Advisories (createAdvisoryBucket)
 import Ecluse.E2E.Harness.CodeArtifact
 import Ecluse.E2E.Harness.CodeArtifact.Roles (PublicationAuthority (..), codeArtifactProxyRoleEnv, codeArtifactSweepRoleEnv)
 import Ecluse.E2E.Harness.Docker (withStubFault)
-import Ecluse.E2E.Harness.RubyGemsCodeArtifact.Fixtures (buildSweepAdvisories, firstPartyName)
 import Ecluse.E2E.Harness.NativeEdge (ObservedNativeProxy, observedProxy, withObservedNativeProxy)
+import Ecluse.E2E.Harness.RubyGemsCodeArtifact.Fixtures (buildSweepAdvisories, firstPartyName)
 import Ecluse.E2E.Harness.RubyGemsRegistry
 import Ecluse.E2E.Harness.Stub (StubFault (RubyGemsCodeArtifactBackend))
 import Ecluse.E2E.Harness.Types

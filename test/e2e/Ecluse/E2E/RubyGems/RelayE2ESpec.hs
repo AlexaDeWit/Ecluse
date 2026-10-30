@@ -17,8 +17,8 @@ import Test.Hspec (around, it, shouldBe, shouldReturn, shouldSatisfy)
 import Ecluse.E2E.Fixtures.Contracts (ConcreteFixture (..))
 import Ecluse.E2E.Fixtures.RubyGems
 import Ecluse.E2E.Harness
-import Ecluse.E2E.Harness.RubyGems
 import Ecluse.E2E.Harness.NativeEdge
+import Ecluse.E2E.Harness.RubyGems
 import Ecluse.E2E.Harness.RubyGemsRegistry
 import Ecluse.E2E.RubyGems.InstallE2ESpec (rubyConsumer)
 import Ecluse.Test.Contract.Catalogue (caseLabel)

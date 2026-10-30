@@ -22,8 +22,8 @@ import Test.Hspec (shouldBe, shouldMatchList, shouldSatisfy)
 import Ecluse.E2E.Fixtures.Contracts (concreteFamily)
 import Ecluse.E2E.Fixtures.RubyGems
 import Ecluse.E2E.Harness
-import Ecluse.E2E.Harness.RubyGems
 import Ecluse.E2E.Harness.NativeEdge
+import Ecluse.E2E.Harness.RubyGems
 import Ecluse.E2E.InstallationE2ESpec (codedArtifact)
 import Ecluse.Test.Contract.Ecosystem (FamilyFixture)
 import Ecluse.Test.Contract.Install

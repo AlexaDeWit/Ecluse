@@ -9,10 +9,10 @@ import Data.Text qualified as T
 import System.Exit (ExitCode (ExitFailure, ExitSuccess))
 
 import Ecluse.Core.Server.Path (encodeComponent)
+import Ecluse.E2E.Harness.NativeEdge (observedProxy)
 import Ecluse.E2E.Harness.Proxy (proxyContainerLogs)
 import Ecluse.E2E.Harness.RubyGems
 import Ecluse.E2E.Harness.RubyGemsCodeArtifact
-import Ecluse.E2E.Harness.NativeEdge (observedProxy)
 import Ecluse.E2E.Harness.RubyGemsRegistry (rubyRegistryToken)
 import Ecluse.E2E.Harness.Types (ClientResult (..))
 import Ecluse.Test.Contract.Sweep.Types (ClientOps (..))
