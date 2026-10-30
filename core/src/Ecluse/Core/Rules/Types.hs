@@ -83,7 +83,8 @@ import Ecluse.Core.Fault (RetryAfter (..))
 import Ecluse.Core.Package (
     Availability,
     CodeExecSignal,
-    PackageDetails (pkgAvailability, pkgInstallCode, pkgName, pkgPublishedAt, pkgVersion),
+    DependencySources,
+    PackageDetails (pkgAvailability, pkgDependencySources, pkgInstallCode, pkgName, pkgPublishedAt, pkgVersion),
     PackageName,
     Scope,
  )
@@ -99,6 +100,8 @@ data Rule
       AllowIfOlderThan NominalDiffTime
     | -- | Deny npm install scripts, RubyGems native builds, and PyPI sdist builds. Abstain without that signal.
       DenyInstallTimeExecution
+    | -- | Deny a version whose installable dependency a client would fetch from outside the registry, such as an npm git or URL spec.
+      DenyExternalDependencies
     | -- | Refuse versions carrying the registry yank flag.
       DenyIfYanked
     | -- | Refuse versions carrying the registry deprecation flag, including obsolete release lines.
@@ -195,6 +198,7 @@ data RuleType
     | DenyIfYankedType
     | DenyIfDeprecatedType
     | DenyInstallTimeExecutionType
+    | DenyExternalDependenciesType
     | DenyByIdentityType
     deriving stock (Eq, Generic, Ord, Show)
 
@@ -213,6 +217,7 @@ instance WireVocab RuleType where
                , (DenyIfYankedType, "DenyIfYanked")
                , (DenyIfDeprecatedType, "DenyIfDeprecated")
                , (DenyInstallTimeExecutionType, "DenyInstallTimeExecution")
+               , (DenyExternalDependenciesType, "DenyExternalDependencies")
                , (DenyByIdentityType, "DenyByIdentity")
                ]
 
@@ -224,6 +229,7 @@ ruleType = \case
     DenyIfYanked -> DenyIfYankedType
     DenyIfDeprecated -> DenyIfDeprecatedType
     DenyInstallTimeExecution -> DenyInstallTimeExecutionType
+    DenyExternalDependencies -> DenyExternalDependenciesType
     DenyByIdentity{} -> DenyByIdentityType
     AllowByIdentity{} -> AllowByIdentityType
     AllowIfRemediatesCve{} -> AllowIfRemediatesCveType
@@ -247,6 +253,7 @@ readsAdvisories = \case
     DenyIfYanked -> False
     DenyIfDeprecated -> False
     DenyInstallTimeExecution -> False
+    DenyExternalDependencies -> False
     DenyByIdentity{} -> False
     AllowByIdentity{} -> False
 
@@ -262,6 +269,7 @@ deniesOnAdvisories = \case
     DenyIfYanked -> False
     DenyIfDeprecated -> False
     DenyInstallTimeExecution -> False
+    DenyExternalDependencies -> False
     DenyByIdentity{} -> False
     AllowByIdentity{} -> False
 
@@ -279,6 +287,7 @@ requiresEpss = \case
     DenyIfYanked -> False
     DenyIfDeprecated -> False
     DenyInstallTimeExecution -> False
+    DenyExternalDependencies -> False
     DenyByIdentity{} -> False
     AllowByIdentity{} -> False
 
@@ -288,6 +297,7 @@ ruleDenies = \case
     DenyIfYanked -> True
     DenyIfDeprecated -> True
     DenyInstallTimeExecution -> True
+    DenyExternalDependencies -> True
     DenyByIdentity{} -> True
     DenyIfCve{} -> True
     DenyIfKnownMalicious{} -> True
@@ -337,6 +347,7 @@ defaultPrecedence = \case
     DenyIfYanked -> defaultDenyInstallTimeExecutionPrecedence
     DenyIfDeprecated -> defaultDenyInstallTimeExecutionPrecedence
     DenyInstallTimeExecution -> defaultDenyInstallTimeExecutionPrecedence
+    DenyExternalDependencies -> defaultDenyInstallTimeExecutionPrecedence
     DenyByIdentity{} -> defaultDenyByIdentityPrecedence
 
 -- | Default precedence of 'AllowIfOlderThan': the lowest band, a quarantine that yields to allow-lists and every deny.
@@ -359,7 +370,7 @@ defaultDenyIfCvePrecedence = 225
 defaultDenyIfEpssPrecedence :: Int
 defaultDenyIfEpssPrecedence = defaultDenyIfCvePrecedence
 
--- | An identity pin overrides scored advisory denies, and yields to MAL, availability, install-code, and identity denies.
+-- | An identity pin overrides scored advisory denies, and yields to MAL, availability, install-code, dependency, and identity denies.
 defaultAllowByIdentityPrecedence :: Int
 defaultAllowByIdentityPrecedence = 250
 
@@ -391,6 +402,8 @@ data RuleEvidence = RuleEvidence
     -- ^ The typed registry flag, without upstream notice text.
     , evInstallCode :: Fact CodeExecSignal
     -- ^ Whether installing the version executes code.
+    , evDependencySources :: Fact DependencySources
+    -- ^ Whether installing the version fetches a dependency from outside the registry.
     }
     deriving stock (Eq, Show)
 
@@ -403,6 +416,7 @@ completeEvidence pd =
         , evPublishedAt = Known (pkgPublishedAt pd)
         , evAvailability = Known (pkgAvailability pd)
         , evInstallCode = Known (pkgInstallCode pd)
+        , evDependencySources = Known (pkgDependencySources pd)
         }
 
 -- | Identity alone, as an authenticated store listing establishes it. A rule reading any other fact cannot decide.
@@ -414,6 +428,7 @@ identityEvidence name version =
         , evPublishedAt = Unread
         , evAvailability = Unread
         , evInstallCode = Unread
+        , evDependencySources = Unread
         }
 
 -- | Ambient information a rule may need that is not part of the package itself.
@@ -503,6 +518,10 @@ data Reason
       NothingRunsOnInstall
     | -- | 'DenyInstallTimeExecution' abstains: whether installing runs code is not yet determined.
       InstallCodeUndetermined
+    | -- | 'DenyExternalDependencies' denies: the dependency a client would fetch from outside the registry.
+      FetchesOutside Text
+    | -- | 'DenyExternalDependencies' abstains: every installable dependency resolves through the registry.
+      DependenciesThroughRegistry
     | -- | The version carries the yank flag.
       VersionYanked
     | -- | The version carries no yank flag.
@@ -561,6 +580,8 @@ reasonAdvisories = \case
     RunsOnInstall{} -> []
     NothingRunsOnInstall -> []
     InstallCodeUndetermined -> []
+    FetchesOutside{} -> []
+    DependenciesThroughRegistry -> []
     VersionYanked -> []
     VersionNotYanked -> []
     VersionDeprecated -> []
@@ -652,6 +673,8 @@ data Inability
       InstallSignalUnread
     | -- | Nothing read the availability flag.
       AvailabilityUnread
+    | -- | Nothing read where the installable dependencies come from.
+      DependencySourcesUnread
     | -- | No advisory database is loaded.
       NoDatabaseLoaded
     | -- | The serving advisory push is older than its maximum.

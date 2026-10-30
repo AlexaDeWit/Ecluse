@@ -189,6 +189,7 @@ ruleTypeParameters = \case
     "DenyIfYanked" -> []
     "DenyIfDeprecated" -> []
     "DenyInstallTimeExecution" -> []
+    "DenyExternalDependencies" -> []
     _ -> []
 
 -- The parameter keys an entry actually sets, in a fixed order so a refusal reads the same twice.
@@ -233,6 +234,7 @@ buildRule name ty entry = case ty of
     "DenyIfYanked" -> Right DenyIfYanked
     "DenyIfDeprecated" -> Right DenyIfDeprecated
     "DenyInstallTimeExecution" -> Right DenyInstallTimeExecution
+    "DenyExternalDependencies" -> Right DenyExternalDependencies
     _ -> Left [UnknownRuleType name ty]
 
 requireField :: Text -> Text -> Text -> (a -> Either [PolicyError] b) -> Maybe a -> Either [PolicyError] b
@@ -280,6 +282,7 @@ patchRuleValue name entry rule =
         DenyIfYanked -> Right DenyIfYanked
         DenyIfDeprecated -> Right DenyIfDeprecated
         DenyInstallTimeExecution -> Right DenyInstallTimeExecution
+        DenyExternalDependencies -> Right DenyExternalDependencies
 
 -- A publish-age threshold: a non-negative number of seconds.
 validateAgeSeconds :: Text -> Integer -> Either [PolicyError] NominalDiffTime

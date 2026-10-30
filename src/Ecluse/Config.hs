@@ -251,7 +251,7 @@ resolveGlobalPolicy shared overridesAst = do
 
 sharedPolicyErrors :: [PolicyError] -> [ConfigError]
 sharedPolicyErrors errors
-    | SuppressUnknownRule "deny-scripts" `elem` errors = [SharedPolicyErrors errors]
+    | any (`elem` errors) (map SuppressUnknownRule npmShippedRules) = [SharedPolicyErrors errors]
     | otherwise = [PolicyErrors errors]
 
 -- The resolved mounts, and the source-activated rules any of them runs.

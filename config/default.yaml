@@ -479,12 +479,19 @@ mounts:
     #   minTrusted: sha256
     #   divergencePolicy: warn # deprecated compatibility only, remove this key
     # ECLUSE_MOUNTS__NPM__RULES refines the shared policy, then these shipped rules.
-    # This default refuses npm install scripts at admission and keeps stored copies.
+    # Both defaults refuse at admission, at precedence 300, and keep stored copies.
+    # deny-scripts refuses npm install scripts. deny-external-dependencies refuses a version
+    # whose dependencies, optionalDependencies or peerDependencies name a git source
+    # (git+https:, git:, github:, user/repo and the like) or a remote tarball URL, which a
+    # client would fetch from outside Écluse. It reads the specs the packument already holds.
     rules:
       deny-scripts:
         type: DenyInstallTimeExecution
         appliesTo: [admission]
-      # Disable it here with deny-scripts: { enabled: false }, not under shared rules.
+      deny-external-dependencies:
+        type: DenyExternalDependencies
+        appliesTo: [admission]
+      # Disable either here with <name>: { enabled: false }, not under shared rules.
       # Or add an AllowByIdentity pin here with explicit precedence above 300.
       # Restate appliesTo: [admission, revocation] here to include Dredger deletion.
       # Optional deprecation deny, disabled unless added. No parameters. Default precedence: 300.
@@ -674,12 +681,14 @@ rules:
   # exactly, or that name and version joined by an @: no prefix, glob, or range.
   # At precedence 250 it overrides the scored DenyIfCve and DenyIfEpss rules.
   # It stays below DenyIfKnownMalicious, DenyIfYanked, DenyIfDeprecated,
-  # DenyInstallTimeExecution and DenyByIdentity. Override MAL with precedence 301.
+  # DenyInstallTimeExecution, DenyExternalDependencies and DenyByIdentity. Override MAL
+  # with precedence 301.
   # pin-fix:
   #   type: AllowByIdentity
   #   identity: left-pad@1.3.0  # a bare name pins every version of that package
-  # The npm install-script deny ships under mounts.npm.rules, at admission only.
-  # Disable or refine deny-scripts there. An AllowByIdentity pin needs precedence > 300.
+  # The npm install-script and external-dependency denies ship under mounts.npm.rules, at
+  # admission only. Disable or refine deny-scripts and deny-external-dependencies there.
+  # An AllowByIdentity pin needs precedence > 300.
   # Opt-in revoke, absent from this shipped policy. It denies one package, or one
   # package@version, whatever else would admit it. `identity` matches on the same exact
   # terms as AllowByIdentity. It carries the highest precedence of any shipped type, so
