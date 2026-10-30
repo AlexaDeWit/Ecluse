@@ -13,6 +13,7 @@ module Ecluse.Core.Registry.Cargo.Manifest (
     publicationMetadata,
     checkPublicationIndex,
     checkUploadAgreement,
+    checkDependencyRegistries,
     parseRustRelease,
     publishMetadataValue,
     cratesIoIndex,
@@ -150,6 +151,23 @@ checkUploadAgreement limits registry manifest (Object metadata) = do
     actualRust <- nullableString "rust_version" metadata >>= traverse parseRustRelease
     unless (expectedRust == actualRust) (parseRefusal "Cargo upload and manifest Rust versions disagree")
 checkUploadAgreement _ _ _ _ = parseRefusal "Cargo upload metadata is not an object"
+
+{- | Refuse a dependency from a registry other than crates.io or one of this proxy's own. A null or
+absent source is the publication registry, which the caller lists. Run after 'checkUploadAgreement'.
+-}
+checkDependencyRegistries :: [Text] -> Value -> Either ParseError ()
+checkDependencyRegistries own (Object metadata) = do
+    accepted <- Set.fromList . map sourceComparisonKey <$> traverse parseSource (cratesIoIndex : own)
+    dependencies <- requiredJson "deps" metadata >>= array
+    for_ dependencies $ \case
+        Object fields -> do
+            name <- requiredJson "name" fields >>= jsonString
+            declared <- nullableString "registry" fields >>= traverse parseSource
+            for_ declared $ \source ->
+                unless (Set.member (sourceComparisonKey source) accepted) $
+                    parseRefusal ("Cargo dependency '" <> name <> "' comes from a registry other than crates.io or this proxy: publish it through this proxy first, then depend on this proxy's copy")
+        _ -> parseRefusal "Cargo upload dependency is not an object"
+checkDependencyRegistries _ _ = parseRefusal "Cargo upload metadata is not an object"
 
 uploadDependency :: CargoSource -> Value -> Either ParseError Value
 uploadDependency registry (Object fields) = do
