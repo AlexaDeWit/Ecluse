@@ -59,7 +59,7 @@ import Ecluse.Service (mountBindingFor)
 import Ecluse.Test.Contract.Catalogue (caseLabel)
 import Ecluse.Test.Deadline (withSweeper)
 import Ecluse.Test.Registry.Cargo.Fixtures (CargoRelease (releaseArchive), cargoUpload, cargoUploadMetadata, cargoUploadWithMetadata)
-import Ecluse.Test.Registry.Cargo.Publish (cargoPublicationFixture, cargoResolverAgreements, cargoResolverArchive, cargoResolverContradictions)
+import Ecluse.Test.Registry.Cargo.Publish (cargoPublicationFixture, cargoResolverAgreements, cargoResolverArchive, cargoResolverContradictions, cargoResolverDependencyField)
 import Ecluse.Test.Registry.Npm.Publish (npmDeprecateDocument, npmMisfiledVersion, npmReleaseDocument, npmRepeatedAttachments, npmTaggedRelease)
 import Ecluse.Test.Server.Mount (inertDepsFor, inertPackumentDeps)
 import Ecluse.Test.Stub (Captured (capBody, capHeaders, capMethod, capPath), Stub, allCaptured, headerValue, stubBaseUrl, stubPort, withRoutedStub, withStubHeaders)
@@ -614,6 +614,16 @@ cargoPublishSpec = describe "first-party Cargo publication relay" $ do
             lookup "WWW-Authenticate" (simpleHeaders reply) `shouldBe` Just "Cargo"
             captures <- allCaptured stub
             map capPath captures `shouldBe` ["/index/config.json", "/registry/api/v1/crates/new"]
+    it (caseLabel "integration/publication/cargo-005" "refuses unstable dependency fields with 400 before any upstream request") $ do
+        archive <- cargoResolverArchive
+        withRoutedStub cargoTargetReply $ \stub -> withSweeper $ \deadlines -> do
+            app <- cargoProxy deadlines stub
+            for_ ["artifact", "bindep_target", "lib", "public"] $ \key -> do
+                bytes <- expectRight (cargoUploadWithMetadata (cargoResolverDependencyField key (Aeson.Bool True)) archive)
+                reply <- cargoPut (fromStrict bytes) app
+                status reply `shouldBe` 400
+                decodeUtf8 (simpleBody reply) `shouldSatisfy` T.isInfixOf "Cargo upload dependency 'tool' carries an unstable artifact, bindep_target, lib or public field"
+            allCaptured stub `shouldReturn` []
   where
     uploadRefusal captured
         | capMethod captured == "PUT" = (mkStatus 401 "Unauthorized", [], "native upload denied")

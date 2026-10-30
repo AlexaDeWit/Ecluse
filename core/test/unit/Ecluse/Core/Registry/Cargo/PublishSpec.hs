@@ -10,6 +10,7 @@ import Data.Aeson.KeyMap qualified as KeyMap
 import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as LBS
 import Data.Map.Strict qualified as Map
+import Data.Text qualified as T
 import Network.HTTP.Client (defaultManagerSettings, newManager)
 import Network.HTTP.Types (ResponseHeaders)
 import Network.HTTP.Types.Status (Status, status200, status401, status403, status404, status500)
@@ -18,7 +19,7 @@ import Test.Hspec
 import Ecluse.Core.Credential (bareCredential, mkSecret)
 import Ecluse.Core.Package (PackageDetails (pkgName, pkgVersion), PackageInfo (..))
 import Ecluse.Core.Package.Entry (EntryKey (RecordEntry))
-import Ecluse.Core.Registry (FetchFault (FetchBoundExceeded, FetchUrlUnformable), PublishError (PublishError), PublishFault (..), UrlFormationError (UnparseableUrl))
+import Ecluse.Core.Registry (FetchFault (FetchBoundExceeded, FetchUrlUnformable), ParseError (..), PublishBodyFault (PublishMalformed), PublishError (PublishError), PublishFault (..), UrlFormationError (UnparseableUrl))
 import Ecluse.Core.Registry.Adapter.Capability (AdapterPublish (publishMirrorRequirements, publishRelay), MirrorRequirements (mirrorStateRequirement), MirrorStateRequirement (DurableVersionState), PublishExtras (NoPublishExtras), PublishRequestBody (PublishRequestBody))
 import Ecluse.Core.Registry.CachedDocument (cargoCached)
 import Ecluse.Core.Registry.Cargo.Document (cargoDocument)
@@ -36,7 +37,7 @@ import Ecluse.Test.Package (hexSha256Of)
 import Ecluse.Test.Port (passthroughTracingPort)
 import Ecluse.Test.Registry.Cargo.Fixtures (CargoRelease (releaseArchive, releaseChecksum), cargoCrateArchive, cargoIndexRecord, cargoUpload, cargoUploadMetadata, cargoUploadWithMetadata)
 import Ecluse.Test.Registry.Cargo.Metadata (cargoTestName)
-import Ecluse.Test.Registry.Cargo.Publish (cargoPublicationFixture, cargoResolverAgreements, cargoResolverArchive, cargoResolverContradictions, cargoResolverMetadata, cargoSourceVersion)
+import Ecluse.Test.Registry.Cargo.Publish (cargoPublicationFixture, cargoResolverAgreements, cargoResolverArchive, cargoResolverContradictions, cargoResolverDependencyField, cargoResolverMetadata, cargoSourceVersion)
 import Ecluse.Test.Registry.Cargo.Reference (UploadFrame (..), referenceUpload)
 import Ecluse.Test.Registry.Publish (publishOnlyFile)
 import Ecluse.Test.Stub (Captured (..), allCaptured, headerValue, stubBaseUrl, withRoutedStub)
@@ -245,6 +246,17 @@ spec = do
             case reverse payments of
                 comparison : archiveCharge : _ -> comparison `shouldSatisfy` (> archiveCharge)
                 _ -> expectationFailure "Cargo upload omitted its archive or comparison reservation"
+        it "refuses unstable dependency fields before archive inspection" $ do
+            archive <- cargoResolverArchive
+            for_ ["artifact", "bindep_target", "lib", "public"] $ \key -> do
+                bytes <- expectRight (cargoUploadWithMetadata (cargoResolverDependencyField key (Bool True)) archive)
+                paid <- newIORef ([] :: [Int])
+                refused <- uploadClaims defaultLimits (\cost -> modifyIORef' paid (<> [cost])) "https://proxy.test/cargo/private" (PublishRequestBody bytes Nothing NoPublishExtras)
+                refused `shouldSatisfy` \case
+                    Left (PublishMalformed fault) -> "Cargo upload dependency 'tool' carries an unstable" `T.isInfixOf` parseErrorMessage fault
+                    _ -> False
+                -- The metadata reservation is the only charge, so the archive was never inspected.
+                length <$> readIORef paid `shouldReturn` 1
         it "rejects malformed members before either claims or relay can contact the destination" $
             withRoutedStub (targetReply "/registry") $ \stub -> do
                 release <- cargoPublicationFixture
