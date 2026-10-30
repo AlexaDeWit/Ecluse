@@ -43,7 +43,7 @@ import Ecluse.BenchLoad.ProxyProcess (
 import Ecluse.Composition.Support (expectPlanFor, noCeiling)
 import Ecluse.Composition.Types (BootRole (BootMirrorPipeline), MirrorRole (ServeAndMirror))
 import Ecluse.Config (AppConfig (cfgServer), Config (configApp), ServerSettings (srvMetadataGzip), loadConfig, renderConfigError)
-import Ecluse.Core.Ecosystem (Ecosystem (Cargo, Npm, PyPI))
+import Ecluse.Core.Ecosystem (Ecosystem (Cargo, Npm, PyPI, RubyGems), ecosystemName)
 import Ecluse.Core.Server.Encoding (MetadataCompression (IdentityOnly))
 import Ecluse.Rts.Cgroup (readIfExists)
 import Ecluse.Runtime.Server (listeningPrefix, proxyListener)
@@ -236,6 +236,14 @@ environmentSpec = describe "proxyEnvironment" $ do
             lookup "ECLUSE_MOUNTS__CARGO__PUBLIC_UPSTREAM__REGISTRY__URL" environment `shouldBe` Just "https://127.0.0.2:9001"
             lookup "ECLUSE_MOUNTS__CARGO__PRIVATE_UPSTREAM__REGISTRY__URL" environment `shouldBe` Just "https://127.0.0.1:9002"
             lookup "ECLUSE_MOUNTS__CARGO__MIRROR_TARGET__REGISTRY__URL" environment `shouldBe` ("https://127.0.0.1:9002" <$ statePort)
+    it "sets no mirror uploadUrl where the protocol uploads below its url" $
+        for_ [Npm, RubyGems] $ \ecosystem -> do
+            let managed = (proxySettings ecosystem 3600){psMirrorStatePort = Just 9003}
+                environment = proxyEnvironment managed Unlimited 3 "/tmp/proxy" (8080, 8081, 8082) 9001 (Just 9002) []
+                mirrorKey key = "ECLUSE_MOUNTS__" <> toString (T.toUpper (ecosystemName ecosystem)) <> "__MIRROR_TARGET__REGISTRY__" <> key
+            lookup (mirrorKey "URL") environment `shouldSatisfy` isJust
+            lookup (mirrorKey "UPLOAD_URL") environment `shouldBe` Nothing
+            whenLeft_ (loadConfig environment Nothing) (expectationFailure . toString . unlines . map renderConfigError)
     it "derives GHC capabilities from the cgroup under a limited shape, and overrides the count when unlimited" $ do
         lookup "ECLUSE_RUNTIME__CORES" podEnvironment `shouldBe` Nothing
         lookup "ECLUSE_RUNTIME__CORES" (environmentFor Unlimited) `shouldBe` Just "3"
