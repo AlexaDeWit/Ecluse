@@ -148,7 +148,7 @@ spec = describe "Ecluse.Core.Server.Pipeline (core handlers over a ServeRuntime)
     it "records an unavailability and renders 503 when no upstream resolves" $ withSweeper $ \deadlines -> do
         (metricsPort, decisions) <- recordingMetricsPort
         rt <- testServeRuntime deadlines metricsPort
-        deps <- depsFor 1
+        deps <- closedPrivate <$> depsFor 1
         resp <- captureServe npmPackumentContract rt (mountWith deps) (servePackument npmPackumentReplies leftpadName defaultRequest)
         statusCode (responseStatus resp) `shouldBe` 503
         decisions >>= (`shouldBe` [Unavailable])
@@ -204,7 +204,7 @@ spec = describe "Ecluse.Core.Server.Pipeline (core handlers over a ServeRuntime)
         rt <- testServeRuntime deadlines metricsPort
         hits <- newIORef (0 :: Int)
         testWithApplication (pure (countingUpstream hits upstreamApp)) $ \port -> do
-            base <- depsFor port
+            base <- closedPrivate <$> depsFor port
             let serveUnder firstParty =
                     captureServe
                         npmPackumentContract
@@ -226,7 +226,7 @@ spec = describe "Ecluse.Core.Server.Pipeline (core handlers over a ServeRuntime)
         rt <- testServeRuntime deadlines metricsPort
         hits <- newIORef (0 :: Int)
         testWithApplication (pure (countingUpstream hits upstreamApp)) $ \port -> do
-            base <- depsFor port
+            base <- closedPrivate <$> depsFor port
             for_ [serveTarball, headTarball] $ \serve -> do
                 firstParty <-
                     captureServe
@@ -278,7 +278,7 @@ spec = describe "Ecluse.Core.Server.Pipeline (core handlers over a ServeRuntime)
                     simpleStatus response `shouldBe` simpleStatus baseline
                     simpleHeaders response `shouldBe` simpleHeaders baseline
                     simpleBody response `shouldBe` simpleBody baseline
-            fetch base >>= assertSame
+            fetch (closedPrivate base) >>= assertSame
             for_ [status404, status302, status400, status429, status500, status503] $ \privateStatus ->
                 testWithApplication (pure (\_ respond -> respond (responseLBS privateStatus [] "private refusal"))) $ \privatePort ->
                     fetch (withPrivateBaseUrl (Just (loopbackRegistryUrl ("http://localhost:" <> show privatePort))) base) >>= assertSame
@@ -1140,18 +1140,19 @@ edgeToken = "edge-token"
 -- Closed upstream ports distinguish an edge refusal from a fetch failure.
 gatedDeps :: IO PackumentDeps
 gatedDeps = do
-    base <- depsFor 1
+    base <- closedPrivate <$> depsFor 1
     pure base{pdInboundToken = Just (mkSecret edgeToken)}
 
 requestWith :: RequestHeaders -> Request
 requestWith headers = defaultRequest{requestHeaders = headers}
 
+-- A public-only mount. A case that reads a private origin configures one.
 depsFor :: Int -> IO PackumentDeps
 depsFor publicPort = do
     prepared <- prepare inertRuleDeps allowPolicy
     pure
         ( npmServeDeps
-            (Just (loopbackRegistryUrl "http://localhost:1"))
+            Nothing
             (loopbackRegistryUrl ("http://localhost:" <> show publicPort))
             (MirrorOnAdmit (loopbackRegistryUrl "http://mirror.test"))
             prepared
@@ -1160,6 +1161,10 @@ depsFor publicPort = do
             { pdMountBaseUrl = "http://proxy.test"
             , pdEgressUrl = Right . loopbackRegistryUrl
             }
+
+-- A private origin on a port that never listens, so every private read fails.
+closedPrivate :: PackumentDeps -> PackumentDeps
+closedPrivate = withPrivateBaseUrl (Just (loopbackRegistryUrl "http://localhost:1"))
 
 allowPolicy :: [PrecededRule]
 allowPolicy = [atDefaultPrecedence (AllowIfOlderThan (7 * nominalDay))]

@@ -38,7 +38,7 @@ import Ecluse.Test.Rules (atDefaultPrecedence, inertRuleDeps)
 import Ecluse.Test.Sweep (RecordedSweep (recPorts, recResults), recordingPorts, testMount, testPacing)
 import Ecluse.Test.Wai
 import Katip (Environment (Environment), closeScribes)
-import Network.HTTP.Types (status200, status401, status403, status404, status429, status503, statusCode)
+import Network.HTTP.Types (status200, status401, status403, status429, status503, statusCode)
 import Network.Wai (Request (pathInfo, requestHeaders), responseLBS)
 import Network.Wai.Test (simpleBody)
 import Test.Hspec
@@ -137,7 +137,7 @@ privateOutcomes :: [(Text, String, IO Upstream, Int)]
 privateOutcomes =
     -- Only the origin's own 404 settles the question. A 5xx and an undecodable body leave it
     -- open, so both invite a retry rather than report the name as gone.
-    [ ("absent", "HTTP 404", upstreamRespondingWith (responseLBS status404 [] "not found"), 404)
+    [ ("absent", "HTTP 404", absentUpstream, 404)
     , ("unavailable", "HTTP 503", upstreamRespondingWith (responseLBS status503 [] "unavailable"), 503)
     , ("malformed", "an undecodable body", servingUpstream "this is not json at all", 503)
     ]
@@ -214,7 +214,7 @@ namespaceTransitionSpec = describe "declaring a namespace after public ingestion
                     }
         privateUp <- servingUpstreamIO (storedTransitionBody store)
         publicUp <- servingUpstreamIO (pure . transitionBody ["1.0.0", "2.0.0"])
-        absentPrivate <- failingUpstream
+        absentPrivate <- absentUpstream
         withProxy absentPrivate publicUp Nothing $ \app -> do
             original <- getPath (transitionArtifactPath "1.0.0") app
             status original `shouldBe` 200
@@ -354,7 +354,7 @@ cooldownSpec = describe "public authority cooldown" $
     it (caseLabel "integration/origin/native-018" "refuses locally during public cooldown and resumes after its deadline") $ do
         fixture <- newPublicFixture
         busy <- newIORef True
-        privateUp <- upstreamRespondingWith (responseLBS status404 [] "absent")
+        privateUp <- absentUpstream
         publicUp <- recordingUpstreamIO $ \request -> do
             throttled <- readIORef busy
             pure $
