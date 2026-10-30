@@ -40,12 +40,13 @@ This matters on every mount that sets `privateUpstream`, because Écluse reads i
 
 | Private registry answer | What Écluse does |
 | --- | --- |
-| A document | Merges it with the admitted public versions. |
+| A document for the requested name | Merges it with the admitted public versions. |
 | `404` | Serves admitted public content. A first-party name answers `404`. |
 | `401` or `403` | Refuses with the statuses the [private access policy](@/docs/configuration.md#first-party-namespaces) lists. |
-| A transport error, a timeout, any other status, or a document Écluse cannot decode or that exceeds its bound | Refuses with `503` for every name and serves no public content. |
+| A transport error, a timeout, a `5xx` or a `429` | Refuses with `503` for every name and serves no public content. When the private registry sent `Retry-After`, Écluse forwards it. |
+| A redirect, any other status, a document for another name, or a document Écluse cannot decode or that exceeds its bound | Refuses with `502` for every name and serves no public content. |
 
-Any other status includes a `5xx`, a `429`, and a redirect, which Écluse does not follow. RubyGems discovery reads the private `/versions` directory as a whole, and the [protocol reference](@/docs/protocol-support.md#rubygems) describes how a failure there refuses discovery.
+Écluse does not follow a redirect from the private registry. These statuses apply to listings, metadata and artifacts on every ecosystem, and a first-party name keeps its own wording. RubyGems discovery reads the private `/versions` directory as a whole, and the [protocol reference](@/docs/protocol-support.md#rubygems) describes how a failure there refuses discovery.
 
 A private package whose name you have not declared first-party can share its name with a public package. If Écluse served public content while the private read failed, the public package would replace the private one as soon as its version passed your rules, and builds would switch packages without notice. Declaring every private name cannot close that gap reliably, because most registries give no complete list of first-party names.
 

@@ -68,7 +68,7 @@ The [Cargo protocol contract](@/docs/protocol-support.md#cargo) defines its disc
 {{ diagram(name="metadata-admission", alt="The proxy combines caller-authorised private metadata with admitted anonymous public metadata. First-party names stay private, and response reuse follows fresh private authorisation.", caption="Version discovery and admission. Advisory polling runs independently of each request.") }}
 
 1. **The listing.** For npm, PyPI, Cargo, and RubyGems non-first-party names, Écluse fetches private and public metadata in parallel.
-   If the private read fails, the listing refuses with `503` rather than serving public versions alone.
+   If the private read fails, the listing refuses with `503` or `502` rather than serving public versions alone.
    Private versions must meet the trusted integrity floor, and managed mirror versions must also prove completion.
    The policy filters public versions before the listing is merged. For npm, `dist-tags.latest` follows an admitted
    public tag, otherwise the highest admitted version, with stable versions before prereleases.

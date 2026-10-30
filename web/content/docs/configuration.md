@@ -288,10 +288,10 @@ A private crate whose name is not declared, and which also exists on crates.io, 
 crates.io versions beside its private ones. Declare every private crate name or prefix.
 
 The private upstream is that name's one authority, so why it did not answer decides what your
-client sees. A `404` from it settles the question, and Écluse answers `404`. An upstream Écluse
-cannot reach, one that faults, and one whose body does not decode all leave the question open
-instead, so Écluse answers `503` and the client retries rather than treating the install as
-missing.
+client sees. A `404` from it settles the question, and Écluse answers `404`. Any other failure
+leaves the question open, so the client treats the install as failed rather than missing. An
+upstream Écluse cannot reach, a `5xx` and a `429` answer `503`. A redirect, another unexpected
+status, and a body that does not decode or names another package answer `502`.
 
 This is a privilege over names, not authentication. It says which names are yours, never who may
 use them, so the private upstream stays the authority on every caller.
@@ -316,7 +316,7 @@ Without configured help, those replies have no body.
 
 Check the caller's private credential and access when this refusal appears. A private `404` lets
 admitted public content serve for a name outside your first-party namespaces. Any other private
-read failure refuses with `503` for every name, as
+read failure refuses with `503` or `502` for every name, as
 [a failing private registry](@/docs/private-reads.md#private-outage) describes.
 First-party names remain private-only. A backend that masks an access refusal as `404` supplies
 no proof that authentication succeeded.
