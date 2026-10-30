@@ -358,8 +358,6 @@ data QueueSettings = QueueSettings
 data LimitsSettings = LimitsSettings
     { limMaxResponseBytes :: Maybe Int
     , limMaxVersionCount :: Int
-    , limMaxArtifactCount :: Int
-    -- ^ The per-package artifact fan-out cap. It bounds document shape, not bytes, so it stays pinned.
     , limMaxNestingDepth :: Int
     , limMaxAdvisoryDatabaseBytes :: Int
     -- ^ The advisory-database download cap. It bounds a stream to disk, not a heap tenant, so it stays pinned.

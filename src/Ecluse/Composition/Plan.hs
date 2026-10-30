@@ -61,7 +61,7 @@ import Ecluse.Composition.Vet (decided, runVet)
 import Ecluse.Config (
     AppConfig (cfgAdvisories, cfgCache, cfgLimits, cfgMounts, cfgQueue, cfgRuntime),
     Config (configApp, configMounts),
-    LimitsSettings (limMaxArtifactCount, limMaxNestingDepth, limMaxVersionCount),
+    LimitsSettings (limMaxNestingDepth, limMaxVersionCount),
     Mount (mountPolicy),
     MountConfig (mntMaxRequestBytes, mntPublicationTarget),
     RuntimeSettings (rtPrivateConnectionsPerHost, rtPublicConnectionsPerHost, rtServeMaxInFlight),
@@ -211,7 +211,6 @@ bootPlanFrom role inputs (validated, mirror, s3Endpoint) =
             defaultLimits
                 { maxMetadataBytes = mpMaxResponseBytes memoryPlan
                 , maxVersionCount = limMaxVersionCount (cfgLimits app)
-                , maxArtifactCount = limMaxArtifactCount (cfgLimits app)
                 , maxNestingDepth = limMaxNestingDepth (cfgLimits app)
                 , progressFloor = vpProgressFloor validated
                 }
