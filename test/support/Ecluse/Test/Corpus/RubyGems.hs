@@ -120,9 +120,8 @@ rowCount (Object fields) = case KeyMap.lookup "rows" fields of
     _ -> 0
 rowCount _ = 0
 
-{- | Independent native rows supply the held-tree comparison. The reference reader supplies each
-row, and this reader derives the archive filename and grouped age itself. Production smart
-constructors only build the coordinate, platform and hash values the document type holds.
+{- | The held-tree oracle: reference rows, with archive filenames and grouped age derived here.
+Production constructors build only the coordinate, platform and hash values the document holds.
 -}
 projectRubyGemsTree :: Limits -> PackageName -> ByteString -> Either MetadataError (PackageInfo, CachedDoc)
 projectRubyGemsTree limits name bytes = do
