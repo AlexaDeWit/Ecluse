@@ -102,7 +102,7 @@ spec = do
             overLimit <- fixture [("Cargo.toml", padded 513)]
             result <- inspect limits overLimit
             void result `shouldBe` Left (ParseError "tar metadata or extended header exceeds its bound")
-        it "does not retain README payloads during the execution evidence pass" $ do
+        it "does not retain README payloads during the manifest pass" $ do
             small <- fixture [("Cargo.toml", manifest), ("README.md", BS.replicate 65536 65)]
             large <- fixture [("Cargo.toml", manifest), ("README.md", BS.replicate (1024 * 1024) 65)]
             a <- peakCharge small
