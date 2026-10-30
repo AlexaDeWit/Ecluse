@@ -3,7 +3,7 @@
 -- SPDX-License-Identifier: MIT
 
 -- | Caller-owned npm bytes projected through the production incremental parser.
-module Ecluse.Test.Registry.Npm.Metadata (projectNpmManifest, projectNpmFull, npmFullTestWalk, projectNpmVersion, fetchMetadataFormBounded) where
+module Ecluse.Test.Registry.Npm.Metadata (npmRead, projectNpmManifest, projectNpmFull, npmFullTestWalk, projectNpmVersion, fetchMetadataFormBounded) where
 
 import Control.Monad.ST (ST)
 import Data.Aeson (Value)
@@ -17,7 +17,8 @@ import Ecluse.Core.Registry.Exchange (formThen)
 import Ecluse.Core.Registry.Json.Walk (Steps)
 import Ecluse.Core.Registry.JsonStream (StreamResult (streamBytes))
 import Ecluse.Core.Registry.Metadata (MetadataError (MetadataBoundExceeded), VersionRead)
-import Ecluse.Core.Registry.Npm.Metadata (NpmFullRead, npmFullTable, npmFullWalk, npmPackumentWalk, projectNpmPacked, projectNpmStream, selectNpmRead)
+import Ecluse.Core.Registry.Metadata.Fetch.Types (EcosystemRead)
+import Ecluse.Core.Registry.Npm.Metadata (NpmFullRead, npmFullTable, npmFullWalk, npmPackumentWalk, npmReadWith, projectNpmPacked, projectNpmStream, selectNpmRead)
 import Ecluse.Core.Registry.Npm.Reader (PackumentRead (..), releaseUniqueFields)
 import Ecluse.Core.Registry.Npm.Request (MetadataForm, metadataRequest)
 import Ecluse.Core.Registry.Origin (OriginClient (ocClient, ocLimits, ocToken), originBaseUrl)
@@ -25,6 +26,10 @@ import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), Limits (maxMetadataB
 import Ecluse.Core.Version (Version, renderVersion)
 import Ecluse.Test.Registry.JsonStream (testTable, walkJsonChunks, walkWritingChunks)
 import Ecluse.Test.Registry.Metadata.Fetch (fetchTestBody)
+
+-- | The production npm read with no full-read workspace charge, for reads that hold no admission ticket.
+npmRead :: EcosystemRead
+npmRead = npmReadWith (const pass)
 
 -- | Feed held bytes in bounded pieces without adding a second transport body ceiling.
 projectNpmManifest :: Limits -> PackageName -> ByteString -> Either MetadataError (PackageInfo, Value)

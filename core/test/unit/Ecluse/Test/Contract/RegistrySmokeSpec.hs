@@ -18,13 +18,13 @@ import Ecluse.Core.Registry (FetchFault (FetchBoundExceeded, FetchTransport), Re
 import Ecluse.Core.Registry.Metadata (Manifest (manifestInfo), MetadataError (..))
 import Ecluse.Core.Registry.Metadata.Fetch (readManifest)
 import Ecluse.Core.Registry.Metadata.Fetch.Types (ReadTerms (..))
-import Ecluse.Core.Registry.Npm.Metadata (npmRead)
 import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit, MirrorArtifactBodyLimit), LimitError (BodyTooLarge, TooDeeplyNested, TooManyVersions), Limits (maxMetadataBytes, maxNestingDepth, maxVersionCount), boundedRead, defaultLimits)
 import Ecluse.Test.Contract.RegistrySmoke (liveMetadata, liveRegistryResponse)
 import Ecluse.Test.Corpus.Npm (benchPackageName, syntheticPackumentBytes)
 import Ecluse.Test.Port (passthroughTracingPort)
 import Ecluse.Test.Registry.JsonStream (heldChunks)
 import Ecluse.Test.Registry.Metadata.Fetch (heldBody, heldManifest)
+import Ecluse.Test.Registry.Npm.Metadata (npmRead)
 import Ecluse.Test.Support (expectRight)
 
 -- | Broken provider facts cannot pass as live protocol evidence.
