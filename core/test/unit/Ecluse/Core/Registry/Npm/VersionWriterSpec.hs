@@ -27,7 +27,7 @@ import Test.Hspec
 import Test.Hspec.Hedgehog (hedgehog, modifyMaxSuccess)
 
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
-import Ecluse.Core.Package (Artifact (..), Availability (..), CodeExecSignal (..), Hash, HashAlg (SHA1), PackageDetails (..), PackageInfo (..), PackageName, mkHash, mkSriHashes)
+import Ecluse.Core.Package (Artifact (..), Availability (..), CodeExecSignal (..), DependencySources (..), Hash, HashAlg (SHA1), PackageDetails (..), PackageInfo (..), PackageName, mkHash, mkSriHashes)
 import Ecluse.Core.Package.Entry (EntryKey (ObjectEntry))
 import Ecluse.Core.Package.Merge (Provenance (..), mergePackuments)
 import Ecluse.Core.Registry.CachedDocument (npmPacked)
@@ -37,6 +37,7 @@ import Ecluse.Core.Registry.Json.Shape (Mode (..), Shape (Generic), Trees (..), 
 import Ecluse.Core.Registry.Json.Walk (Steps (Finished), Walked (..), withElement)
 import Ecluse.Core.Registry.Json.Writer (decodeWhole, discard, newWriter, replacedMember, sealValue)
 import Ecluse.Core.Registry.JsonStream (StreamResult)
+import Ecluse.Core.Registry.Npm.DependencySource (ExternalDependency, externalDependencyOf, renderExternalDependency)
 import Ecluse.Core.Registry.Npm.Document (PackedPackument (..), tarballHole)
 import Ecluse.Core.Registry.Npm.Filter (assembleMergedDocument, serialiseMergedDocument)
 import Ecluse.Core.Registry.Npm.Project (projectVersionEntryResult, projectVersionManifest)
@@ -199,6 +200,7 @@ genericExpected raw = do
             , vmHasInstallScript = frozenVmHasInstallScript vm
             , vmScripts = Map.map (const "") (Map.filterWithKey (\key _ -> key `elem` frozenInstallHooks) (frozenVmScripts vm))
             , vmLicense = licence <$> frozenVmLicense vm
+            , vmExternalDependency = frozenVmExternal vm
             }
 
 assertGeneric :: Mode -> ByteString -> Expectation
@@ -611,6 +613,7 @@ data FrozenVersionManifest = FrozenVersionManifest
     , frozenVmHasInstallScript :: Maybe Bool
     , frozenVmScripts :: Map Text Text
     , frozenVmLicense :: Maybe FrozenLicense
+    , frozenVmExternal :: Maybe ExternalDependency
     }
     deriving stock (Eq, Show)
 
@@ -624,6 +627,7 @@ instance FromJSON FrozenVersionManifest where
             <*> o .:? "hasInstallScript"
             <*> o .:? "scripts" .!= mempty
             <*> o .:? "license"
+            <*> pure (externalDependencyOf o)
 
 frozenAvailability :: Maybe Value -> Availability
 frozenAvailability = \case
@@ -649,6 +653,7 @@ frozenProjectDetails requested version publishedAt (FrozenVersionEntry vm) =
         , pkgVersion = version
         , pkgPublishedAt = publishedAt
         , pkgInstallCode = frozenInstallCode vm
+        , pkgDependencySources = maybe RegistryDependencies (FetchesOutsideRegistry . renderExternalDependency) (frozenVmExternal vm)
         , pkgAvailability = frozenVmAvailability vm
         , pkgArtifacts = (:| []) $! frozenProjectArtifact version (frozenVmDist vm)
         }

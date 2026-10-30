@@ -6,6 +6,7 @@
 {- | npm policy facts collected beside the existing packed writer.
 The walk still owns shapes, depth checks and first-member handling.
 Only the three install hooks retain script names, and no command survives in typed facts.
+A dependency spec is classified where it is read, and only an external one is kept.
 -}
 module Ecluse.Core.Registry.Npm.VersionWriter (
     -- * Packing
@@ -28,11 +29,12 @@ import Data.Primitive.MutVar (MutVar, newMutVar, readMutVar, writeMutVar)
 import Data.Set qualified as Set
 
 import Ecluse.Core.Package (Availability (Available))
-import Ecluse.Core.Registry.Json.Intern (Entry, entryString, nameText)
+import Ecluse.Core.Registry.Json.Intern (Entry, entryString, entryText, nameText)
 import Ecluse.Core.Registry.Json.Packed (Packed)
 import Ecluse.Core.Registry.Json.Shape (Build (..), MemberKey (..), memberText)
 import Ecluse.Core.Registry.Json.Walk (Steps)
 import Ecluse.Core.Registry.Json.Writer (Frame, Writer, discard, newWriter, sealValue)
+import Ecluse.Core.Registry.Npm.DependencySource (ExternalDependency (ExternalDependency), ExternalSource, InstallableField (..), earlierDependency, externalSource)
 import Ecluse.Core.Registry.Npm.Project (installHooks)
 import Ecluse.Core.Registry.Npm.Wire (Dist, License, Person, VersionManifest (..), availability, distFields, distFromFields, licenseFromFields, personFromFields)
 
@@ -53,9 +55,13 @@ data VersionValue
     | StringCommand
     | ScriptValue (Maybe (Map Text Text))
     | ReleaseValue (Maybe VersionManifest)
+    | ExternalSpec ExternalSource
+    | -- A dependency spec, or a whole dependency map, that fetches nothing from outside the registry.
+      NoExternalSpec
+    | ExternalMap ExternalDependency
     | Unobserved
 
-data Role = Release | ScalarField | DistObject | LicenseObject | PersonObject | Scripts | Command | Ignore
+data Role = Release | ScalarField | DistObject | LicenseObject | PersonObject | Scripts | Command | DependencyMap InstallableField | DependencySpec | Ignore
 
 data VersionFrame
     = VersionFrame Frame ObservedFields (Set Text)
@@ -67,6 +73,7 @@ data ObservedFields
     | LicenseFields (Maybe (Maybe Text)) (Maybe (Maybe Text))
     | PersonFields (Maybe (Maybe Text)) (Maybe (Maybe Text)) (Maybe (Maybe Text))
     | ScriptFields (Maybe (Map Text Text))
+    | DependencyFields InstallableField (Maybe ExternalDependency)
 
 data Manifest = Manifest
     { manifestName :: Maybe Text
@@ -77,6 +84,7 @@ data Manifest = Manifest
     , manifestScripts :: Maybe (Map Text Text)
     , manifestLicense :: Maybe (Maybe License)
     , manifestPublisher :: Bool
+    , manifestExternal :: Maybe ExternalDependency
     }
 
 -- | The optional replacement member follows 'newWriter', including original-author diagnostics.
@@ -106,14 +114,16 @@ instance Build (VersionWriter st) (ST st (Steps (ST st) s)) where
     type Items (VersionWriter st) = Int
     sharedString writer entry next =
         sharedString (packedWriter writer) entry $ \() ->
-            observeScalar writer True (ScalarValue (entryString entry)) >>= next
+            observeString writer (entryText entry) (entryString entry) >>= next
     ownString writer name next =
         ownString (packedWriter writer) name $ \() ->
-            observeScalar writer True (ScalarValue (String (nameText name))) >>= next
+            observeString writer (nameText name) (String (nameText name)) >>= next
     integer writer number next =
-        integer (packedWriter writer) number (\() -> observeScalar writer False (IntegerValue number) >>= next)
-    whole writer value next = whole (packedWriter writer) value (\() -> observeScalar writer False (ScalarValue value) >>= next)
-    emptyContainer writer next = emptyContainer (packedWriter writer) (\() -> observeScalar writer False (ScalarValue (Array mempty)) >>= next)
+        integer (packedWriter writer) number (\() -> observeScalar writer (IntegerValue number) >>= next)
+    whole writer value next = whole (packedWriter writer) value $ \() -> case value of
+        String text -> observeString writer text value >>= next
+        _ -> observeScalar writer (ScalarValue value) >>= next
+    emptyContainer writer next = emptyContainer (packedWriter writer) (\() -> observeScalar writer (ScalarValue (Array mempty)) >>= next)
     openObject writer next = openObject (packedWriter writer) $ \frame -> do
         role <- readMutVar (nextRole writer)
         case role of
@@ -139,11 +149,13 @@ instance Build (VersionWriter st) (ST st (Steps (ST st) s)) where
         IgnoredFrame packed _ -> addMember (packedWriter writer) key () packed (const (next frame))
         VersionFrame packed fields seen ->
             addMember (packedWriter writer) key () packed $ \packed' ->
-                case (fields, value) of
-                    (ReleaseFields{}, Unobserved) -> next frame
-                    (DistFields{}, Unobserved) -> next frame
-                    (LicenseFields{}, Unobserved) -> next frame
-                    (PersonFields{}, Unobserved) -> next frame
+                case (fields, value, key) of
+                    (ReleaseFields{}, Unobserved, _) -> next frame
+                    (DistFields{}, Unobserved, _) -> next frame
+                    (LicenseFields{}, Unobserved, _) -> next frame
+                    (PersonFields{}, Unobserved, _) -> next frame
+                    -- A spec under a table key changes nothing, and the packed writer already knows the key.
+                    (_, NoExternalSpec, SharedKey _) -> next frame
                     _ -> next (VersionFrame packed' (addField (memberText key) value fields) (rememberOwn key value seen))
     dropValue writer _ = dropValue (packedWriter writer) ()
     closeObject writer frame next = case frame of
@@ -168,11 +180,22 @@ instance Build (VersionWriter st) (ST st (Steps (ST st) s)) where
     {-# INLINE addItem #-}
     {-# INLINE closeArray #-}
 
-observeScalar :: VersionWriter st -> Bool -> VersionValue -> ST st VersionValue
-observeScalar writer stringToken value = do
+-- A registry spec classifies without allocating, so a release's dependencies cost no more than before.
+observeString :: VersionWriter st -> Text -> Value -> ST st VersionValue
+observeString writer text value = do
     role <- readMutVar (nextRole writer)
     pure $! case role of
-        Command | stringToken -> StringCommand
+        Command -> StringCommand
+        DependencySpec -> maybe NoExternalSpec ExternalSpec (externalSource text)
+        Ignore -> Unobserved
+        _ -> ScalarValue value
+{-# INLINE observeString #-}
+
+observeScalar :: VersionWriter st -> VersionValue -> ST st VersionValue
+observeScalar writer value = do
+    role <- readMutVar (nextRole writer)
+    pure $! case role of
+        DependencySpec -> NoExternalSpec
         Ignore -> Unobserved
         _ -> value
 {-# INLINE observeScalar #-}
@@ -185,7 +208,8 @@ rememberOwn key value seen = case (key, value) of
 
 fieldsFor :: Role -> Maybe ObservedFields
 fieldsFor = \case
-    Release -> Just (ReleaseFields (Manifest Nothing Nothing Nothing Available (Just Nothing) (Just mempty) (Just Nothing) True))
+    Release -> Just (ReleaseFields (Manifest Nothing Nothing Nothing Available (Just Nothing) (Just mempty) (Just Nothing) True Nothing))
+    DependencyMap field -> Just (DependencyFields field Nothing)
     Scripts -> Just (ScriptFields (Just mempty))
     DistObject -> Just (DistFields Nothing (Just Nothing) (Just Nothing) Nothing)
     LicenseObject -> Just (LicenseFields (Just Nothing) (Just Nothing))
@@ -203,11 +227,15 @@ memberRole fields key = case fields of
         "version" -> ScalarField
         "deprecated" -> ScalarField
         "hasInstallScript" -> ScalarField
+        "dependencies" -> DependencyMap Dependencies
+        "optionalDependencies" -> DependencyMap OptionalDependencies
+        "peerDependencies" -> DependencyMap PeerDependencies
         _ -> Ignore
     DistFields{} -> if key `elem` distFields then ScalarField else Ignore
     LicenseFields{} -> if key == "type" || key == "url" then ScalarField else Ignore
     PersonFields{} -> if key == "name" || key == "email" || key == "url" then ScalarField else Ignore
     ScriptFields _ -> Command
+    DependencyFields{} -> DependencySpec
 
 addField :: Text -> VersionValue -> ObservedFields -> ObservedFields
 addField "unpackedSize" (IntegerValue number) (DistFields tarball shasum integrity _) =
@@ -236,6 +264,11 @@ addField key value observed = case observed of
             StringCommand -> Just (keepHook key held)
             ScalarValue scalar -> parseMaybe (parseJSON @Text) scalar $> keepHook key held
             _ -> Nothing
+    fields@(DependencyFields field held) -> case value of
+        ExternalSpec source ->
+            let found = ExternalDependency field key source
+             in DependencyFields field (Just (maybe found (`earlierDependency` found) held))
+        _ -> fields
 
 keepHook :: Text -> Map Text Text -> Map Text Text
 keepHook key scripts
@@ -248,6 +281,7 @@ addManifest key value manifest = case (key, value) of
     ("license", LicenseValue licence) -> manifest{manifestLicense = Just <$> licence}
     ("_npmUser", PersonValue valid) -> manifest{manifestPublisher = valid}
     ("scripts", ScriptValue scripts) -> manifest{manifestScripts = scripts}
+    (_, ExternalMap found) -> manifest{manifestExternal = Just (maybe found (`earlierDependency` found) (manifestExternal manifest))}
     (_, ScalarValue scalar) -> case key of
         "name" -> manifest{manifestName = parseMaybe parseJSON scalar}
         "version" -> manifest{manifestVersion = parseMaybe parseJSON scalar}
@@ -272,7 +306,9 @@ finishFields = \case
             <*> manifestInstallScript manifest
             <*> manifestScripts manifest
             <*> manifestLicense manifest
+            <*> pure (manifestExternal manifest)
     DistFields tarball shasum integrity size -> DistValue (distFromFields tarball shasum integrity (Just size))
     LicenseFields kind url -> LicenseValue (licenseFromFields kind url)
     PersonFields name email url -> PersonValue (isJust (personFromFields name email url))
     ScriptFields scripts -> ScriptValue scripts
+    DependencyFields _ held -> maybe NoExternalSpec ExternalMap held

@@ -54,6 +54,7 @@ import Ecluse.Core.Registry.Metadata (
     VersionRead (vrBodyBytes, vrUpstreamLatest, vrVersion),
  )
 import Ecluse.Core.Registry.Metadata.Projection (projectionResult, streamError, validateReportedName)
+import Ecluse.Core.Registry.Npm.DependencySource (installableFieldName)
 import Ecluse.Core.Registry.Npm.Document (PackedPackument (..), tarballHole, tarballUrl)
 import Ecluse.Core.Registry.Npm.Filter (assembleMergedDocument, serialiseMergedDocument)
 import Ecluse.Core.Registry.Npm.Metadata (npmPackumentWalk, projectNpmPacked, projectNpmStream, selectNpmVersionDoc)
@@ -778,7 +779,7 @@ basePackedStep writer limits name (BasePackedRead acc heldReleases) field next =
 baseRebases :: Value -> Bool
 baseRebases release = isJust (tarballUrl release >>= rebaseArtifactUrl Just)
 baseTypedMembers :: Pick
-baseTypedMembers = Only [(field, if field == "dist" then Only [(member, Whole) | member <- distFields] else Whole) | field <- versionListFields]
+baseTypedMembers = Only [(field, if field == "dist" then Only [(member, Whole) | member <- distFields] else Whole) | field <- versionListFields <> map installableFieldName [minBound .. maxBound]]
 baseFinishPacked :: Limits -> PackageName -> Text -> DocTable -> BasePackedRead -> Either MetadataError (PackageInfo, PackedPackument)
 baseFinishPacked limits requested authorPointer table (BasePackedRead acc heldReleases) = second document <$> baseFinishParts limits requested acc
   where

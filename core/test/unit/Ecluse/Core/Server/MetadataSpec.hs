@@ -23,6 +23,7 @@ import Ecluse.Core.Package (
     Artifact (..),
     Availability (Available),
     CodeExecSignal (NoCodeOnInstall),
+    DependencySources (RegistryDependencies),
     InvalidEntry,
     PackageDetails (..),
     PackageInfo (..),
@@ -579,6 +580,7 @@ details who rawVer =
         , pkgVersion = npmVersion rawVer
         , pkgPublishedAt = Nothing
         , pkgInstallCode = NoCodeOnInstall
+        , pkgDependencySources = RegistryDependencies
         , pkgAvailability = Available
         , pkgArtifacts = artifact :| []
         }

@@ -33,6 +33,7 @@ detailsFieldsWeight details =
         + 256 * toInteger rawLength
         + maybe 0 timeWeight (pkgPublishedAt details)
         + installWeight (pkgInstallCode details)
+        + dependencyWeight (pkgDependencySources details)
         + itemsWeight artifactWeight (pkgArtifacts details)
   where
     -- Parsed tokens and bounded numeric components use this allowance, which also covers RubyGems hyphen expansion and copied parser text.
@@ -64,6 +65,11 @@ installWeight = \case
     NoCodeOnInstall -> 0
     RunsCodeOnInstall reason -> textWeight reason
     CodeExecUnknown -> 0
+
+dependencyWeight :: DependencySources -> Integer
+dependencyWeight = \case
+    RegistryDependencies -> 0
+    FetchesOutsideRegistry reason -> textWeight reason
 
 -- | Charge coordinates, source strings, digests and companion declarations.
 artifactWeight :: Artifact -> Integer
