@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Capture complete registry bodies. Set BENCH_CORPUS_VERIFY=1 for offline verification.
-# Set BENCH_CORPUS_ECOSYSTEM=npm, pypi, rubygems or cargo to select one catalogue section.
+# Set BENCH_CORPUS_ECOSYSTEM=npm, pypi or rubygems to select one catalogue section.
 set -euo pipefail
 
 pins_file="${1:-bench/corpus/pins.json}"
@@ -15,19 +15,11 @@ const crypto = require("crypto");
 const [pinsPath, outDir, ecosystem] = process.argv.slice(2);
 const catalogue = JSON.parse(fs.readFileSync(pinsPath, "utf8"));
 const verify = process.env.BENCH_CORPUS_VERIFY === "1";
-if (!["all", "npm", "pypi", "rubygems", "cargo"].includes(ecosystem)) throw new Error("unknown corpus ecosystem: " + ecosystem);
+if (!["all", "npm", "pypi", "rubygems"].includes(ecosystem)) throw new Error("unknown corpus ecosystem: " + ecosystem);
 catalogue.captures ||= {};
 
 function stem(name) {
   return name.replace(/^@/, "").replace(/\//, "-");
-}
-
-// The crates.io sparse index path: 1/, 2/ and 3/<first char>/ for short names, else two 2-char directories.
-function cargoShard(name) {
-  const lower = name.toLowerCase();
-  return lower.length <= 2 ? lower.length + "/" + lower
-    : lower.length === 3 ? "3/" + lower[0] + "/" + lower
-    : lower.slice(0, 2) + "/" + lower.slice(2, 4) + "/" + lower;
 }
 
 function fetchDocument(source, accept) {
@@ -83,25 +75,6 @@ function validate(body, mediaType, expectedType, name, eco) {
     }
     return records.length;
   }
-  if (eco === "cargo") {
-    const rows = new TextDecoder("utf-8", { fatal: true }).decode(body).split("\n");
-    if (rows.pop() !== "") throw new Error(`${name}: incomplete sparse index body`);
-    if (!rows.length) throw new Error(`${name}: empty sparse index`);
-    for (const row of rows) {
-      let record;
-      try {
-        record = JSON.parse(row);
-      } catch {
-        throw new Error(`${name}: undecodable sparse index record`);
-      }
-      if (record?.name !== name) throw new Error(`${name}: sparse index record names ${record?.name}`);
-      if (typeof record.vers !== "string" || !record.vers) throw new Error(`${name}: sparse index record has no version`);
-      if (typeof record.cksum !== "string" || !/^[0-9a-f]{64}$/.test(record.cksum)) {
-        throw new Error(`${name}: sparse index record has no SHA-256 checksum`);
-      }
-    }
-    return rows.length;
-  }
   const document = JSON.parse(body.toString("utf8"));
   if (document.name !== name) throw new Error(`${name}: response names ${document.name}`);
   const entries = eco === "npm" ? document.versions : document.files;
@@ -115,15 +88,12 @@ function validate(body, mediaType, expectedType, name, eco) {
 async function capture(eco, name) {
   const npm = eco === "npm";
   const ruby = eco === "rubygems";
-  const cargo = eco === "cargo";
   const source = npm ? "https://registry.npmjs.org/" + name.replace("/", "%2f")
     : ruby ? "https://rubygems.org/info/" + encodeURIComponent(name)
-    : cargo ? "https://index.crates.io/" + cargoShard(name)
     : "https://pypi.org/simple/" + encodeURIComponent(name) + "/";
-  const expectedType = npm ? "application/json" : ruby || cargo ? "text/plain" : "application/vnd.pypi.simple.v1+json";
+  const expectedType = npm ? "application/json" : ruby ? "text/plain" : "application/vnd.pypi.simple.v1+json";
   const file = npm ? path.join(outDir, stem(name) + ".full.json")
     : ruby ? path.join(path.dirname(outDir), "rubygems", name + ".info")
-    : cargo ? path.join(path.dirname(outDir), "cargo", name + ".index.ndjson")
     : path.join(path.dirname(outDir), "pypi", name + ".simple.json");
   const existing = catalogue.captures[eco]?.[name];
   if (verify && !existing) throw new Error(`${name}: missing capture record`);
@@ -148,11 +118,11 @@ async function capture(eco, name) {
     catalogue.captures[eco][name] = record;
     fs.writeFileSync(pinsPath, JSON.stringify(catalogue, null, 2) + "\n");
   }
-  console.log(`${eco}/${name}: ${record.bytes} bytes, ${count} ${npm ? "versions" : ruby || cargo ? "records" : "files"}, sha256 ${sha256}`);
+  console.log(`${eco}/${name}: ${record.bytes} bytes, ${count} ${npm ? "versions" : ruby ? "records" : "files"}, sha256 ${sha256}`);
 }
 
 (async () => {
-  for (const [eco, pins] of [["npm", catalogue.pins], ["pypi", catalogue.pypiPins], ["rubygems", catalogue.rubygemsPins], ["cargo", catalogue.cargoPins]]) {
+  for (const [eco, pins] of [["npm", catalogue.pins], ["pypi", catalogue.pypiPins], ["rubygems", catalogue.rubygemsPins]]) {
     if (ecosystem === "all" || ecosystem === eco) {
       for (const name of Object.keys(pins || {})) await capture(eco, name);
     }
