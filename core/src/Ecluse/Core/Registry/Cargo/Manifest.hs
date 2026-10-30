@@ -152,8 +152,9 @@ checkUploadAgreement limits registry manifest (Object metadata) = do
     unless (expectedRust == actualRust) (parseRefusal "Cargo upload and manifest Rust versions disagree")
 checkUploadAgreement _ _ _ _ = parseRefusal "Cargo upload metadata is not an object"
 
-{- | Refuse a dependency from a registry other than crates.io or one of this proxy's own. A null or
-absent source is the publication registry, which the caller lists. Run after 'checkUploadAgreement'.
+{- | Refuse a dependency a consumer resolves from a registry other than crates.io or one of this
+proxy's own. A null or absent source is the publication registry, which the caller lists. Run after
+'checkUploadAgreement'.
 -}
 checkDependencyRegistries :: [Text] -> Value -> Either ParseError ()
 checkDependencyRegistries own (Object metadata) = do
@@ -162,12 +163,18 @@ checkDependencyRegistries own (Object metadata) = do
     for_ dependencies $ \case
         Object fields -> do
             name <- requiredJson "name" fields >>= jsonString
-            declared <- nullableString "registry" fields >>= traverse parseSource
+            declared <- consumerRegistry fields >>= traverse parseSource
             for_ declared $ \source ->
                 unless (Set.member (sourceComparisonKey source) accepted) $
                     parseRefusal ("Cargo dependency '" <> name <> "' comes from a registry other than crates.io or this proxy: publish it through this proxy first, then depend on this proxy's copy")
         _ -> parseRefusal "Cargo upload dependency is not an object"
 checkDependencyRegistries _ _ = parseRefusal "Cargo upload metadata is not an object"
+
+-- | The registry a dependency names, unless it is a dev-dependency, which no consumer resolves, as with npm's @devDependencies@.
+consumerRegistry :: KeyMap.KeyMap Value -> Either ParseError (Maybe Text)
+consumerRegistry fields = do
+    kind <- nullableString "kind" fields
+    if kind == Just "dev" then Right Nothing else nullableString "registry" fields
 
 uploadDependency :: CargoSource -> Value -> Either ParseError Value
 uploadDependency registry (Object fields) = do
