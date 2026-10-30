@@ -94,6 +94,7 @@ import Ecluse.Test.Package (unscopedNpm, validSha1, validSha512Sri)
 import Ecluse.Test.Registry.JsonBytes (damaged, genChunks, genPackumentBytes, genServablePackumentBytes)
 import Ecluse.Test.Registry.JsonStream (byteChunks, testTable, walkJsonChunks, walkWritingChunks)
 import Ecluse.Test.Registry.Metadata.Fetch (heldWorkspacePeak)
+import Ecluse.Test.Registry.Npm (densePackument)
 import Ecluse.Test.Registry.Npm.Metadata (npmFullTestWalk, projectNpmManifest, projectNpmVersion)
 import Ecluse.Test.Registry.Packed (walkedLength)
 import Ecluse.Test.Snapshot (digestOf, readDetails)
@@ -132,8 +133,7 @@ entryFloorSpec = describe "the full-read entry floor" $ do
   where
     adapterRead = metadataRead (adapterMetadata npmAdapter)
     entries = 300
-    members render = BS.intercalate "," [render (show at :: ByteString) | at <- [1 .. entries :: Int]]
-    denseBody = "{\"name\":\"thing\",\"time\":{" <> members (\at -> "\"v" <> at <> "\":\"2020-01-01T00:00:00.000Z\"") <> "},\"dist-tags\":{" <> members (\at -> "\"t" <> at <> "\":\"1.0." <> at <> "\"") <> "}}"
+    denseBody = densePackument entries
     denseShortfall = entryFloorBytes * 2 * entries - scaleCharge (cfFullReadPermille npmChargeFactors) (BS.length denseBody)
 
 packedReadSpec :: Spec

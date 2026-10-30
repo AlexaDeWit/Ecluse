@@ -11,6 +11,7 @@ module Ecluse.Test.Registry.Npm (
     versionSpec,
     versionValue,
     packumentValue,
+    densePackument,
     listingValue,
     publishedDaysAgo,
     documentName,
@@ -41,6 +42,7 @@ import Data.Aeson (Value (Bool, Null, Number, Object, String), object, toJSON, (
 import Data.Aeson.Key qualified as Key
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.Aeson.Types (Pair)
+import Data.ByteString qualified as BS
 import Data.List.NonEmpty qualified as NE
 import Data.Text qualified as T
 import Data.Time (UTCTime, addUTCTime, nominalDay)
@@ -229,6 +231,12 @@ packumentValue name latest versions times =
         , "versions" .= object [(Key.fromText version, value) | (version, value) <- versions]
         , "time" .= object times
         ]
+
+-- | A packument named @thing@ with as many publish times and dist-tags as asked and no versions: many retained entries in few bytes.
+densePackument :: Int -> ByteString
+densePackument entries = "{\"name\":\"thing\",\"time\":{" <> members (\at -> "\"v" <> at <> "\":\"2020-01-01T00:00:00.000Z\"") <> "},\"dist-tags\":{" <> members (\at -> "\"t" <> at <> "\":\"1.0." <> at <> "\"") <> "}}"
+  where
+    members render = BS.intercalate "," [render (show at) | at <- [1 .. entries]]
 
 {- | An npm @\/-\/all@ listing body: one empty entry per package name. The registry's own
 @_updated@ bookkeeping key is a site-specific extra, so a case that exercises it adds it.

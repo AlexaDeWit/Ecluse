@@ -30,8 +30,8 @@ import Test.Hspec
 import UnliftIO (timeout, wait, withAsync)
 import UnliftIO.Exception (bracket, evaluate, throwIO)
 
-import Ecluse.Core.Ecosystem (Ecosystem (Cargo))
-import Ecluse.Core.Package (PackageInfo (infoVersions))
+import Ecluse.Core.Ecosystem (Ecosystem (Cargo, Npm, PyPI))
+import Ecluse.Core.Package (PackageInfo (infoVersions), PackageName)
 import Ecluse.Core.Package.Entry (EntryKey (RecordEntry))
 import Ecluse.Core.Registry.Adapter.Capability (AdapterMetadata (metadataChargeFactors, metadataRead))
 import Ecluse.Core.Registry.CachedDocument (cargoCached, cargoPacked, cargoRendered)
@@ -39,13 +39,17 @@ import Ecluse.Core.Registry.Cargo.Credential (cargoCredential)
 import Ecluse.Core.Registry.Cargo.Document (cargoRecords)
 import Ecluse.Core.Registry.Cargo.Route (cargoRouter)
 import Ecluse.Core.Registry.Exchange (chargedRead)
-import Ecluse.Core.Registry.Metadata (Manifest (..), MetadataClient (fetchVersionMetadata), MetadataError (MetadataAbsent), VersionDoc (..), VersionRead (..))
+import Ecluse.Core.Registry.Metadata (Manifest (..), MetadataError (MetadataAbsent), VersionDoc (..), VersionRead (..))
+import Ecluse.Core.Registry.Metadata.EntryFloor (entryFloorBytes)
 import Ecluse.Core.Registry.Metadata.Fetch (readVersion)
 import Ecluse.Core.Registry.Metadata.Fetch.Preparation (PrepareRead (PrepareRead), prepareRead)
 import Ecluse.Core.Registry.Metadata.Fetch.Types (EcosystemRead (..), ReadTerms (ReadTerms))
 import Ecluse.Core.Registry.Npm.Credential (npmCredential)
 import Ecluse.Core.Registry.Npm.Route (npmRouter)
 import Ecluse.Core.Registry.Origin (OriginClient (ocChargeFullRead, ocChargeFullReadWorkspace))
+import Ecluse.Core.Registry.PyPI.Credential (pypiCredential)
+import Ecluse.Core.Registry.PyPI.Route (pypiRouter)
+import Ecluse.Core.Registry.Request (CredentialMapping)
 import Ecluse.Core.Registry.ServedDocument (stringField)
 import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), LimitError (BodyTooLarge), Limits (maxVersionCount), defaultLimits)
 import Ecluse.Core.Security.Egress (registryUrlText)
@@ -57,7 +61,7 @@ import Ecluse.Core.Server.Cache (CacheConfig (cacheMaxEntries), MetadataCache, S
 import Ecluse.Core.Server.Cache.Backend (BackendStorage (LocalStorage), RetentionOperations (roInsert))
 import Ecluse.Core.Server.Cache.Provider (cacheProvider)
 import Ecluse.Core.Server.Cache.VersionWeight (weighVersion)
-import Ecluse.Core.Server.Context (MountBinding (..), PackumentDeps (..), RequestCtx (RequestCtx), ServeRuntime (srMemoryMeter, srMetadataCache), pdPrivateBase, pdPublicBaseUrl, runHandler)
+import Ecluse.Core.Server.Context (MountBinding (..), MountRouter, PackumentDeps (..), RequestCtx (RequestCtx), ServeRuntime (srMemoryMeter, srMetadataCache), pdPublicBaseUrl, runHandler)
 import Ecluse.Core.Server.Pipeline.Origin (
     ObservedReadBoundExceeded (ObservedReadBoundExceeded),
     OriginMiss (MissAbsent, MissUnresolved),
@@ -83,10 +87,12 @@ import Ecluse.Core.Telemetry.Metrics qualified as Metric
 import Ecluse.Core.Telemetry.Record (MetricsPort (mpCacheRequest, mpVersionCacheRequest, mpVersionCacheResidentBytes))
 import Ecluse.Test.Deadline (withSweeper)
 import Ecluse.Test.Log (newTestLogEnv)
-import Ecluse.Test.Package (leftpadName, npmVersion, sampleManifest, thingName)
+import Ecluse.Test.Package (leftpadName, requestsName, sampleManifest, thingName)
 import Ecluse.Test.Port (noopMetricsPort, passthroughTracingPort)
 import Ecluse.Test.Registry.Cargo.Metadata (cargoFeatureRecord, cargoRead, cargoTestDiscovery, cargoTestName, cargoTestRecord, cargoTestVersion)
 import Ecluse.Test.Registry.Metadata.Fetch (heldBody)
+import Ecluse.Test.Registry.Npm (densePackument)
+import Ecluse.Test.Registry.PyPI (denseIndex)
 import Ecluse.Test.Server.Cache (cachedVersion, defaultCacheConfig, newLocalRetention, newMetadataCache)
 import Ecluse.Test.Server.Handler (testServeRuntime)
 import Ecluse.Test.Server.Mount (inertDepsFor, inertPackumentDeps, requiredAdapter, serveDepsFor, withPrivateBaseUrl)
@@ -100,7 +106,8 @@ spec = describe "originMiss -- the outcomes that leave nothing to serve" $ do
     retainedConsumerSpec
     selectedChargeSpec
     fullReadSpec
-    it "reports no miss for a document or an access refusal" $
+    keptFloorSpec
+    it "reports no miss for a document, an access refusal, or an identity refusal" $
         map
             originMiss
             [ OriginResolved (sampleManifest thingName [])
@@ -235,14 +242,44 @@ observingFullRead meter factor sourcePaid peak balances factory = PrepareRead $ 
      in fmap observeBody <$> prepareRead factory origin{ocChargeFullRead = source, ocChargeFullReadWorkspace = workspace}
 
 runCargoFull :: ServeRuntime -> PackumentDeps -> MemoryTicket -> Bool -> IO OriginResult
-runCargoFull runtime deps ticket public = do
+runCargoFull = runFullRead ("cargo", cargoRouter, cargoCredential) cargoTestName
+
+-- One full read of the package through its public or its private origin, on a part of its own.
+runFullRead :: (Text, MountRouter, CredentialMapping) -> PackageName -> ServeRuntime -> PackumentDeps -> MemoryTicket -> Bool -> IO OriginResult
+runFullRead (prefix, router, credential) name runtime deps ticket public = do
     part <- newChargePart ticket
     logEnv <- newTestLogEnv
-    let binding = MountBinding ("cargo" :| []) cargoRouter cargoCredential deps Nothing
+    let binding = MountBinding (prefix :| []) router credential deps Nothing
     runHandler logEnv mempty (RequestCtx runtime binding) $
         if public
-            then fetchPublicOriginObserved (const pass) deps runtime ticket part cargoTestName
-            else fetchPrivateOriginObserved (const pass) deps runtime part Nothing cargoTestName
+            then fetchPublicOriginObserved (const pass) deps runtime ticket part name
+            else fetchPrivateOriginObserved (const pass) deps runtime part Nothing name
+
+-- A dense listing's bytes pay less than the entry floor, so its read keeps the floor once it completes.
+keptFloorSpec :: Spec
+keptFloorSpec = describe "full npm and PyPI read payments" $
+    for_ denseListings $ \(ecosystem, mount, name, body, entries) ->
+        for_ [False, True] $ \public ->
+            it ((if public then "public " else "private ") <> show ecosystem <> " keeps the entry floor for each retained entry once a dense read completes") $ withSweeper $ \deadlines -> do
+                adapter <- requiredAdapter ecosystem
+                withRoutedStubIO (\_ -> pure (status200, [], toLazy body)) $ \stub -> do
+                    original <- testServeRuntime deadlines noopMetricsPort
+                    meter <- newMemoryMeter deadlines MeterSettings{msBudgetBytes = maxBound `div` 2, msStepBytes = 1, msEntryRoom = 0, msEntryWaitMicros = 0}
+                    let url = loopbackRegistryUrl (stubBaseUrl stub)
+                        deps = serveDepsFor adapter (Just url) url NoMirrorWrite [] (pdNow inertPackumentDeps)
+                        kept = scaleCharge (cfKeptPermille (metadataChargeFactors (pdMetadata deps))) (BS.length body)
+                    completed <- withMemoryEntry noopMetricsPort meter $ \ticket -> do
+                        result <- runFullRead mount name original{srMemoryMeter = meter} deps ticket public
+                        isJust (originManifest result) `shouldBe` True
+                        kept `shouldSatisfy` (< entryFloorBytes * entries)
+                        snChargedBytes <$> meterSnapshot meter `shouldReturn` entryFloorBytes * entries
+                    completed `shouldBe` Right ()
+                    snChargedBytes <$> meterSnapshot meter `shouldReturn` 0
+  where
+    denseListings =
+        [ (Npm, ("npm", npmRouter, npmCredential), thingName, densePackument 300, 600)
+        , (PyPI, ("pypi", pypiRouter, pypiCredential), requestsName, denseIndex 150 400, 550)
+        ]
 
 retainedConsumerSpec :: Spec
 retainedConsumerSpec = describe "successful selected consumers" $ do

@@ -26,6 +26,7 @@ import Ecluse.Core.Credential (mkSecret)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
 import Ecluse.Core.Package (PackageName, mkPackageName)
 import Ecluse.Core.Registry.Adapter.Capability (AdapterMetadata (metadataChargeFactors))
+import Ecluse.Core.Registry.Metadata.EntryFloor (entryFloorBytes)
 import Ecluse.Core.Registry.Npm.Credential (npmCredential)
 import Ecluse.Core.Registry.Npm.Route (npmRouter)
 import Ecluse.Core.Registry.Npm.Route.Internal (npmPackumentContract, npmPackumentReplies)
@@ -236,7 +237,7 @@ metadataGzipSpec = describe "native metadata gzip over the live listing path" $
                     atRespond <- newIORef Nothing
                     runListing unmetered{srMemoryMeter = meter} listing deps methodGet [] (\_ -> chargedOn meter >>= writeIORef atRespond . Just)
                     sizes <- traverse readIORef [privateSent, publicSent]
-                    readIORef atGate `shouldReturn` Just (sum (map (scaleCharge (cfKeptPermille factors)) sizes))
+                    readIORef atGate `shouldReturn` Just (sum (map (\size -> max (scaleCharge (cfKeptPermille factors) size) (entryFloorBytes * listingEntries listing)) sizes))
                     readIORef atRespond `shouldReturn` Just (scaleCharge (cfOutputPermille factors) (foldl' max 0 sizes))
                     chargedOn meter `shouldReturn` 0
   where
@@ -436,13 +437,15 @@ data Listing = Listing
     -- ^ The edge token @edge-token@ in the ecosystem's own presentation.
     , listingDeps :: Int -> IO PackumentDeps
     , listingOrigin :: Application
+    , listingEntries :: Int
+    -- ^ The entries a full read of the origin's document retains, which the entry floor charges.
     }
 
 listings :: [Listing]
 listings =
-    [ Listing "npm" (mkPackageName Npm Nothing "leftpad") npmRouter ["leftpad"] "npm" npmCredential (hAuthorization, "Bearer edge-token") (agedDeps npmServeDeps (UTCTime (fromGregorian 2020 1 1) 0)) npmOrigin
+    [ Listing "npm" (mkPackageName Npm Nothing "leftpad") npmRouter ["leftpad"] "npm" npmCredential (hAuthorization, "Bearer edge-token") (agedDeps npmServeDeps (UTCTime (fromGregorian 2020 1 1) 0)) npmOrigin 3
     , -- HTTP Basic, user:edge-token.
-      Listing "PyPI" (mkPackageName PyPI Nothing "requests") pypiRouter ["simple", "requests"] "pypi" pypiCredential (hAuthorization, "Basic dXNlcjplZGdlLXRva2Vu") (agedDeps pypiServeDeps (UTCTime (fromGregorian 2026 6 20) 0)) pypiOrigin
+      Listing "PyPI" (mkPackageName PyPI Nothing "requests") pypiRouter ["simple", "requests"] "pypi" pypiCredential (hAuthorization, "Basic dXNlcjplZGdlLXRva2Vu") (agedDeps pypiServeDeps (UTCTime (fromGregorian 2026 6 20) 0)) pypiOrigin 1
     ]
   where
     agedDeps serveDeps now port = do
