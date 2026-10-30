@@ -218,12 +218,15 @@ HEAD authorises and checks availability without reading or hashing an archive bo
 The public `/versions` directory adds a global transfer and refresh cost before per-gem acquisition.
 The public and private directories each accept at most 2,000,000 distinct gem names, and a directory past that ceiling fails its read.
 The ceiling is fixed in Écluse and independent of `limits.maxVersionCount` and `limits.maxArtifactCount`, which bound per-gem `/info` reads.
+A ceiling breach logs under the `version-count` bound with a cap of `2000000`.
 Private discovery uses current caller credentials and remains outside public shared retention.
 Private directory failure remains a failure rather than a public-only or stale conditional response.
+A malformed private directory row fails the private read.
 When the public directory times out, fails, cools down or cannot be decoded, the reply serves the caller-authorised private rows alone.
-With no private rows, the request fails with `502` or `503`.
+With no private rows, the request fails: `403` when the public source refuses access, otherwise `502` or `503`.
 A public directory past its byte bound or gem-name ceiling refuses the request with `502`, even beside private rows.
-A malformed directory row is dropped and logged, and the rest of the directory serves.
+A malformed public directory row is dropped and logged, and the rest of the directory serves.
+A public directory with no well-formed row cannot be decoded.
 Detailed metadata acquisition stays on demand. There is no full specification index, unfiltered fallback, or client yank relay.
 Compact specification and archive locations point through Écluse.
 A failed read stays a failure rather than an empty successful result.
