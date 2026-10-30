@@ -18,7 +18,7 @@ import Data.JsonStream.Lexer (Cursor)
 import Data.Primitive.PrimVar (PrimVar, newPrimVar, readPrimVar, writePrimVar)
 
 import Ecluse.Core.Registry.Json.Walk (readJsonWalkST)
-import Ecluse.Core.Registry.JsonStream (Steps, StreamResult)
+import Ecluse.Core.Registry.JsonStream (Steps, StreamResult, maxChunkBytes)
 import Ecluse.Core.Security (BodyLimit, LimitError)
 import Ecluse.Core.Server.Admission.Budget (scaleCharge)
 import Ecluse.Core.Server.MemoryModel (saturatingCharge)
@@ -34,8 +34,8 @@ countingEntries counter entries next taken = do
     next taken
 {-# INLINE countingEntries #-}
 
-{- | Walk a body, raising @pay@'s absolute workspace after each piece to the floor for the entries the
-walk has published, less the per-byte charge at @permille@ the chunks read so far already paid.
+{- | Walk a body, raising @pay@'s absolute workspace before each piece to the floor for the entries
+the walk has published, less the per-byte charge at @permille@ the pieces read so far already paid.
 -}
 readFlooredWalk ::
     (Int -> IO ()) ->
@@ -47,16 +47,18 @@ readFlooredWalk ::
 readFlooredWalk pay permille bound walk readChunk = do
     entries <- newPrimVar 0
     seen <- newPrimVar 0
-    let counted = do
-            chunk <- readChunk
-            readPrimVar seen >>= writePrimVar seen . (+ BS.length chunk)
-            pure chunk
-        floored :: ST RealWorld a -> IO a
-        floored piece = do
-            result <- stToIO piece
+    held <- newIORef BS.empty
+    let piece = do
             retained <- readPrimVar entries
             bytes <- readPrimVar seen
             let shortfall = saturatingCharge (toInteger entryFloorBytes * toInteger retained - toInteger (scaleCharge permille bytes))
             when (shortfall > 0) (pay shortfall)
-            pure result
-    readJsonWalkST floored bound (walk entries) counted
+            pending <- readIORef held
+            chunk <- if BS.null pending then readChunk else pure pending
+            let (next, rest) = BS.splitAt maxChunkBytes chunk
+            writeIORef held rest
+            writePrimVar seen (bytes + BS.length next)
+            pure next
+    readJsonWalkST stToIO bound (walk entries) piece
+-- Specialise in the reading module, which turns full laziness off. Compiled here, npm and PyPI full reads allocated 30% to 60% more.
+{-# INLINE readFlooredWalk #-}
