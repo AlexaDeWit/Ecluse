@@ -32,7 +32,7 @@ import Ecluse.Core.Registry.Request (credentialRecover, mkBaseRequest)
 import Ecluse.Core.Security (BodyLimit (PublishRequestBodyLimit), Limits (maxPublishRequestBytes, progressFloor), boundedRead)
 import Ecluse.Core.Server.Admission.Budget (scaleCharge)
 import Ecluse.Core.Server.Admission.Bytes (withByteAdmission)
-import Ecluse.Core.Server.Admission.Meter (charge, newChargeRegion)
+import Ecluse.Core.Server.Admission.Meter (MemoryTicket, charge, newChargeRegion)
 import Ecluse.Core.Server.Context (
     Handler,
     MountBinding (bindingPackumentDeps, bindingPublishDeps),
@@ -70,6 +70,8 @@ servePublish replies name request respond = do
         Nothing -> liftIO (respond (publishDisabledReply replies [("Allow", publishAllowedMethods replies)] (pdHelp (bindingPackumentDeps mount))))
         Just deps -> publishWithDeps replies deps (pdMountBaseUrl (bindingPackumentDeps mount)) (credentialRecover (publishCredential (pubAdapter deps)) (requestHeaders request)) name request respond
 
+-- The body is read under the byte gate alone, so a slow upload holds no CPU slot or memory charge.
+-- Memory and CPU admission start after the read and cover inspection, target preparation and relay.
 publishWithDeps ::
     PublishReplies response ->
     PublishDeps ->
@@ -85,24 +87,16 @@ publishWithDeps replies deps registry clientToken name request respond
     | Just pathName <- name
     , not (pubAllowed deps pathName) =
         liftIO (respond (outOfScope replies deps pathName))
-    | Left fault <- extras =
-        liftIO (respond (bodyRefusal replies deps fault))
-    | overDeclaredCap =
-        liftIO (respond (publishTooLarge replies deps))
-    | otherwise = do
-        rt <- asks ctxRuntime
-        withMetadataAdmission
-            rt
-            (\headers -> liftIO (respond (publishError replies shedStatus headers shedMessage)))
-            ( \ticket -> do
-                workspace <- liftIO (newChargeRegion (charge ticket))
-                withByteAdmission (srMetrics rt) (pubBodyBudget deps) bodyWeight $
-                    liftIO (readAndRelay replies deps registry workspace (publicationTarget deps rt clientToken) name request)
-            )
-            (liftIO . respond . fromMaybe (bodyBudgetShed replies deps))
+    | otherwise = case publishRequestExtras (pubAdapter deps) (requestHeaders request) of
+        Left fault -> liftIO (respond (bodyRefusal replies deps fault))
+        Right extras
+            | overDeclaredCap -> liftIO (respond (publishTooLarge replies deps))
+            | otherwise -> do
+                rt <- asks ctxRuntime
+                liftIO $ do
+                    outcome <- withByteAdmission (srMetrics rt) (pubBodyBudget deps) bodyWeight (readThenAdmit rt extras)
+                    respond (fromMaybe (bodyBudgetShed replies deps) outcome)
   where
-    extras = publishRequestExtras (pubAdapter deps) (requestHeaders request)
-
     overDeclaredCap = case requestBodyLength request of
         KnownLength n -> n > fromIntegral (pubMaxRequestBytes deps)
         ChunkedBody -> False
@@ -111,36 +105,42 @@ publishWithDeps replies deps registry clientToken name request respond
         KnownLength n -> fromIntegral n
         ChunkedBody -> pubMaxRequestBytes deps
 
--- The body reservation stays live through validation, discovery and relay.
-readAndRelay ::
+    readThenAdmit rt extras =
+        boundedRead (PublishRequestBodyLimit (pubMaxRequestBytes deps)) (getRequestBodyChunk request) >>= \case
+            Left _ -> pure (publishTooLarge replies deps)
+            Right (_, bytes) -> do
+                let body = PublishRequestBody bytes (lookup hContentType (requestHeaders request)) extras
+                withMetadataAdmission
+                    rt
+                    (\headers -> pure (publishError replies shedStatus headers shedMessage))
+                    (\ticket -> inspectAndRelay replies deps registry ticket (publicationTarget deps rt clientToken) name body)
+                    pure
+
+-- The byte reservation, the memory ticket and the CPU slot all stay held through the relay.
+inspectAndRelay ::
     PublishReplies response ->
     PublishDeps ->
     Text ->
-    (Int -> IO ()) ->
+    MemoryTicket ->
     OriginClient ->
     Maybe PackageName ->
-    Request ->
+    PublishRequestBody ->
     IO response
-readAndRelay replies deps registry workspace target name request =
-    boundedRead (PublishRequestBodyLimit (pubMaxRequestBytes deps)) (getRequestBodyChunk request) >>= \case
-        Left _ -> pure (publishTooLarge replies deps)
-        Right (_, bytes) -> case publishRequestExtras (pubAdapter deps) (requestHeaders request) of
-            Left fault -> pure (bodyRefusal replies deps fault)
-            Right extras -> do
-                let body = PublishRequestBody bytes (lookup hContentType (requestHeaders request)) extras
-                claims <- publishUploadClaims (pubAdapter deps) ((pubLimits deps){maxPublishRequestBytes = pubMaxRequestBytes deps}) workspace registry body
-                case claims of
-                    Left fault -> pure (bodyRefusal replies deps fault)
-                    Right declared -> case resolveName declared of
-                        Left refusal -> pure refusal
-                        Right agreed -> do
-                            outcome <- withinServeCap (ecDeadlines (ocClient target)) (progressFloor (pubLimits deps)) MetadataFetch $ do
-                                fullRead <- accumulatingCharge (workspace . scaleCharge (pcTargetReadPermille (publishCodec (pubAdapter deps))))
-                                prepared <- pcPrepareTarget (publishCodec (pubAdapter deps)) target{ocChargeFullRead = fullRead} (pubTargetUrl deps)
-                                case prepared of
-                                    Left fault -> pure (Left fault)
-                                    Right approved -> first MetadataFetch <$> publishRelay (pubAdapter deps) target{ocBaseRequest = mkBaseRequest approved} agreed body
-                            pure (either (targetRefusal replies deps) (renderRelay replies deps . Right) outcome)
+inspectAndRelay replies deps registry ticket target name body = do
+    workspace <- newChargeRegion (charge ticket)
+    claims <- publishUploadClaims (pubAdapter deps) ((pubLimits deps){maxPublishRequestBytes = pubMaxRequestBytes deps}) workspace registry body
+    case claims of
+        Left fault -> pure (bodyRefusal replies deps fault)
+        Right declared -> case resolveName declared of
+            Left refusal -> pure refusal
+            Right agreed -> do
+                outcome <- withinServeCap (ecDeadlines (ocClient target)) (progressFloor (pubLimits deps)) MetadataFetch $ do
+                    fullRead <- accumulatingCharge (workspace . scaleCharge (pcTargetReadPermille (publishCodec (pubAdapter deps))))
+                    prepared <- pcPrepareTarget (publishCodec (pubAdapter deps)) target{ocChargeFullRead = fullRead} (pubTargetUrl deps)
+                    case prepared of
+                        Left fault -> pure (Left fault)
+                        Right approved -> first MetadataFetch <$> publishRelay (pubAdapter deps) target{ocBaseRequest = mkBaseRequest approved} agreed body
+                pure (either (targetRefusal replies deps) (renderRelay replies deps . Right) outcome)
   where
     resolveName claims = case name of
         Just pathName -> case bodyNameDisagreement (pubProjectName deps) pathName claims of
