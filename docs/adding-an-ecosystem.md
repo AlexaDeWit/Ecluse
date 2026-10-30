@@ -163,6 +163,7 @@ The configuration load reads it to require `uploadUrl` or refuse it.
 Composition reads it for its boot checks.
 Neither switches on ecosystem names.
 A store that asks for service credentials its own way gains one row for the ecosystem, for CodeArtifact in [Credential.CodeArtifact.Presentation](../runtime/src/Ecluse/Runtime/Credential/CodeArtifact/Presentation.hs).
+A Basic row carries the store's username.
 Composition gains no branch for it.
 Use `relayPublishRequest` in [Publish](../core/src/Ecluse/Core/Registry/Publish/Internal.hs) to retain native replies under metadata and progress limits.
 

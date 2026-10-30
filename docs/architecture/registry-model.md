@@ -498,11 +498,12 @@ protocol adapter, and its store contributes the backend the mount's private pack
 supplies.
 
 The two sides share only the vocabulary above: `Ecosystem`, `PackageName`, and `Version`, plus the
-abstract mechanism a store declares for a service credential. Neither imports the other, and a
-store that needs an ecosystem fact reads it off the `Ecosystem` value, as the CodeArtifact format
-token and its credential presentation table do. Every credential Écluse owns renders through that
-table, the Dredger's store reads included. A backend matrix therefore costs one adapter per
-ecosystem plus one backend per store, never a cell per pair. npm, PyPI, Cargo, and RubyGems ship read and native publication capabilities in this build. Their stores
+abstract mechanism a store declares for a service credential. Neither imports the other, and a store
+that needs an ecosystem fact reads it off the `Ecosystem` value, as the CodeArtifact format token
+and its credential presentation table do. Every credential Écluse owns renders through that table,
+the Dredger's store reads included. A Basic row carries the store's own username. A backend matrix
+therefore costs one adapter per ecosystem plus one backend per store, never a cell per pair. npm,
+PyPI, Cargo, and RubyGems ship read and native publication capabilities in this build. Their stores
 are CodeArtifact, any host that speaks the protocol, and Verdaccio for development.
 
 Shared code reads what it needs from an adapter's declarations instead of branching on its
