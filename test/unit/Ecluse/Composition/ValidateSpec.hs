@@ -86,7 +86,7 @@ import Ecluse.Core.Ecosystem (Ecosystem (Cargo, Npm, PyPI, RubyGems))
 import Ecluse.Core.Package (mkScope)
 import Ecluse.Core.Registry.Adapter (RegistryAdapter (adapterPublish), adapterFor)
 import Ecluse.Core.Registry.Sweep.Types (minimumChunkPause)
-import Ecluse.Core.Rules.Types (PrecededRule (prRule), RuleType (AllowScopeType, DenyExternalDependenciesType, DenyInstallTimeExecutionType), ruleName)
+import Ecluse.Core.Rules.Types (PrecededRule (prRule), RuleType (AllowScopeType, DenyInstallTimeExecutionType), ruleName)
 import Ecluse.Core.Security (mkProgressFloor, serveCapSeconds)
 import Ecluse.Core.Security.Egress (registryUrlText)
 
@@ -366,9 +366,9 @@ ruleBlocksSpec = describe "vetBoot -- ecosystem rule blocks" $ do
         it "ignores a disabled PyPI mount's blocked declaration" $
             refusalsFor role (overrideEnv "ECLUSE_MOUNTS__PYPI__ENABLED" "false" (overrideEnv "ECLUSE_RULES" installRule bothMounts))
                 `shouldReturn` []
-        it "refuses a shared external-dependency deny on the PyPI, Cargo and RubyGems mounts" $ do
-            errors <- refusalsFor role (overrideEnv "ECLUSE_MOUNTS__CARGO__ENABLED" "true" (overrideEnv "ECLUSE_MOUNTS__RUBYGEMS__ENABLED" "true" (overrideEnv "ECLUSE_RULES" "{\"no-external\":{\"type\":\"DenyExternalDependencies\"}}" bothMounts)))
-            errors `shouldMatchList` dependencyBlocks
+        it "accepts a shared external-dependency deny on every ecosystem's mount" $
+            refusalsFor role (overrideEnv "ECLUSE_MOUNTS__CARGO__ENABLED" "true" (overrideEnv "ECLUSE_MOUNTS__RUBYGEMS__ENABLED" "true" (overrideEnv "ECLUSE_RULES" "{\"no-external\":{\"type\":\"DenyExternalDependencies\"}}" bothMounts)))
+                `shouldReturn` []
         it "clears the external-dependency deny when it lives under npm alone" $
             refusalsFor role (overrideEnv "ECLUSE_MOUNTS__NPM__RULES" "{\"no-external\":{\"type\":\"DenyExternalDependencies\"}}" bothMounts)
                 `shouldReturn` []
@@ -384,11 +384,6 @@ ruleBlocksSpec = describe "vetBoot -- ecosystem rule blocks" $ do
     scopeRule = "{\"custom-scope\":{\"type\":\"AllowScope\",\"scope\":\"acme\"}}"
     installBlock = RuleBlockedOnMount PyPI DenyInstallTimeExecutionType "Most PyPI releases offer a source distribution, which runs its own build on install, so this rule would deny nearly every release."
     scopeBlock = RuleBlockedOnMount PyPI AllowScopeType "A PyPI project name has no scope, so this rule can never match one."
-    dependencyBlocks =
-        [ RuleBlockedOnMount PyPI DenyExternalDependenciesType "The PyPI adapter does not read where a release's dependencies install from."
-        , RuleBlockedOnMount Cargo DenyExternalDependenciesType "The Cargo adapter does not read where a crate's dependencies install from."
-        , RuleBlockedOnMount RubyGems DenyExternalDependenciesType "A RubyGems dependency names only a gem and its requirements, never a source, so this rule can never match one."
-        ]
 
 advisoryStoreSpec :: Spec
 advisoryStoreSpec = describe "vetBoot -- an advisory deny with no advisory store" $ do

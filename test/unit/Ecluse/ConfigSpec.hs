@@ -186,6 +186,12 @@ spec = do
             cfg <- configFor "{\"mounts\":{\"npm\":{\"rules\":{\"pin\":{\"type\":\"AllowByIdentity\",\"identity\":\"thing@1.0.0\",\"precedence\":301}}}}}"
             decideOn cfg Npm (externalEvidence Npm) >>= (\decision -> admittedBy decision `shouldBe` Just "AllowByIdentity")
 
+        it "loads the dependency deny type on a PyPI mount, where it abstains on registry-only dependencies" $ do
+            cfg <- configFor "{\"rules\":{\"no-external\":{\"type\":\"DenyExternalDependencies\"}},\"mounts\":{\"pypi\":{\"enabled\":true}}}"
+            fmap (map (ruleName . prRule) . mountPolicy) (Map.lookup PyPI (configMounts cfg))
+                `shouldBe` Just ["AllowIfOlderThan", "DenyExternalDependencies"]
+            decideOn cfg PyPI (scriptEvidence PyPI) >>= (\decision -> admittedBy decision `shouldBe` Just "AllowIfOlderThan")
+
         it "disables the shipped dependency deny under the npm mount, keeping the script deny" $ do
             cfg <- configFor "{\"mounts\":{\"npm\":{\"rules\":{\"deny-external-dependencies\":{\"enabled\":false}}}}}"
             Map.map limitedRules (configMounts cfg) `shouldBe` Map.singleton Npm ["DenyInstallTimeExecution"]
