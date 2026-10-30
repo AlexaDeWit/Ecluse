@@ -22,7 +22,7 @@ import Data.ByteString.Builder (byteString, lazyByteString, toLazyByteString, wo
 import Data.ByteString.Lazy qualified as LBS
 
 import Ecluse.Core.Registry (ParseError (..), parseRefusal)
-import Ecluse.Core.Registry.Cargo.Manifest (parseRustRelease)
+import Ecluse.Core.Registry.Cargo.Manifest (parseRustRelease, usesUnstableDependencyField)
 import Ecluse.Core.Registry.Cargo.Project (projectName)
 import Ecluse.Core.Registry.Cargo.Wire (cargoTreeCharge, decodeCargoRecord)
 import Ecluse.Core.Security.Limits (Limits (..))
@@ -112,7 +112,9 @@ metadataIdentity = withObject "Cargo upload metadata" $ \fields -> do
 
 uploadDependency :: Value -> Parser ()
 uploadDependency = withObject "Cargo upload dependency" $ \fields -> do
-    fields .: "name" >>= nativeName
+    name <- fields .: "name"
+    nativeName name
+    when (usesUnstableDependencyField fields) (fail ("Cargo upload dependency '" <> toString name <> "' carries an unstable artifact, bindep_target, lib or public field"))
     void (fields .: "version_req" :: Parser Text)
     void (fields .: "features" :: Parser [Text])
     for_ ["optional", "default_features"] $ \key ->
