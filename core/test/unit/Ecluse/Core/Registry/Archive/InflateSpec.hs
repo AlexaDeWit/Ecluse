@@ -1,7 +1,6 @@
 -- SPDX-FileCopyrightText: 2026 Alexandra de Wit
 --
 -- SPDX-License-Identifier: MIT
-{-# LANGUAGE ImportQualifiedPost #-}
 
 -- | Scoped zlib decoding checks framing and closes its pull action on every callback exit.
 module Ecluse.Core.Registry.Archive.InflateSpec (spec) where

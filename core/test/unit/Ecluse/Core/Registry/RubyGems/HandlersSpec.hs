@@ -1,7 +1,6 @@
 -- SPDX-FileCopyrightText: 2026 Alexandra de Wit
 --
 -- SPDX-License-Identifier: MIT
-{-# LANGUAGE ImportQualifiedPost #-}
 
 -- | Native info and coordinate requests exercise admission and response contracts.
 module Ecluse.Core.Registry.RubyGems.HandlersSpec (spec) where

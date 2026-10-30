@@ -1,7 +1,6 @@
 -- SPDX-FileCopyrightText: 2026 Alexandra de Wit
 --
 -- SPDX-License-Identifier: MIT
-{-# LANGUAGE ImportQualifiedPost #-}
 
 -- | Captured discovery keeps public archive routes separate from local view routes.
 module Ecluse.Test.Corpus.CargoSpec (spec) where
