@@ -185,8 +185,9 @@ Upload dependencies must not carry the `artifact`, `bindep_target`, `lib`, or `p
 Target comparison parses native cfg expressions under the configured nesting limit, including final commas in `all` and `any` lists.
 Registry comparison uses native logical identities, preserving source kinds and sparse registry paths.
 A null upload dependency registry identifies this `/cargo/` registry. An absent manifest registry identifies crates.io.
-Every dependency, development and build dependencies included, must come from crates.io or from Écluse's `/cargo/` index under `server.publicUrl`.
-Écluse refuses a dependency from any other registry with `400` and names it.
+Every normal and build dependency must come from crates.io or from Écluse's `/cargo/` index under `server.publicUrl`.
+Écluse refuses such a dependency from any other registry with `400` and names it.
+A development dependency may come from any registry, as npm publishes `devDependencies`, because no consumer resolves it.
 Publish that dependency through Écluse first, then depend on Écluse's copy.
 Écluse does not check crates that reach the private upstream by other means.
 Descriptive and additive metadata need not match the manifest. Accepted uploads retain their original bytes.
