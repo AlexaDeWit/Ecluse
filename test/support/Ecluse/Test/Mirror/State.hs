@@ -22,6 +22,7 @@ import Data.Text qualified as T
 import Data.Time (UTCTime (UTCTime), fromGregorian)
 
 import Ecluse.Core.Ecosystem (Ecosystem (Cargo, PyPI))
+import Ecluse.Core.Mirror.Documents (MirrorDocuments)
 import Ecluse.Core.Mirror.State (MirrorState (MirrorState), MirrorStateFault (StateInvalid, StateMissingCompanion), ProjectMirrorRecord, StateRead, StateTarget, extendProjectRecord)
 import Ecluse.Core.Mirror.State.Internal (StateRevision, retainVerifiedIdentity)
 import Ecluse.Core.Package
@@ -106,9 +107,9 @@ cargoMirrorRecord target name archive rows = do
         Just <$> expectRight (retainVerifiedIdentity (mkVersion Cargo version) verified expected)
 
 -- | A bounded managed view with a supplied reader and no write or companion capabilities.
-mirrorViewWith :: StateTarget -> (PackageName -> Maybe StateRevision -> IO (Either MirrorStateFault StateRead)) -> IO MirrorView
-mirrorViewWith target readState = do
+mirrorViewWith :: MirrorDocuments -> StateTarget -> (PackageName -> Maybe StateRevision -> IO (Either MirrorStateFault StateRead)) -> IO MirrorView
+mirrorViewWith documents target readState = do
     pool <- newLocalPool 20 10_000_000
     cache <- newMirrorRetention pool 60 (StoreBudget 0 0)
     let store = MirrorState (const readState) (\_ _ _ _ -> pure (Left (StateInvalid "unexpected write"))) (\_ _ -> pure (Left StateMissingCompanion)) (\_ _ -> pure (Left StateMissingCompanion))
-    pure (newMirrorView defaultLimits target store cache)
+    pure (newMirrorView defaultLimits target store cache documents)

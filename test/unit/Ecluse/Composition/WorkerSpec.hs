@@ -27,6 +27,7 @@ import Ecluse.Core.Registry.CachedDocument (pypiSimpleCached)
 import Ecluse.Core.Registry.Metadata (VersionDoc (vdDetails, vdRaw), VersionEvaluation (VersionCooling, VersionPresent))
 import Ecluse.Core.Registry.Publish (MirrorPublish (mpProbeInventory), MirrorTransport (ptLimits))
 import Ecluse.Core.Registry.PyPI.Document (simpleEnvelope, simpleFiles)
+import Ecluse.Core.Registry.PyPI.Mirror (pypiMirrorDocuments)
 import Ecluse.Core.Registry.PyPI.Request (pypiArtifactHosts)
 import Ecluse.Core.Rules.Types (EvalContext (EvalContext))
 import Ecluse.Core.Security (Limits (maxMetadataBytes, maxMirrorArtifactBytes, progressFloor), defaultLimits, mkProgressFloor)
@@ -278,7 +279,7 @@ composedManagedBudget deadlines allowance = do
         unexpected :: IO a
         unexpected = throwIO (TestContractEscape "budget test reached durable storage")
         store = MirrorState (\_ _ _ -> unexpected) (\_ _ _ _ -> unexpected) (\_ _ -> unexpected) (\_ _ -> unexpected)
-        view = newMirrorView testLimits target store retention
+        view = newMirrorView testLimits target store retention pypiMirrorDocuments
         states = Map.singleton PyPI (MirrorStateBinding store target view)
         policy = Map.lookup PyPI (workerPoliciesWithState env states bindings targets testArtifactCap)
     binding <- maybe (fail "missing composed managed PyPI policy") pure (policy >>= wpMirrorState)

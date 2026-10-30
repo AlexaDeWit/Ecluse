@@ -79,9 +79,9 @@ import Ecluse.Core.Registry.Adapter (RegistryAdapter, adapterFor, adapterPublish
 import Ecluse.Core.Registry.Adapter.Capability (
     AdapterPublish (publishIdentity, publishMirrorRequirements, publishUploadEndpoint),
     MirrorRequirements (mirrorStateRequirement),
-    MirrorStateRequirement (DurableVersionState),
     UploadEndpointRequirement (ExplicitUploadEndpoint),
     UploadIdentityRequirement (NamedIdentity),
+    durableMirrorDocuments,
  )
 import Ecluse.Core.Registry.Sweep.Types (minimumChunkPause)
 import Ecluse.Core.Rules.Types (
@@ -147,7 +147,7 @@ vetMirrorCapabilities role app = decided $ case missing of
             maybe [] (mirrorNeeds eco publish) (mntMirrorTarget mount)
                 <> maybe [] (publicationNeeds eco publish) (mntPublicationTarget mount)
     mirrorNeeds eco publish endpoint =
-        [MirrorStateRequired eco | mirrorStateRequirement (publishMirrorRequirements publish) == DurableVersionState, isJust pipeline, isNothing (cfgMirrorState app)]
+        [MirrorStateRequired eco | isJust (durableMirrorDocuments (mirrorStateRequirement (publishMirrorRequirements publish))), isJust pipeline, isNothing (cfgMirrorState app)]
             <> [required eco "mirrorTarget" (meTarget endpoint) "uploadUrl" | separateUpload publish, mirrorWrites, isNothing (meUploadUrl endpoint)]
             <> [required eco "mirrorTarget" (meTarget endpoint) "username" | publishIdentity publish == NamedIdentity, mirrorWrites, tgtTag (meTarget endpoint) /= TagCodeArtifact, isNothing (meUsername endpoint)]
     -- The publication refusal says what url and uploadUrl each name, for a url that still holds the upload endpoint.

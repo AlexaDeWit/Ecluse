@@ -27,6 +27,7 @@ import Ecluse.Core.Mirror.State.Internal (StateRevision (StateRevision))
 import Ecluse.Core.Package (PackageName)
 import Ecluse.Core.Registry.Adapter (RegistryAdapter (adapterPublish))
 import Ecluse.Core.Registry.Adapter.Capability (AdapterPublish (publishMirrorRequirements), MirrorRequirements (mirrorStateRequirement), MirrorStateRequirement (DurableVersionState))
+import Ecluse.Core.Registry.PyPI.Mirror (pypiMirrorDocuments)
 import Ecluse.Core.Server.Admission.Meter (withMemoryEntry)
 import Ecluse.Core.Server.Cache (CacheConfig (cacheMaxBytes, cacheMaxEntries))
 import Ecluse.Core.Server.Cache.Backend.Local (newLocalPool)
@@ -88,7 +89,7 @@ spec = describe "durable mirror state allocation" $ do
         let requireDurable mount = mount{vmAdapter = adapter{adapterPublish = fmap durable (adapterPublish adapter)}}
               where
                 adapter = vmAdapter mount
-            durable publish = publish{publishMirrorRequirements = (publishMirrorRequirements publish){mirrorStateRequirement = DurableVersionState}}
+            durable publish = publish{publishMirrorRequirements = (publishMirrorRequirements publish){mirrorStateRequirement = DurableVersionState pypiMirrorDocuments}}
         calls <- newIORef []
         let store = readOnlyStore (\_ _ -> unexpected)
             expectedTarget = stateTarget "https://mirror.example.test"

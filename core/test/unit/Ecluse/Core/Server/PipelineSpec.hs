@@ -36,6 +36,7 @@ import Ecluse.Core.Registry.Npm.Route.Internal (
     npmTarballReplies,
  )
 import Ecluse.Core.Registry.PyPI.Credential (pypiCredential)
+import Ecluse.Core.Registry.PyPI.Mirror (pypiMirrorDocuments)
 import Ecluse.Core.Registry.PyPI.Route (pypiRouter)
 import Ecluse.Core.Registry.Request (CredentialMapping, credentialMapping)
 import Ecluse.Core.Registry.Sweep (sweepCycle)
@@ -393,7 +394,7 @@ overflowRouteSpec = describe "overflow refusal through ecosystem routes" $
                             origin = loopbackRegistryUrl ("http://localhost:" <> show port)
                         rt <- testServeRuntimeWith deadlines admission metrics
                         prepared <- prepare inertRuleDeps allowPolicy
-                        view <- mirrorViewWith (stateTarget "http://private.test/") (\_ _ -> modifyIORef' stateReads (+ 1) >> throwIO MissingFixtureResponse)
+                        view <- mirrorViewWith pypiMirrorDocuments (stateTarget "http://private.test/") (\_ _ -> modifyIORef' stateReads (+ 1) >> throwIO MissingFixtureResponse)
                         let unexpected = throwIO MissingFixtureResponse
                             base =
                                 if ecosystem == "npm"

@@ -34,7 +34,7 @@ import Ecluse.Core.Registry.RubyGems.CompactSpec (checkGemSpecification)
 import Ecluse.Core.Registry.RubyGems.Credential
 import Ecluse.Core.Registry.RubyGems.Document (GemRow (..))
 import Ecluse.Core.Registry.RubyGems.Metadata (prepareGemRead)
-import Ecluse.Core.Registry.RubyGems.Mirror (mirrorRow, rubyMirrorCompanion)
+import Ecluse.Core.Registry.RubyGems.Mirror (mirrorRow, rubyGemsMirrorDocuments, rubyMirrorCompanion)
 import Ecluse.Core.Registry.RubyGems.Request (gemInfoRequestUnder, gemInfoUrl)
 import Ecluse.Core.Security.Limits (Limits)
 import Ecluse.Core.Server.Admission.Types (ChargeFactors (cfFullReadPermille))
@@ -48,7 +48,7 @@ rubyPublish factors =
         , publishRequestExtras = rubyPublishExtras
         , publishUploadClaims = uploadClaims
         , publishCodec = rubyPublishCodec factors
-        , publishMirrorRequirements = MirrorRequirements (NativeChargedWorkerRead prepareGemRead) DurableVersionState
+        , publishMirrorRequirements = MirrorRequirements (NativeChargedWorkerRead prepareGemRead) (DurableVersionState rubyGemsMirrorDocuments)
         , publishUploadEndpoint = ReadRootUpload
         , publishIdentity = TokenIdentity
         }
