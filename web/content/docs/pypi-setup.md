@@ -40,12 +40,12 @@ mounts:
     publicationTarget:
       codeArtifact:
         url: https://acme-123456789012.d.codeartifact.us-east-1.amazonaws.com/pypi/first-party/
+        uploadUrl: https://acme-123456789012.d.codeartifact.us-east-1.amazonaws.com/pypi/first-party/
 ```
 
 The [configuration reference](@/docs/configuration.md#the-configuration-reference) owns every key, default and environment spelling.
-The private and mirror URLs are registry roots. Écluse appends `simple/` for index reads.
-The mirror `uploadUrl` is an explicit native endpoint for the same CodeArtifact repository.
-The publication URL is the exact native upload endpoint, rather than a read root that Écluse rewrites.
+Every `url` is a registry root. Écluse appends `simple/` for index reads.
+Each `uploadUrl` is the native upload endpoint of the same CodeArtifact repository as its `url`.
 For another PyPI registry, use the `registry` tag and its native endpoints.
 A generic mirror also requires a Basic `username` and a secret `token` supplied through the environment.
 See [upload configuration](@/docs/configuration.md#pypi-uploads-and-mirror-state) for state consistency and retention requirements.

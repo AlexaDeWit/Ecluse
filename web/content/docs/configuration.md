@@ -162,8 +162,16 @@ The keys each tag admits depend on the endpoint, because the endpoints hold diff
 | `mirrorTarget` | `url`, `token` | `url`, optional `tokenDuration` | `url`, `token`, optional `permitDeletion` |
 | `publicationTarget` | `url`, optional `token` | `url`, optional `token` | `url`, optional `token` |
 
-Native upload fields extend this table as the configuration reference describes.
-Cargo mirror and publication targets require distinct sparse read and approved API coordinates.
+On `mirrorTarget` and `publicationTarget`, `url` is where Écluse reads and `uploadUrl` is where it writes.
+Whether a target takes `uploadUrl`, under any tag, depends on how the ecosystem's protocol publishes:
+
+| Ecosystem | `uploadUrl` on `mirrorTarget` and `publicationTarget` |
+| --- | --- |
+| npm | Refused at load. Écluse publishes below `url`. |
+| RubyGems | Refused at load. Écluse posts to `api/v1/gems` below `url`. |
+| PyPI | Required before a role writes through the target. It names the native upload endpoint. |
+| Cargo | Required before a role writes through the target. It names the approved API base. |
+
 See [Cargo protocol support](@/docs/protocol-support.md#cargo) and [Cargo mirror setup](@/docs/mirror-setup.md#cargo).
 
 Proxy reads forward the caller's own credential to the private upstream, while public reads
@@ -194,15 +202,15 @@ different tags are refused for every role, because one store has one backend.
 
 [Complete PyPI setup](@/docs/pypi-setup.md) combines the repositories, roles, credentials and rollout order.
 
-PyPI mirror tags also admit `uploadUrl` and `username`. Publication tags also admit `username`.
+PyPI mirror and publication tags also admit `username`.
 The role requires these fields as described below.
 
-A PyPI mirror declares the registry root, from which reads append `simple/`, and an explicit native `uploadUrl`. A generic static
+A PyPI mirror or publication target declares the registry root as `url`, from which reads append `simple/`, and the native upload endpoint as `uploadUrl`. A generic static
 write token also declares its Basic `username`. CodeArtifact supplies `aws` at its backend binding.
 A CodeArtifact upload URL must name the same domain, account, region and repository as its read root.
 Its supported upload paths are listed in the [configuration reference](#the-configuration-reference).
-The refresh provider still owns only the secret. Client publication uses the exact configured
-publication URL and retains the caller's Basic pair when no static replacement is configured.
+The refresh provider still owns only the secret. Client publication posts to `uploadUrl`
+and retains the caller's Basic pair when no static replacement is configured.
 
 Configure `mirrorState.url` independently from `advisories.url`. Its S3-compatible store must
 support strong reads, conditional creation and conditional replacement. The proxy needs reads
