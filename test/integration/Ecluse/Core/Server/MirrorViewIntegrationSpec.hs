@@ -51,10 +51,10 @@ import Ecluse.Test.Deadline (withSweeper)
 import Ecluse.Test.Mirror.RubyGems (RubyStateProbeFixture (..), rubyStateProbeFixture)
 import Ecluse.Test.Mirror.State
 import Ecluse.Test.Queue (newTestMemoryQueue)
-import Ecluse.Test.Rules (atDefaultPrecedence, inertRuleDeps, packageRule, revocation)
 import Ecluse.Test.Registry.Cargo.Fixtures qualified as Cargo
 import Ecluse.Test.Registry.Cargo.Reference qualified as Reference
 import Ecluse.Test.Registry.RubyGems.Reference (RubyInfoRow (rowPosition), referenceInfo)
+import Ecluse.Test.Rules (atDefaultPrecedence, inertRuleDeps, packageRule, revocation)
 import Ecluse.Test.Server.Mount (serveDepsFor, withMirrorPlan)
 import Ecluse.Test.Support (expectRight)
 import Ecluse.Test.Wai (localhost, lookupAuth, selfBaseUrl)
