@@ -26,7 +26,7 @@ import Ecluse.Core.Mirror.State.Internal (StateRevision (StateRevision), Verifie
 import Ecluse.Core.Package (HashAlg (SHA512), mkPackageName)
 import Ecluse.Core.Package.Integrity (mkMinIntegrity)
 import Ecluse.Core.Queue (MirrorJob (jobPackage, jobTriggerFilename, jobVersion), MirrorQueue (enqueue))
-import Ecluse.Core.Registry.Adapter (RegistryAdapter, adapterFor)
+import Ecluse.Core.Registry.Adapter (RegistryAdapter)
 import Ecluse.Core.Registry.Cargo.Mirror (cargoMirrorDocuments)
 import Ecluse.Core.Registry.MirrorUpload (MirrorReadData (..), inventoryFiles, inventoryReadData)
 import Ecluse.Core.Registry.PyPI.Adapter (pypiAdapter)
@@ -55,7 +55,7 @@ import Ecluse.Test.Registry.Cargo.Fixtures qualified as Cargo
 import Ecluse.Test.Registry.Cargo.Reference qualified as Reference
 import Ecluse.Test.Registry.RubyGems.Reference (RubyInfoRow (rowPosition), referenceInfo)
 import Ecluse.Test.Rules (atDefaultPrecedence, inertRuleDeps, packageRule, revocation)
-import Ecluse.Test.Server.Mount (serveDepsFor, withMirrorPlan)
+import Ecluse.Test.Server.Mount (requiredAdapter, serveDepsFor, withMirrorPlan)
 import Ecluse.Test.Support (expectRight)
 import Ecluse.Test.Wai (localhost, lookupAuth, selfBaseUrl)
 
@@ -516,6 +516,3 @@ withMountOver eco adapter (queue, configure) view firstParty private public acti
                         , pdMountBaseUrl = "http://ecluse.test/" <> ecosystemName eco
                         }
             action (application (mkServerConfig (maybeToList (mountBindingFor eco (configure deps) Nothing))) env)
-
-requiredAdapter :: Ecosystem -> IO RegistryAdapter
-requiredAdapter eco = maybe (fail (toString (ecosystemName eco) <> " has no production adapter registration")) pure (adapterFor eco)

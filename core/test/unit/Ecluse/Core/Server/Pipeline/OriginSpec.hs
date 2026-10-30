@@ -33,7 +33,6 @@ import UnliftIO.Exception (bracket, evaluate, throwIO)
 import Ecluse.Core.Ecosystem (Ecosystem (Cargo))
 import Ecluse.Core.Package (PackageInfo (infoVersions))
 import Ecluse.Core.Package.Entry (EntryKey (RecordEntry))
-import Ecluse.Core.Registry.Adapter (RegistryAdapter, adapterFor)
 import Ecluse.Core.Registry.Adapter.Capability (AdapterMetadata (metadataChargeFactors, metadataRead))
 import Ecluse.Core.Registry.CachedDocument (cargoCached, cargoPacked, cargoRendered)
 import Ecluse.Core.Registry.Cargo.Credential (cargoCredential)
@@ -88,7 +87,7 @@ import Ecluse.Test.Registry.Cargo.Metadata (cargoFeatureRecord, cargoRead, cargo
 import Ecluse.Test.Registry.Metadata.Fetch (heldBody)
 import Ecluse.Test.Server.Cache (cachedVersion, defaultCacheConfig, newLocalRetention, newMetadataCache)
 import Ecluse.Test.Server.Handler (testServeRuntime)
-import Ecluse.Test.Server.Mount (inertDepsFor, inertPackumentDeps, serveDepsFor, withPrivateBaseUrl)
+import Ecluse.Test.Server.Mount (inertDepsFor, inertPackumentDeps, requiredAdapter, serveDepsFor, withPrivateBaseUrl)
 import Ecluse.Test.Stub (Captured (capPath), stubBaseUrl, withRoutedStubIO)
 import Ecluse.Test.Support (expectRight)
 
@@ -124,7 +123,7 @@ fullReadSpec = describe "full Cargo read payments" $ do
     for_ [False, True] $ \public ->
         for_ [False, True] $ \refused ->
             it ((if public then "public" else "private") <> (if refused then " releases source and workspace after a refused read" else " retains only packed source after a full read")) $ withSweeper $ \deadlines -> do
-                adapter <- requiredCargoAdapter
+                adapter <- requiredAdapter Cargo
                 let body = toStrict (encode (cargoFeatureRecord "1.0.0" 16384)) <> "\n" <> toStrict (encode (cargoTestRecord "2.0.0"))
                     reply captured
                         | capPath captured == "/config.json" = pure (status200, [], "{\"dl\":\"https://static.crates.io/crates/{crate}/{crate}-{version}.crate\"}")
@@ -159,7 +158,7 @@ fullReadSpec = describe "full Cargo read payments" $ do
                     completed `shouldBe` Right ()
                     snChargedBytes <$> meterSnapshot meter `shouldReturn` 0
     it "charges a collapsed full flight with the overdraw owner's priority" $ withSweeper $ \deadlines -> do
-        adapter <- requiredCargoAdapter
+        adapter <- requiredAdapter Cargo
         started <- newEmptyMVar
         releaseSource <- newEmptyMVar
         followerEntered <- newEmptyMVar
@@ -243,7 +242,7 @@ runCargoFull runtime deps ticket public = do
 retainedConsumerSpec :: Spec
 retainedConsumerSpec = describe "successful selected consumers" $ do
     it "keeps a local Cargo hit charged after cache eviction and upstream absence" $ withSweeper $ \deadlines -> do
-        adapter <- requiredCargoAdapter
+        adapter <- requiredAdapter Cargo
         let name = cargoTestName
             version = cargoTestVersion "1.0.0"
             replacement = cargoTestVersion "2.0.0"
@@ -279,7 +278,7 @@ retainedConsumerSpec = describe "successful selected consumers" $ do
         readIORef misses `shouldReturn` 1
         snChargedBytes <$> meterSnapshot meter `shouldReturn` 0
     it "does not pin a raw cache row in the deferred serving continuation" $ withSweeper $ \deadlines -> do
-        adapter <- requiredCargoAdapter
+        adapter <- requiredAdapter Cargo
         cache <- newMetadataCache defaultCacheConfig{cacheMaxEntries = 1}
         original <- testServeRuntime deadlines noopMetricsPort
         let base = inertDepsFor adapter
@@ -297,7 +296,7 @@ retainedConsumerSpec = describe "successful selected consumers" $ do
         completed `shouldBe` Right ()
     for_ [False, True] $ \holdsToken ->
         it (if holdsToken then "completes a successful oversized Cargo flight when the follower holds the overdraw token" else "keeps an oversized successful Cargo follower charged after its leader exits") $ withSweeper $ \deadlines -> do
-            adapter <- requiredCargoAdapter
+            adapter <- requiredAdapter Cargo
             (body, _, expected) <- retainedCargoFixture
             started <- newEmptyMVar
             releaseSource <- newEmptyMVar
@@ -378,9 +377,6 @@ retainedCargoFixture = do
     let served = selected{vrVersion = fmap (\document -> document{vdRaw = Nothing}) (vrVersion selected)}
     void (evaluate (weighVersion served))
     pure (body, selected, served)
-
-requiredCargoAdapter :: IO RegistryAdapter
-requiredCargoAdapter = maybe (fail "Cargo has no registered adapter") pure (adapterFor Cargo)
 
 runCargoConsumer :: ServeRuntime -> PackumentDeps -> MemoryTicket -> (VersionRead -> IO a) -> IO (Either MetadataError a)
 runCargoConsumer runtime deps ticket consume =
