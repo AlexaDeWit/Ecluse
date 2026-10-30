@@ -29,16 +29,13 @@ import Ecluse.Core.Registry.Adapter.Capability (
     WorkerMetadataRead (..),
  )
 import Ecluse.Core.Registry.Adapter.Types (AdapterServe (..), RegistryAdapter (..))
-import Ecluse.Core.Registry.FirstParty (FirstPartyDeclaration (FirstPartyDeclaration), FirstPartyNames (..))
-import Ecluse.Core.Registry.Metadata.Fetch.Preparation (staticRead)
 import Ecluse.Core.Registry.Npm (relayPublishDocument)
 import Ecluse.Core.Registry.Npm.Credential (npmCredential)
 import Ecluse.Core.Registry.Npm.Filter (assembleMergedDocument, serialiseMergedDocument)
 import Ecluse.Core.Registry.Npm.Maintenance (npmMaintenance)
-import Ecluse.Core.Registry.Npm.Metadata (npmChargeFactors, npmRead)
-import Ecluse.Core.Registry.Npm.Mirror (npmStateFormat)
-import Ecluse.Core.Registry.Npm.Project (projectName, projectScope)
-import Ecluse.Core.Registry.Npm.Publish (npmPublishAllowed, npmPublishCodec, uploadClaims)
+import Ecluse.Core.Registry.Npm.Metadata (npmChargeFactors, prepareNpmRead)
+import Ecluse.Core.Registry.Npm.Project (projectName)
+import Ecluse.Core.Registry.Npm.Publish (npmPublishCodec, uploadClaims)
 import Ecluse.Core.Registry.Npm.Request qualified as NpmRequest
 import Ecluse.Core.Registry.Npm.Route qualified as NpmRoute
 import Ecluse.Core.Registry.Origin (OriginClient (ocBaseRequest, ocToken))
@@ -58,7 +55,7 @@ npmAdapter =
                 }
         , adapterMetadata =
             AdapterMetadata
-                { metadataRead = staticRead npmRead
+                { metadataRead = prepareNpmRead
                 , metadataAssemble = assembleMergedDocument
                 , metadataSerialise = serialiseMergedDocument
                 , metadataChargeFactors = npmChargeFactors

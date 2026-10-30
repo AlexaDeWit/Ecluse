@@ -8,6 +8,7 @@ module Ecluse.Core.Registry.PyPI.StreamingProjection (
     emptyProjection,
     collectField,
     keepsFile,
+    retainedEntries,
     finishProjection,
     packedFileStep,
     finishPackedProjection,
@@ -40,6 +41,7 @@ data PyPIProjection = PyPIProjection
     , projectedMemo :: FilenameMemo
     , projectedFileDrops :: [InvalidEntry]
     , projectedVersionDrops :: [InvalidEntry]
+    , projectedEntries :: Int
     , projectedShape :: Bool
     , projectedFilesSeen :: Bool
     , projectedFilesActive :: Bool
@@ -51,11 +53,15 @@ data FilePayload = TreeFile Value | PackedFile Packed
 
 -- | Start one project's source without retaining any input chunks.
 emptyProjection :: PackageName -> PyPIProjection
-emptyProjection name = PyPIProjection mempty [] (filenameMemo name) [] [] True False False False False
+emptyProjection name = PyPIProjection mempty [] (filenameMemo name) [] [] 0 True False False False False
 
 -- | Whether a file read now would be retained: files in the first files array.
 keepsFile :: PyPIProjection -> Bool
 keepsFile = projectedFilesActive
+
+-- | The files, file drops and version drops the projection holds.
+retainedEntries :: PyPIProjection -> Int
+retainedEntries = projectedEntries
 
 -- | Decode one compact file, refusing the read at the first file position past the version ceiling.
 collectField :: Limits -> PyPIProjection -> PyPIField -> Either LimitError PyPIProjection
@@ -68,7 +74,7 @@ collectField limits acc = \case
     VersionsShape valid -> Right acc{projectedVersionsSeen = True, projectedVersionsActive = not (projectedVersionsSeen acc), projectedShape = projectedShape acc && (projectedVersionsSeen acc || valid)}
     InvalidVersionField position value
         | projectedVersionsActive acc ->
-            Right acc{projectedVersionDrops = mkInvalidEntry InvalidVersionListing (show position) value "expected a version string" : projectedVersionDrops acc}
+            Right acc{projectedVersionDrops = mkInvalidEntry InvalidVersionListing (show position) value "expected a version string" : projectedVersionDrops acc, projectedEntries = projectedEntries acc + 1}
         | otherwise -> Right acc
     FileField position raw
         | projectedFilesActive acc -> do
@@ -81,13 +87,13 @@ retainFile :: Int -> Value -> PyPIProjection -> PyPIProjection
 retainFile position value current = foldl' (retainFileFact (TreeFile value)) withDrops files
   where
     (files, drops) = decodeIndexFiles [(position, value)]
-    withDrops = current{projectedFileDrops = reverse drops <> projectedFileDrops current}
+    withDrops = current{projectedFileDrops = reverse drops <> projectedFileDrops current, projectedEntries = projectedEntries current + length drops}
 
 retainFileFact :: FilePayload -> PyPIProjection -> IndexFile -> PyPIProjection
 retainFileFact served current file =
     let (coordinate, memo) = readCoordinate (projectedMemo current) (ifFilename file)
         !projected = projectFile file coordinate
-     in current{projectedFiles = (projected, served) : projectedFiles current, projectedMemo = memo}
+     in current{projectedFiles = (projected, served) : projectedFiles current, projectedMemo = memo, projectedEntries = projectedEntries current + 1}
 
 -- | Refuse at the first file position past the version ceiling. Decode a whole file only for its invalid-entry diagnostic.
 packedFileStep :: Writer st -> Limits -> PyPIProjection -> Int -> FileValue -> (Either LimitError PyPIProjection -> ST st r) -> ST st r
