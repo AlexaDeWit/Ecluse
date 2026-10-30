@@ -534,6 +534,7 @@ retained-live measurements remain distinct from the cached accounting estimate.
 RubyGems uses `MergePrivateAndPublic` with global Compact Index discovery and per-gem metadata acquisition.
 The public directory shares bounded retention. Caller-authorised private discovery remains fresh and separate from public retention.
 Discovery bounds gem names with a fixed ceiling rather than the per-package count limits, so lowering those limits for npm or PyPI cannot break RubyGems discovery.
+The public directory follows partial availability, except that a bound breach refuses the request as an exceeded input bound does.
 Per-gem `/info/<gem>` rows follow the shared source selection, admission and mirror restoration paths.
 Unknown transformed info-file MD5 values use explicit blank hints in the supported clients.
 This keeps detailed metadata acquisition on demand without publishing a false checksum.
