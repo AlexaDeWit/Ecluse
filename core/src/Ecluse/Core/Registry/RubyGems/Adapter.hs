@@ -11,10 +11,12 @@ import Ecluse.Core.Ecosystem (Ecosystem (RubyGems))
 import Ecluse.Core.Registry (UrlFormationError (UnparseableUrl))
 import Ecluse.Core.Registry.Adapter.Capability (AdapterArtifact (..), AdapterMaintenance (..), AdapterMetadata (..), PrivateArtifactAddressing (AdmittedIndexedArtifactLocation))
 import Ecluse.Core.Registry.Adapter.Types (AdapterServe (..), RegistryAdapter (..))
+import Ecluse.Core.Registry.FirstParty (FirstPartyDeclaration (FirstPartyDeclaration))
 import Ecluse.Core.Registry.Maintenance.NameSpace (mkNameAlphabet)
 import Ecluse.Core.Registry.Origin (OriginClient (ocBaseRequest, ocToken))
 import Ecluse.Core.Registry.Request (artifactGet, artifactRequestByUrl, requestAt)
 import Ecluse.Core.Registry.RubyGems.Credential (rubyReadCredential)
+import Ecluse.Core.Registry.RubyGems.FirstParty (rubyGemsFirstPartyNames)
 import Ecluse.Core.Registry.RubyGems.Metadata (prepareGemRead)
 import Ecluse.Core.Registry.RubyGems.Project (projectName, rubyGemsNameChars)
 import Ecluse.Core.Registry.RubyGems.Publish (rubyPublish)
@@ -61,6 +63,7 @@ rubyGemsAdapter factors =
                 , artifactPrivateAddressing = AdmittedIndexedArtifactLocation
                 }
         , adapterProjectName = rightToMaybe . projectName
+        , adapterFirstParty = FirstPartyDeclaration rubyGemsFirstPartyNames
         , adapterPublish = Just (rubyPublish factors)
         , adapterMaintenance = AdapterMaintenance Nothing Nothing (mkNameAlphabet rubyGemsNameChars)
         }

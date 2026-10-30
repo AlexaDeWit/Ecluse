@@ -15,9 +15,6 @@ module Ecluse.Composition (
     -- * Boot-time wiring
     planMounts,
 
-    -- * The first-party privilege
-    firstPartyName,
-
     -- * Publish-side wiring
     PublishBudget (..),
     PublishTarget (..),
@@ -49,7 +46,6 @@ import Ecluse.Composition.Validate (
 import Ecluse.Config (
     AppConfig (..),
     EgressSettings (..),
-    FirstParty (..),
     IntegritySettings (..),
     MirrorTarget (mtBackend, mtUploadUrl, mtUrl, mtUsername),
     Mount (..),
@@ -68,7 +64,6 @@ import Ecluse.Config.Target (storePresentation)
 import Ecluse.Core.Credential (CredentialProvider)
 import Ecluse.Core.Credential.Refresh (CredentialReporters)
 import Ecluse.Core.Ecosystem (Ecosystem, prefixFor)
-import Ecluse.Core.Package (PackageName)
 import Ecluse.Core.Registry.Adapter (
     RegistryAdapter,
     adapterArtifact,
@@ -77,11 +72,8 @@ import Ecluse.Core.Registry.Adapter (
     adapterPublish,
  )
 import Ecluse.Core.Registry.Adapter.Capability (AdapterArtifact (artifactHosts))
-import Ecluse.Core.Registry.Cargo.FirstParty (cargoFirstPartyName)
-import Ecluse.Core.Registry.Npm.Publish (npmPublishAllowed)
-import Ecluse.Core.Registry.PyPI.FirstParty (pypiFirstPartyName)
+import Ecluse.Core.Registry.FirstParty (firstPartyName)
 import Ecluse.Core.Registry.Request (ServicePresentation)
-import Ecluse.Core.Registry.RubyGems.FirstParty (rubyGemsFirstPartyName)
 import Ecluse.Core.Rules (RuleDeps, prepare, rdCurrentAdvisoryEtag, rdSourceReporter)
 import Ecluse.Core.Rules.Outage (SourceReporter (noteAdmission))
 import Ecluse.Core.Security (Limits, maxPublishRequestBytes)
@@ -285,14 +277,6 @@ publishDepsFor adapter app limits publishBudget helpMessage publication = do
             , pubProjectName = adapterProjectName adapter
             , pubAdapter = publish
             }
-
--- | Whether this deployment owns a name: the one predicate every consumer of the privilege reads.
-firstPartyName :: FirstParty -> PackageName -> Bool
-firstPartyName = \case
-    FirstPartyNpmScopes scopes -> npmPublishAllowed (toList scopes)
-    FirstPartyPyPI entries -> pypiFirstPartyName entries
-    FirstPartyCargo entries -> cargoFirstPartyName entries
-    FirstPartyRubyGems entries -> rubyGemsFirstPartyName entries
 
 -- | One ecosystem's publish target, resolved once: the worker's write endpoint and its token provider.
 data PublishTarget = PublishTarget

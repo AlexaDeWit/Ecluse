@@ -18,7 +18,6 @@ import Ecluse.Composition (
     PublishBudget (..),
     PublishTarget (ptPresentation),
     WiringPorts (WiringPorts, wpBuildCredentials, wpClock, wpReporters, wpResolveAdapter, wpRuleDeps),
-    firstPartyName,
     planMounts,
     planPublishTargets,
     resolveBootWiring,
@@ -52,7 +51,7 @@ import Ecluse.Composition.Vet (runVet)
 import Ecluse.Config (
     Config (configMounts),
     ConfigError (..),
-    FirstParty (FirstPartyCargo, FirstPartyNpmScopes, FirstPartyPyPI, FirstPartyRubyGems),
+    FirstParty (FirstParty),
     Mount (mountPolicy),
     PolicyError (UnknownRuleType),
     StoreTag (TagRegistry),
@@ -67,10 +66,13 @@ import Ecluse.Core.Package.Integrity (
     mkMinIntegrity,
     mkMinTrustedIntegrity,
  )
-import Ecluse.Core.Registry.FirstParty (FirstPartyEntry (OwnedName))
-import Ecluse.Core.Registry.PyPI.FirstParty (PyPIFirstParty (PyPIOwnedName))
+import Ecluse.Core.Registry.Cargo.FirstParty (cargoFirstPartyNames)
+import Ecluse.Core.Registry.FirstParty (FirstPartyEntry (OwnedName), firstPartyName)
+import Ecluse.Core.Registry.Npm.Adapter (npmFirstPartyNames)
+import Ecluse.Core.Registry.PyPI.FirstParty (PyPIFirstParty (PyPIOwnedName), pypiFirstPartyNames)
 import Ecluse.Core.Registry.Request (StoreOperation (StoreRead, StoreWrite), attachCredential, nativePresentation, presentedMapping)
 import Ecluse.Core.Registry.RubyGems.Credential (rubyPublishCredential, rubyReadCredential)
+import Ecluse.Core.Registry.RubyGems.FirstParty (rubyGemsFirstPartyNames)
 import Ecluse.Core.Rules (PreparedRule (prepName), bootOrder, renderBootOrder)
 import Ecluse.Core.Rules.Types (EvalContext (EvalContext), identityEvidence)
 import Ecluse.Core.Security (Limits (maxMetadataBytes, maxNestingDepth, maxVersionCount), defaultLimits)
@@ -574,7 +576,7 @@ firstPartySpec :: Spec
 firstPartySpec = describe "firstPartyName (the derived first-party predicate)" $ do
     it "matches an npm scope exactly, refusing a lookalike and an unscoped name" $
         map
-            (firstPartyName (FirstPartyNpmScopes (mkScope "acme" :| [mkScope "beta"])))
+            (firstPartyName (FirstParty npmFirstPartyNames (mkScope "acme" :| [mkScope "beta"])))
             [scopedName "acme", scopedName "beta", scopedName "acme-evil", thingName]
             `shouldBe` [True, True, False, False]
 
@@ -587,14 +589,14 @@ firstPartySpec = describe "firstPartyName (the derived first-party predicate)" $
     it "dispatches RubyGems ownership without changing native identity" $
         let owned = mkPackageName RubyGems Nothing "Acme_Tools"
          in map
-                (firstPartyName (FirstPartyRubyGems (OwnedName owned :| [])))
+                (firstPartyName (FirstParty rubyGemsFirstPartyNames (OwnedName owned :| [])))
                 [owned, mkPackageName RubyGems Nothing "acme-tools", mkPackageName Npm Nothing "Acme_Tools"]
                 `shouldBe` [True, False, False]
 
     it "dispatches Cargo ownership through its collision key, refusing another ecosystem" $
         let owned = mkPackageName Cargo Nothing "acme_tools"
          in map
-                (firstPartyName (FirstPartyCargo (OwnedName owned :| [])))
+                (firstPartyName (FirstParty cargoFirstPartyNames (OwnedName owned :| [])))
                 [owned, mkPackageName Cargo Nothing "acme-tools", mkPackageName Cargo Nothing "acme-toolsx", mkPackageName RubyGems Nothing "acme_tools"]
                 `shouldBe` [True, True, False, False]
 
@@ -618,4 +620,4 @@ firstPartySpec = describe "firstPartyName (the derived first-party predicate)" $
 
 -- A PyPI declaration of exact names.
 pypiFirstParty :: NonEmpty Text -> FirstParty
-pypiFirstParty = FirstPartyPyPI . fmap (PyPIOwnedName . unscopedPyPI)
+pypiFirstParty = FirstParty pypiFirstPartyNames . fmap (PyPIOwnedName . unscopedPyPI)
