@@ -20,6 +20,7 @@ import Ecluse.Composition.BootError (BootError (..), renderBootError)
 import Ecluse.Composition.Credential (initTargetCredentialProviders)
 import Ecluse.Composition.MirrorRole (MirrorMintPlan (MintMirrorWrite, SkipMirrorWrite))
 import Ecluse.Composition.Support (
+    cargoMirrorEnv,
     completeMountDoc,
     expectConfig,
     expectEnv,
@@ -66,6 +67,7 @@ import Ecluse.Core.Server.Context (
     MountBinding (bindingPackumentDeps, bindingPrefix, bindingPublishDeps),
     PackumentDeps (..),
     PublishDeps (..),
+    ReadSourceSelection (MergePrivateAndPublic),
     pdMirror,
     pdPrivateBaseUrl,
     pdPublicBaseUrl,
@@ -301,6 +303,17 @@ planMountsSpec = describe "resolveBootWiring (config-driven serving)" $ do
             Right [binding] -> do
                 let deps = bindingPackumentDeps binding
                 mirrorTargetText (pdMirror deps) `shouldBe` Just "https://mirror.example.test"
+            other -> expectationFailure ("expected one binding, got " <> show (fmap length other))
+
+    it "plans a Cargo mount that reads the private upstream and only writes to its distinct mirror target" $ do
+        planFrom cargoMirrorEnv Nothing >>= \case
+            Right [binding] -> do
+                bindingPrefix binding `shouldBe` ("cargo" :| [])
+                let deps = bindingPackumentDeps binding
+                fmap registryUrlText (pdPrivateBaseUrl deps) `shouldBe` Just "https://private.example.test/"
+                mirrorTargetText (pdMirror deps) `shouldBe` Just "https://target.example.test/"
+                pdReadSourceSelection deps `shouldBe` MergePrivateAndPublic
+                pdMountBaseUrl deps `shouldBe` "https://registry.example.test/cargo"
             other -> expectationFailure ("expected one binding, got " <> show (fmap length other))
 
     it "refines the trusted floor per mount over the global default" $ do
