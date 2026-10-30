@@ -193,6 +193,8 @@ integrationObligations =
         , "integration/mirror-view/native-018/partial"
         , "integration/mirror-view/native-018/absent"
         , "integration/mirror-view/native-018/unavailable"
+        , "integration/mirror-view/native-019"
+        , "integration/mirror-view/native-020"
         ]
     , required
         "integration/egress"
