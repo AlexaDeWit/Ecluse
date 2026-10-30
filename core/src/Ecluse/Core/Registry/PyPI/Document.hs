@@ -9,6 +9,7 @@ module Ecluse.Core.Registry.PyPI.Document (
     simpleEnvelope,
     simpleFiles,
     restrictSimpleFiles,
+    simpleSourceCompanions,
     simpleEncoding,
 
     -- * Packed full reads
@@ -28,6 +29,7 @@ import Data.Primitive.SmallArray (smallArrayFromList)
 import Data.Set qualified as Set
 
 import Ecluse.Core.Package.Entry (EntryKey)
+import Ecluse.Core.Registry (CompanionRequirement (DeclaredCompanions))
 import Ecluse.Core.Registry.Json.Packed (DocTable, Packed, Piece (..), Pieces (ArrayPieces), RenderPlan (..), packedResident, packedValue, tableResident)
 
 -- | Supported envelope fields and files associated with their original source positions.
@@ -47,6 +49,10 @@ simpleDocument envelope = SimpleDocument (KeyMap.delete "files" envelope)
 restrictSimpleFiles :: Set EntryKey -> SimpleDocument -> SimpleDocument
 restrictSimpleFiles keys document =
     simpleDocument (simpleEnvelope document) (filter ((`Set.member` keys) . fst) (simpleFiles document))
+
+-- | A retained file needs a companion only where its entry declares core metadata.
+simpleSourceCompanions :: CompanionRequirement
+simpleSourceCompanions = DeclaredCompanions
 
 -- The empty state avoids a trailing Series append. Strict payloads keep the fold eager.
 data EnvelopePairs

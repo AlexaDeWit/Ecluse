@@ -8,6 +8,7 @@ module Ecluse.Core.Registry.Cargo.SourceState (
     cargoRecordFacts,
     validateCargoSource,
     restrictCargoDocument,
+    cargoSourceCompanions,
 ) where
 
 import Data.Aeson (Value (..))
@@ -18,6 +19,7 @@ import Data.Time (UTCTime)
 
 import Ecluse.Core.Package (Artifact (..), Availability (Available, Yanked), HashAlg (SHA256), PackageDetails (..), mkHash)
 import Ecluse.Core.Package.Entry (EntryKey, validRecordKey)
+import Ecluse.Core.Registry (CompanionRequirement (DeclaredCompanions))
 import Ecluse.Core.Registry.Cargo.Discovery (cargoArtifactCoordinate, coordinateFilename)
 import Ecluse.Core.Registry.Cargo.Document (CargoDocument, cargoDocument, cargoRecords)
 import Ecluse.Core.Registry.Cargo.Project (projectName)
@@ -73,3 +75,7 @@ validateCargoSource details document = case (cargoRecords document, toList (pkgA
 -- | Keep the admitted rows in native order without renumbering their physical coordinates.
 restrictCargoDocument :: Set EntryKey -> CargoDocument -> CargoDocument
 restrictCargoDocument admitted = cargoDocument . filter ((`Set.member` admitted) . fst) . cargoRecords
+
+-- | A retained crate needs a companion only where its artifact declares one, and index rows declare none.
+cargoSourceCompanions :: CompanionRequirement
+cargoSourceCompanions = DeclaredCompanions

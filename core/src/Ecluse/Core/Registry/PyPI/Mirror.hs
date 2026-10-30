@@ -16,13 +16,12 @@ import Ecluse.Core.Mirror.Documents (MirrorDocuments (..), restoreFragments)
 import Ecluse.Core.Mirror.State (MirrorVersion, recordEnvelope)
 import Ecluse.Core.Package (Artifact (..), PackageDetails (pkgArtifacts))
 import Ecluse.Core.Package.Entry (EntryKey (ArrayEntry))
-import Ecluse.Core.Registry (CompanionRequirement (DeclaredCompanions))
 import Ecluse.Core.Registry.CachedDocument (pypiPacked, pypiSimpleCached)
 import Ecluse.Core.Registry.Json.Packed (docTable)
 import Ecluse.Core.Registry.Json.Writer (packTree)
 import Ecluse.Core.Registry.Metadata (VersionDoc (..))
 import Ecluse.Core.Registry.MirrorUpload (MirrorReadData (PyPIMirrorRead))
-import Ecluse.Core.Registry.PyPI.Document (packedSimple, simpleDocument, simpleEnvelope, simpleFiles, urlHole)
+import Ecluse.Core.Registry.PyPI.Document (packedSimple, simpleDocument, simpleEnvelope, simpleFiles, simpleSourceCompanions, urlHole)
 
 -- | Files keep array coordinates and versions keep version-text order. The listing envelope is the retained project's.
 pypiMirrorDocuments :: MirrorDocuments
@@ -37,7 +36,7 @@ pypiMirrorDocuments =
         , mdAssemble = \record docs ->
             let files = concat [simpleFiles document | doc <- docs, Just raw <- [vdRaw doc], Just document <- [snd pypiSimpleCached raw]]
              in fst pypiPacked (packedSimple (recordEnvelope record) (docTable (smallArrayFromList [])) [(key, packTree urlHole value) | (key, value) <- files])
-        , mdCompanions = DeclaredCompanions
+        , mdCompanions = simpleSourceCompanions
         }
 
 restoreSimpleVersion :: MirrorVersion -> [Artifact] -> Maybe VersionDoc
