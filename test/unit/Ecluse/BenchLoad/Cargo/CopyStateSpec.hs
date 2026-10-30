@@ -2,20 +2,22 @@
 --
 -- SPDX-License-Identifier: MIT
 
--- | Cargo's private-copy state records only private rows that match their public source.
+-- | Cargo's private-copy state records only private rows that match their public source, and serves them as S3 objects.
 module Ecluse.BenchLoad.Cargo.CopyStateSpec (spec) where
 
+import Data.List (lookup)
 import Data.Map.Strict qualified as Map
 import Data.Ratio ((%))
 import Data.Set qualified as Set
 import Network.HTTP.Client qualified as HTTP
-import Network.HTTP.Types (status200, status404)
+import Network.HTTP.Types (Header, status200, status304, status404)
+import Network.HTTP.Types.Header (hETag, hIfNoneMatch)
 import Network.Wai (Application)
 import Network.Wai.Handler.Warp (testWithApplication)
 import Test.Hspec
 
 import Ecluse.BenchLoad.Cargo (crateStubWith, indexStubWithArtifacts)
-import Ecluse.BenchLoad.Cargo.CopyState (withCopyState)
+import Ecluse.BenchLoad.Cargo.CopyState (copyStateApplication, withCopyState)
 import Ecluse.BenchLoad.Fixture (fetchChecked, loadCorpusBodies, loadCorpusCuts, primeETag)
 import Ecluse.BenchLoad.Harness (LoadKnobs (lkUpstreamLatencyMicros), defaultLoadKnobs)
 import Ecluse.BenchLoad.ProxyProcess (ProxySettings (..), mirrorStateBucket, proxySettings)
@@ -28,10 +30,17 @@ import Ecluse.Core.Security (defaultLimits)
 import Ecluse.Test.Corpus (CorpusPackage, cargoCorpusPackages, cpName)
 import Ecluse.Test.Corpus.Cargo (cargoVersionKeys)
 import Ecluse.Test.Corpus.Subset (newestCargoShare)
+import Ecluse.Test.Mirror.Read (ReadFixture (fixtureOld, fixtureTarget), makeReadFixtureFor)
+import Ecluse.Test.Mirror.State (mirrorPackage)
 import Ecluse.Test.Support (expectRight, expectRightText)
 
 spec :: Spec
-spec = describe "withCopyState" $ do
+spec = do
+    withCopyStateSpec
+    copyStateApplicationSpec
+
+withCopyStateSpec :: Spec
+withCopyStateSpec = describe "withCopyState" $ do
     it "records the private copy's rows that match their public source, behind the copy-state hosts" $ do
         cut <- loadCorpusCuts (newestCargoShare (5 % 100)) tokioCapture
         cutVersions <- expectRightText (cargoVersionKeys . toStrict =<< maybeToRight "the cut holds no tokio capture" (Map.lookup "tokio" cut))
@@ -51,6 +60,32 @@ spec = describe "withCopyState" $ do
     indexStub bodies = do
         rewritten <- newIORef mempty
         pure (indexStubWithArtifacts rewritten 0 bodies Map.empty)
+
+copyStateApplicationSpec :: Spec
+copyStateApplicationSpec = describe "copyStateApplication" $
+    it "serves native records under opaque revisions with conditional reads, and a missing record as NoSuchKey" $ do
+        input <- makeReadFixtureFor (stateTarget "https://private.fixture") 1
+        let nativePath = encodeUtf8 ("/" <> mirrorStateBucket <> "/" <> projectKey (fixtureTarget input) mirrorPackage <> "/project.json")
+            application = copyStateApplication 0 (Map.singleton nativePath (fixtureOld input))
+        testWithApplication (pure application) $ \port -> do
+            manager <- HTTP.newManager HTTP.defaultManagerSettings
+            let fetchObject :: ByteString -> [Header] -> IO (HTTP.Response LByteString)
+                fetchObject path headers = do
+                    request <- HTTP.parseRequest ("http://127.0.0.1:" <> show port <> toString (decodeUtf8 path :: Text))
+                    HTTP.httpLbs request{HTTP.requestHeaders = headers, HTTP.checkResponse = \_ _ -> pass} manager
+            stored <- fetchObject nativePath []
+            HTTP.responseStatus stored `shouldBe` status200
+            toStrict (HTTP.responseBody stored) `shouldBe` fixtureOld input
+            case lookup hETag (HTTP.responseHeaders stored) of
+                Nothing -> expectationFailure "native state has no opaque revision"
+                Just revision -> do
+                    unchanged <- fetchObject nativePath [(hIfNoneMatch, revision)]
+                    HTTP.responseStatus unchanged `shouldBe` status304
+                    HTTP.responseBody unchanged `shouldBe` ""
+                    lookup hETag (HTTP.responseHeaders unchanged) `shouldBe` Just revision
+            missing <- fetchObject (encodeUtf8 ("/" <> mirrorStateBucket <> "/missing/project.json")) []
+            HTTP.responseStatus missing `shouldBe` status404
+            HTTP.responseBody missing `shouldBe` "<Error><Code>NoSuchKey</Code></Error>"
 
 tokio :: PackageName
 tokio = mkPackageName Cargo Nothing "tokio"

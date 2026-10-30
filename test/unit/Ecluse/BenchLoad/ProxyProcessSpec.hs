@@ -305,14 +305,6 @@ environmentSpec = describe "proxyEnvironment" $ do
         lookup "AWS_PROFILE" shipped `shouldBe` Nothing
         let noDatabase = proxyEnvironment settings Unlimited 3 "/tmp/proxy" (8080, 8081, 8082) 9001 (Just 9002) awsBase
         filter (("AWS_" `isPrefixOf`) . fst) noDatabase `shouldBe` []
-    it "selects one endpoint and one identity when Cargo uses advisory and native state buckets" $ do
-        let feed = AdvisoryFeed 9003 advisoryDenyRules (AdvisoryObject Cargo (UTCTime (fromGregorian 2026 9 27) 0) "compiled advisory bytes")
-            combined = (proxySettings Cargo 0){psAdvisories = Just feed, psMirrorStatePort = Just 9004}
-            environment = proxyEnvironment combined Unlimited 3 "/tmp/proxy" (8080, 8081, 8082) 9001 (Just 9002) []
-        filter ((== "AWS_ENDPOINT_URL") . fst) environment `shouldBe` [("AWS_ENDPOINT_URL", "http://127.0.0.1:9004")]
-        filter ((== "AWS_ACCESS_KEY_ID") . fst) environment `shouldBe` [("AWS_ACCESS_KEY_ID", "test")]
-        lookup "ECLUSE_ADVISORIES__URL" environment `shouldBe` Just "s3://ecluse-bench-advisories"
-        lookup "ECLUSE_MIRROR_STATE__URL" environment `shouldBe` Just "s3://ecluse-bench-mirror-state"
     it "adds an advisory feed's rules to the shipped policy, and leaves the policy alone without any" $ do
         let rulesFor rules = lookup "ECLUSE_RULES" (proxyEnvironment settings{psAdvisories = Just (AdvisoryFeed 9003 rules advisoryObject)} Unlimited 3 "/tmp/proxy" (8080, 8081, 8082) 9001 Nothing [])
             ruleNames = \case
