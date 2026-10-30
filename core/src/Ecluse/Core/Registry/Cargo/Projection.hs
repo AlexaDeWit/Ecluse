@@ -8,7 +8,7 @@ module Ecluse.Core.Registry.Cargo.Projection (projectCargoRecord) where
 import Data.Aeson (Value (..))
 
 import Ecluse.Core.Ecosystem (Ecosystem (Cargo))
-import Ecluse.Core.Package (Artifact (..), CodeExecSignal (CodeExecUnknown), DependencySources (RegistryDependencies), HashAlg (SHA256), InvalidEntry, InvalidEntryKind (InvalidVersionManifest), PackageDetails (..), PackageName, mkHash, mkInvalidEntry)
+import Ecluse.Core.Package (Artifact (..), CodeExecSignal (CodeExecUnknown), DependencySources (DependencySourcesUnknown), HashAlg (SHA256), InvalidEntry, InvalidEntryKind (InvalidVersionManifest), PackageDetails (..), PackageName, mkHash, mkInvalidEntry)
 import Ecluse.Core.Package.Entry (EntryKey)
 import Ecluse.Core.Registry.Cargo.Discovery (CargoDiscovery, bindCargoDownload, cargoArtifactCoordinate, coordinateFilename)
 import Ecluse.Core.Registry.Cargo.Project (projectName)
@@ -36,8 +36,7 @@ projectCargoRecord requested key discovery value = first invalid $ do
             , pkgVersion = version
             , pkgPublishedAt = crfPublishedAt facts
             , pkgInstallCode = CodeExecUnknown
-            , -- crates.io refuses a published dependency on code from outside crates.io.
-              pkgDependencySources = RegistryDependencies
+            , pkgDependencySources = DependencySourcesUnknown
             , pkgAvailability = crfAvailability facts
             , pkgArtifacts = artifact :| []
             }
