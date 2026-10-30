@@ -21,13 +21,13 @@ import Data.Bits (shiftL, (.|.))
 import Data.ByteString qualified as BS
 import Data.ByteString.Builder (byteString, lazyByteString, toLazyByteString, word32LE)
 import Data.ByteString.Lazy qualified as LBS
-import Data.Text qualified as T
 
 import Ecluse.Core.Registry (ParseError (..), parseRefusal)
 import Ecluse.Core.Registry.Cargo.Manifest (parseRustRelease, unstableDependencyFields, usesUnstableDependencyField)
 import Ecluse.Core.Registry.Cargo.Project (projectName)
 import Ecluse.Core.Registry.Cargo.Wire (cargoTreeCharge, decodeCargoRecord)
 import Ecluse.Core.Security.Limits (Limits (..))
+import Ecluse.Core.Text (joinAlternatives)
 import Ecluse.Core.Version.Cargo (parseCargo)
 
 -- | The decoded claims and archive remain paired with one fully consumed native body.
@@ -131,9 +131,7 @@ uploadDependency = withObject "Cargo upload dependency" $ \fields -> do
 
 -- The shared field list as the refusal names it: "artifact, bindep_target, lib or public".
 unstableFieldNames :: Text
-unstableFieldNames = case reverse (map Key.toText unstableDependencyFields) of
-    final : earlier@(_ : _) -> T.intercalate ", " (reverse earlier) <> " or " <> final
-    names -> T.intercalate ", " names
+unstableFieldNames = joinAlternatives (map Key.toText unstableDependencyFields)
 
 nativeName :: Text -> Parser ()
 nativeName = either (const (fail "Cargo upload name is invalid")) (const (pure ())) . projectName
