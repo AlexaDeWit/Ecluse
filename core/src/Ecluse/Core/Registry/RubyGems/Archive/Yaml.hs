@@ -216,12 +216,12 @@ psychNumber signed = integer || float
     separated = (`elem` ['_', ','])
     radix prefix digit = case T.stripPrefix prefix text of
         Just rest -> case T.uncons (T.dropWhile separated rest) of
-            Just (first, others) -> digit first && T.all (\c -> digit c || separated c) others
+            Just (leading, others) -> digit leading && T.all (\c -> digit c || separated c) others
             Nothing -> False
         Nothing -> False
     decimal = case T.uncons text of
         Just ('0', rest) -> T.null rest
-        Just (first, rest) -> first `elem` ['1' .. '9'] && grouped (T.unpack rest)
+        Just (leading, rest) -> leading `elem` ['1' .. '9'] && grouped (T.unpack rest)
         Nothing -> False
     grouped = \case
         [] -> True
@@ -231,12 +231,12 @@ psychNumber signed = integer || float
     integer = radix "0b" (`elem` ['0', '1']) || radix "0x" isHexDigit || radix "0" (`elem` ['0' .. '7']) || decimal
     float = case T.breakOn "." text of
         (whole, point) | Just after <- T.stripPrefix "." point ->
-            let (_, exponent) = T.span isDigit after
+            let (_, scale) = T.span isDigit after
              in (T.null whole || (T.all isDigit (T.take 1 whole) && T.all (\c -> isDigit c || separated c) whole))
                     && not (T.null whole && T.null after)
-                    && (T.null exponent || validExponent exponent)
+                    && (T.null scale || validScale scale)
         _ -> False
-    validExponent exponent = case T.unpack exponent of
+    validScale scale = case T.unpack scale of
         e : sign : digits@(_ : _) -> e `elem` ['e', 'E'] && sign `elem` ['-', '+'] && all isDigit digits
         _ -> False
 
