@@ -384,7 +384,7 @@ one:
 | `DenyIfDeprecated` | No | Denies a version carrying the npm deprecation flag, including whole packages and release lines. | None |
 | `DenyIfYanked` | No | Denies a yanked Cargo version or a PyPI release whose every file is yanked. | None |
 | `DenyInstallTimeExecution` | npm only | `deny-scripts` denies npm install scripts at admission. Stored copies stay. | None |
-| `DenyExternalDependencies` | npm only | `deny-external-dependencies` denies a public npm version whose `dependencies`, `optionalDependencies` or `peerDependencies` name a git source or a remote tarball URL, at admission. Stored copies stay. | None |
+| `DenyExternalDependencies` | npm only | `deny-external-dependencies` denies a public npm version whose `dependencies`, `optionalDependencies` or `peerDependencies` name a git source, a remote tarball URL or an unsupported scheme such as `jsr:`, at admission. Stored copies stay. | None |
 | `DenyIfKnownMalicious` | With `advisories.url` | Denies affected versions named by an active primary `MAL-` advisory. Named `deny-known-malicious`, precedence 300, both phases. | `onUnavailable` |
 | `AllowByIdentity` | No | Admits a package or `package@version`, and a bare name matches every version. It overrides scored advisory denies. Override MAL denial with precedence above 300. | `identity` |
 | `DenyIfCve` | No | Denies a version that a synced advisory marks as affected at or above a CVSS threshold. | `minCvss` (0-10), `onUnavailable` |
@@ -436,12 +436,13 @@ enable a mount themselves.
 PyPI inherits only the shared defaults, so an admitted release keeps its source distributions and wheels.
 
 `deny-external-dependencies` denies a public version whose installable dependencies a client would
-fetch directly, past Écluse: a git source (`git+https:`, `git:`, `git+ssh:`, `ssh:`, `github:`,
-`gitlab:`, `bitbucket:`, `gist:`, `sourcehut:`, `user/repo` shorthand, or a `user@host:path`
-address) or a remote tarball URL (`http:` or `https:`). It reads the specs the packument already
-carries, so it adds no fetch. `devDependencies`, which consumers do not install, `file:`, `link:` and
-`workspace:` specs, and `npm:` aliases do not trigger it. PyPI, Cargo and RubyGems block the type
-at boot, as the table of blocked types below lists.
+fetch from outside Écluse. Only a registry range or dist-tag, an `npm:` alias, a `file:`, `link:` or
+`workspace:` spec, or a local path passes. A git source (`git+https:`, `git:`, `git+ssh:`, `ssh:`,
+`github:`, `gitlab:`, `bitbucket:`, `gist:`, `sourcehut:`, `user/repo` shorthand, or a
+`user@host:path` address), a remote tarball URL (`http:` or `https:`), and every other scheme, such
+as pnpm's `jsr:` or one a client adds later, trigger it. It reads the specs the packument already
+carries, so it adds no fetch. `devDependencies`, which consumers do not install, do not trigger it.
+PyPI, Cargo and RubyGems block the type at boot, as the table of blocked types below lists.
 
 Disable either default under `mounts.npm.rules`, or admit a named package with an `AllowByIdentity`
 pin whose explicit `precedence` is above 300:
