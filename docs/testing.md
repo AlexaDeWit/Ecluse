@@ -1380,7 +1380,8 @@ Four scenarios per ecosystem stress admission under memory pressure.
 `rubygems/herd` sends it for the `rails` per-gem `/info` record.
 Each ecosystem's `herd-under-heavy-private` sends that burst during a heavy private load.
 See [The herd under heavy private load](#the-herd-under-heavy-private-load).
-Each ecosystem's `warm-under-cold` measures assembled hits and retained selected reads.
+The npm, PyPI and Cargo `warm-under-cold` scenarios measure assembled hits and retained selected reads.
+`rubygems/warm-under-cold` measures `/info` replies rebuilt per request and retained selected reads.
 A second generator drives heavy-tier listings that never reuse an assembled response.
 Each ecosystem's `ramp` steps from 10 to 400 connections, with one configured duration per step, and reports each step.
 None of these sixteen scenarios joins the concurrency-one pass.
@@ -1476,7 +1477,7 @@ a change. Like every scenario, each fails on an OOM kill or a heap overflow.
 
 Each scenario runs its ecosystem's `heavy-private` load at the base concurrency for the window.
 Halfway through, 100 more connections each send one request for the herd's listing at the same
-moment: `typescript` for npm, `boto3` for PyPI, and `aws-sdk-ec2` for Cargo.
+moment: `typescript` for npm, `boto3` for PyPI, `aws-sdk-ec2` for Cargo, and `rails` for RubyGems.
 The burst passes through the same admission as the load. From that moment until the last burst response ends, the harness reads the proxy cgroup's
 files every 10 ms. A herd on an idle proxy completes in about a second, so the one-second gauges
 would miss its peak. The scenario's own section adds three rows to the usual figures:
