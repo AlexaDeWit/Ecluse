@@ -4,7 +4,7 @@
 {-# LANGUAGE ImportQualifiedPost #-}
 
 -- | Native tar fixtures shared across registry ecosystems.
-module Ecluse.Test.Registry.Archive (tarBytes, tarEntries, regular, pax, paxRecord) where
+module Ecluse.Test.Registry.Archive (tarBytes, tarEntries, regular, pax, paxAt, paxRecord) where
 
 import Codec.Archive.Tar qualified as Tar
 import Codec.Archive.Tar.Entry qualified as Tar
@@ -28,9 +28,13 @@ regular path bytes = do
 
 -- | One extended header of the given type flag, such as PAX @x@ or @g@, over raw records.
 pax :: Char -> BSL.ByteString -> IO Tar.Entry
-pax code bytes = do
-    path <- expectRight (Tar.toTarPath False "PaxHeaders/entry")
-    pure (Tar.simpleEntry path (Tar.OtherEntryType code bytes (BSL.length bytes)))
+pax = paxAt "PaxHeaders/entry"
+
+-- | 'pax' under its own header name, for a reader that lists each extended header as a member.
+paxAt :: FilePath -> Char -> BSL.ByteString -> IO Tar.Entry
+paxAt path code bytes = do
+    name <- expectRight (Tar.toTarPath False path)
+    pure (Tar.simpleEntry name (Tar.OtherEntryType code bytes (BSL.length bytes)))
 
 -- | Frame one POSIX pax attribute with its decimal byte count.
 paxRecord :: ByteString -> BSL.ByteString
