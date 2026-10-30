@@ -31,7 +31,7 @@ The caller's credential authorises private reads and, by default, publication. T
 
 A worker token does not give the caller private access. An explicit private authentication refusal stops the request rather than falling back to a public source.
 
-Cargo and RubyGems keep their native refusal statuses, which the [private access policy](@/docs/configuration.md#first-party-namespaces) lists.
+Cargo keeps its native refusal statuses, which the [private access policy](@/docs/configuration.md#first-party-namespaces) lists.
 Cargo's private discovery follows edge authentication and the current caller's authority. It stays uncached across callers.
 The [Cargo protocol reference](@/docs/protocol-support.md#cargo) describes discovery failure during a trusted-registry outage.
 
