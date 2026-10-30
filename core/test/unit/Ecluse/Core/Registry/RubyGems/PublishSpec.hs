@@ -24,7 +24,7 @@ import Ecluse.Core.Registry.Metadata (VersionDoc (..))
 import Ecluse.Core.Registry.MirrorUpload
 import Ecluse.Core.Registry.Origin (OriginClient (ocChargeFullReadWorkspace), originClient)
 import Ecluse.Core.Registry.Publish (MirrorPublish (mpProbeInventory), MirrorTransport (..), PublishCodec (..), PublishPlan (PublishPlan), newMirrorPublish)
-import Ecluse.Core.Registry.Request (AuthMechanism (AuthBasic, AuthBearer), ServicePresentation, StoreOperation (StoreRead, StoreWrite), declaredPresentation, nativePresentation)
+import Ecluse.Core.Registry.Request (nativePresentation)
 import Ecluse.Core.Registry.RubyGems.Document
 import Ecluse.Core.Registry.RubyGems.Project (projectName)
 import Ecluse.Core.Registry.RubyGems.Projection (projectGemRows)
@@ -34,6 +34,7 @@ import Ecluse.Core.Security (Limits (maxMirrorArtifactBytes), defaultLimits)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Core.Server.Admission.Types (ChargeFactors (ChargeFactors))
 import Ecluse.Server.Admission.Support (refuseCharge)
+import Ecluse.Test.Credential (basicReadsBearerWrites)
 import Ecluse.Test.Deadline (withExchangeClient, withSweeper)
 import Ecluse.Test.Port (passthroughTracingPort)
 import Ecluse.Test.Registry.Archive (pax, paxRecord, tarEntries)
@@ -162,12 +163,6 @@ spec = describe "RubyGems publication" $ do
 
 publisher :: AdapterPublish
 publisher = rubyPublish factors
-
--- A store that asks for Basic on reads and Bearer on writes.
-basicReadsBearerWrites :: ServicePresentation
-basicReadsBearerWrites = declaredPresentation $ \case
-    StoreRead -> AuthBasic
-    StoreWrite -> AuthBearer
 
 factors :: ChargeFactors
 factors = ChargeFactors 1000 1000 1000

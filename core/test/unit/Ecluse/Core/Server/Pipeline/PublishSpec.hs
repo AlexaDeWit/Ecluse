@@ -18,7 +18,7 @@ import Ecluse.Core.Registry.Npm.Adapter (npmPublish)
 import Ecluse.Core.Registry.Npm.Project (projectName)
 import Ecluse.Core.Registry.Origin (OriginClient (ocChargeFullRead, ocToken))
 import Ecluse.Core.Registry.Publish (PublishCodec (pcPrepareTarget, pcTargetReadPermille))
-import Ecluse.Core.Registry.Request (AuthMechanism (AuthBasic, AuthBearer), ServicePresentation, StoreOperation (StoreRead, StoreWrite), declaredPresentation, nativePresentation)
+import Ecluse.Core.Registry.Request (ServicePresentation, nativePresentation)
 import Ecluse.Core.Registry.RubyGems.Credential (rubyOtpHeaders, rubyPublishCredential, rubyPublishExtras, rubyReadCredential)
 import Ecluse.Core.Registry.RubyGems.Route (rubyGemsRouter)
 import Ecluse.Core.Security (defaultLimits)
@@ -30,6 +30,7 @@ import Ecluse.Core.Server.Admission.Meter (meterSnapshot)
 import Ecluse.Core.Server.Admission.Types (MeterSnapshot (snChargedBytes))
 import Ecluse.Core.Server.Context (MountBinding (..), PublishDeps (..), RequestCtx (RequestCtx), ResponseAction (..), RouteAction (RouteAction), ServeRuntime (srAdmission, srMemoryMeter), runHandler)
 import Ecluse.Core.Server.Contract (responseToWai)
+import Ecluse.Test.Credential (basicReadsBearerWrites)
 import Ecluse.Test.Deadline (withSweeper)
 import Ecluse.Test.Log (newTestLogEnv)
 import Ecluse.Test.Port (noopMetricsPort)
@@ -63,13 +64,13 @@ spec = do
     describe "store-declared presentation at a protected mount" $ do
         it "presents a static credential as the target store declares" $ do
             seen <- newIORef []
-            withPresentedFixture (recordingPresentation seen) (Just (bareCredential (mkSecret "target-key"))) bearerWrites $ \send observed -> do
+            withPresentedFixture (recordingPresentation seen) (Just (bareCredential (mkSecret "target-key"))) basicReadsBearerWrites $ \send observed -> do
                 simpleStatus <$> send [("Authorization", "edge-key")] `shouldReturn` status201
                 readIORef observed `shouldReturn` [(Just (bareCredential (mkSecret "target-key")), [], "unchanged-native-body")]
-            readIORef seen `shouldReturn` [bearerWrites]
+            readIORef seen `shouldReturn` [basicReadsBearerWrites]
         it "keeps a caller credential's own presentation where the store declares one" $ do
             seen <- newIORef []
-            withPresentedFixture (recordingPresentation seen) Nothing bearerWrites $ \send observed -> do
+            withPresentedFixture (recordingPresentation seen) Nothing basicReadsBearerWrites $ \send observed -> do
                 simpleStatus <$> send [("Authorization", "edge-key")] `shouldReturn` status201
                 readIORef observed `shouldReturn` [(Just (bareCredential (mkSecret "edge-key")), [], "unchanged-native-body")]
             readIORef seen `shouldReturn` [nativePresentation]
@@ -211,12 +212,6 @@ inspectionCharge = 8 * 1024 * 1024
 recordingPresentation :: IORef [ServicePresentation] -> ServeRuntime -> AdapterPublish -> AdapterPublish
 recordingPresentation seen _ publish =
     publish{publishRelay = \presentation origin name body -> modifyIORef' seen (<> [presentation]) >> publishRelay publish presentation origin name body}
-
--- A store that asks for Basic on reads and Bearer on writes.
-bearerWrites :: ServicePresentation
-bearerWrites = declaredPresentation $ \case
-    StoreRead -> AuthBasic
-    StoreWrite -> AuthBearer
 
 -- Pay three equal chunks, each large enough that one chunk and the entry step stay under their sum.
 discoveryPaying :: IORef (Maybe Int) -> ServeRuntime -> AdapterPublish -> AdapterPublish

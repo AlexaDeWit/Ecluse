@@ -28,7 +28,6 @@ import Ecluse.Core.Registry (UrlFormationError (EmptyBaseUrl, UnparseableUrl))
 import Ecluse.Core.Registry.Request (
     AuthMechanism (AuthBasic, AuthBearer, AuthRawKey),
     CredentialMapping,
-    ServicePresentation,
     StoreOperation (StoreRead, StoreWrite),
     artifactRequestByUrl,
     attachCredential,
@@ -51,6 +50,7 @@ import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Core.Server.FieldValue (fieldValues)
 import Ecluse.Core.Server.Path (encodeComponent)
 import Ecluse.Registry.Request.Support (baseAt, genBaseUrl, genComponent, outcomeFacts)
+import Ecluse.Test.Credential (basicReadsBearerWrites)
 import Ecluse.Test.Stub (headerValue, lastCaptured, stubBaseUrl, withStub)
 import Ecluse.Test.Support (parseRequestOrFail)
 
@@ -294,12 +294,6 @@ therefore comes from the mapping, not from a scheme the code assumes.
 -}
 schemedMapping :: CredentialMapping
 schemedMapping = credentialMapping recoverApiKey "Authorization" (\credential -> "Token " <> encodeUtf8 (unSecret (credSecret credential)))
-
--- A store that asks for Basic on reads and Bearer on writes.
-basicReadsBearerWrites :: ServicePresentation
-basicReadsBearerWrites = declaredPresentation $ \case
-    StoreRead -> AuthBasic
-    StoreWrite -> AuthBearer
 
 {- | A presentation that carries a username beside its secret, so a case can assert the pair
 travels whole.

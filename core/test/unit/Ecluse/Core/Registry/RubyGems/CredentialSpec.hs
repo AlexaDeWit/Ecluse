@@ -12,8 +12,9 @@ import Test.Hspec (Spec, describe, it, shouldBe, shouldSatisfy)
 
 import Ecluse.Core.Credential (ClientCredential (ClientCredential), bareCredential, mkSecret)
 import Ecluse.Core.Registry.Adapter.Capability (PublishExtras (..))
-import Ecluse.Core.Registry.Request (AuthMechanism (AuthBasic, AuthBearer), StoreOperation (StoreRead, StoreWrite), attachCredential, credentialRecover, declaredPresentation, presentedMapping)
+import Ecluse.Core.Registry.Request (StoreOperation (StoreRead, StoreWrite), attachCredential, credentialRecover, presentedMapping)
 import Ecluse.Core.Registry.RubyGems.Credential
+import Ecluse.Test.Credential (basicReadsBearerWrites)
 import Ecluse.Test.Support (parseRequestOrFail)
 
 spec :: Spec
@@ -40,11 +41,8 @@ spec = do
         it "renders a store-declared Bearer write beside the Basic read and pins redirects" $ do
             request <- parseRequestOrFail "https://registry.test/ruby/repository"
             let key = Just (bareCredential (mkSecret "secret"))
-                declared = declaredPresentation $ \case
-                    StoreRead -> AuthBasic
-                    StoreWrite -> AuthBearer
-                reading = attachCredential (presentedMapping declared StoreRead rubyReadCredential) (Just (ClientCredential (Just "aws") (mkSecret "secret"))) request
-                writing = attachCredential (presentedMapping declared StoreWrite rubyPublishCredential) key request
+                reading = attachCredential (presentedMapping basicReadsBearerWrites StoreRead rubyReadCredential) (Just (ClientCredential (Just "aws") (mkSecret "secret"))) request
+                writing = attachCredential (presentedMapping basicReadsBearerWrites StoreWrite rubyPublishCredential) key request
             lookup "Authorization" (Client.requestHeaders reading) `shouldBe` Just "Basic YXdzOnNlY3JldA=="
             lookup "Authorization" (Client.requestHeaders writing) `shouldBe` Just "Bearer secret"
             Client.redirectCount reading `shouldBe` 0
