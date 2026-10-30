@@ -33,9 +33,9 @@ spec = describe "inert bounded gem YAML" $ do
             result `shouldSatisfy` isLeft
     it "refuses the reached depth, node, byte and alias-work bounds" $ do
         decode defaultLimits{maxNestingDepth = 1} "--- [[[one]]]" >>= (`shouldSatisfy` isLeft)
-        decode defaultLimits{maxArtifactCount = 4} "--- [one, two, three, four]" >>= (`shouldSatisfy` isLeft)
+        decode defaultLimits{inertNodeCeiling = 4} "--- [one, two, three, four]" >>= (`shouldSatisfy` isLeft)
         decode defaultLimits{maxMetadataBytes = 4} "--- one" >>= (`shouldSatisfy` isLeft)
-        decode defaultLimits{maxArtifactCount = 30} "--- [ &a [one, two, three], &b [*a, *a, *a], *b, *b, *b]" >>= (`shouldSatisfy` isLeft)
+        decode defaultLimits{inertNodeCeiling = 30} "--- [ &a [one, two, three], &b [*a, *a, *a], *b, *b, *b]" >>= (`shouldSatisfy` isLeft)
 
 decode :: Limits -> ByteString -> IO (Either ParseError YamlValue)
 decode limits = decodeYaml limits (const (pure ()))
