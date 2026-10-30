@@ -41,7 +41,7 @@ recordingStore = do
     pure (RecordingStore (externalOperations readValue writeValue) values readCount writes)
 
 sampleEntry :: CacheEntry
-sampleEntry = CacheEntry (manifestInfo manifest) (manifestRaw manifest) (manifestBodyBytes manifest) (manifestDigest manifest)
+sampleEntry = CacheEntry (manifestInfo manifest) (manifestRaw manifest) (manifestBodyBytes manifest) (manifestRetainedEntries manifest) (manifestDigest manifest)
   where
     manifest = sampleManifest thingName [v1_0_0]
 

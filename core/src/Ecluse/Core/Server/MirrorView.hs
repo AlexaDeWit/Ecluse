@@ -115,7 +115,7 @@ mirrorProjectViews documents revision record private = do
         details = Map.fromList [(key, vdDetails doc) | (key, doc) <- rebased]
         managedRaw = mdAssemble documents record (map snd rebased)
         fingerprint = TE.encodeUtf8 (show revision) <> maybe mempty (digestBytes . manifestDigest) private
-        managed = Manifest (PackageInfo (recordPackage record) details Map.empty []) managedRaw (fromIntegral (weighCachedDoc managedRaw)) (digestFromContext (hashUpdate hashInit fingerprint))
+        managed = Manifest (PackageInfo (recordPackage record) details Map.empty []) managedRaw (fromIntegral (weighCachedDoc managedRaw)) 0 (digestFromContext (hashUpdate hashInit fingerprint))
     pure (unmanaged, managed <$ guard (not (Map.null details)), pending)
 
 rekeyVersion :: MirrorDocuments -> Int -> (Text, VersionDoc) -> (Int, (Text, VersionDoc))

@@ -8,6 +8,7 @@ bytes pay for. Such a read raises its workspace charge to the floor after each p
 -}
 module Ecluse.Core.Registry.Metadata.EntryFloor (
     entryFloorBytes,
+    entryFloorCharge,
     countingEntries,
     readFlooredWalk,
 ) where
@@ -26,6 +27,10 @@ import Ecluse.Core.Server.MemoryModel (saturatingCharge)
 -- | The bytes each retained entry costs at least: its map node or list cell, its key and its typed value.
 entryFloorBytes :: Int
 entryFloorBytes = 256
+
+-- | The floor for a number of retained entries, saturating at the largest charge.
+entryFloorCharge :: Int -> Int
+entryFloorCharge retained = saturatingCharge (toInteger entryFloorBytes * toInteger retained)
 
 -- | Continue a step after publishing the entries its accepted state retains.
 countingEntries :: PrimVar st Int -> (s -> Int) -> (Either LimitError s -> ST st r) -> Either LimitError s -> ST st r
@@ -51,7 +56,7 @@ readFlooredWalk pay permille bound walk readChunk = do
     let piece = do
             retained <- readPrimVar entries
             bytes <- readPrimVar seen
-            let shortfall = saturatingCharge (toInteger entryFloorBytes * toInteger retained - toInteger (scaleCharge permille bytes))
+            let shortfall = entryFloorCharge retained - scaleCharge permille bytes
             when (shortfall > 0) (pay shortfall)
             pending <- readIORef held
             chunk <- if BS.null pending then readChunk else pure pending

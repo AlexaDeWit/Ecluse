@@ -32,7 +32,7 @@ import Ecluse.Core.Package (InvalidEntry, PackageDetails, PackageInfo (infoInval
 import Ecluse.Core.Registry (FetchFault (FetchBoundExceeded, FetchCooldown, FetchTransport, FetchUrlUnformable))
 import Ecluse.Core.Registry.Exchange (withinServeCap)
 import Ecluse.Core.Registry.Metadata (
-    Manifest (Manifest, manifestBodyBytes, manifestDigest, manifestInfo, manifestRaw),
+    Manifest (Manifest, manifestBodyBytes, manifestDigest, manifestInfo, manifestRaw, manifestRetainedEntries),
     MetadataClient (..),
     MetadataError (MetadataAbsent, MetadataAuthorisationFailure, MetadataBoundExceeded, MetadataFetch, MetadataHttpFailure, MetadataNameMismatch, MetadataUndecodable),
     VersionRead,
@@ -43,7 +43,7 @@ import Ecluse.Core.Registry.Origin (OriginClient, OriginFor, Private, Public, or
 import Ecluse.Core.Security (ProgressFloor)
 
 import Ecluse.Core.Server.Cache (
-    CacheEntry (CacheEntry, entryBodyBytes, entryDigest, entryInfo, entryRaw),
+    CacheEntry (CacheEntry, entryBodyBytes, entryDigest, entryInfo, entryRaw, entryRetainedEntries),
     MetadataCache,
     Source,
     prepareVersion,
@@ -170,7 +170,7 @@ entryOfManifest :: ClientWiring -> PackageName -> Manifest -> IO CacheEntry
 entryOfManifest wiring name manifest = do
     let invalid = infoInvalidEntries (manifestInfo manifest)
     unless (null invalid) (cwLogInvalid wiring name invalid)
-    pure (CacheEntry (manifestInfo manifest) (manifestRaw manifest) (manifestBodyBytes manifest) (manifestDigest manifest))
+    pure (CacheEntry (manifestInfo manifest) (manifestRaw manifest) (manifestBodyBytes manifest) (manifestRetainedEntries manifest) (manifestDigest manifest))
 
 resolveSelectedVersion :: ClientWiring -> PackageName -> Version -> IO (Either MetadataError VersionRead)
 resolveSelectedVersion wiring name version = case cwCaching wiring of
@@ -205,6 +205,7 @@ entryToManifest entry =
         { manifestInfo = entryInfo entry
         , manifestRaw = entryRaw entry
         , manifestBodyBytes = entryBodyBytes entry
+        , manifestRetainedEntries = entryRetainedEntries entry
         , manifestDigest = entryDigest entry
         }
 

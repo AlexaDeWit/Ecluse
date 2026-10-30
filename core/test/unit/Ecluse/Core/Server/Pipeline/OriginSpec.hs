@@ -218,12 +218,13 @@ observingFullRead meter factor sourcePaid peak balances factory = PrepareRead $ 
     let recordSource amount = modifyIORef' sourcePaid (+ scaleCharge factor amount)
         source amount = ocChargeFullRead origin amount >> recordSource amount
         -- The fetch retains the original origin, so body payments bypass the preparation wrapper.
-        observeBody EcosystemRead{erRequest, erUniqueFields, erWalkFull, erFinishFull, erWalkSelected, erFinishSelected} =
+        observeBody EcosystemRead{erRequest, erUniqueFields, erWalkFull, erFinishFull, erRetainedEntries, erWalkSelected, erFinishSelected} =
             EcosystemRead
                 { erRequest
                 , erUniqueFields
                 , erWalkFull = \limits name base bound table next -> erWalkFull limits name base bound table (chargedRead recordSource next)
                 , erFinishFull
+                , erRetainedEntries
                 , erWalkSelected
                 , erFinishSelected
                 }

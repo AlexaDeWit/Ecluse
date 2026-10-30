@@ -75,6 +75,7 @@ npmReadWith pay =
         , erUniqueFields = releaseUniqueFields
         , erWalkFull = readNpmFull pay
         , erFinishFull = finishNpmFull
+        , erRetainedEntries = \(Walked _ acc) -> retainedEntries acc
         , erWalkSelected = \limits name version -> readNpmPackument limits name (OneRelease (renderVersion version))
         , erFinishSelected = finishNpmVersion
         }

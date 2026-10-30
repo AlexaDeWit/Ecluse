@@ -54,7 +54,7 @@ presentedRead mapping = \case
 @refusal@, and a finish located against another base is undecodable.
 -}
 bindToOrigin :: UrlFormationError -> Text -> EcosystemRead -> EcosystemRead
-bindToOrigin refusal root EcosystemRead{erRequest, erUniqueFields, erWalkFull, erFinishFull, erWalkSelected, erFinishSelected} =
+bindToOrigin refusal root EcosystemRead{erRequest, erUniqueFields, erWalkFull, erFinishFull, erRetainedEntries, erWalkSelected, erFinishSelected} =
     EcosystemRead
         { erRequest = \base credential name -> do
             unless (registryUrlText (baseRequestUrl base) == root) (Left refusal)
@@ -64,6 +64,7 @@ bindToOrigin refusal root EcosystemRead{erRequest, erUniqueFields, erWalkFull, e
         , erFinishFull = \limits name base streamed -> do
             unless (base == root) (Left MetadataUndecodable)
             erFinishFull limits name base streamed
+        , erRetainedEntries
         , erWalkSelected
         , erFinishSelected = \limits name base version streamed -> do
             unless (base == root) (Left MetadataUndecodable)

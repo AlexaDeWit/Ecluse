@@ -35,7 +35,7 @@ import Ecluse.Core.Registry (FetchFault (FetchCooldown))
 import Ecluse.Core.Registry.Adapter.Capability (AdapterMetadata (metadataChargeFactors, metadataRead))
 import Ecluse.Core.Registry.Exchange.Types (ExchangeClient (ecDeadlines))
 import Ecluse.Core.Registry.Metadata (
-    Manifest (manifestBodyBytes),
+    Manifest (manifestBodyBytes, manifestRetainedEntries),
     MetadataClient (fetchFullManifest),
     MetadataError (
         MetadataAbsent,
@@ -49,6 +49,7 @@ import Ecluse.Core.Registry.Metadata (
     VersionDoc (..),
     VersionRead (..),
  )
+import Ecluse.Core.Registry.Metadata.EntryFloor (entryFloorCharge)
 import Ecluse.Core.Registry.Metadata.Fetch.Preparation (canChargeFullReadWorkspace)
 import Ecluse.Core.Registry.Origin (OriginClient (ocClient), OriginFor, Private, Public, anonymousOrigin, chargingFullReadWorkspace, chargingFullReads, chargingNativeReads, controlPublicOrigin, originBaseUrl, originClientOf, perCallerOrigin)
 import Ecluse.Core.Registry.Request (BaseRequest)
@@ -171,9 +172,10 @@ keepingRead deps part result = do
     liftIO (stepDown part (keptCharge deps settled))
     pure settled
 
+-- A manifest's bytes at the kept charge, or the entry floor for the entries it retained when that is larger.
 keptCharge :: PackumentDeps -> OriginResult -> Int
 keptCharge deps = \case
-    OriginResolved manifest -> scaleCharge (cfKeptPermille (chargeFactors deps)) (manifestBodyBytes manifest)
+    OriginResolved manifest -> max (scaleCharge (cfKeptPermille (chargeFactors deps)) (manifestBodyBytes manifest)) (entryFloorCharge (manifestRetainedEntries manifest))
     _ -> 0
 
 -- Origin logs use the request's logging context and its selected upstream.
