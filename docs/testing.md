@@ -630,27 +630,34 @@ output factors of 2.0 and 1.6.
 ### Dense listings
 
 The per-byte charges come from realistic listings, so a document of many tiny entries pays almost
-nothing for them. An npm or PyPI full read pays the entry floor for each entry it retains instead,
-and `EntryFloorResidencySpec` measures what such a read holds. For each entry kind it writes a
-document of 10,000 entries in the densest form the read retains: npm versions with empty bodies,
-and npm timestamps and dist-tags whose values do not decode, and PyPI files and versions entries
-that are bare numbers, and number items in `alternate-locations` and `meta.tracks`. A fresh child
-reads the document through the same listing probe as [Listing peaks](#listing-peaks), and the
-parent counts the entries the production read retains. Each listing reports a
+nothing for them. An npm or PyPI full read pays a floor for each entry it retains instead, 1,152
+bytes for a version or file and 704 bytes for any other entry, and `EntryFloorResidencySpec`
+measures what such a read holds. For each entry kind it writes a document of 10,000 entries in the
+densest form the read retains: npm versions with empty bodies, and npm timestamps and dist-tags whose
+values do not decode, and PyPI files and versions entries that are bare numbers, and number items in
+`alternate-locations` and `meta.tracks`. It also writes 10,000 npm versions and PyPI files with
+minimal valid bodies, of about 90 source bytes each, which hold more per entry than any dense form.
+A fresh child reads each document through the same listing probe as
+[Listing peaks](#listing-peaks). The parent reads it through the production read and takes the
+workspace it paid and the entries its finished document keeps. Each listing reports a
 `metadata-dense-listing` line with the read's peak and its held entry above baseline.
 
 The checks are:
 
-- The read's peak fits the larger of its full-read charge and the floor for its entries, and the
-  held entry fits the larger of its kept charge and the floor.
+- The workspace the read paid is the floors for the entries the document holds, less its per-byte
+  full-read charge, and the finished document keeps the entries the case expects. An npm timestamp
+  under a key that names no version is dropped, so that document keeps only its one release.
+- The read's peak fits the larger of its full-read charge and the floors for the entries it holds,
+  and the held entry fits the larger of its kept charge and the floors for the entries it keeps.
 - Each figure stays under its limit: the measured bytes per entry plus 4% for a read peak and 3%
   for a held entry, rounded up to a permille, plus the 16 KiB release tolerance. The tolerance
   keeps a near-zero figure, such as npm's held timestamps, from failing on one block.
 
 The `Calibration` module stores the figures, and `entryFloor` applies the charge rule: 1.25 times
-the largest figure, rounded up to 64 bytes. `CalibrationResidencySpec` checks that the production
-floor matches it, and that every figure's limit stays below it. The figures were measured on amd64
-with GHC 9.10.3 and Cabal `-O1`:
+the largest figure, rounded up to 64 bytes. Over the dense figures it gives the entry floor, and
+over the dense and minimal-body figures together it gives the release floor.
+`CalibrationResidencySpec` checks that both production floors match, and that every figure's limit
+stays below its floor. The figures were measured on amd64 with GHC 9.10.3 and Cabal `-O1`:
 
 | Listing | Source bytes per entry | Read peak per entry | Held per entry |
 |---|---:|---:|---:|
@@ -661,15 +668,16 @@ with GHC 9.10.3 and Cabal `-O1`:
 | PyPI versions | 2.0 | 176.5 | 176.5 |
 | PyPI `alternate-locations` | 2.0 | 74.6 | 69.7 |
 | PyPI `meta.tracks` | 2.0 | 74.5 | 69.7 |
+| npm versions with minimal bodies | 87.8 | 844.5 | 657.9 |
+| PyPI files with minimal bodies | 97.8 | 885.3 | 856.1 |
 
-npm versions set the floor: 1.25 times 524.4 is 655.5, which rounds up to 704. An npm read drops
-timestamps that name no version when it completes, so its held entry is nearly empty. The case
-leaves out versions and files with minimal valid bodies, of about 90 source bytes each. The same
-probe measured their read peaks at 845 bytes per entry for npm and 885 for PyPI, which the floor
-does not cover and the version count still bounds.
+npm versions with empty bodies set the entry floor: 1.25 times 524.4 is 655.5, which rounds up to
+704. PyPI files with minimal bodies set the release floor: 1.25 times 885.3 is 1,106.7, which rounds
+up to 1,152. An npm read drops timestamps that name no version when it completes, so its held entry
+is nearly empty.
 
-The unit specs of each ecosystem's metadata read check the realistic side: the floor for each
-corpus capture's retained entries stays within its kept charge.
+The unit specs of each ecosystem's metadata read check the realistic side: the floors for the
+entries each corpus capture keeps stay within its kept charge.
 
 ### Read evaluation
 
