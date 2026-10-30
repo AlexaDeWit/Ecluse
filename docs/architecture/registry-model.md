@@ -395,7 +395,7 @@ how trusted and gated provenances combine.
 
 ## Cargo integration
 
-Cargo uses one mount and one native view, `/cargo/`, which replaces crates.io and selects `MergePrivateAndPublic` as npm, PyPI and RubyGems do.
+Cargo uses one mount and one native view, `/cargo/`, which replaces crates.io and merges caller-authorised private crates with admitted public crates, as npm, PyPI and RubyGems do.
 Every consumer reads only through Écluse, so the view departs by design from the Cargo book's rule that a replacement source holds no crate absent from the original.
 `Cargo.lock` therefore records private crates under the crates.io source identity.
 The mirror target stays write-only under Écluse's token, and completed copies are read through `privateUpstream`.
@@ -534,11 +534,11 @@ retained-live measurements remain distinct from the cached accounting estimate.
 
 ## RubyGems integration
 
-RubyGems uses `MergePrivateAndPublic` with global Compact Index discovery and per-gem metadata acquisition.
+RubyGems merges caller-authorised private gems with admitted public gems. It discovers gems through the global Compact Index and acquires metadata per gem.
 The public directory shares bounded retention. Caller-authorised private discovery remains fresh and separate from public retention.
 Discovery bounds gem names with a fixed ceiling rather than the per-package count limits, so lowering those limits for npm or PyPI cannot break RubyGems discovery.
 The public directory follows partial availability, except that a bound breach refuses the request as an exceeded input bound does.
-Per-gem `/info/<gem>` rows follow the shared source selection, admission and mirror restoration paths.
+Per-gem `/info/<gem>` rows follow the shared merge, admission and mirror restoration paths.
 Unknown transformed info-file MD5 values use explicit blank hints in the supported clients.
 This keeps detailed metadata acquisition on demand without publishing a false checksum.
 Selected compact specifications and archives use exact native coordinates.

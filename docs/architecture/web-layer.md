@@ -44,7 +44,7 @@ the gate. A mount therefore rewrites embedded artifact URLs under its own protoc
 route and prefix before serving metadata.
 
 Cargo's sparse index contains no artifact URL. Local discovery under `/cargo/` supplies the proxy's download template and, when publication is configured, its one publication API.
-The [registry model](registry-model.md#cargo-integration) explains source selection and credential authority.
+The [registry model](registry-model.md#cargo-integration) explains the merged view and credential authority.
 
 Same-host artifacts have a second benefit. The npm client attaches credentials only to requests on
 the registry host. A same-host artifact URL keeps that auth on a tarball fetch. A separate host
