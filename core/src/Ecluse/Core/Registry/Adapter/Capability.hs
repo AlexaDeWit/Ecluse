@@ -160,7 +160,7 @@ data AdapterPublish = AdapterPublish
     , publishRelay :: ServicePresentation -> OriginClient -> PackageName -> PublishRequestBody -> IO (Either FetchFault PublishRelayResponse)
     -- ^ Relay a client's publish document to the target named as the origin, under the target store's presentation, and return its answer.
     , publishUploadClaims :: Limits -> (Int -> IO ()) -> Text -> PublishRequestBody -> IO (Either PublishBodyFault [Text])
-    -- ^ Check claims before target IO using the selected logical view base. Charge extra workspace as an absolute total.
+    -- ^ Check claims before target IO against the mount's own base URL. Charge extra workspace as an absolute total.
     , publishCodec :: ServicePresentation -> PublishCodec
     -- ^ The mirror write's document, requests, probe, and status semantics under the target store's presentation. The transport owns the manager, mint, and fault classification.
     , publishMirrorRequirements :: MirrorRequirements
