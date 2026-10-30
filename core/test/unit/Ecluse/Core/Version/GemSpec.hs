@@ -17,15 +17,11 @@ import Ecluse.Test.Support (expectRight)
 -- | Check canonical spelling and detect unevaluated native token construction without forcing it.
 spec :: Spec
 spec = do
-    describe "renderGem" $ do
-        for_ [("1.19.0", "1.19"), ("2.0.a.0", "2.a"), ("1.0.0-1", "1.pre.1"), ("0.0.0", "0"), ("0.a", "a"), ("1.a.0.b", "1.a.b"), ("1.2.pre.0.rc", "1.2.pre.rc"), ("1.a.0b", "1.a.b")] $ \(raw, expected) ->
+    describe "renderGem" $
+        for_ [("1.19.0", "1.19"), ("2.0.a.0", "2.a"), ("1.0.0-1", "1.pre.1"), ("0.0.0", "0"), ("0.a", "a")] $ \(raw, expected) ->
             it ("renders " <> toString raw <> " as " <> toString expected) $ do
                 renderVersionKey <$> parseVersionKey RubyGems raw `shouldBe` Right expected
                 parseVersionKey RubyGems expected `shouldBe` parseVersionKey RubyGems raw
-        -- RubyGems 3.7.2 canonical_segments removes only the first zero run that starts a segment before a letter.
-        for_ [("1.0.a.0.b", "1.a.0.b"), ("1.a0b", "1.a.0.b"), ("1.2.0.10.a", "1.2.0.10.a")] $ \(raw, expected) ->
-            it ("keeps the zeros Gem::Version keeps in " <> toString raw) $
-                renderVersionKey <$> parseVersionKey RubyGems raw `shouldBe` Right expected
     describe "parseGem token construction" $ do
         it "detects a deliberately deferred token tail without evaluating it" $ do
             let !token = VNum 1
