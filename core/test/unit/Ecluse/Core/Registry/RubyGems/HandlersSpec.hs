@@ -142,6 +142,11 @@ spec = do
                 -- The header and the packed public and private rows take 37 bytes.
                 simpleStatus <$> capture runtime (metadataByteCap 37 binding) "GET" "/versions" [] `shouldReturn` status200
                 simpleStatus <$> capture runtime (metadataByteCap 36 binding) "GET" "/versions" [] `shouldReturn` status502
+        it "refuses colliding directories over the metadata bound before they merge" $
+            withDirectoryBodies "---\na 1.0 \n" "---\na 2.0 \n" $ \runtime binding _ _ -> do
+                -- The header and packed rows take 18 bytes before the merge and 15 after it, so only the pre-merge check refuses 17.
+                simpleStatus <$> capture runtime (metadataByteCap 18 binding) "GET" "/versions" [] `shouldReturn` status200
+                simpleStatus <$> capture runtime (metadataByteCap 17 binding) "GET" "/versions" [] `shouldReturn` status502
         it "keeps a native400 directory limit failure at the capability boundary" $
             withDirectorySources $ \runtime binding hits privateStatus -> do
                 writeIORef privateStatus status400
@@ -510,7 +515,11 @@ responseTag :: SResponse -> IO ByteString
 responseTag response = maybe (expectationFailure "the admitted metadata response omitted its ETag" >> pure "") pure (lookup "ETag" (simpleHeaders response))
 
 withDirectorySources :: (ServeRuntime -> MountBinding -> IORef [([Text], [Header])] -> IORef Status -> IO a) -> IO a
-withDirectorySources use = do
+withDirectorySources = withDirectoryBodies "---\npublic-gem 1.0 \n" "---\nprivate-gem 1.0 \n"
+
+-- | Serve the given public and private @/versions@ bodies to a merging mount.
+withDirectoryBodies :: LByteString -> LByteString -> (ServeRuntime -> MountBinding -> IORef [([Text], [Header])] -> IORef Status -> IO a) -> IO a
+withDirectoryBodies publicBody privateBody use = do
     hits <- newIORef []
     privateStatus <- newIORef status200
     let upstream request respond = do
@@ -518,8 +527,8 @@ withDirectorySources use = do
             case pathInfo request of
                 ["private", "versions"] -> do
                     status <- readIORef privateStatus
-                    respond (responseLBS status [] "---\nprivate-gem 1.0 \n")
-                ["public", "versions"] -> respond (responseLBS status200 [] "---\npublic-gem 1.0 \n")
+                    respond (responseLBS status [] privateBody)
+                ["public", "versions"] -> respond (responseLBS status200 [] publicBody)
                 _ -> respond (responseLBS status404 [] "")
     testWithApplication (pure upstream) $ \port -> do
         let base = "http://localhost:" <> show port
