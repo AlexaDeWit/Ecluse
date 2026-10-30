@@ -682,7 +682,9 @@ dependencyForms =
     | field <- ["dependencies", "optionalDependencies", "peerDependencies"]
     ]
         <> [ ("a remote URL", ["dependencies" .= object ["left-pad" .= ("https://example.test/left-pad.tgz" :: Text)]], FetchesOutsideRegistry "dependency 'left-pad' in dependencies names a remote URL")
+           , ("an unsupported scheme", ["dependencies" .= object ["left-pad" .= ("jsr:@std/path@^1" :: Text)]], FetchesOutsideRegistry "dependency 'left-pad' in dependencies names an unsupported scheme")
            , ("registry ranges and an alias", ["dependencies" .= object ["left-pad" .= ("^1.0.0" :: Text), "pad" .= ("npm:left-pad@1" :: Text)]], RegistryDependencies)
+           , ("local link and workspace specs", ["dependencies" .= object ["left-pad" .= ("link:../left-pad" :: Text), "pad" .= ("workspace:*" :: Text)]], RegistryDependencies)
            , ("a git source only in devDependencies", ["devDependencies" .= object ["left-pad" .= git]], RegistryDependencies)
            , ("a dependency map that is not an object", ["dependencies" .= git], RegistryDependencies)
            , ("the earliest field, then the smallest name", ["peerDependencies" .= object ["alpha" .= git], "optionalDependencies" .= object ["zeta" .= git, "beta" .= git]], FetchesOutsideRegistry "dependency 'beta' in optionalDependencies names a git source")
