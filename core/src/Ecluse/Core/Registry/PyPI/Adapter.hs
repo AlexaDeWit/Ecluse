@@ -48,7 +48,7 @@ import Ecluse.Core.Registry.PyPI.Publish.Multipart qualified as Multipart
 import Ecluse.Core.Registry.PyPI.Request qualified as PyPIRequest
 import Ecluse.Core.Registry.PyPI.Route qualified as PyPIRoute
 
-import Ecluse.Core.Rules.Types (RuleType (AllowScopeType, DenyIfDeprecatedType, DenyInstallTimeExecutionType))
+import Ecluse.Core.Rules.Types (RuleType (AllowScopeType, DenyExternalDependenciesType, DenyIfDeprecatedType, DenyInstallTimeExecutionType))
 
 -- | PyPI's capability record.
 pypiAdapter :: RegistryAdapter
@@ -58,6 +58,7 @@ pypiAdapter =
         , adapterRuleBlocks =
             Map.fromList
                 [ (DenyInstallTimeExecutionType, "Most PyPI releases offer a source distribution, which runs its own build on install, so this rule would deny nearly every release.")
+                , (DenyExternalDependenciesType, "The PyPI adapter does not read where a release's dependencies install from.")
                 , (DenyIfDeprecatedType, "The PyPI adapter supplies no deprecation flag.")
                 , (AllowScopeType, "A PyPI project name has no scope, so this rule can never match one.")
                 ]

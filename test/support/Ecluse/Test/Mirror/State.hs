@@ -58,7 +58,7 @@ mirrorSample numbers companion location note = do
     artifacts <-
         maybe (fail "empty test inventory") pure . nonEmpty $
             [Artifact (ArrayEntry position) (mirrorFilename number) (location <> mirrorFilename number) [digest] (if companion then Just (MetadataAvailable True) else Nothing) (Just 5) | (position, number) <- zip [0 ..] numbers]
-    let details = PackageDetails mirrorPackage mirrorVersion Nothing NoCodeOnInstall RegistryDependencies Available artifacts
+    let details = PackageDetails mirrorPackage mirrorVersion Nothing NoCodeOnInstall DependencySourcesUnknown Available artifacts
     expectRight (restoreMirrorInventory details (mirrorSource artifacts note))
 
 -- | Keep source coordinates and custom served fields when a test changes artifact facts.
@@ -99,7 +99,7 @@ cargoMirrorRecord target name archive rows = do
             _ -> fail "Cargo row lacks its version"
         let filename = renderPackageName name <> "-" <> version <> ".crate"
             artifact = Artifact (RecordEntry position) filename ("https://static.crates.io/crates/" <> renderPackageName name <> "/" <> filename) [checksum] Nothing Nothing
-            details = PackageDetails name (mkVersion Cargo version) (Just (UTCTime (fromGregorian 2020 1 1) 0)) CodeExecUnknown RegistryDependencies Available (artifact :| [])
+            details = PackageDetails name (mkVersion Cargo version) (Just (UTCTime (fromGregorian 2020 1 1) 0)) CodeExecUnknown DependencySourcesUnknown Available (artifact :| [])
         inventory <- expectRight (restoreMirrorInventory details (CargoMirrorRead (cargoDocument [(RecordEntry position, row)])))
         expected <- expectRight (extendProjectRecord defaultLimits target inventory previous)
         let file :| _ = inventoryFiles inventory

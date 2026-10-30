@@ -27,7 +27,7 @@ import Data.Text.Encoding qualified as Text
 import Data.Time.Format.ISO8601 (iso8601ParseM)
 
 import Ecluse.Core.Ecosystem (Ecosystem (RubyGems))
-import Ecluse.Core.Package (Artifact (..), Availability (Available), CodeExecSignal (CodeExecUnknown), DependencySources (RegistryDependencies), HashAlg (SHA256), PackageDetails (..), PackageInfo (..), PackageName, mkHash, mkPackageName, renderPackageName)
+import Ecluse.Core.Package (Artifact (..), Availability (Available), CodeExecSignal (CodeExecUnknown), DependencySources (DependencySourcesUnknown), HashAlg (SHA256), PackageDetails (..), PackageInfo (..), PackageName, mkHash, mkPackageName, renderPackageName)
 import Ecluse.Core.Package.Entry (EntryKey (RecordEntry))
 import Ecluse.Core.Registry.CachedDocument (CachedDoc, rubyGemsCached)
 import Ecluse.Core.Registry.Metadata (MetadataError (MetadataBoundExceeded, MetadataUndecodable))
@@ -154,7 +154,7 @@ projectRubyGemsTree limits name bytes = do
     insert versions (version, filename, row) =
         let artifact = Artifact (grEntryKey row) filename ("https://rubygems.org/gems/" <> filename) [grChecksum row] Nothing Nothing
          in Map.insertWith (flip (<>)) version ((artifact, grPublishedAt row) :| []) versions
-    settle version artifacts = PackageDetails name (mkVersion RubyGems version) (groupedAge artifacts) CodeExecUnknown RegistryDependencies Available (fmap fst artifacts)
+    settle version artifacts = PackageDetails name (mkVersion RubyGems version) (groupedAge artifacts) CodeExecUnknown DependencySourcesUnknown Available (fmap fst artifacts)
     -- The newest upload, or no age once any artifact's time is unknown.
     groupedAge ((_, firstTime) :| rest) = foldl' (\newest (_, time) -> max <$> newest <*> time) firstTime rest
 
