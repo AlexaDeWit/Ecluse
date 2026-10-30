@@ -662,8 +662,6 @@ data Inability
       SourceBreakerOpen
     | -- | The read was given up. A client reads this in place of the fault's detail.
       EvaluationFailed
-    | -- | Bounded diagnostics from a required native evidence read.
-      InstallEvidenceFailed Text
     | -- | The rule or its read threw: the exception as text.
       RuleThrew Text
     | -- | One attempt of the read ran past its timeout.

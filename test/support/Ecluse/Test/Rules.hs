@@ -26,7 +26,7 @@ module Ecluse.Test.Rules (
     -- * One version under one rule
     evalRule,
 
-    -- * Evaluation without native install evidence
+    -- * Evaluation
     newEvaluator,
     evalRules,
 
@@ -86,9 +86,10 @@ import Ecluse.Core.Rules (
     PreparedRule (PreparedRule, prepEval, prepName, prepPrecedence),
     Resilience,
     RuleDeps (..),
-    RuleEval (PerInstallEvidence, PerPackage, PerVersion),
-    VerdictSource (FromAdvisories, FromEvidence, FromInstallEvidence),
-    newEvaluatorWithInstallRead,
+    RuleEval (PerPackage, PerVersion),
+    VerdictSource (FromAdvisories, FromEvidence),
+    evalRules,
+    newEvaluator,
     noSourceReporter,
     prepare,
     readAdvisories,
@@ -96,7 +97,6 @@ import Ecluse.Core.Rules (
     withCveLookup,
  )
 import Ecluse.Core.Rules.Freshness (AdvisoryFreshness (AdvisoryFresh))
-import Ecluse.Core.Rules.Install (InstallEvidenceMode (ProjectedInstallFacts))
 import Ecluse.Core.Rules.Render (renderInability, renderReason)
 import Ecluse.Core.Rules.Types (
     AdvisoryScore (Cvss),
@@ -130,16 +130,6 @@ inertRuleDeps =
         , rdSourceReporter = noSourceReporter
         , rdAdvisoryFreshness = pure AdvisoryFresh
         }
-
--- | Reuse one production evaluator across fixture versions without native install evidence.
-newEvaluator :: EvalContext -> [PreparedRule] -> IO (RuleEvidence -> IO Decision)
-newEvaluator ctx rules = do
-    decide <- newEvaluatorWithInstallRead ProjectedInstallFacts ctx rules
-    pure (`decide` Nothing)
-
--- | Decide one fixture version through a fresh production evaluator.
-evalRules :: EvalContext -> [PreparedRule] -> RuleEvidence -> IO Decision
-evalRules ctx rules ev = newEvaluator ctx rules >>= ($ ev)
 
 -- | 'inertRuleDeps' with a database configured and the given generation serving.
 servingRuleDeps :: DbEtag -> CveLookup -> RuleDeps
@@ -201,7 +191,6 @@ admissionOnly (PrecededRule prec _ rule) = PrecededRule prec AdmissionOnly rule
 evalRule :: RuleDeps -> EvalContext -> Rule -> RuleEvidence -> IO RuleVerdict
 evalRule deps ctx rule ev = case verdictSource rule of
     FromEvidence verdict -> pure (verdict ctx ev)
-    FromInstallEvidence verdict -> pure (verdict ctx ev)
     FromAdvisories _ verdict -> (`verdict` ev) <$> withCveLookup deps (readAdvisories (evName ev))
 
 -- | Return a fixed verdict for any version.
@@ -235,7 +224,6 @@ mapPackageRead :: (PackageRead -> PackageRead) -> PreparedRule -> PreparedRule
 mapPackageRead adjust rule = case prepEval rule of
     PerPackage packageRead -> rule{prepEval = PerPackage (adjust packageRead)}
     PerVersion _ -> rule
-    PerInstallEvidence _ -> rule
 
 -- | Adjust the resilience around a prepared rule's package read.
 mapResilience :: (Resilience -> Resilience) -> PreparedRule -> PreparedRule

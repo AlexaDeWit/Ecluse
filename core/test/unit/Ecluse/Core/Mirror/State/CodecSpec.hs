@@ -42,7 +42,7 @@ spec = describe "durable record codec" $ do
                     , msRetainCompanion = \_ _ -> fail "unexpected companion write"
                     , msReadCompanion = \_ _ -> fail "unexpected companion read"
                     }
-            budget = WorkerStateBudget charge charge charge charge charge charge charge Nothing
+            budget = WorkerStateBudget charge charge charge charge charge charge charge
             binding = WorkerMirrorState store target defaultLimits (\action -> Just <$> action budget)
         void (recordExpectedInventory defaultLimits charge target store inventory >>= expectRight)
         readIORef paid `shouldReturn` [97640]

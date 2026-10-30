@@ -319,7 +319,7 @@ composedFixturesFrom deadlines envVars limits = do
     providers <- expectProviders config
     plan <- expectValidated config
     bindings <-
-        planMounts mountBindingFor (pure fixedNow) (const inertRuleDeps) MintMirrorWrite providers deadlines limits Nothing plan
+        planMounts mountBindingFor (pure fixedNow) (const inertRuleDeps) MintMirrorWrite providers limits Nothing plan
             >>= either (\errs -> fail ("unexpected boot errors: " <> show errs)) pure
     targets <-
         either (\errs -> fail ("unexpected publish-target errors: " <> show errs)) pure (planPublishTargets MintMirrorWrite providers plan)

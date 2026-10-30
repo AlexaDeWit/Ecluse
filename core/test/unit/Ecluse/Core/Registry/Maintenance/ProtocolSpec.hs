@@ -56,7 +56,6 @@ import Ecluse.Core.Registry.Npm.Maintenance (npmMaintenance)
 import Ecluse.Core.Registry.Npm.Metadata (npmRead)
 import Ecluse.Core.Registry.Npm.Publish (npmPublishCodec)
 import Ecluse.Core.Registry.Origin (OriginClient)
-import Ecluse.Core.Rules.Install (unavailableInstallArtifactRead)
 import Ecluse.Core.Security (Limits (maxMetadataBytes), defaultLimits)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Test.Contract.Maintenance (MaintenanceProfile (..), maintenanceConsentContract, maintenanceDeletionContract, maintenanceFactsContract, maintenanceInventoryContract)
@@ -411,7 +410,6 @@ protocolStore permitted origin = do
                 ProtocolRead
                     { prOrigin = origin
                     , prReadManifest = readManifestOver origin
-                    , prReadArtifact = unavailableInstallArtifactRead
                     , prListing = listing
                     , prCodec = npmPublishCodec
                     , prBackendName = "verdaccio"

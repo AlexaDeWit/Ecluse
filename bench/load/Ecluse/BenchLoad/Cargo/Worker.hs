@@ -68,7 +68,6 @@ cargoPolicy adapter environment = do
         WorkerPolicy
             { wpFirstParty = const False
             , wpResolveVersion = \pay name version -> chargingNativeReads factors pay (weSourceOrigin environment) >>= \origin -> versionEvaluation <$> prepareVersion prepareCargoRead passthroughTracingPort (originClientOf origin) name version
-            , wpInstallEvidence = Nothing
             , wpRules = weRules environment
             , wpMinIntegrity = defaultMinIntegrity
             , wpArtifactHostHonoured = const True

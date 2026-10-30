@@ -29,7 +29,7 @@ import Ecluse.Core.Registry.RubyGems.Directory (GemDirectory (GemDirectory), dir
 import Ecluse.Core.Registry.RubyGems.FirstParty (projectFirstPartyEntry, rubyGemsFirstPartyName)
 import Ecluse.Core.Registry.RubyGems.Project (projectName)
 import Ecluse.Core.Registry.RubyGems.Route (rubyGemsRouter)
-import Ecluse.Core.Rules (PreparedRule (prepEval), RuleEval (PerInstallEvidence, PerPackage, PerVersion), prepare)
+import Ecluse.Core.Rules (PreparedRule (prepEval), RuleEval (PerPackage, PerVersion), prepare)
 import Ecluse.Core.Rules.Types (FailureAlignment (FailDeny), Inability (NoDatabaseLoaded), Rule (AllowIfOlderThan), RuleEvidence (evVersion), RuleVerdict (CannotVet))
 import Ecluse.Core.Security (Limits (..))
 import Ecluse.Core.Security.Egress (RegistryUrl, registryUrlText)
@@ -665,7 +665,6 @@ missingDatabaseForVersion :: Text -> PreparedRule -> PreparedRule
 missingDatabaseForVersion version rule = case prepEval rule of
     PerVersion evaluate -> rule{prepEval = PerVersion (\ctx evidence -> if renderVersion (evVersion evidence) == version then pure (CannotVet FailDeny NoDatabaseLoaded) else evaluate ctx evidence)}
     PerPackage _ -> rule
-    PerInstallEvidence _ -> rule
 
 metadataByteCap :: Int -> MountBinding -> MountBinding
 metadataByteCap cap binding =

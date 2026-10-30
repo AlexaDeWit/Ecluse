@@ -54,7 +54,6 @@ import Ecluse.Core.Registry.Sweep.Types (
     previewCache,
  )
 import Ecluse.Core.Rules (PreparedRule)
-import Ecluse.Core.Rules.Install (InstallEvidenceBudget (..))
 import Ecluse.Core.Rules.Types (Rule)
 import Ecluse.Core.Security (Limits (maxVersionCount), defaultLimits)
 import Ecluse.Core.Telemetry.Metrics (SweepResult (SweepDeleted, SweepWouldDelete), SweepTarget (..))
@@ -183,9 +182,6 @@ mountOver store rules configured =
         , smRuleDeps = inertRuleDeps
         , smProjectName = adapterProjectName npmAdapter
         , smFirstParty = const False
-        , smInstallEvidence = Nothing
-        , smInstallLimits = defaultLimits
-        , smInstallBudget = InstallEvidenceBudget (\action -> Just <$> action (const pass) (const pass))
         }
 
 {- | The report a real run carries: a removal counts as a deletion, and reaching the cap stops the

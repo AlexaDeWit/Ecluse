@@ -63,5 +63,4 @@ cargoAdapter factors =
                 , maintenanceVersionDelete = Nothing
                 , maintenanceAlphabet = mkNameAlphabet cargoNameChars
                 }
-        , adapterInstallEvidence = Nothing
         }

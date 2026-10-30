@@ -176,7 +176,6 @@ type VersionEval = RuleEvidence -> IO (Either Text RuleEvaluation)
 bindRule :: EvalContext -> PackageCell (Either Text AdvisoryRead) -> PreparedRule -> IO VersionEval
 bindRule ctx shared rule = case prepEval rule of
     PerVersion eval -> pure (caughtEvaluation . fmap Decided . eval ctx)
-    PerInstallEvidence verdict -> pure (caughtEvaluation . pure . Decided . verdict ctx)
     PerPackage packageRead -> do
         own <- newPackageCell
         pure $ \ev ->

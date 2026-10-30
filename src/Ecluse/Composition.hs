@@ -66,13 +66,11 @@ import Ecluse.Config (
  )
 import Ecluse.Core.Credential (CredentialProvider)
 import Ecluse.Core.Credential.Refresh (CredentialReporters)
-import Ecluse.Core.Deadline (Deadlines)
 import Ecluse.Core.Ecosystem (Ecosystem (Cargo), prefixFor)
 import Ecluse.Core.Package (PackageName)
 import Ecluse.Core.Registry.Adapter (
     RegistryAdapter,
     adapterArtifact,
-    adapterInstallEvidence,
     adapterMetadata,
     adapterProjectName,
     adapterPublish,
@@ -107,8 +105,6 @@ data WiringPorts = WiringPorts
     -- ^ The clock every mount's serve path reads.
     , wpRuleDeps :: Ecosystem -> RuleDeps
     -- ^ One ecosystem's rule capabilities, including its advisory-database lookup.
-    , wpDeadlines :: Deadlines
-    -- ^ The process's sweeper, which bounds native install-evidence inspection.
     }
 
 -- | What only a live environment settles: the served mounts and the worker's publish targets.
@@ -126,7 +122,7 @@ resolveBootWiring ports mintPlan limits publishBudget plan = do
     case providersE of
         Left errs -> pure (Left errs)
         Right providers -> do
-            bindingsE <- planMounts (wpResolveAdapter ports) (wpClock ports) (wpRuleDeps ports) mintPlan providers (wpDeadlines ports) limits publishBudget plan
+            bindingsE <- planMounts (wpResolveAdapter ports) (wpClock ports) (wpRuleDeps ports) mintPlan providers limits publishBudget plan
             -- The serve side and the publish side read the same providers independently, so
             -- 'Validation' reports both rather than the mounts' refusals alone.
             pure . validationToEither $
@@ -148,8 +144,8 @@ data PublishBudget = PublishBudget
     }
 
 -- | Resolve mounts with their configured authority and publication budget.
-planMounts :: ResolveAdapter -> IO UTCTime -> (Ecosystem -> RuleDeps) -> MirrorMintPlan -> CredentialProviders -> Deadlines -> Limits -> Maybe PublishBudget -> ValidatedPlan -> IO (Either [BootError] [MountBinding])
-planMounts resolveAdapter clock ruleDepsFor mintPlan providers deadlines limits publishBudget plan = do
+planMounts :: ResolveAdapter -> IO UTCTime -> (Ecosystem -> RuleDeps) -> MirrorMintPlan -> CredentialProviders -> Limits -> Maybe PublishBudget -> ValidatedPlan -> IO (Either [BootError] [MountBinding])
+planMounts resolveAdapter clock ruleDepsFor mintPlan providers limits publishBudget plan = do
     bindingResults <- traverse bindingFor (vpMounts plan)
     pure $ case partitionEithers bindingResults of
         ([], bindings) -> Right bindings
@@ -162,7 +158,6 @@ planMounts resolveAdapter clock ruleDepsFor mintPlan providers deadlines limits 
     ctx =
         WiringContext
             { wcApp = app
-            , wcDeadlines = deadlines
             , wcLimits = limits
             , wcClock = clock
             , wcRuleDeps = ruleDepsFor
@@ -188,7 +183,6 @@ planMounts resolveAdapter clock ruleDepsFor mintPlan providers deadlines limits 
 whole pass, so two mounts cannot be wired against different values of one of them. -}
 data WiringContext = WiringContext
     { wcApp :: AppConfig
-    , wcDeadlines :: Deadlines
     , wcLimits :: Limits
     , wcClock :: IO UTCTime
     , wcRuleDeps :: Ecosystem -> RuleDeps
@@ -245,7 +239,6 @@ packumentDepsFor ctx adapter mount mcfg = do
     -- 'pdAdvisoryEtag' reads the current ETag through those same 'RuleDeps', so no generation is pinned at boot.
     let ruleDeps = wcRuleDeps ctx (mountEcosystem mount)
     prepared <- prepare ruleDeps (mountPolicy mount)
-    installEvidence <- traverse (\build -> build (wcDeadlines ctx) (wcLimits ctx)) (adapterInstallEvidence adapter)
     let regs = mountRegistries mount
         app = wcApp ctx
     pure
@@ -259,7 +252,6 @@ packumentDepsFor ctx adapter mount mcfg = do
             , -- Deny by default: a mount that declares no namespaces owns no first-party name.
               pdFirstParty = maybe (const False) firstPartyName (mntFirstParty mcfg)
             , pdMountBaseUrl = mountBaseUrl (srvPublicUrl (cfgServer app)) (mountEcosystem mount)
-            , pdInstallEvidence = installEvidence
             , pdRules = prepared
             , -- Operator ranges extending the fixed internal-range block on the @dist.tarball@ host
               -- gate. One list for every mount: internal ranges are a deployment-wide fact.

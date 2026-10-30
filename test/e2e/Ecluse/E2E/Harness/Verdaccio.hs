@@ -48,7 +48,6 @@ import Ecluse.Core.Registry.Npm.Maintenance (npmMaintenance)
 import Ecluse.Core.Registry.Npm.Metadata (npmRead)
 import Ecluse.Core.Registry.Npm.Publish (npmPublishCodec)
 import Ecluse.Core.Registry.Origin (originClient)
-import Ecluse.Core.Rules.Install (unavailableInstallArtifactRead)
 import Ecluse.Core.Security (defaultLimits)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.E2E.Harness.Npm (npmArtifactPath)
@@ -215,7 +214,6 @@ withVerdaccioObservation e2e action = do
                 , prListing = listing
                 , prCodec = npmPublishCodec
                 , prReadManifest = fmap (first storeFaultOfMetadata) . fetchManifest npmRead passthroughTracingPort origin
-                , prReadArtifact = unavailableInstallArtifactRead
                 , prBackendName = "verdaccio"
                 , prPermitDeletion = False
                 , prConsentDescriptor = "these observing calls carry no deletion consent"
