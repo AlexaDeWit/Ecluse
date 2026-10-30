@@ -214,7 +214,7 @@ environmentSpec = describe "proxyEnvironment" $ do
         case loadConfig environment Nothing of
             Left errors -> expectationFailure (toString (unlines (map renderConfigError errors)))
             Right config -> void (expectPlanFor (BootMirrorPipeline ServeAndMirror) environment Nothing config noCeiling)
-    it "boots every ecosystem's ordinary proxy on the same upstream hosts, without durable state or a mirror target" $
+    it "gives every ecosystem's default proxySettings the same upstream host pair, without durable state or a mirror target" $
         for_ [Npm, PyPI, Cargo, RubyGems] $ \ecosystem -> do
             let environment = proxyEnvironment (proxySettings ecosystem 60) Unlimited 3 "/tmp/proxy" (8080, 8081, 8082) 9001 (Just 9002) []
             lookup (registryKey ecosystem "PUBLIC_UPSTREAM" "URL") environment `shouldBe` Just "https://localhost:9001"
