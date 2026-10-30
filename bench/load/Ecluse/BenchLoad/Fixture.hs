@@ -35,15 +35,21 @@ import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as LBS
 import Data.List qualified as List
 import Data.Map.Strict qualified as Map
+import Data.Streaming.Network (bindPortTCP, bindRandomPortTCP)
 import Data.Text qualified as T
 import Data.Time (UTCTime (UTCTime), fromGregorian)
+import GHC.IO.Exception (IOErrorType (UnsupportedOperation))
 import Network.HTTP.Client (defaultManagerSettings, newManager)
 import Network.HTTP.Client qualified as HTTP
 import Network.HTTP.Types (Header, Status, status200, status304, status404)
 import Network.HTTP.Types.Header (hETag, hIfNoneMatch)
+import Network.Socket (Socket, close, setCloseOnExecIfNeeded, withFdSocket)
 import Network.Wai (Application, responseLBS)
-import Network.Wai.Handler.Warp (Port, testWithApplication)
-import UnliftIO (evaluate)
+import Network.Wai.Handler.Warp (Port, defaultSettings, defaultShouldDisplayException, runSettingsSocket)
+import System.IO.Error (ioeGetErrorType, isAlreadyInUseError)
+import UnliftIO (bracket, catch, evaluate, onException, throwIO, tryIO)
+import UnliftIO.Async (link, mapConcurrently_, withAsync)
+import UnliftIO.Concurrent (myThreadId, throwTo)
 
 import Ecluse.BenchLoad.CapturedArtifact (SelectedArtifact)
 import Ecluse.BenchLoad.Error (benchFail)
@@ -87,9 +93,32 @@ withProxyPortsConfigured ecosystem knobs configure privateApp publicApp mkMix bo
             , psTuning = lkProxyTuning knobs
             }
 
--- | Serve a stub on a free loopback port, raising an exception the application throws in the caller.
+{- | Serve a stub on one free port at 127.0.0.1 and, when the host has an IPv6 loopback, at ::1, since http-client
+dials the second address of a name such as @localhost@ 250 ms after the first. Application exceptions reach the caller.
+-}
 withLoopbackStub :: Application -> (Port -> IO a) -> IO a
-withLoopbackStub app = testWithApplication (pure app)
+withLoopbackStub app use = do
+    caller <- myThreadId
+    let reported request respond =
+            app request respond `catch` \(failure :: SomeException) -> do
+                when (defaultShouldDisplayException failure) (throwTo caller failure)
+                throwIO failure
+    bracket loopbackListeners (traverse_ close . snd) $ \(port, listeners) -> do
+        -- The measured proxy is a child process, so it must not inherit a listener.
+        traverse_ (`withFdSocket` setCloseOnExecIfNeeded) listeners
+        withAsync (mapConcurrently_ (\listener -> runSettingsSocket defaultSettings listener reported) listeners) $ \server ->
+            link server >> use port
+
+-- One free port at 127.0.0.1, bound at ::1 as well unless the host has no IPv6 loopback.
+loopbackListeners :: IO (Port, [Socket])
+loopbackListeners = do
+    (port, ipv4) <- bindRandomPortTCP "127.0.0.1"
+    (tryIO (bindPortTCP port "::1") `onException` close ipv4) >>= \case
+        Right ipv6 -> pure (port, [ipv4, ipv6])
+        Left err
+            | ioeGetErrorType err == UnsupportedOperation -> pure (port, [ipv4])
+            | isAlreadyInUseError err -> close ipv4 >> loopbackListeners
+            | otherwise -> close ipv4 >> throwIO err
 
 -- | The target for a duration-driven load over the URL mix.
 httpTarget :: (Target -> IO a) -> ProxyProcess -> [Text] -> IO a
