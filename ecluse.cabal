@@ -2068,6 +2068,7 @@ test-suite ecluse-smoke
   main-is:            Spec.hs
   hs-source-dirs:     test/smoke
   other-modules:
+    Ecluse.Core.Registry.CargoSmokeSpec
     Ecluse.Core.Registry.NpmSmokeSpec
     Ecluse.Core.Registry.PyPISmokeSpec
     Ecluse.Core.Registry.RubyGemsSmokeSpec
