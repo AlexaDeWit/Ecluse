@@ -38,7 +38,7 @@ import Ecluse.Core.Package (mkPackageName)
 import Ecluse.Core.Registry.Adapter.Capability (AdapterMetadata (metadataRead))
 import Ecluse.Core.Registry.Adapter.Types (RegistryAdapter (adapterMetadata))
 import Ecluse.Core.Registry.CachedDocument (cargoCached)
-import Ecluse.Core.Registry.Cargo.Mirror (cargoMirrorDocuments)
+import Ecluse.Core.Registry.Cargo.Mirror (cargoMirrorDocuments, cargoStateFormat)
 import Ecluse.Core.Registry.Metadata (VersionDoc (..), VersionRead (..))
 import Ecluse.Core.Registry.Metadata.Fetch.Preparation (prepareVersion)
 import Ecluse.Core.Registry.MirrorUpload (MirrorReadData (CargoMirrorRead), checkedMirrorInventory, inventoryFiles, verifyMirrorBytes)
@@ -310,7 +310,7 @@ cargoUpstream releases request respond
 cargoManagedView :: RegistryAdapter -> OriginClient -> Text -> [ServingRelease] -> [ServingRelease] -> IO MirrorView
 cargoManagedView adapter origin targetUrl private public = do
     record <- foldM copy Nothing copies
-    mirrorViewWith cargoMirrorDocuments target (\_ _ -> pure (Right (maybe StateAbsent (StateLoaded (StateRevision target name "complete")) record)))
+    mirrorViewWith cargoStateFormat cargoMirrorDocuments target (\_ _ -> pure (Right (maybe StateAbsent (StateLoaded (StateRevision target name "complete")) record)))
   where
     target = stateTarget targetUrl
     name = mkPackageName Cargo Nothing "thing"
@@ -322,7 +322,7 @@ cargoManagedView adapter origin targetUrl private public = do
         doc <- maybe (fail "completed fixture has no admitted source version") pure (vrVersion result)
         source <- maybe (fail "completed fixture has no native source records") pure (vdRaw doc >>= snd cargoCached)
         inventory <- expectRight (checkedMirrorInventory name version doc (CargoMirrorRead source))
-        expected <- expectRight (extendProjectRecord defaultLimits target inventory previous)
+        expected <- expectRight (extendProjectRecord cargoStateFormat defaultLimits target inventory previous)
         let file :| _ = inventoryFiles inventory
         verified <- expectRight (verifyMirrorBytes file (releaseBytes release))
         Just <$> expectRight (retainVerifiedIdentity version verified expected)

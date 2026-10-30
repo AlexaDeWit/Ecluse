@@ -20,6 +20,7 @@ import System.FilePath ((</>))
 
 import Ecluse.Core.Mirror.State
 import Ecluse.Core.Mirror.State.Codec (chargedDecodeProjectRecord)
+import Ecluse.Core.Mirror.State.Format (MirrorStateFormat (msfCompanions))
 import Ecluse.Core.Mirror.State.Internal (MirrorVersion (..), ProjectMirrorRecord (..), StoredMirrorFragment (..), VerifiedCompanionBytes (..), retainVerifiedIdentity)
 import Ecluse.Core.Mirror.State.Weight (retainedRecordWeight)
 import Ecluse.Core.Package (Artifact (artFilename), PackageDetails (..), PackageInfo (..), PackageName, hashValue, renderPackageName)
@@ -30,7 +31,7 @@ import Ecluse.Core.Registry.Publish (MirrorCompanion (mcValidate))
 import Ecluse.Core.Registry.RubyGems.Archive (checkGemArchive, gemArchiveSpecification, inspectGemArchive)
 import Ecluse.Core.Registry.RubyGems.CompactSpec (checkGemSpecification)
 import Ecluse.Core.Registry.RubyGems.Document (GemDocument (..), GemRow (..), selectGemVersion)
-import Ecluse.Core.Registry.RubyGems.Mirror (mirrorRow, rubyMirrorCompanion)
+import Ecluse.Core.Registry.RubyGems.Mirror (mirrorRow, rubyGemsStateFormat, rubyMirrorCompanion)
 import Ecluse.Core.Registry.RubyGems.Project (coordinateFilename, coordinatePlatform, coordinateVersion, projectName, unGemPlatform)
 import Ecluse.Core.Registry.RubyGems.Wire (decodeInfoRow)
 import Ecluse.Core.Security (Limits (maxMetadataBytes), defaultLimits)
@@ -68,7 +69,7 @@ makeRubyStateProbeFixture directory rawName = do
     let target = stateTarget "https://private.test"
     (record, objects) <- foldM (retainVersion target name source releases) (Nothing, Map.empty) (Map.elems (infoVersions info))
     complete <- maybe (fail "native state fixture has no expected versions") pure record
-    encoded <- expectRight (encodeProjectRecord defaultLimits complete)
+    encoded <- expectRight (encodeProjectRecord rubyGemsStateFormat defaultLimits complete)
     pure (RubyStateProbeFixture target name encoded objects)
 
 retainVersion :: StateTarget -> PackageName -> GemDocument -> [RubyRelease] -> (Maybe ProjectMirrorRecord, Map Text ByteString) -> PackageDetails -> IO (Maybe ProjectMirrorRecord, Map Text ByteString)
@@ -76,7 +77,7 @@ retainVersion target name source releases (previous, objects) details = do
     selected <- maybe (fail "native state fixture lost a selected version") pure (selectGemVersion (pkgVersion details) source)
     let doc = VersionDoc details (Just (fst rubyGemsCached selected))
     inventory <- expectRight (checkedMirrorInventory name (pkgVersion details) doc (RubyGemsMirrorRead selected))
-    record <- expectRight (extendProjectRecord defaultLimits target inventory previous)
+    record <- expectRight (extendProjectRecord rubyGemsStateFormat defaultLimits target inventory previous)
     (retained, addedObjects) <- foldM (retainFile inventory releases) (record, objects) (toList (inventoryFiles inventory))
     version <- maybe (fail "native state fixture lost its retained version") pure (recordVersion (pkgVersion details) retained)
     unless (checkMirrorCompletion version (toList (pkgArtifacts details)) == MirrorComplete) (fail "native state fixture is incomplete")
@@ -105,7 +106,7 @@ checkedFixtureFile inventory releases file = do
     void (expectRight (checkGemSpecification coordinate row (gemArchiveSpecification archive)))
     compact <- expectRightIO (withSweeper (\deadlines -> mcValidate rubyMirrorCompanion deadlines defaultLimits (const pass) inventory file (releaseCompact release)))
     unless (compact == releaseCompact release) (fail "native state fixture changed the original compact bytes")
-    checked <- expectRight (verifySourceCompanionBytes defaultLimits (inventoryReadData inventory) file compact)
+    checked <- expectRight (verifySourceCompanionBytes defaultLimits (msfCompanions rubyGemsStateFormat) file compact)
     pure (verified, checked)
 
 retainFixtureCompanionObject :: VerifiedCompanionBytes -> Map Text ByteString -> IO (Map Text ByteString)
@@ -121,7 +122,7 @@ retainFixtureCompanionObject checked@(VerifiedCompanionBytes _ reference _) obje
 padRubyStateProbeSource :: Int -> RubyStateProbeFixture -> IO RubyStateProbeFixture
 padRubyStateProbeSource padding fixture = do
     when (padding <= 0) (fail "native state source padding must be positive")
-    record <- chargedDecodeProjectRecord (const pass) defaultLimits (rubyStateTarget fixture) (rubyStatePackage fixture) (rubyStateEncodedRecord fixture) >>= expectRight
+    record <- chargedDecodeProjectRecord rubyGemsStateFormat (const pass) defaultLimits (rubyStateTarget fixture) (rubyStatePackage fixture) (rubyStateEncodedRecord fixture) >>= expectRight
     let rows = [row | version <- Map.elems (recordVersions record), StoredMirrorFragment _ (RubyGemsMirrorRead source) _ <- toList (versionFragments version), row <- gemRows source]
         suffixBytes = toInteger padding + toInteger (BS.length paddingPrefix)
         growth = sum [base64Length (toInteger (BS.length (grSource row)) + suffixBytes) - base64Length (toInteger (BS.length (grSource row))) | row <- rows]
@@ -130,7 +131,7 @@ padRubyStateProbeSource padding fixture = do
     when (null rows) (fail "native state source padding has no native rows")
     let suffix = paddingPrefix <> BS.replicate padding 120
     versions <- traverse (padVersion suffix) (projectVersions record)
-    encoded <- expectRight (encodeProjectRecord defaultLimits record{projectVersions = versions})
+    encoded <- expectRight (encodeProjectRecord rubyGemsStateFormat defaultLimits record{projectVersions = versions})
     pure fixture{rubyStateEncodedRecord = encoded}
 
 paddingPrefix :: ByteString
@@ -152,7 +153,7 @@ padFragment _ _ = fail "native source padding encountered another ecosystem"
 
 -- | Weigh an omitted native source while the probe retains the unchanged, complete record.
 rubyStateSourceOmissionCharge :: ProjectMirrorRecord -> Integer
-rubyStateSourceOmissionCharge record = retainedRecordWeight record{projectVersions = fmap (\version -> version{storedFragments = fmap omitFragmentSource (storedFragments version)}) (projectVersions record)}
+rubyStateSourceOmissionCharge record = retainedRecordWeight rubyGemsStateFormat record{projectVersions = fmap (\version -> version{storedFragments = fmap omitFragmentSource (storedFragments version)}) (projectVersions record)}
 
 omitFragmentSource :: StoredMirrorFragment -> StoredMirrorFragment
 omitFragmentSource (StoredMirrorFragment details (RubyGemsMirrorRead source) expected) = StoredMirrorFragment details (RubyGemsMirrorRead source{gemHeader = mempty, gemRows = []}) expected
@@ -160,4 +161,4 @@ omitFragmentSource fragment = fragment
 
 -- | Weigh omitted companion references without changing the actual probe root or external object map.
 rubyStateCompanionOmissionCharge :: ProjectMirrorRecord -> Integer
-rubyStateCompanionOmissionCharge record = retainedRecordWeight record{projectVersions = fmap (\version -> version{storedCompanions = Map.empty}) (projectVersions record)}
+rubyStateCompanionOmissionCharge record = retainedRecordWeight rubyGemsStateFormat record{projectVersions = fmap (\version -> version{storedCompanions = Map.empty}) (projectVersions record)}

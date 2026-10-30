@@ -20,18 +20,19 @@ import Ecluse.Core.Deadline (newDeadlines)
 import Ecluse.Core.Ecosystem (Ecosystem (Cargo))
 import Ecluse.Core.Mirror.State
 import Ecluse.Core.Mirror.State.Codec (chargedDecodeProjectRecord)
+import Ecluse.Core.Mirror.State.Format (MirrorStateFormat (msfCompanions))
 import Ecluse.Core.Mirror.State.Internal (StateRevision (StateRevision), VerifiedCompanionBytes (VerifiedCompanionBytes), retainVerifiedIdentity)
 import Ecluse.Core.Package
 import Ecluse.Core.Package.Entry (EntryKey (ArrayEntry, RecordEntry))
 import Ecluse.Core.Registry.CachedDocument (CachedDoc, cargoCached, pypiPacked, pypiSimpleCached, rubyGemsCached)
 import Ecluse.Core.Registry.Cargo.Document (cargoDocument, cargoRecords)
-import Ecluse.Core.Registry.Cargo.Mirror (cargoMirrorDocuments)
+import Ecluse.Core.Registry.Cargo.Mirror (cargoMirrorDocuments, cargoStateFormat)
 import Ecluse.Core.Registry.Metadata (Manifest (..), VersionDoc (..))
 import Ecluse.Core.Registry.MirrorUpload
 import Ecluse.Core.Registry.PyPI.Document (simpleFiles)
-import Ecluse.Core.Registry.PyPI.Mirror (pypiMirrorDocuments)
+import Ecluse.Core.Registry.PyPI.Mirror (pypiMirrorDocuments, pypiStateFormat)
 import Ecluse.Core.Registry.RubyGems.Document (GemDocument (..), GemRow (..), selectGemVersion)
-import Ecluse.Core.Registry.RubyGems.Mirror (rubyGemsMirrorDocuments)
+import Ecluse.Core.Registry.RubyGems.Mirror (rubyGemsMirrorDocuments, rubyGemsStateFormat)
 import Ecluse.Core.Registry.RubyGems.Project (coordinateVersion, projectName)
 import Ecluse.Core.Registry.RubyGems.Projection (projectGemRows)
 import Ecluse.Core.Registry.RubyGems.Wire (decodeInfoRow)
@@ -53,9 +54,9 @@ spec = do
         it "restores original yank, time and additive fields after durable reopen and target replacement" $ do
             (original, inventory) <- cargoInventory
             fmap cargoRecords (snd cargoCached (raw inventory)) `shouldBe` fmap cargoRecords (vdRaw original >>= snd cargoCached)
-            record <- expectRight (extendProjectRecord defaultLimits target inventory Nothing)
-            bytes <- expectRight (encodeProjectRecord defaultLimits record)
-            reopened <- chargedDecodeProjectRecord (const (pure ())) defaultLimits target (pkgName (vdDetails original)) bytes >>= expectRight
+            record <- expectRight (extendProjectRecord cargoStateFormat defaultLimits target inventory Nothing)
+            bytes <- expectRight (encodeProjectRecord cargoStateFormat defaultLimits record)
+            reopened <- chargedDecodeProjectRecord cargoStateFormat (const (pure ())) defaultLimits target (pkgName (vdDetails original)) bytes >>= expectRight
             current <- cargoTarget original
             restored <- expectRight (mirrorVersionView cargoMirrorDocuments (pkgVersion (vdDetails original)) reopened (Just current))
             fmap vdDetails restored `shouldBe` Just (vdDetails original){pkgArtifacts = pkgArtifacts (vdDetails current)}
@@ -70,7 +71,7 @@ spec = do
             map snd rows `shouldBe` [value | source <- maybeToList (vdRaw original >>= snd cargoCached), (_, value) <- cargoRecords source]
         it "refuses absent, missing-digest and conflicting target identity" $ do
             (original, inventory) <- cargoInventory
-            record <- expectRight (extendProjectRecord defaultLimits target inventory Nothing)
+            record <- expectRight (extendProjectRecord cargoStateFormat defaultLimits target inventory Nothing)
             current <- cargoTarget original
             let details = vdDetails current
                 noHash = current{vdDetails = details{pkgArtifacts = fmap (\artifact -> artifact{artHashes = []}) (pkgArtifacts details)}}
@@ -81,21 +82,21 @@ spec = do
             mirrorVersionView cargoMirrorDocuments (pkgVersion details) record (Just conflicting) `shouldSatisfy` isLeft
         it "rejects corrupt retained source facts and retains the first admitted row on re-admission" $ do
             (original, inventory) <- cargoInventory
-            record <- expectRight (extendProjectRecord defaultLimits target inventory Nothing)
+            record <- expectRight (extendProjectRecord cargoStateFormat defaultLimits target inventory Nothing)
             current <- cargoTarget original
             currentRaw <- maybe (fail "missing target row") pure (vdRaw current >>= snd cargoCached)
             admittedAgain <- expectRight (checkedMirrorInventory (pkgName (vdDetails current)) (pkgVersion (vdDetails current)) current (CargoMirrorRead currentRaw))
-            extendProjectRecord defaultLimits target admittedAgain (Just record) `shouldBe` Right record
-            encoded <- expectRight (encodeProjectRecord defaultLimits record)
+            extendProjectRecord cargoStateFormat defaultLimits target admittedAgain (Just record) `shouldBe` Right record
+            encoded <- expectRight (encodeProjectRecord cargoStateFormat defaultLimits record)
             value <- expectRight (eitherDecodeStrict encoded)
             let corrupt = rewriteCargoSource value
-            chargedDecodeProjectRecord (const (pure ())) defaultLimits target (pkgName (vdDetails original)) (LBS.toStrict (encode corrupt)) >>= (`shouldSatisfy` isLeft)
+            chargedDecodeProjectRecord cargoStateFormat (const (pure ())) defaultLimits target (pkgName (vdDetails original)) (LBS.toStrict (encode corrupt)) >>= (`shouldSatisfy` isLeft)
     describe "managed mirror source restoration" $ do
         it "retains every source entry across colliding fragment coordinates and changed native URLs" $ do
             originalInventory <- mirrorSample [1] False "https://public.test/" "first"
             later <- mirrorSample [2] False "https://public.test/" "second"
-            initial <- expectRight (extendProjectRecord defaultLimits target originalInventory Nothing)
-            record <- expectRight (extendProjectRecord defaultLimits target later (Just initial))
+            initial <- expectRight (extendProjectRecord pypiStateFormat defaultLimits target originalInventory Nothing)
+            record <- expectRight (extendProjectRecord pypiStateFormat defaultLimits target later (Just initial))
             targetInventory <- mirrorSample [1, 2] False "https://private.test/moved/" "stripped"
             let current = Just (VersionDoc (inventoryDetails targetInventory) Nothing)
             restored <- expectRight (mirrorVersionView pypiMirrorDocuments mirrorVersion record current)
@@ -107,7 +108,7 @@ spec = do
 
         it "refuses a native deletion and digestless presence after earlier completion" $ do
             inventory <- mirrorSample [1, 2] False "https://public.test/" "source"
-            record <- expectRight (extendProjectRecord defaultLimits target inventory Nothing)
+            record <- expectRight (extendProjectRecord pypiStateFormat defaultLimits target inventory Nothing)
             let details = inventoryDetails inventory
                 firstFile :| _ = pkgArtifacts details
             mirrorVersionView pypiMirrorDocuments mirrorVersion record (Just (VersionDoc details{pkgArtifacts = firstFile :| []} Nothing)) `shouldSatisfy` isLeft
@@ -115,19 +116,19 @@ spec = do
 
         it "requires a declared companion to be retained even when every native wheel exists" $ do
             inventory <- mirrorSample [1] True "https://public.test/" "source"
-            record <- expectRight (extendProjectRecord defaultLimits target inventory Nothing)
+            record <- expectRight (extendProjectRecord pypiStateFormat defaultLimits target inventory Nothing)
             mirrorVersionView pypiMirrorDocuments mirrorVersion record (Just (VersionDoc (inventoryDetails inventory) Nothing)) `shouldSatisfy` isLeft
 
         it "allows a complete public fallback but rejects an apparently successful shortened source" $ do
             inventory <- mirrorSample [1, 2, 3] False "https://public.test/" "source"
             short <- mirrorSample [1, 2] False "https://public.test/" "later"
-            record <- expectRight (extendProjectRecord defaultLimits target inventory Nothing)
+            record <- expectRight (extendProjectRecord pypiStateFormat defaultLimits target inventory Nothing)
             publicMirrorCoverage (recordVersions record) (info inventory) `shouldBe` True
             publicMirrorCoverage (recordVersions record) (info short) `shouldBe` False
 
         it "keeps restored listing contributions packed and binds their validator to revision" $ do
             inventory <- mirrorSample [1, 2] False "https://private.test/" "source"
-            record <- expectRight (extendProjectRecord defaultLimits target inventory Nothing)
+            record <- expectRight (extendProjectRecord pypiStateFormat defaultLimits target inventory Nothing)
             let private = Manifest (info inventory) (raw inventory) 1024 (digestOf "private")
             (_, initialManifest, incompleteVersions) <- expectRight (mirrorProjectViews pypiMirrorDocuments revision record (Just private))
             (_, updatedManifest, _) <- expectRight (mirrorProjectViews pypiMirrorDocuments (rev "new") record (Just private))
@@ -162,7 +163,7 @@ spec = do
             let readState _ previous = do
                     modifyIORef' requests (<> [previous])
                     pure (Right (maybe (StateLoaded revision record) StateUnchanged previous))
-            view <- mirrorViewWith pypiMirrorDocuments target readState
+            view <- mirrorViewWith pypiStateFormat pypiMirrorDocuments target readState
             runRead view `shouldReturn` Right (Just (revision, record))
             runRead view `shouldReturn` Right (Just (revision, record))
             readIORef requests `shouldReturn` [Nothing, Just revision]
@@ -170,7 +171,7 @@ spec = do
         it "owns a retained revision without changing its bytes" $ do
             record <- sampleRecord
             let original = BS.take 4 (BS.replicate 65536 97)
-            view <- mirrorViewWith pypiMirrorDocuments target (\_ _ -> pure (Right (StateLoaded (rev original) record)))
+            view <- mirrorViewWith pypiStateFormat pypiMirrorDocuments target (\_ _ -> pure (Right (StateLoaded (rev original) record)))
             result <- runRead view >>= expectRight
             case result of
                 Just (StateRevision _ _ owned, _) -> do
@@ -183,17 +184,17 @@ spec = do
         it "rejects stale cached state during an outage despite a smaller current public inventory" $ do
             record <- sampleRecord
             answer <- newIORef (Right (StateLoaded revision record))
-            view <- mirrorViewWith pypiMirrorDocuments target (\_ _ -> readIORef answer)
+            view <- mirrorViewWith pypiStateFormat pypiMirrorDocuments target (\_ _ -> readIORef answer)
             runRead view `shouldReturn` Right (Just (revision, record))
             writeIORef answer (Left (StateInvalid "outage"))
             runRead view `shouldReturn` Left (StateInvalid "outage")
 
         it "rejects an unsolicited 304 and a 304 for a different revision" $ do
-            view <- mirrorViewWith pypiMirrorDocuments target (\_ _ -> pure (Right (StateUnchanged revision)))
+            view <- mirrorViewWith pypiStateFormat pypiMirrorDocuments target (\_ _ -> pure (Right (StateUnchanged revision)))
             runRead view `shouldReturn` Left StateRevisionMismatch
             record <- sampleRecord
             answer <- newIORef (Right (StateLoaded revision record))
-            warmed <- mirrorViewWith pypiMirrorDocuments target (\_ _ -> readIORef answer)
+            warmed <- mirrorViewWith pypiStateFormat pypiMirrorDocuments target (\_ _ -> readIORef answer)
             void (runRead warmed)
             writeIORef answer (Right (StateUnchanged (rev "other")))
             runRead warmed `shouldReturn` Left StateRevisionMismatch
@@ -202,12 +203,12 @@ spec = do
             record <- sampleRecord
             requests <- newIORef (0 :: Int)
             answer <- newIORef (Right StateAbsent)
-            view <- mirrorViewWith pypiMirrorDocuments target (\_ _ -> modifyIORef' requests (+ 1) >> readIORef answer)
+            view <- mirrorViewWith pypiStateFormat pypiMirrorDocuments target (\_ _ -> modifyIORef' requests (+ 1) >> readIORef answer)
             runRead view `shouldReturn` Right Nothing
             writeIORef answer (Right (StateLoaded revision record))
             runRead view `shouldReturn` Right (Just (revision, record))
             added <- mirrorSample [4] False "https://public.test/" "added"
-            extended <- expectRight (extendProjectRecord defaultLimits target added (Just record))
+            extended <- expectRight (extendProjectRecord pypiStateFormat defaultLimits target added (Just record))
             writeIORef answer (Right (StateLoaded (rev "extended") extended))
             runRead view `shouldReturn` Right (Just (rev "extended", extended))
             readIORef requests `shouldReturn` 3
@@ -224,7 +225,7 @@ raw :: MirrorInventory -> CachedDoc
 raw = mirrorReadDocument . inventoryReadData
 
 sampleRecord :: IO ProjectMirrorRecord
-sampleRecord = mirrorSample [1, 2, 3] False "https://public.test/" "source" >>= \inventory -> expectRight (extendProjectRecord defaultLimits target inventory Nothing)
+sampleRecord = mirrorSample [1, 2, 3] False "https://public.test/" "source" >>= \inventory -> expectRight (extendProjectRecord pypiStateFormat defaultLimits target inventory Nothing)
 
 target :: StateTarget
 target = stateTarget "https://private.test/"
@@ -265,12 +266,12 @@ rubyGemsRecord = do
     retainGemVersion source previous details = do
         selected <- maybe (fail "missing RubyGems version rows") pure (selectGemVersion (pkgVersion details) source)
         inventory <- expectRight (checkedMirrorInventory (pkgName details) (pkgVersion details) (VersionDoc details (Just (fst rubyGemsCached selected))) (RubyGemsMirrorRead selected))
-        expected <- expectRight (extendProjectRecord defaultLimits target inventory previous)
+        expected <- expectRight (extendProjectRecord rubyGemsStateFormat defaultLimits target inventory previous)
         Just <$> foldM (completeGemFile inventory) expected (inventoryFiles inventory)
     completeGemFile inventory record file = do
         verified <- expectRight (verifyMirrorBytes file (gemArchive (renderVersion (inventoryVersion inventory))))
         withIdentity <- expectRight (retainVerifiedIdentity (inventoryVersion inventory) verified record)
-        checked@(VerifiedCompanionBytes _ reference _) <- expectRight (verifySourceCompanionBytes defaultLimits (inventoryReadData inventory) file "compact")
+        checked@(VerifiedCompanionBytes _ reference _) <- expectRight (verifySourceCompanionBytes defaultLimits (msfCompanions rubyGemsStateFormat) file "compact")
         expectRight (retainCompanionReference (inventoryVersion inventory) checked reference withIdentity)
 
 cargoInventory :: IO (VersionDoc, MirrorInventory)

@@ -52,6 +52,7 @@ import Ecluse.Core.Registry.Publish (
     MirrorPublish (mpProbeInventory),
     PublishPlan (ppLatest),
  )
+import Ecluse.Core.Registry.PyPI.Mirror (pypiStateFormat)
 import Ecluse.Core.Registry.Request (nativePresentation)
 import Ecluse.Core.Rules (prepare)
 import Ecluse.Core.Rules.Types (Decision (Undecidable), DenyIfCveParams (DenyIfCveParams), FailureAlignment (FailDeny, FailNoDecision), Inability (NoDatabaseLoaded, RuleThrew), Reason (RuleUnable), Rule (AllowIfOlderThan, DenyIfCve, DenyIfDeprecated, DenyIfKnownMalicious, DenyIfYanked), Transience (WillResolve, WontResolve), ruleName)
@@ -288,7 +289,7 @@ spec = do
                                 if already
                                     then msWriteProject original charge name revision record
                                     else do
-                                        _ <- recordExpectedInventory defaultLimits (const (pure ())) (wmsTarget binding) original competing >>= expectRight
+                                        _ <- recordExpectedInventory pypiStateFormat defaultLimits (const (pure ())) (wmsTarget binding) original competing >>= expectRight
                                         pure (Right StateConflict)
                             }
                     policy = (mfPolicy fixture){wpMirrorState = Just binding{wmsStore = store}}
@@ -353,7 +354,7 @@ spec = do
                 added <- managedInventory url False [1, 2, 3, 4]
                 let binding = mfBinding fixture
                 writeIORef (mfOnProbe fixture) $ \number -> when (number == 2) $ do
-                    _ <- recordExpectedInventory defaultLimits (const (pure ())) (wmsTarget binding) (wmsStore binding) added >>= expectRight
+                    _ <- recordExpectedInventory pypiStateFormat defaultLimits (const (pure ())) (wmsTarget binding) (wmsStore binding) added >>= expectRight
                     writeIORef (mfSource fixture) (VersionPresent (sourceDocument added) Nothing)
                 runManaged fixture `shouldReturn` Succeeded
                 readIORef (mfUploads fixture) `shouldReturn` map mirrorFilename [1, 2, 3, 4]
@@ -365,7 +366,7 @@ spec = do
                 added <- managedInventory url False [1, 2, 3, 4]
                 let binding = mfBinding fixture
                 writeIORef (mfOnProbe fixture) $ \number -> when (number == 2) $ do
-                    _ <- recordExpectedInventory defaultLimits (const (pure ())) (wmsTarget binding) (wmsStore binding) added >>= expectRight
+                    _ <- recordExpectedInventory pypiStateFormat defaultLimits (const (pure ())) (wmsTarget binding) (wmsStore binding) added >>= expectRight
                     writeIORef (mfTarget fixture) (toList (pkgArtifacts (inventoryDetails added)))
                 runManaged fixture `shouldReturn` Succeeded
                 readIORef (mfUploads fixture) `shouldReturn` map mirrorFilename [1, 2, 3]

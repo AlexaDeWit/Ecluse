@@ -31,6 +31,7 @@ import Ecluse.Core.Registry.Metadata (VersionDoc (..), VersionEvaluation (Versio
 import Ecluse.Core.Registry.MirrorUpload
 import Ecluse.Core.Registry.MirrorUpload.Internal (restoreMirrorInventory)
 import Ecluse.Core.Registry.Publish.Internal (MirrorPublish (..), PreparedMirrorUpload (..), PreparedMirrorVersion (..))
+import Ecluse.Core.Registry.PyPI.Mirror (pypiStateFormat)
 import Ecluse.Core.Security (defaultLimits)
 import Ecluse.Core.Worker.Job (JobOutcome, processJob)
 import Ecluse.Core.Worker.Types (WorkerMirrorState (..), WorkerPolicy (..), WorkerStateBudget (..))
@@ -91,7 +92,7 @@ managedFixture location companion = do
         binding = WorkerMirrorState store targetIdentity defaultLimits (\action -> Just <$> action unmeteredStateBudget)
         publish = fixturePublish record target uploads probes reject loseReply transform onProbe
         resolve _ _ = modifyIORef' resolves (+ 1) >> readIORef sourceRef
-        policy = (npmPolicy resolve [admitRule]){wpMirrorState = Just binding, wpPublish = publish}
+        policy = (npmPolicy resolve [admitRule]){wpMirrorState = Just binding, wpPublish = publish, wpMirrorFormat = pypiStateFormat}
     pure (ManagedFixture policy binding record target uploads probes resolves sourceRef stateFault reject loseReply transform onProbe companions)
 
 -- | Exact digests and paired source entries for a changing admitted snapshot.

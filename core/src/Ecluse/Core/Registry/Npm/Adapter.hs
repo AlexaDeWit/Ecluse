@@ -33,6 +33,7 @@ import Ecluse.Core.Registry.Npm.Credential (npmCredential)
 import Ecluse.Core.Registry.Npm.Filter (assembleMergedDocument, serialiseMergedDocument)
 import Ecluse.Core.Registry.Npm.Maintenance (npmMaintenance)
 import Ecluse.Core.Registry.Npm.Metadata (npmChargeFactors, npmRead)
+import Ecluse.Core.Registry.Npm.Mirror (npmStateFormat)
 import Ecluse.Core.Registry.Npm.Project (projectName)
 import Ecluse.Core.Registry.Npm.Publish (npmPublishCodec, uploadClaims)
 import Ecluse.Core.Registry.Npm.Request qualified as NpmRequest
@@ -80,7 +81,7 @@ npmPublish =
         , publishRelay = \presentation origin name -> relayPublishDocument (presentedMapping presentation StoreWrite npmCredential) origin name . publishBodyBytes
         , publishUploadClaims = \_ _ _ -> pure . uploadClaims . publishBodyBytes
         , publishCodec = npmPublishCodec
-        , publishMirrorRequirements = MirrorRequirements CachedWorkerRead NativeVersionState
+        , publishMirrorRequirements = MirrorRequirements CachedWorkerRead npmStateFormat NativeVersionState
         , publishUploadEndpoint = ReadRootUpload
         , publishIdentity = TokenIdentity
         }

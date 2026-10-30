@@ -13,6 +13,7 @@ import Ecluse.Core.Mirror.State
 import Ecluse.Core.Mirror.State.Internal (StateRevision (..))
 import Ecluse.Core.Registry.Metadata (VersionDoc (vdDetails))
 import Ecluse.Core.Registry.MirrorUpload (inventoryDetails)
+import Ecluse.Core.Registry.PyPI.Mirror (pypiStateFormat)
 import Ecluse.Core.Security (defaultLimits)
 import Ecluse.Core.Worker.Managed
 import Ecluse.Core.Worker.Types (WorkerMirrorState (..))
@@ -33,7 +34,7 @@ spec = describe "managed worker records" $ do
     it "refuses a record bound to another target" $ do
         fixture <- managedFixture "https://source.test" False
         inventory <- mirrorSample [1] False "https://source.test/" "original"
-        record <- expectRight (extendProjectRecord defaultLimits (stateTarget "another target") inventory Nothing)
+        record <- expectRight (extendProjectRecord pypiStateFormat defaultLimits (stateTarget "another target") inventory Nothing)
         let binding = mfBinding fixture
             revision = StateRevision (wmsTarget binding) mirrorPackage "one"
             store = (wmsStore binding){msReadProject = \_ _ _ -> pure (Right (StateLoaded revision record))}
@@ -42,7 +43,7 @@ spec = describe "managed worker records" $ do
     it "keeps original selected source fields paired through the durable fragment" $ do
         fixture <- managedFixture "https://source.test" False
         inventory <- mirrorSample [1, 2] False "https://source.test/" "original"
-        record <- persistInventory unmeteredStateBudget defaultLimits (Just (mfBinding fixture)) inventory Nothing >>= expectRight
+        record <- persistInventory unmeteredStateBudget pypiStateFormat defaultLimits (Just (mfBinding fixture)) inventory Nothing >>= expectRight
         case recordVersion mirrorVersion record of
             Nothing -> expectationFailure "record lost its requested version"
             Just version -> do
@@ -53,13 +54,13 @@ spec = describe "managed worker records" $ do
     it "keeps transient inventories monotonic without durable storage" $ do
         initialInventory <- mirrorSample [1] False "https://source.test/" "first"
         two <- mirrorSample [2] False "https://source.test/" "second"
-        record <- persistInventory unmeteredStateBudget defaultLimits Nothing initialInventory Nothing >>= expectRight
-        updated <- persistInventory unmeteredStateBudget defaultLimits Nothing two (Just record) >>= expectRight
+        record <- persistInventory unmeteredStateBudget pypiStateFormat defaultLimits Nothing initialInventory Nothing >>= expectRight
+        updated <- persistInventory unmeteredStateBudget pypiStateFormat defaultLimits Nothing two (Just record) >>= expectRight
         fmap (Map.keys . versionFiles) (recordVersion mirrorVersion updated) `shouldBe` Just (map mirrorFilename [1, 2])
 
     it "refuses pending companion declarations without an object proof" $ do
         inventory <- mirrorSample [1] True "https://source.test/" "pending"
-        record <- persistInventory unmeteredStateBudget defaultLimits Nothing inventory Nothing >>= expectRight
+        record <- persistInventory unmeteredStateBudget pypiStateFormat defaultLimits Nothing inventory Nothing >>= expectRight
         case recordVersion mirrorVersion record of
             Nothing -> expectationFailure "record lost its requested version"
             Just version -> verifyCompanions unmeteredStateBudget (pure ()) Nothing version `shouldReturn` Left StateMissingCompanion
