@@ -28,6 +28,7 @@ module Ecluse.Config (
     MirrorTarget (..),
     StoreTag (..),
     storeTagName,
+    taggedKeyPath,
     Target (..),
     PrivateEndpoint (..),
     DeletionConsent (..),

@@ -45,7 +45,7 @@ validateMirrorSettings app = case concatMap refusedUploadUrls mounts of
 -- A protocol that derives its write address from url takes no uploadUrl, which would silently send uploads elsewhere.
 refusedUploadUrls :: (Ecosystem, MountConfig) -> [ConfigError]
 refusedUploadUrls (eco, mount) =
-    [ UploadUrlRefused eco (key <> "." <> storeTagName (tgtTag target) <> ".uploadUrl")
+    [ UploadUrlRefused eco (taggedKeyPath key (tgtTag target) "uploadUrl")
     | derivesUploadAddress
     , (key, target, Just _) <- mirrorTarget <> publicationTarget
     ]

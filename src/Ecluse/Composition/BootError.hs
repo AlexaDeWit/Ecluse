@@ -24,6 +24,7 @@ import Ecluse.Config (
     StoreTag,
     renderPolicyError,
     storeTagName,
+    taggedKeyPath,
  )
 import Ecluse.Config.Resolve (mountDocRef, mountKeyRef)
 import Ecluse.Core.Credential (Secret)
@@ -234,7 +235,7 @@ renderBootError = \case
             <> mountKeyRef eco "privateUpstream"
             <> " is not: first-party names resolve from the private upstream alone. Configure privateUpstream for these names, or remove firstParty."
     PublishStaticCredentialNeedsEdge eco tag ->
-        mountKeyRef eco ("publicationTarget." <> storeTagName tag <> ".token")
+        mountKeyRef eco (taggedKeyPath "publicationTarget" tag "token")
             <> " is set but ECLUSE_SERVER__AUTH_TOKEN is not: a static publish credential needs a verifiable inbound edge."
     PublicationTargetOnPublicUpstream eco other url ->
         mountKeyRef eco "publicationTarget"
@@ -363,7 +364,7 @@ renderStoreMaintenanceReason eco = \case
         "its target is a "
             <> storeTagName tag
             <> " store and "
-            <> mountKeyRef eco ("mirrorTarget." <> storeTagName tag <> ".permitDeletion")
+            <> mountKeyRef eco (taggedKeyPath "mirrorTarget" tag "permitDeletion")
             <> " is not set: that key is your consent for the Dredger to delete from this store"
     NoProtocolMaintenance ->
         "its store has no control plane, and the "
