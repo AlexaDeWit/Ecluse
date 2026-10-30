@@ -253,7 +253,7 @@ A directory failure does not remove unrelated backend capabilities, such as publ
 Names, raw versions, and platform labels retain their native identity.
 Dependencies, version constraints, required Ruby and RubyGems versions, checksums, and supported source fields remain available.
 Malformed records and conflicting coordinates cannot supply an admitted version.
-Native builds remain allowed. RubyGems blocks active `DenyInstallTimeExecution`, `DenyIfDeprecated`, and `AllowScope` rules at boot.
+Native builds remain allowed. RubyGems blocks active `DenyInstallTimeExecution`, `DenyIfYanked`, `DenyIfDeprecated`, and `AllowScope` rules at boot.
 Unknown installation metadata does not prove that an archive executes no code.
 
 Private reads preserve the caller's complete Basic credential pair.

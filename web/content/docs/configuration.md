@@ -490,6 +490,7 @@ The following types are blocked:
 | cargo | `AllowScope` | Cargo package names have no scope. |
 | cargo | `DenyIfDeprecated` | Cargo's sparse index supplies no deprecation flag. |
 | rubygems | `DenyInstallTimeExecution` | RubyGems native builds are normal installation behaviour. This rule is unsupported for the ecosystem. |
+| rubygems | `DenyIfYanked` | RubyGems reports no yank flag in a gem's metadata. Yanked versions disappear from it. |
 | rubygems | `DenyIfDeprecated` | RubyGems metadata supplies no supported deprecation flag. |
 | rubygems | `AllowScope` | RubyGems package names have no scope. |
 
