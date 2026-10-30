@@ -12,7 +12,7 @@ import Test.Hspec
 import Ecluse.Core.Ecosystem (Ecosystem (Cargo, Npm, PyPI, RubyGems))
 import Ecluse.Core.Registry.Adapter (RegistryAdapter (adapterMetadata))
 import Ecluse.Core.Registry.Adapter.Capability (AdapterMetadata (metadataChargeFactors))
-import Ecluse.Core.Registry.Metadata.EntryFloor (entryFloorBytes)
+import Ecluse.Core.Registry.Metadata.EntryFloor (entryFloorBytes, releaseFloorBytes)
 import Ecluse.Core.Server.Admission.Types (ChargeFactors (..))
 import Ecluse.Core.Server.MemoryModel.Calibration
 import Ecluse.Core.Server.MemoryModel.Probe (Residency (..), requireResidency)
@@ -78,8 +78,9 @@ spec = do
         it "pins the entry floor" $ do
             entryFloor denseFigures `shouldBe` 704
             toInteger entryFloorBytes `shouldBe` entryFloor denseFigures
-        it "derives the release floor from every dense and minimal-body figure" $
+        it "derives the release floor from every dense and minimal-body figure" $ do
             releaseFloor `shouldBe` 1152
+            toInteger releaseFloorBytes `shouldBe` releaseFloor
         it "keeps each minimal-body figure's regression limit below the release floor" $
             for_ minimalBodyFigures $ \figures -> do
                 readPeakLimit (entryReadPeak figures) `shouldSatisfy` (< 1000 * releaseFloor)
