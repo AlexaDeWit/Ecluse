@@ -24,7 +24,7 @@ import Ecluse.Core.Registry.RubyGems.Document (GemDocument (..), GemRow (..))
 import Ecluse.Core.Registry.RubyGems.Project (coordinatePlatform, coordinateVersion, unGemPlatform)
 import Ecluse.Core.Registry.RubyGems.Projection (projectGemRows)
 import Ecluse.Core.Registry.RubyGems.Wire (GemRowError (..), decodeInfoRow, infoRowIdentity, infoRowVersion)
-import Ecluse.Core.Security (Limits, checkArtifactCount, checkVersionCountOf)
+import Ecluse.Core.Security (Limits, checkVersionCountOf)
 import Ecluse.Core.Server.MemoryModel (saturatingCharge)
 import Ecluse.Core.Strict (strictElements)
 import Ecluse.Core.Version (Version, renderVersion)
@@ -49,7 +49,6 @@ data Scan = Scan
     , scanHeaderDone :: Bool
     , scanHeader :: [ByteString]
     , scanCount :: Int
-    , scanVersions :: Set Text
     , scanSeen :: Map (Text, Text) Int
     , scanBad :: Set Text
     , scanRows :: [GemRow]
@@ -61,15 +60,15 @@ data Scan = Scan
 readGemInfoCharged :: (Int -> IO ()) -> Limits -> PackageName -> Text -> GemRead -> DocumentWalk GemReadResult
 readGemInfoCharged pay limits name base mode bound _ = readStepsWithEnd id finishRecordSteps bound (gemInfoSteps pay limits name base mode)
 
--- | Selected scans count source positions, while full scans count distinct versions before grouping.
+-- | Full and selected scans count every nonblank source row before parsing or version grouping.
 gemInfoSteps :: (Monad m) => (Int -> m ()) -> Limits -> PackageName -> Text -> GemRead -> Steps m GemReadResult
 gemInfoSteps pay limits name base mode = recordSteps reserve consume complete initial
   where
-    initial = Scan 0 False [] 0 Set.empty Map.empty Set.empty [] [] 0
+    initial = Scan 0 False [] 0 Map.empty Set.empty [] [] 0
     selected raw = case mode of FullRead -> True; SelectedRead version -> raw == renderVersion version
     reserve scan previous fragment = do
         let cost = recordFragmentCharge previous fragment
-            bookkeeping = 128 * toInteger (Set.size (scanVersions scan) + Map.size (scanSeen scan) + Set.size (scanBad scan))
+            bookkeeping = 128 * toInteger (Map.size (scanSeen scan) + Set.size (scanBad scan))
         pay (saturatingCharge (toInteger (scanKeptCharge scan) + toInteger cost + bookkeeping))
         pure cost
     consume scan charge bytes
@@ -81,15 +80,11 @@ gemInfoSteps pay limits name base mode = recordSteps reserve consume complete in
                 claimed = infoRowIdentity name bytes
                 claimedVersion = renderVersion <$> infoRowVersion bytes
                 nativeIdentity = fmap (\coordinate -> (renderVersion (coordinateVersion coordinate), unGemPlatform (coordinatePlatform coordinate))) claimed
-                versions = case mode of
-                    FullRead -> maybe (scanVersions scan) (`Set.insert` scanVersions scan) claimedVersion
-                    SelectedRead _ -> Set.empty
                 seen = case nativeIdentity of
                     Just native@(raw, _) | selected raw -> Map.insertWith (+) native 1 (scanSeen scan)
                     _ -> scanSeen scan
-                next = scan{scanOrdinal = scanOrdinal scan + 1, scanCount = count, scanVersions = versions, scanSeen = seen}
-            checkArtifactCount limits count
-            checkVersionCountOf limits (case mode of FullRead -> Set.size versions; SelectedRead _ -> count)
+                next = scan{scanOrdinal = scanOrdinal scan + 1, scanCount = count, scanSeen = seen}
+            checkVersionCountOf limits count
             case decodeInfoRow name key bytes of
                 Left fault ->
                     let reason = case fault of GemRowMalformed detail -> detail; GemRowUnsupported detail -> detail
