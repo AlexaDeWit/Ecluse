@@ -5,7 +5,7 @@
 
 -- | Inspect verified Cargo archives without extraction or execution. Publication text uses one further local pass.
 module Ecluse.Core.Registry.Cargo.Archive (
-    CargoArchiveMetadata (caInventory),
+    CargoArchiveMetadata,
     inspectCargoArchive,
     cargoPublicationMetadata,
     cargoPublicationAgreement,
@@ -18,7 +18,6 @@ import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import Data.Text qualified as T
 import Data.Text.Encoding qualified as TE
-import Text.Show (showString, shows, showsPrec)
 import UnliftIO.Exception (evaluate)
 
 import Ecluse.Core.Package.Hash (sha256Hex)
@@ -26,26 +25,13 @@ import Ecluse.Core.Registry (ParseError (..), parseRefusal)
 import Ecluse.Core.Registry.Archive.Inflate (InflateFormat (GzipMembers), withInflatedChunks)
 import Ecluse.Core.Registry.Archive.Tar (TarMember (..), TarScan, scanTar, sourceReader, tarContents, tarMembers)
 import Ecluse.Core.Registry.CachedDocument (estimateValueBytes)
-import Ecluse.Core.Registry.Cargo.Manifest (CargoManifest, CargoPublishMetadata, checkPublicationIndex, checkUploadAgreement, decodeManifest, manifestTextPaths, publicationMetadata, publishMetadataValue)
+import Ecluse.Core.Registry.Cargo.Archive.Internal (CargoArchiveMetadata (..))
+import Ecluse.Core.Registry.Cargo.Manifest (CargoPublishMetadata, checkPublicationIndex, checkUploadAgreement, decodeManifest, manifestTextPaths, publicationMetadata, publishMetadataValue)
 import Ecluse.Core.Registry.Cargo.Project (cargoArchiveStem)
 import Ecluse.Core.Registry.Cargo.Wire (cargoTreeCharge)
 import Ecluse.Core.Security.Limits (Limits (..))
 import Ecluse.Core.Server.Admission.Meter (newChargePair)
 import Ecluse.Core.Server.MemoryModel (saturatingCharge)
-
--- | The inspected source bytes, checked against the admitted SHA-256 when one exists.
-data CargoArchiveMetadata = CargoArchiveMetadata
-    { caManifest :: CargoManifest
-    , caInventory :: Set Text
-    -- ^ Regular-file paths relative to the admitted single archive root.
-    , caSource :: ByteString
-    , caRoot :: Text
-    , caRetainedBytes :: Int
-    , caManifestWorkspace :: Int
-    }
-
-instance Show CargoArchiveMetadata where
-    showsPrec _ metadata = showString "CargoArchiveMetadata " . shows (caRoot metadata)
 
 {- | Charge extra workspace as an absolute total. The caller owns the compressed-byte charge.
 A first-party upload carries no checksum, so only an admitted SHA-256 is compared.
