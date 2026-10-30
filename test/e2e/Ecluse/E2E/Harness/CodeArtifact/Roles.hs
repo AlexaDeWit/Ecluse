@@ -13,8 +13,8 @@ import Data.Text qualified as T
 import Data.Universe.Class qualified as Universe
 
 import Ecluse.Core.Ecosystem (Ecosystem, ecosystemName)
-import Ecluse.Core.Registry.Adapter (RegistryAdapter (adapterPublish), adapterFor)
-import Ecluse.Core.Registry.Adapter.Capability (AdapterPublish (publishUploadEndpoint), UploadEndpointRequirement (ExplicitUploadEndpoint))
+import Ecluse.Core.Registry.Adapter (uploadEndpointFor)
+import Ecluse.Core.Registry.Adapter.Capability (UploadEndpointRequirement (ExplicitUploadEndpoint))
 import Ecluse.E2E.Harness.Advisories (advisoryBucket)
 import Ecluse.E2E.Harness.CodeArtifact (codeArtifactRepositoryUrl)
 import Ecluse.E2E.Harness.Docker (ministackAwsEnv)
@@ -63,7 +63,7 @@ codeArtifactProxyRoleEnv ecosystem authority =
     mirror = codeArtifactRepositoryUrl ecosystem "mirror"
     upload = mirror <> paUploadPath authority
     -- A protocol that derives its upload address from url refuses an uploadUrl at load.
-    separateUpload = fmap publishUploadEndpoint (adapterPublish =<< adapterFor ecosystem) == Just ExplicitUploadEndpoint
+    separateUpload = uploadEndpointFor ecosystem == Just ExplicitUploadEndpoint
     publication key = mountKey ecosystem ("PUBLICATION_TARGET__CODE_ARTIFACT__" <> key)
 
 mountKey :: Ecosystem -> Text -> Text
