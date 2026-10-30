@@ -40,7 +40,7 @@ import Ecluse.Core.Server.Admission.Types (ChargeFactors (ChargeFactors), MeterS
 import Ecluse.Core.Server.Cache (Source (Source), newMetadataCacheWithProvider)
 import Ecluse.Core.Server.Cache.Backend (BackendStorage (ExternalStorage))
 import Ecluse.Core.Server.Cache.Provider (cacheProvider)
-import Ecluse.Core.Server.Context (MountBinding (..), PackumentDeps (..), ReadSourceSelection (MergePrivateAndPublic, PrivateOnly), RequestCtx (RequestCtx), ResponseAction (..), RouteAction (RouteAction), ServeRuntime (srMemoryMeter, srMetadataCache, srMetrics, srTracing), pdPublicBaseUrl, runHandler)
+import Ecluse.Core.Server.Context (MountBinding (..), PackumentDeps (..), RequestCtx (RequestCtx), ResponseAction (..), RouteAction (RouteAction), ServeRuntime (srMemoryMeter, srMetadataCache, srMetrics, srTracing), pdPublicBaseUrl, runHandler)
 import Ecluse.Core.Server.Contract (responseToWai)
 import Ecluse.Core.Server.Encoding (MetadataCompression (GzipWhenAccepted))
 import Ecluse.Core.Server.Upstream (MirrorServePlan (NoMirrorWrite))
@@ -518,15 +518,14 @@ spec = do
                             response <- capture runtime binding method path []
                             simpleStatus response `shouldBe` expected
                             sort <$> readIORef hits `shouldReturn` coordinatePrivateMetadataReads
-                for_ [False, True] $ \privateOnly ->
-                    it ("keeps owned private absence without public fallback for " <> show (privateOnly, method, path)) $
-                        withCoordinateSources (PublicDeniedPrivateCandidateSource status404) $ \runtime original hits _ -> do
-                            owned <- expectRight (projectFirstPartyEntry "acme-1")
-                            let deps = bindingPackumentDeps original
-                                binding = original{bindingPackumentDeps = deps{pdFirstParty = rubyGemsFirstPartyName (owned :| []), pdReadSourceSelection = if privateOnly then PrivateOnly else MergePrivateAndPublic}}
-                            response <- capture runtime binding method path []
-                            simpleStatus response `shouldBe` status404
-                            sort <$> readIORef hits `shouldReturn` ([["private", "info", "acme"], ["private", "info", "acme-1"]] <> [["public", "info", "acme"] | not privateOnly])
+                it ("keeps owned private absence without public fallback for " <> show (method, path)) $
+                    withCoordinateSources (PublicDeniedPrivateCandidateSource status404) $ \runtime original hits _ -> do
+                        owned <- expectRight (projectFirstPartyEntry "acme-1")
+                        let deps = bindingPackumentDeps original
+                            binding = original{bindingPackumentDeps = deps{pdFirstParty = rubyGemsFirstPartyName (owned :| [])}}
+                        response <- capture runtime binding method path []
+                        simpleStatus response `shouldBe` status404
+                        sort <$> readIORef hits `shouldReturn` [["private", "info", "acme"], ["private", "info", "acme-1"], ["public", "info", "acme"]]
 
     describe "partial coordinate integrity exclusions" $ do
         for_ [False, True] $ \trusted ->
@@ -694,9 +693,8 @@ withDirectoryFaults publicBody privateBody use = do
                 _ -> respond (responseLBS status404 [] "")
     testWithApplication (pure upstream) $ \port -> do
         let base = "http://localhost:" <> show port
-        withNativeOrigins (Just (loopbackRegistryUrl (base <> "/private/"))) (loopbackRegistryUrl (base <> "/public/")) $ \runtime binding -> do
-            let deps = bindingPackumentDeps binding
-            use runtime binding{bindingPackumentDeps = deps{pdReadSourceSelection = MergePrivateAndPublic}} hits privateStatus publicStatus
+        withNativeOrigins (Just (loopbackRegistryUrl (base <> "/private/"))) (loopbackRegistryUrl (base <> "/public/")) $ \runtime binding ->
+            use runtime binding hits privateStatus publicStatus
 
 -- A public directory longer than the 40-byte cap its specs set, beside a private directory under it.
 oversizedPublicDirectory :: LByteString
@@ -741,14 +739,16 @@ withNativeArchive archiveStatus use = do
                 _ -> respond (responseLBS status404 [] "")
     testWithApplication (pure upstream) $ \port -> do
         let origin = loopbackRegistryUrl ("http://localhost:" <> show port)
-        withNativeOrigins (Just origin) origin $ \runtime binding -> use runtime binding hits
+            -- One origin answers both legs, so first-party names keep each per-gem read to one request.
+            owning binding = binding{bindingPackumentDeps = (bindingPackumentDeps binding){pdFirstParty = const True}}
+        withNativeOrigins (Just origin) origin $ \runtime binding -> use runtime (owning binding) hits
 
 withNativeOrigins :: Maybe RegistryUrl -> RegistryUrl -> (ServeRuntime -> MountBinding -> IO a) -> IO a
 withNativeOrigins private public use = withSweeper $ \deadlines -> do
     admission <- newServeAdmissionTuned deadlines 1 0 0
     runtime <- testServeRuntimeWith deadlines admission noopMetricsPort
     let adapter = rubyGemsAdapter (ChargeFactors 1000 1000 1000)
-        deps = (serveDepsFor adapter private public NoMirrorWrite [] (pure (UTCTime (fromGregorian 2030 1 1) 0))){pdReadSourceSelection = PrivateOnly}
+        deps = serveDepsFor adapter private public NoMirrorWrite [] (pure (UTCTime (fromGregorian 2030 1 1) 0))
         binding = MountBinding ("rubygems" :| []) rubyGemsRouter rubyReadCredential deps Nothing
     use runtime binding
 
@@ -829,7 +829,7 @@ withCoordinateSourceHeader header sources use = do
             firstParty = case sources of OwnedCandidateSource _ -> rubyGemsFirstPartyName (owned :| []); _ -> const False
         withNativeOrigins private (loopbackRegistryUrl (base <> "/public/")) $ \runtime binding -> do
             let deps = bindingPackumentDeps binding
-                selected = binding{bindingPackumentDeps = deps{pdReadSourceSelection = MergePrivateAndPublic, pdFirstParty = firstParty, pdRules = rules}}
+                selected = binding{bindingPackumentDeps = deps{pdFirstParty = firstParty, pdRules = rules}}
             use runtime selected hits release
 
 checkCoordinateResponse :: Method -> ByteString -> ByteString -> SResponse -> Expectation
