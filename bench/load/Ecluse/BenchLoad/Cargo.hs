@@ -6,6 +6,7 @@
 module Ecluse.BenchLoad.Cargo (
     cargoFixture,
     cargoLoadNotes,
+    cargoPrivateCopy,
     selectWarmArtifacts,
     indexStubWithArtifacts,
     crateStubWith,
