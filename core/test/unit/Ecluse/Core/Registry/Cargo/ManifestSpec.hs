@@ -1,7 +1,6 @@
 -- SPDX-FileCopyrightText: 2026 Alexandra de Wit
 --
 -- SPDX-License-Identifier: MIT
-{-# LANGUAGE ImportQualifiedPost #-}
 
 -- | Native Cargo manifest interpretation and publication translation contracts.
 module Ecluse.Core.Registry.Cargo.ManifestSpec (spec) where
