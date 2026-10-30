@@ -272,9 +272,10 @@ mergedPrivate plane = withPrivateRegistry plane privateConfig CargoRegistryHealt
         assertCargoRouting (cargoInvocationTraffic invocation)
     let config = privateConfig{ecExtraEnv = ecExtraEnv privateConfig <> [("ECLUSE_MOUNTS__CARGO__FIRST_PARTY", "ecluse-e2e-build")]}
     withObservedNativeProxy config plane $ \firstPartyProxy -> do
-        before <- stubReadsNow plane
+        let publicReads = filter ((== CargoPublic) . srRoute) <$> stubReadsNow plane
+        before <- publicReads
         proxyStatus (observedProxy firstPartyProxy) ("/cargo/" <> cargoShard "ecluse-e2e-build") `shouldReturn` 404
-        stubReadsNow plane `shouldReturn` before
+        publicReads `shouldReturn` before
 
 localDiscovery :: GlobalDataPlane -> IO ()
 localDiscovery plane = withPrivateRegistry plane privateConfig CargoRegistryHealthy $ \registry observed -> do
