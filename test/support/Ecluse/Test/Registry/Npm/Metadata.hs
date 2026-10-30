@@ -9,6 +9,7 @@ import Control.Monad.ST (ST)
 import Data.Aeson (Value)
 import Data.ByteString qualified as BS
 import Data.JsonStream.Lexer (Cursor)
+import Data.Primitive.PrimVar (newPrimVar)
 import Ecluse.Core.Package (PackageInfo, PackageName)
 import Ecluse.Core.Registry (FetchFault (FetchUrlUnformable), RegistryResponse)
 import Ecluse.Core.Registry.CachedDocument (CachedDoc, npmPacked)
@@ -39,7 +40,10 @@ projectNpmFull limits name body = do
 
 -- | The production full-read walk for a capture from the registry, over a table under the fixed test key.
 npmFullTestWalk :: Limits -> PackageName -> Text -> ST st (Cursor -> ST st (Steps (ST st) NpmFullRead))
-npmFullTestWalk limits name registry = npmFullTable registry name (testTable releaseUniqueFields) <&> \(table, writer) -> npmFullWalk writer limits name table
+npmFullTestWalk limits name registry = do
+    (table, writer) <- npmFullTable registry name (testTable releaseUniqueFields)
+    entries <- newPrimVar 0
+    pure (npmFullWalk entries writer limits name table)
 
 -- | Select one release using the production field policy and timestamp join.
 projectNpmVersion :: Limits -> PackageName -> Version -> ByteString -> Either MetadataError VersionRead
