@@ -18,6 +18,7 @@ import Test.Hspec
 import Ecluse.Core.Package.Hash (sha256Hex)
 import Ecluse.Core.Registry (ParseError (..))
 import Ecluse.Core.Registry.Cargo.Archive
+import Ecluse.Core.Registry.Cargo.Archive.Internal (caInventory)
 import Ecluse.Core.Registry.Cargo.Manifest (publishMetadataValue)
 import Ecluse.Core.Security.Limits (Limits (..), defaultLimits)
 import Ecluse.Server.Admission.Support (ChargeRefused (..), refuseCharge)

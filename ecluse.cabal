@@ -183,6 +183,7 @@ library ecluse-core
     Ecluse.Core.Registry.Archive.Inflate
     Ecluse.Core.Registry.Archive.Tar
     Ecluse.Core.Registry.Cargo.Archive
+    Ecluse.Core.Registry.Cargo.Archive.Internal
     Ecluse.Core.Registry.Cargo.Manifest
     Ecluse.Core.Registry.Cargo.Source
     Ecluse.Core.Registry.Cargo.Target
