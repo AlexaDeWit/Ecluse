@@ -289,22 +289,22 @@ spec = do
         it "keeps shared rules at both phases while the npm default applies only at admission" $ do
             cfg <- configFor "{\"rules\":{\"deny-scripts\":{\"type\":\"DenyInstallTimeExecution\"}},\"mounts\":{\"npm\":{\"enabled\":true},\"pypi\":{\"enabled\":true}}}"
             Map.map (map ruleReach . mountPolicy) (configMounts cfg)
-                `shouldBe` Map.fromList [(Npm, [AdmissionOnly, AdmissionAndRevocation]), (PyPI, replicate 2 AdmissionAndRevocation)]
+                `shouldBe` Map.fromList [(Npm, [AdmissionOnly, AdmissionOnly, AdmissionAndRevocation]), (PyPI, replicate 2 AdmissionAndRevocation)]
 
         it "limits a shared deny to admission only on the mount that says so" $ do
             cfg <- configFor "{\"rules\":{\"withdrawn\":{\"type\":\"DenyByIdentity\",\"identity\":\"thing\"}},\"mounts\":{\"npm\":{\"enabled\":true},\"pypi\":{\"enabled\":true,\"rules\":{\"withdrawn\":{\"appliesTo\":[\"admission\"]}}}}}"
-            Map.map limitedRules (configMounts cfg) `shouldBe` Map.fromList [(Npm, ["DenyInstallTimeExecution"]), (PyPI, ["DenyByIdentity"])]
+            Map.map limitedRules (configMounts cfg) `shouldBe` Map.fromList [(Npm, ["DenyExternalDependencies", "DenyInstallTimeExecution"]), (PyPI, ["DenyByIdentity"])]
 
         it "widens on one mount a rule the layer below limits to admission" $ do
             cfg <- configFor "{\"rules\":{\"deny-scripts\":{\"type\":\"DenyInstallTimeExecution\",\"appliesTo\":[\"admission\"]}},\"mounts\":{\"npm\":{\"enabled\":true,\"rules\":{\"deny-scripts\":{\"appliesTo\":[\"admission\",\"revocation\"]}}},\"pypi\":{\"enabled\":true}}}"
-            Map.map limitedRules (configMounts cfg) `shouldBe` Map.fromList [(Npm, []), (PyPI, ["DenyInstallTimeExecution"])]
+            Map.map limitedRules (configMounts cfg) `shouldBe` Map.fromList [(Npm, ["DenyExternalDependencies"]), (PyPI, ["DenyInstallTimeExecution"])]
 
         it "replaces the document's list whole from the environment" $ do
             let doc = "{\"mounts\":{\"npm\":{\"enabled\":true,\"rules\":{\"deny-scripts\":{\"type\":\"DenyInstallTimeExecution\",\"appliesTo\":[\"admission\"]}}}}}"
             limited <- configFor doc
             widened <- expectConfig (pubUrlEnv <> [("ECLUSE_MOUNTS__NPM__RULES", "{\"deny-scripts\":{\"appliesTo\":[\"admission\",\"revocation\"]}}")]) (Just doc)
-            Map.map limitedRules (configMounts limited) `shouldBe` Map.singleton Npm ["DenyInstallTimeExecution"]
-            Map.map limitedRules (configMounts widened) `shouldBe` Map.singleton Npm []
+            Map.map limitedRules (configMounts limited) `shouldBe` Map.singleton Npm ["DenyExternalDependencies", "DenyInstallTimeExecution"]
+            Map.map limitedRules (configMounts widened) `shouldBe` Map.singleton Npm ["DenyExternalDependencies"]
 
         it "switches off, from the environment, a shipped rule whose phases the document states" $ do
             -- The two layers merge into one entry, where enabled: false decides and appliesTo is not read.
@@ -313,7 +313,7 @@ spec = do
                     (pubUrlEnv <> [("ECLUSE_RULES", "{\"min-age\":{\"enabled\":false}}")])
                     (Just "{\"rules\":{\"min-age\":{\"appliesTo\":[\"admission\",\"revocation\"]}},\"mounts\":{\"npm\":{\"enabled\":true}}}")
             Map.map (map (ruleName . prRule) . mountPolicy) (configMounts cfg)
-                `shouldBe` Map.singleton Npm ["DenyInstallTimeExecution"]
+                `shouldBe` Map.singleton Npm ["DenyExternalDependencies", "DenyInstallTimeExecution"]
 
         it "refuses an ambiguous setting on a mount's own rules, for npm and for PyPI" $
             for_ ["npm", "pypi"] $ \mount ->
