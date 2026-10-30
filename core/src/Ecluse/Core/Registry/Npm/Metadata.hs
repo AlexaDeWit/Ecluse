@@ -55,7 +55,7 @@ import Ecluse.Core.Registry.Metadata.Projection (streamError)
 import Ecluse.Core.Registry.Npm.Document (PackedPackument)
 import Ecluse.Core.Registry.Npm.Reader (PackumentRead (..), npmWalk, releaseUniqueFields)
 import Ecluse.Core.Registry.Npm.Request (MetadataForm (Full), metadataRequestUnder, npmArtifactHosts, packageUrl)
-import Ecluse.Core.Registry.Npm.StreamingProjection (PackedRead, TreeRead, emptyPackedRead, emptyTreeRead, finishPacked, finishTree, keepsPackedRelease, keepsTreeRelease, packedStep, retainedEntries, treeStep)
+import Ecluse.Core.Registry.Npm.StreamingProjection (PackedRead, TreeRead, emptyPackedRead, emptyTreeRead, finishPacked, finishTree, keepsPackedRelease, keepsTreeRelease, keptEntries, packedStep, retainedEntries, treeStep)
 import Ecluse.Core.Registry.Npm.VersionWriter (VersionWriter, newVersionWriter)
 import Ecluse.Core.Registry.Origin (OriginClient (ocChargeFullReadWorkspace))
 import Ecluse.Core.Registry.ServedDocument (objectField)
@@ -75,7 +75,7 @@ npmReadWith pay =
         , erUniqueFields = releaseUniqueFields
         , erWalkFull = readNpmFull pay
         , erFinishFull = finishNpmFull
-        , erRetainedEntries = \(Walked _ acc) -> retainedEntries acc
+        , erRetainedEntries = \(Walked _ acc) -> keptEntries acc
         , erWalkSelected = \limits name version -> readNpmPackument limits name (OneRelease (renderVersion version))
         , erFinishSelected = finishNpmVersion
         }
