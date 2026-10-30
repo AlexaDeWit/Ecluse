@@ -29,14 +29,13 @@ import Ecluse.Core.Server.Context (
  )
 import Ecluse.Core.Server.Path (Filename)
 import Ecluse.Core.Server.Pipeline.Internal (recordDenials, serveDecisionClass)
-import Ecluse.Core.Server.Pipeline.Origin (OriginMiss (MissUnresolved))
 import Ecluse.Core.Server.Pipeline.Shared
 import Ecluse.Core.Server.Pipeline.Tarball.Private (
     PrivateLeg (PrivateAnswered, PrivateHandled, PrivateMissed),
     streamPrivateArtifact,
  )
 import Ecluse.Core.Server.Pipeline.Tarball.Public (servePublicArtifact)
-import Ecluse.Core.Server.Pipeline.Tarball.Refusal (artifactError, firstPartyMissRefusal, upstreamUnavailable)
+import Ecluse.Core.Server.Pipeline.Tarball.Refusal (artifactError, privateMissRefusal)
 import Ecluse.Core.Server.Pipeline.Tarball.Relay (ArtifactServe (ServeFull, ServeHead))
 import Ecluse.Core.Server.Pipeline.Tarball.Types (ArtifactRequest (..), TarballReplies (..))
 import Ecluse.Core.Server.Response (ServeDecision, mkRefusal)
@@ -124,13 +123,9 @@ serveArtifactLegs ctx token =
         PrivateAnswered decision received -> do
             liftIO (mpServeDecision (srMetrics (arRuntime ctx)) decision)
             pure received
-        PrivateMissed miss
-            | pdFirstParty (arDeps ctx) (arPackage ctx) -> refuseMiss ctx (firstPartyMissRefusal miss)
-            | MissUnresolved <- miss -> refuseMiss ctx upstreamUnavailable
-            | otherwise -> servePublicArtifact ctx
+        PrivateMissed miss -> maybe (servePublicArtifact ctx) (refuseMiss ctx) (privateMissRefusal (arDeps ctx) (arPackage ctx) miss)
 
--- A first-party name has one authority, and an unread private origin may hold any name, so either
--- miss ends the request here rather than falling through to the public leg.
+-- A private miss that ends the request here records its decision and denial before answering.
 refuseMiss :: ArtifactRequest response -> ServeDecision -> Handler ResponseReceived
 refuseMiss ctx decision = do
     let metrics = srMetrics (arRuntime ctx)
