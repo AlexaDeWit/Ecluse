@@ -409,7 +409,7 @@ preparationSpec = describe "origin preparation" $ do
                 let fullStore = externalOperations (\_ key -> Map.lookup key <$> readIORef fullValues) (\key value -> modifyIORef' fullValues (Map.insert key value))
                     versionStore = externalOperations (\_ key -> Map.lookup key <$> readIORef versionValues) (\key value -> modifyIORef' versionValues (Map.insert key value))
                 cache <- newMetadataCacheWithProvider (cacheProvider (ExternalStorage 100000) Nothing (Just fullStore) (Just versionStore) Nothing)
-                let factory = PrepareRead $ \_ selectedOrigin -> do
+                let factory = PrepareRead $ \selectedOrigin -> do
                         ocToken selectedOrigin `shouldBe` Nothing
                         atomicModifyIORef' prepared (\count -> (count + 1, ()))
                         pure (Right npmRead)
@@ -431,7 +431,7 @@ preparationSpec = describe "origin preparation" $ do
                 prepared <- newIORef []
                 let firstToken = Just (bareCredential (mkSecret "first"))
                     secondToken = Just (bareCredential (mkSecret "second"))
-                    factory = PrepareRead $ \_ selectedOrigin -> do
+                    factory = PrepareRead $ \selectedOrigin -> do
                         atomicModifyIORef' prepared (\tokens -> (ocToken selectedOrigin : tokens, ()))
                         pure (Right npmRead)
                     client token =
@@ -461,7 +461,7 @@ preparationSpec = describe "origin preparation" $ do
                 prepared <- newIORef (0 :: Int)
                 cache <- newMetadataCache defaultCacheConfig
                 let refusal = MetadataAuthorisationFailure 401
-                    factory = PrepareRead $ \_ _ -> do
+                    factory = PrepareRead $ \_ -> do
                         modifyIORef' prepared (+ 1)
                         pure (Left refusal)
                     origin = anonymousOrigin defaultLimits exchanges (mkBaseRequest (loopbackRegistryUrl (stubBaseUrl stub)))

@@ -56,7 +56,7 @@ spec = do
         it "rejects a broken registered factory despite a valid held-body reader" $ do
             metadataStatusLaw eco (200, Right ())
             calls <- newIORef (0 :: Int)
-            let refused = PrepareRead $ \_ _ -> do
+            let refused = PrepareRead $ \_ -> do
                     modifyIORef' calls (+ 1)
                     pure (Left MetadataUndecodable)
             metadataStatusLaw eco{rdPrepareRead = refused} (200, Right ()) `shouldThrow` anyException
