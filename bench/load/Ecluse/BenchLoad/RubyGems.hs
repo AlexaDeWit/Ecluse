@@ -306,8 +306,8 @@ relayBody payload original = do
         previous <- maybeToRight "RubyGems relay row has no checksum" (lookup "checksum" (rowFields row))
         pure (rowPosition row, previous)
     let digest = hexSha256Of (toStrict payload)
-        swap bytes previous = swapChecksumPreservingWidth "RubyGems" ("checksum:" <> previous) ("checksum:" <> digest) bytes
-    rewriteLines (\position bytes -> maybe (Right bytes) (swap bytes) (Map.lookup position checksums)) original
+        replaceChecksum bytes previous = swapChecksumPreservingWidth "RubyGems" ("checksum:" <> previous) ("checksum:" <> digest) bytes
+    rewriteLines (\position bytes -> maybe (Right bytes) (replaceChecksum bytes) (Map.lookup position checksums)) original
 
 preflightListings :: [Text] -> IO ()
 preflightListings = traverse_ checked . ordNub
