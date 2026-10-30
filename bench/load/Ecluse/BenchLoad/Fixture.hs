@@ -8,6 +8,7 @@ module Ecluse.BenchLoad.Fixture (
     withProxyConfigured,
     withProxyPortsConfigured,
     ProxyConfigure,
+    withLoopbackStub,
     httpTarget,
     longCacheTtl,
     artifactBytes,
@@ -41,7 +42,7 @@ import Network.HTTP.Client qualified as HTTP
 import Network.HTTP.Types (Header, Status, status200, status304, status404)
 import Network.HTTP.Types.Header (hETag, hIfNoneMatch)
 import Network.Wai (Application, responseLBS)
-import Network.Wai.Handler.Warp (testWithApplication)
+import Network.Wai.Handler.Warp (Port, testWithApplication)
 import UnliftIO (evaluate)
 
 import Ecluse.BenchLoad.CapturedArtifact (SelectedArtifact)
@@ -71,8 +72,8 @@ type ProxyConfigure = Int -> Int -> IO (ProxySettings -> ProxySettings)
 -- | Configure a measured proxy after both registry ports are available.
 withProxyPortsConfigured :: Ecosystem -> LoadKnobs -> ProxyConfigure -> Application -> Application -> (Int -> [Text]) -> (ProxyProcess -> [Text] -> IO a) -> IO a
 withProxyPortsConfigured ecosystem knobs configure privateApp publicApp mkMix body =
-    testWithApplication (pure privateApp) $ \privatePort ->
-        testWithApplication (pure publicApp) $ \publicPort -> do
+    withLoopbackStub privateApp $ \privatePort ->
+        withLoopbackStub publicApp $ \publicPort -> do
             adjust <- configure privatePort publicPort
             withProxyProcess (adjust knobSettings) publicPort (Just privatePort) $ \proxy ->
                 body proxy (mkMix (proxyPort proxy))
@@ -85,6 +86,10 @@ withProxyPortsConfigured ecosystem knobs configure privateApp publicApp mkMix bo
             , psAdvisories = lkAdvisories knobs
             , psTuning = lkProxyTuning knobs
             }
+
+-- | Serve a stub on a free loopback port, raising an exception the application throws in the caller.
+withLoopbackStub :: Application -> (Port -> IO a) -> IO a
+withLoopbackStub app = testWithApplication (pure app)
 
 -- | The target for a duration-driven load over the URL mix.
 httpTarget :: (Target -> IO a) -> ProxyProcess -> [Text] -> IO a
