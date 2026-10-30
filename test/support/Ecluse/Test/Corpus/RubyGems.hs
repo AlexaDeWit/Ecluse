@@ -19,27 +19,25 @@ module Ecluse.Test.Corpus.RubyGems (
 import Data.Aeson (Value (..), object, toJSON, (.=))
 import Data.Aeson.Key (Key)
 import Data.Aeson.KeyMap qualified as KeyMap
-import Data.Aeson.Types (parseMaybe)
 import Data.ByteString qualified as BS
 import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import Data.Text qualified as T
 import Data.Text.Encoding qualified as Text
+import Data.Time.Format.ISO8601 (iso8601ParseM)
 
 import Ecluse.Core.Ecosystem (Ecosystem (RubyGems))
-import Ecluse.Core.Package (Artifact (..), Availability (Available), CodeExecSignal (CodeExecUnknown), HashAlg (SHA256), PackageDetails (..), PackageInfo (..), PackageName, mkHash, mkPackageName)
+import Ecluse.Core.Package (Artifact (..), Availability (Available), CodeExecSignal (CodeExecUnknown), HashAlg (SHA256), PackageDetails (..), PackageInfo (..), PackageName, mkHash, mkPackageName, renderPackageName)
 import Ecluse.Core.Package.Entry (EntryKey (RecordEntry))
 import Ecluse.Core.Registry.CachedDocument (CachedDoc, rubyGemsCached)
 import Ecluse.Core.Registry.Metadata (MetadataError (MetadataBoundExceeded, MetadataUndecodable))
 import Ecluse.Core.Registry.Metadata.RecordStream (finishRecordSteps)
 import Ecluse.Core.Registry.RubyGems.Document (GemDependency (..), GemDocument (..), GemRow (..))
 import Ecluse.Core.Registry.RubyGems.Metadata (finishGemFull)
-import Ecluse.Core.Registry.RubyGems.Project (coordinateFilename, coordinateVersion, mkCoordinate, mkGemPlatform)
+import Ecluse.Core.Registry.RubyGems.Project (mkCoordinate, mkGemPlatform)
 import Ecluse.Core.Registry.RubyGems.Reader (GemRead (FullRead), gemInfoSteps)
-import Ecluse.Core.Registry.WireSupport (newestUpload, parsePublishTime)
 import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), Limits (maxMetadataBytes), checkArtifactCount, checkVersionCountOf)
-import Ecluse.Core.Server.Path (unFilename)
-import Ecluse.Core.Version (mkVersion, renderVersion)
+import Ecluse.Core.Version (mkVersion)
 import Ecluse.Test.Registry.JsonStream (readStepsChunks)
 import Ecluse.Test.Registry.RubyGems.Reference (RubyInfoRow (..), referenceInfo)
 
@@ -122,17 +120,20 @@ rowCount (Object fields) = case KeyMap.lookup "rows" fields of
     _ -> 0
 rowCount _ = 0
 
--- | Independent native rows supply the held-tree comparison without the production parser or projection.
+{- | Independent native rows supply the held-tree comparison. The reference reader supplies each
+row, and this reader derives the archive filename and grouped age itself. Production smart
+constructors only build the coordinate, platform and hash values the document type holds.
+-}
 projectRubyGemsTree :: Limits -> PackageName -> ByteString -> Either MetadataError (PackageInfo, CachedDoc)
 projectRubyGemsTree limits name bytes = do
     input <- first (const MetadataUndecodable) (Text.decodeUtf8' bytes)
     native <- first (const MetadataUndecodable) (referenceInfo bytes)
     rows <- traverse (projectRow (Map.fromList (zip [0 ..] (T.lines input)))) native
     first MetadataBoundExceeded (checkArtifactCount limits (length rows))
-    unless (Set.size (Set.fromList (map (unFilename . coordinateFilename . grCoordinate) rows)) == length rows) (Left MetadataUndecodable)
+    unless (Set.size (Set.fromList [filename | (_, filename, _) <- rows]) == length rows) (Left MetadataUndecodable)
     let versions = foldl' insert Map.empty rows
     first MetadataBoundExceeded (checkVersionCountOf limits (Map.size versions))
-    pure (PackageInfo name versions Map.empty [], fst rubyGemsCached (GemDocument name (encodeUtf8 (corpusHeader input)) rows))
+    pure (PackageInfo name (Map.mapWithKey settle versions) Map.empty [], fst rubyGemsCached (GemDocument name (encodeUtf8 (corpusHeader input)) [row | (_, _, row) <- rows]))
   where
     projectRow physical observed = do
         platform <- first (const MetadataUndecodable) (mkGemPlatform (rowPlatform observed))
@@ -146,16 +147,17 @@ projectRubyGemsTree limits name bytes = do
         ruby <- requirement "ruby" fields
         rubygems <- requirement "rubygems" fields
         source <- maybeToRight MetadataUndecodable (Map.lookup (rowPosition observed) physical)
-        let published = Map.lookup "created_at" fields >>= parseMaybe parsePublishTime . String
-        pure (GemRow (RecordEntry (rowPosition observed)) coordinate dependencies ruby rubygems checksum published fields (BS.copy (encodeUtf8 source)))
+        let published = Map.lookup "created_at" fields >>= iso8601ParseM . toString
+        pure (rowVersion observed, archiveFilename observed, GemRow (RecordEntry (rowPosition observed)) coordinate dependencies ruby rubygems checksum published fields (BS.copy (encodeUtf8 source)))
     requirement field fields = maybe (Right (">= 0" :| [])) (maybeToRight MetadataUndecodable . nonEmpty . map T.copy . T.splitOn "&") (Map.lookup field fields)
-    insert versions row =
-        let version = coordinateVersion (grCoordinate row)
-            filename = unFilename (coordinateFilename (grCoordinate row))
-            artifact = Artifact (grEntryKey row) filename ("https://rubygems.org/gems/" <> filename) [grChecksum row] Nothing Nothing
-            fresh = PackageDetails name version (grPublishedAt row) CodeExecUnknown Available (artifact :| [])
-            merge previous = previous{pkgPublishedAt = newestUpload (grPublishedAt row) (pkgPublishedAt previous), pkgArtifacts = pkgArtifacts previous <> (artifact :| [])}
-         in Map.alter (Just . maybe fresh merge) (renderVersion version) versions
+    -- The native archive name: the gem name, its raw version and any platform other than ruby.
+    archiveFilename observed = renderPackageName name <> "-" <> rowVersion observed <> (if rowPlatform observed == "ruby" then "" else "-" <> rowPlatform observed) <> ".gem"
+    insert versions (version, filename, row) =
+        let artifact = Artifact (grEntryKey row) filename ("https://rubygems.org/gems/" <> filename) [grChecksum row] Nothing Nothing
+         in Map.insertWith (\new old -> old <> new) version ((artifact, grPublishedAt row) :| []) versions
+    settle version artifacts = PackageDetails name (mkVersion RubyGems version) (groupedAge artifacts) CodeExecUnknown Available (fmap fst artifacts)
+    -- The newest upload, or no age once any artifact's time is unknown.
+    groupedAge ((_, firstTime) :| rest) = foldl' (\newest (_, time) -> max <$> newest <*> time) firstTime rest
 
 -- | Legacy residency keeps its internal tree while reading native rows through the independent oracle.
 projectRubyGemsValues :: Limits -> PackageName -> Value -> Either MetadataError (PackageInfo, Value)
