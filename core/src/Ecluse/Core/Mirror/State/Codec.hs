@@ -14,9 +14,9 @@ module Ecluse.Core.Mirror.State.Codec (
 ) where
 
 import Control.Exception (evaluate)
-import Data.Aeson (Value (..), encode, object, (.:), (.=))
+import Data.Aeson (Value (..), encode, object, (.:), (.:?), (.=))
 import Data.Aeson.KeyMap qualified as KeyMap
-import Data.Aeson.Types (Parser, parseEither, withObject)
+import Data.Aeson.Types (Pair, Parser, parseEither, withObject)
 import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as LBS
 import Data.JsonStream.Parser qualified as J
@@ -290,7 +290,7 @@ parseName = withObject "package identity" $ \value -> do
 
 detailsValue :: PackageDetails -> Value
 detailsValue details =
-    object
+    object $
         [ "package" .= nameValue (pkgName details)
         , "version" .= renderVersion (pkgVersion details)
         , "published" .= pkgPublishedAt details
@@ -298,6 +298,7 @@ detailsValue details =
         , "availability" .= availabilityValue (pkgAvailability details)
         , "artifacts" .= map artifactValue (toList (pkgArtifacts details))
         ]
+            <> dependencyValue (pkgDependencySources details)
 
 parseDetails :: Value -> Parser PackageDetails
 parseDetails = withObject "admission facts" $ \value -> do
@@ -306,6 +307,7 @@ parseDetails = withObject "admission facts" $ \value -> do
     PackageDetails name version
         <$> value .: "published"
         <*> (value .: "install" >>= parseInstall)
+        <*> (value .:? "dependencies" >>= maybe (pure RegistryDependencies) parseDependencies)
         <*> (value .: "availability" >>= parseAvailability)
         <*> (value .: "artifacts" >>= traverse parseArtifact >>= nonempty "empty source fragment")
 
@@ -321,6 +323,17 @@ parseInstall = withObject "install fact" $ \value ->
         "unknown" -> pure CodeExecUnknown
         "runs" -> RunsCodeOnInstall <$> value .: "reason"
         (_ :: Text) -> fail "unknown install fact"
+
+-- Absent for the registry-only fact, so records written before the fact existed keep their bytes.
+dependencyValue :: DependencySources -> [Pair]
+dependencyValue RegistryDependencies = []
+dependencyValue (FetchesOutsideRegistry reason) = ["dependencies" .= object ["kind" .= ("outside" :: Text), "reason" .= reason]]
+
+parseDependencies :: Value -> Parser DependencySources
+parseDependencies = withObject "dependency fact" $ \value ->
+    value .: "kind" >>= \case
+        "outside" -> FetchesOutsideRegistry <$> value .: "reason"
+        (_ :: Text) -> fail "unknown dependency fact"
 
 availabilityValue :: Availability -> Text
 availabilityValue Available = "available"

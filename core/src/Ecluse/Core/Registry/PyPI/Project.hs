@@ -42,6 +42,7 @@ import Ecluse.Core.Package (
     Artifact (..),
     Availability (Available, Yanked),
     CodeExecSignal (NoCodeOnInstall, RunsCodeOnInstall),
+    DependencySources (RegistryDependencies),
     Hash,
     InvalidEntry,
     InvalidEntryKind (InvalidIndexFile),
@@ -178,6 +179,8 @@ projectDetails name file held =
                 , pkgVersion = frVersion file
                 , pkgPublishedAt = frPublishedAt file
                 , pkgInstallCode = releaseInstallCode (frKind file) NoCodeOnInstall
+                , -- pypi.org refuses a direct-reference dependency at upload.
+                  pkgDependencySources = RegistryDependencies
                 , pkgAvailability = releaseAvailability (frYanked file) Yanked
                 , pkgArtifacts = artifact :| []
                 }

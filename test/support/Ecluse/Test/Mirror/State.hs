@@ -52,7 +52,7 @@ mirrorSample numbers companion location note = do
     artifacts <-
         maybe (fail "empty test inventory") pure . nonEmpty $
             [Artifact (ArrayEntry position) (mirrorFilename number) (location <> mirrorFilename number) [digest] (if companion then Just (MetadataAvailable True) else Nothing) (Just 5) | (position, number) <- zip [0 ..] numbers]
-    let details = PackageDetails mirrorPackage mirrorVersion Nothing NoCodeOnInstall Available artifacts
+    let details = PackageDetails mirrorPackage mirrorVersion Nothing NoCodeOnInstall RegistryDependencies Available artifacts
     expectRight (restoreMirrorInventory details (mirrorSource artifacts note))
 
 -- | Keep source coordinates and custom served fields when a test changes artifact facts.

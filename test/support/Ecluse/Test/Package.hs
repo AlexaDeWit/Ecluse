@@ -75,6 +75,7 @@ import Ecluse.Core.Package (
     Artifact (..),
     Availability (Available),
     CodeExecSignal (NoCodeOnInstall),
+    DependencySources (RegistryDependencies),
     Hash,
     HashAlg (SHA256),
     PackageDetails (..),
@@ -244,6 +245,7 @@ sampleDetails name version =
         , pkgVersion = version
         , pkgPublishedAt = Nothing
         , pkgInstallCode = NoCodeOnInstall
+        , pkgDependencySources = RegistryDependencies
         , pkgAvailability = Available
         , pkgArtifacts = sampleArtifact :| []
         }
