@@ -22,9 +22,6 @@ module Ecluse.Core.Server.Pipeline.Shared (
     retryAfterHeaders,
     upstreamCooling,
 
-    -- * Private read refusals
-    privateReplyInvalid,
-
     -- * Shared work
     flightOf,
 
@@ -54,7 +51,7 @@ import Ecluse.Core.Server.Context (MountBinding (bindingCredential), ServeRuntim
 import Ecluse.Core.Server.Response (
     HelpMessage,
     Refusal,
-    RejectReason (BelowIntegrityFloor, MissingIntegrity, UpstreamInvalid),
+    RejectReason (BelowIntegrityFloor, MissingIntegrity),
     Rejection (Rejection),
     RetryAfter (RetryAfter),
     RuleName (RuleName),
@@ -141,10 +138,6 @@ retryAfterHeaders = maybe [] (\(RetryAfter secs) -> [(hRetryAfter, show secs)])
 -- | A public authority that supplies a positive retry delay.
 upstreamCooling :: RetryAfter -> ServeDecision
 upstreamCooling retry = rejectUnavailable (WillResolve (Just retry)) "the public upstream is cooling down"
-
--- | The @502@ refusal for a private reply that was invalid or unusable, on listings and artifacts alike.
-privateReplyInvalid :: ServeDecision
-privateReplyInvalid = Reject (Rejection UpstreamInvalid "the private upstream returned an invalid or unusable reply")
 
 -- | The flight that the shared fetch or render behind a cache key runs under: the key's store and identity.
 flightOf :: CacheKey -> FlightKey
