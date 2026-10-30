@@ -121,6 +121,8 @@ gitSpecs =
     , "git\t+https://github.com/acme/left-pad.git"
     , "user:secret@github.com:acme/left-pad"
     , " .x@github.com:acme/left-pad"
+    , "\\x@github.com:acme/left-pad"
+    , "\\x@github.com/acme/left-pad"
     ]
 
 urlSpecs :: [Text]
