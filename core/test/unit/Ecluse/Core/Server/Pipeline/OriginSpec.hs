@@ -39,7 +39,7 @@ import Ecluse.Core.Registry.Cargo.Credential (cargoCredential)
 import Ecluse.Core.Registry.Cargo.Document (cargoRecords)
 import Ecluse.Core.Registry.Cargo.Route (cargoRouter)
 import Ecluse.Core.Registry.Exchange (chargedRead)
-import Ecluse.Core.Registry.Metadata (Manifest (..), MetadataError (MetadataAbsent), VersionDoc (..), VersionRead (..))
+import Ecluse.Core.Registry.Metadata (Manifest (..), MetadataClient (fetchVersionMetadata), MetadataError (MetadataAbsent), VersionDoc (..), VersionRead (..))
 import Ecluse.Core.Registry.Metadata.EntryFloor (entryFloorBytes)
 import Ecluse.Core.Registry.Metadata.Fetch (readVersion)
 import Ecluse.Core.Registry.Metadata.Fetch.Preparation (PrepareRead (PrepareRead), prepareRead)
@@ -61,7 +61,7 @@ import Ecluse.Core.Server.Cache (CacheConfig (cacheMaxEntries), MetadataCache, S
 import Ecluse.Core.Server.Cache.Backend (BackendStorage (LocalStorage), RetentionOperations (roInsert))
 import Ecluse.Core.Server.Cache.Provider (cacheProvider)
 import Ecluse.Core.Server.Cache.VersionWeight (weighVersion)
-import Ecluse.Core.Server.Context (MountBinding (..), MountRouter, PackumentDeps (..), RequestCtx (RequestCtx), ServeRuntime (srMemoryMeter, srMetadataCache), pdPublicBaseUrl, runHandler)
+import Ecluse.Core.Server.Context (MountBinding (..), MountRouter, PackumentDeps (..), RequestCtx (RequestCtx), ServeRuntime (srMemoryMeter, srMetadataCache), pdPrivateBase, pdPublicBaseUrl, runHandler)
 import Ecluse.Core.Server.Pipeline.Origin (
     ObservedReadBoundExceeded (ObservedReadBoundExceeded),
     OriginMiss (MissAbsent, MissUnresolved),
@@ -74,10 +74,12 @@ import Ecluse.Core.Server.Pipeline.Origin (
         OriginResolved,
         OriginUnresolved
     ),
+    ReadFailure (ReadInvalid, ReadUnavailable),
     fetchPrivateOriginObserved,
     fetchPublicOriginObserved,
     originManifest,
     originMiss,
+    withPrivateMetadataClient,
     withPublicMetadata,
  )
 import Ecluse.Core.Server.Upstream (MirrorServePlan (NoMirrorWrite))
@@ -85,7 +87,7 @@ import Ecluse.Core.Telemetry.Metrics qualified as Metric
 import Ecluse.Core.Telemetry.Record (MetricsPort (mpCacheRequest, mpVersionCacheRequest, mpVersionCacheResidentBytes))
 import Ecluse.Test.Deadline (withSweeper)
 import Ecluse.Test.Log (newTestLogEnv)
-import Ecluse.Test.Package (leftpadName, requestsName, sampleManifest, thingName)
+import Ecluse.Test.Package (leftpadName, npmVersion, requestsName, sampleManifest, thingName)
 import Ecluse.Test.Port (noopMetricsPort, passthroughTracingPort)
 import Ecluse.Test.Registry.Cargo.Metadata (cargoFeatureRecord, cargoRead, cargoTestDiscovery, cargoTestName, cargoTestRecord, cargoTestVersion)
 import Ecluse.Test.Registry.Metadata.Fetch (heldBody)
@@ -102,27 +104,30 @@ spec :: Spec
 spec = describe "originMiss -- the outcomes that leave nothing to serve" $ do
     observedReadSpec
     retainedConsumerSpec
+    selectedChargeSpec
     fullReadSpec
     keptFloorSpec
-    it "reports no miss for a document, an access refusal, or an identity refusal" $
+    it "reports no miss for a document or an access refusal" $
         map
             originMiss
             [ OriginResolved (sampleManifest thingName [])
             , OriginAuthorisationFailure 401
             , OriginAuthorisationFailure 403
-            , OriginNameMismatch
             ]
-            `shouldBe` [Nothing, Nothing, Nothing, Nothing]
+            `shouldBe` [Nothing, Nothing, Nothing]
 
-    it "separates an origin that answered 404 from one that was never read" $
-        map originMiss [OriginNotFound, OriginUnresolved]
-            `shouldBe` [Just MissAbsent, Just MissUnresolved]
+    it "reports an identity refusal as an unread origin whose reply was invalid" $
+        originMiss OriginNameMismatch `shouldBe` Just (MissUnresolved ReadInvalid)
+
+    it "separates an origin that answered 404 from one that was never read, keeping the cause" $
+        map originMiss [OriginNotFound, OriginUnresolved (ReadUnavailable Nothing), OriginUnresolved ReadInvalid]
+            `shouldBe` [Just MissAbsent, Just (MissUnresolved (ReadUnavailable Nothing)), Just (MissUnresolved ReadInvalid)]
 
     it "groups an unconfigured origin with an absence, because no retry reaches it" $
         originMiss OriginAbsent `shouldBe` Just MissAbsent
 
     it "contributes no manifest from any miss" $
-        map (isNothing . originManifest) [OriginNotFound, OriginUnresolved, OriginAbsent]
+        map (isNothing . originManifest) [OriginNotFound, OriginUnresolved (ReadUnavailable Nothing), OriginAbsent]
             `shouldBe` [True, True, True]
 
 fullReadSpec :: Spec
@@ -151,7 +156,7 @@ fullReadSpec = describe "full Cargo read payments" $ do
                         result <- runCargoFull runtime deps ticket public
                         if refused
                             then do
-                                originMiss result `shouldBe` Just MissUnresolved
+                                originMiss result `shouldBe` Just (MissUnresolved ReadInvalid)
                                 snChargedBytes <$> meterSnapshot meter `shouldReturn` 0
                             else do
                                 manifest <- maybe (fail "full Cargo read returned no manifest") pure (originManifest result)
@@ -404,6 +409,38 @@ retainedConsumerSpec = describe "successful selected consumers" $ do
                 readIORef sourceReads `shouldReturn` 1
                 snChargedBytes <$> meterSnapshot meter `shouldReturn` 0
 
+selectedChargeSpec :: Spec
+selectedChargeSpec = describe "selected metadata read payments" $
+    for_ [False, True] $ \public ->
+        it ((if public then "public" else "private") <> " holds the scaled sum of its full-read chunks, not only the largest") $ withSweeper $ \deadlines -> do
+            original <- testServeRuntime deadlines noopMetricsPort
+            meter <- newMemoryMeter deadlines MeterSettings{msBudgetBytes = maxBound `div` 2, msStepBytes = 1, msEntryRoom = 0, msEntryWaitMicros = 0}
+            held <- newIORef Nothing
+            let chunk = 64 * 1024
+                factory = PrepareRead $ \origin -> do
+                    replicateM_ 3 (ocChargeFullRead origin chunk)
+                    meterSnapshot meter >>= writeIORef held . Just . snChargedBytes
+                    pure (Left MetadataAbsent)
+                metadata = pdMetadata inertPackumentDeps
+                deps = inertPackumentDeps{pdMetadata = metadata{metadataRead = factory}}
+                runtime = original{srMemoryMeter = meter}
+            completed <- withMemoryEntry noopMetricsPort meter (runSelectedRead public runtime deps)
+            completed `shouldBe` Right (Left MetadataAbsent)
+            readIORef held >>= (`shouldSatisfy` maybe False (>= scaleCharge (cfFullReadPermille (metadataChargeFactors metadata)) (3 * chunk)))
+            snChargedBytes <$> meterSnapshot meter `shouldReturn` 0
+
+-- Read one npm version through the public or the private selected-metadata binding.
+runSelectedRead :: Bool -> ServeRuntime -> PackumentDeps -> MemoryTicket -> IO (Either MetadataError VersionRead)
+runSelectedRead public runtime deps ticket = do
+    logEnv <- newTestLogEnv
+    base <- maybe (fail "the inert mount has no private base") pure (pdPrivateBase deps)
+    let binding = MountBinding ("npm" :| []) npmRouter npmCredential deps Nothing
+        version = npmVersion "1.0.0"
+    runHandler logEnv mempty (RequestCtx runtime binding) $
+        if public
+            then withPublicMetadata runtime deps ticket leftpadName version liftIO
+            else withPrivateMetadataClient runtime deps (Just ticket) base Nothing (\client -> fetchVersionMetadata client leftpadName version)
+
 retainedCargoFixture :: IO (ByteString, VersionRead, VersionRead)
 retainedCargoFixture = do
     let row = case cargoTestRecord "1.0.0" of
@@ -528,7 +565,7 @@ observedReadSpec = describe "observed full origin reads" $ do
     it "reports actual input bytes even when native parsing rejects the response" $ do
         seen <- newIORef 0
         result <- readObserved (\bytes -> modifyIORef' seen (+ bytes))
-        (case result of OriginUnresolved -> True; _ -> False) `shouldBe` True
+        (case result of OriginUnresolved _ -> True; _ -> False) `shouldBe` True
         readIORef seen `shouldReturn` BS.length malformed
     it "retains a typed request-wide bound refusal instead of a transport outcome" $ do
         let fault = BodyTooLarge (MetadataBodyLimit 12)

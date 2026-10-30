@@ -178,13 +178,13 @@ boundsSpec = describe "response bounds through the request path (security.md inv
                 Object fields -> KeyMap.lookup "_unknown" fields `shouldBe` Nothing
                 _ -> expectationFailure "expected a metadata object"
 
-    it (caseLabel "integration/pipeline-faults/native-007" "refuses an oversized private packument with 503, serving no public set") $ do
+    it (caseLabel "integration/pipeline-faults/native-007" "refuses an oversized private packument with 502, serving no public set") $ do
         privateUp <- servingUpstream (oversizedPackument "9.9.9")
         publicUp <- servingUpstream (encodePackument (admittingPublic "1.0.0"))
         queue <- newTestMemoryQueue
         withProxyEnvQueueDeps queue privateUp publicUp Nothing (withLimits tightLimits) $ \app _env _port -> do
             resp <- getThing Nothing app
-            status resp `shouldBe` 503
+            status resp `shouldBe` 502
             servedVersions resp `shouldBe` []
 
     it (caseLabel "integration/pipeline-faults/native-008" "503s when the only (public) packument is oversized and the private upstream has no such package") $ do
@@ -205,13 +205,13 @@ boundsSpec = describe "response bounds through the request path (security.md inv
             status resp `shouldBe` 503
             servedVersions resp `shouldBe` []
 
-    it (caseLabel "integration/pipeline-faults/native-010" "refuses with 503 when a version-flood document arrives on the private leg") $ do
+    it (caseLabel "integration/pipeline-faults/native-010" "refuses with 502 when a version-flood document arrives on the private leg") $ do
         privateUp <- servingUpstream versionFloodPackument
         publicUp <- servingUpstream (encodePackument (admittingPublic "1.0.0"))
         queue <- newTestMemoryQueue
         withProxyEnvQueueDeps queue privateUp publicUp Nothing (withLimits tightLimits) $ \app _env _port -> do
             resp <- getThing Nothing app
-            status resp `shouldBe` 503
+            status resp `shouldBe` 502
             servedVersions resp `shouldBe` []
 
     it (caseLabel "integration/pipeline-faults/native-011" "refuses a deeply-nested public document fail-closed (503 with no private package)") $ do
@@ -223,13 +223,13 @@ boundsSpec = describe "response bounds through the request path (security.md inv
             status resp `shouldBe` 503
             servedVersions resp `shouldBe` []
 
-    it (caseLabel "integration/pipeline-faults/native-012" "refuses with 503 when a deeply-nested document arrives on the private leg") $ do
+    it (caseLabel "integration/pipeline-faults/native-012" "refuses with 502 when a deeply-nested document arrives on the private leg") $ do
         privateUp <- servingUpstream deeplyNestedBody
         publicUp <- servingUpstream (encodePackument (admittingPublic "1.0.0"))
         queue <- newTestMemoryQueue
         withProxyEnvQueueDeps queue privateUp publicUp Nothing (withLimits tightLimits) $ \app _env _port -> do
             resp <- getThing Nothing app
-            status resp `shouldBe` 503
+            status resp `shouldBe` 502
             servedVersions resp `shouldBe` []
 
     it (caseLabel "integration/pipeline-faults/native-013" "serves normally when every document is within the bounds (no false refusal)") $ do

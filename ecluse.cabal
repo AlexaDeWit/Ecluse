@@ -2065,9 +2065,9 @@ test-suite ecluse-residency
     , wai-extra        ^>=3.1
     , warp             ^>=3.4
 
--- Smoke tests: live calls to public registries (npm, PyPI) to validate our JSON and
--- protocol handling. ALLOWED TO FAIL by design, and non-gating, because they depend
--- on uncontrolled external services.
+-- Smoke tests: live calls to the public npm, PyPI, Cargo and RubyGems registries to
+-- validate our JSON and protocol handling. ALLOWED TO FAIL by design, and non-gating,
+-- because they depend on uncontrolled external services.
 test-suite ecluse-smoke
   import:             shared
   -- hspec-discover generates a Main without an export list.

@@ -19,7 +19,7 @@ import Ecluse.BenchLoad.Error (benchFail)
 import Ecluse.BenchLoad.Fixture (ProxyConfigure)
 import Ecluse.BenchLoad.Harness (LoadKnobs (lkUpstreamLatencyMicros))
 import Ecluse.BenchLoad.ObjectStore (conditionalObjectRead, objectRevision)
-import Ecluse.BenchLoad.ProxyProcess (ProxySettings (..), mirrorStateBucket)
+import Ecluse.BenchLoad.ProxyProcess (ProxySettings (..), mirrorStateBucket, privateStubHost, publicStubHost)
 import Ecluse.Core.Ecosystem (Ecosystem (Cargo))
 import Ecluse.Core.Mirror.State (encodeProjectRecord, extendProjectRecord, stateTarget)
 import Ecluse.Core.Mirror.State.Internal (projectKey, retainVerifiedIdentity)
@@ -53,15 +53,7 @@ withCopyState knobs use = do
 -- | Bind the proxy to a state endpoint on this port, under the hosts its prepared records name.
 copyStateSettings :: Int -> ProxySettings -> ProxySettings
 copyStateSettings statePort settings =
-    settings{psMirrorStatePort = Just statePort, psPublicHost = Just copyStatePublicHost, psPrivateHost = Just copyStatePrivateHost}
-
--- | The public upstream host a native private-copy state fixture reads its sources from.
-copyStatePublicHost :: Text
-copyStatePublicHost = "localhost"
-
--- | The private upstream host a native private-copy state fixture keys its records by.
-copyStatePrivateHost :: Text
-copyStatePrivateHost = "127.0.0.1"
+    settings{psMirrorStatePort = Just statePort, psPublicHost = Just publicStubHost, psPrivateHost = Just privateStubHost}
 
 prepareRecords :: Int -> Int -> IO (Map ByteString ByteString)
 prepareRecords privatePort publicPort =
@@ -89,9 +81,9 @@ prepareRecords privatePort publicPort =
                         record
                 statuses -> benchFail ("Cargo copy-state preparation received HTTP " <> show statuses)
   where
-    publicBase = "http://" <> copyStatePublicHost <> ":" <> show publicPort
-    privateBase = "http://" <> copyStatePrivateHost <> ":" <> show privatePort
-    target = stateTarget ("https://" <> copyStatePrivateHost <> ":" <> show privatePort)
+    publicBase = "http://" <> publicStubHost <> ":" <> show publicPort
+    privateBase = "http://" <> privateStubHost <> ":" <> show privatePort
+    target = stateTarget ("https://" <> privateStubHost <> ":" <> show privatePort)
     fetch client bound url = do
         request <- parseRequest (toString url)
         fetchTestBody client (progressFloor defaultLimits) bound request >>= either (benchFail . show) pure

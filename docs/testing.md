@@ -1284,6 +1284,15 @@ pipe buffers (at most 64 KiB per pipe) but not for the log's page cache. On CI t
 just built or restored the executable, so its text pages are already cached when the proxy starts
 and are not charged to it. The harness does not enforce that.
 
+The proxy dials the private and mirror target stubs at `127.0.0.1`, the address they listen on,
+and the public stub at `localhost`. Boot refuses a mirror target on the public upstream's host, so
+the two names differ. After a private miss the proxy closes that connection, so an onboarding row
+connects to the private stub again on each request. Over plain HTTP, `http-client` starts each
+further address of a name 250 ms after the one before, even when that one refused. While the
+harness named the private stubs `localhost`, which resolves to `::1` first, every onboarding request
+waited those 250 ms. An HTTPS deployment connects through `crypton-connection`, which tries the
+next address as soon as one refuses.
+
 Every load proxy runs with native metadata gzip off. The shared environment builder sets
 `ECLUSE_SERVER__METADATA_GZIP=false` for every scenario, ecosystem and pod shape, and drops an
 ambient `ECLUSE_*` value. The harness reads the resolved `server.metadataGzip` line back from the
@@ -1425,7 +1434,8 @@ Four scenarios per ecosystem stress admission under memory pressure.
 `rubygems/herd` sends it for the `rails` per-gem `/info` record.
 Each ecosystem's `herd-under-heavy-private` sends that burst during a heavy private load.
 See [The herd under heavy private load](#the-herd-under-heavy-private-load).
-Each ecosystem's `warm-under-cold` measures assembled hits and retained selected reads.
+The npm, PyPI and Cargo `warm-under-cold` scenarios measure assembled hits and retained selected reads.
+`rubygems/warm-under-cold` measures `/info` replies rebuilt per request and retained selected reads.
 A second generator drives heavy-tier listings that never reuse an assembled response.
 Each ecosystem's `ramp` steps from 10 to 400 connections, with one configured duration per step, and reports each step.
 None of these sixteen scenarios joins the concurrency-one pass.
@@ -1523,7 +1533,7 @@ a change. Like every scenario, each fails on an OOM kill or a heap overflow.
 
 Each scenario runs its ecosystem's `heavy-private` load at the base concurrency for the window.
 Halfway through, 100 more connections each send one request for the herd's listing at the same
-moment: `typescript` for npm, `boto3` for PyPI, and `aws-sdk-ec2` for Cargo.
+moment: `typescript` for npm, `boto3` for PyPI, `aws-sdk-ec2` for Cargo, and `rails` for RubyGems.
 The burst passes through the same admission as the load. From that moment until the last burst response ends, the harness reads the proxy cgroup's
 files every 10 ms. A herd on an idle proxy completes in about a second, so the one-second gauges
 would miss its peak. The scenario's own section adds three rows to the usual figures:
@@ -2248,7 +2258,7 @@ Upstream discovery runs after caller or service credentials exist, never at boot
 Authority negatives cover public, neighbouring, read, upload, and artifact coordinates without sending credentials to refused destinations.
 Publication cases bind native metadata, body lengths, manifest, archive root, digest, and first-party authority before writes.
 They preserve distinct read and upload roots and bound charged archive/TOML work.
-Policy cases prove that boot and `check-config` refuse active `DenyInstallTimeExecution`, `DenyIfDeprecated`, and `AllowScope` rules with the adapter's reasons.
+Policy cases prove that boot and `check-config` refuse active `DenyInstallTimeExecution`, `DenyExternalDependencies`, `DenyIfDeprecated`, and `AllowScope` rules with the adapter's reasons.
 
 Mirror cases require exact source rows, SHA-256 archive proof, retry, lost replies, restart, and public outage.
 Yank and timestamp controls change target metadata and verify retained original-source facts with fresh client state.

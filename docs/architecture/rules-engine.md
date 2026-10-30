@@ -181,9 +181,10 @@ public admission without deleting stored copies. Disable either with `enabled: f
 `mounts.npm.rules`, or admit a named package with an `AllowByIdentity` pin whose explicit
 precedence is above 300. `DenyExternalDependencies` exists because no consumer fetch may leave
 Écluse: an npm git or URL dependency installs straight from its source, past the quarantine, the
-advisories and the mirror. It reads specs the packument already carries, so it adds no fetch. Its
-type loads on every mount, and PyPI, Cargo and RubyGems project registry-only dependencies, because
-their public registries refuse such dependencies at upload or a dependency there names no source.
+advisories and the mirror. It reads specs the packument already carries, so it adds no fetch. The
+PyPI, Cargo and RubyGems adapters project no dependency source into rule evidence for admission, so
+they block the type at boot. Cargo first-party publication still refuses a dependency from a
+registry other than crates.io or Écluse.
 When `advisories.url` is configured, two more shared defaults activate: `DenyIfKnownMalicious` and
 the `AllowIfRemediatesCve` fast lane. The remaining rules opt in by name.
 

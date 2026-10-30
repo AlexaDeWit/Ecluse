@@ -13,7 +13,7 @@ import Hedgehog.Range qualified as Range
 import Test.Hspec
 import Test.Hspec.Hedgehog (hedgehog)
 
-import Ecluse.Core.Text (afterFirst, httpPrefix, httpsPrefix, isAsciiAlphaNum, isPrefixOfLowered, joinUrlPath, nonBlank, readDecimalText, readHexText, stripTrailingSlash, textStorageBytes, toLowerUnlessAsciiUnchanged, urlFilename, urlFilenameComponent)
+import Ecluse.Core.Text (afterFirst, httpPrefix, httpsPrefix, isAsciiAlphaNum, isPrefixOfLowered, joinAlternatives, joinUrlPath, nonBlank, readDecimalText, readHexText, stripTrailingSlash, textStorageBytes, toLowerUnlessAsciiUnchanged, urlFilename, urlFilenameComponent)
 
 spec :: Spec
 spec = do
@@ -29,6 +29,13 @@ spec = do
     readDecimalTextSpec
     readHexTextSpec
     textStorageSpec
+    joinAlternativesSpec
+
+joinAlternativesSpec :: Spec
+joinAlternativesSpec = describe "joinAlternatives" $
+    for_ [([], ""), (["a"], "a"), (["a", "b"], "a or b"), (["a", "b", "c"], "a, b or c")] $ \(items, joined) ->
+        it ("joins " <> show items <> " as " <> show joined) $
+            joinAlternatives items `shouldBe` joined
 
 afterFirstSpec :: Spec
 afterFirstSpec = describe "afterFirst" $ do

@@ -37,8 +37,7 @@ import Ecluse.Composition.BootError (
         PublicationTargetWithoutPublish,
         PublishStaticCredentialNeedsEdge,
         RuleBlockedOnMount,
-        UploadConfigurationRequired,
-        UploadUrlRequired
+        UploadConfigurationRequired
     ),
  )
 import Ecluse.Composition.Endpoints (
@@ -55,12 +54,12 @@ import Ecluse.Config (
     DredgerSettings (drgChunkPause, drgQuotaOverrides),
     FirstParty,
     LimitsSettings (limMinProgressBytes, limProgressWindow),
-    MirrorEndpoint (meUploadUrl, meUsername),
+    MirrorEndpoint (meUsername),
     MirrorTarget (mtUrl),
     Mount,
     MountConfig (mntFirstParty, mntMaxRequestBytes, mntMirrorTarget, mntPrivateUpstream, mntPublicationTarget),
     PrivateEndpoint (preTarget),
-    PublicationEndpoint (peTarget, peToken, peUploadUrl, peUsername),
+    PublicationEndpoint (peTarget, peToken, peUsername),
     QuotaOverride (qoQuotas, qoScope, qoWeights),
     ServerSettings (srvAuthToken),
     StoreBackend,
@@ -79,9 +78,8 @@ import Ecluse.Core.Credential (ClientCredential (ClientCredential), Secret)
 import Ecluse.Core.Ecosystem (Ecosystem)
 import Ecluse.Core.Registry.Adapter (RegistryAdapter, adapterFor, adapterPublish, adapterRuleBlocks)
 import Ecluse.Core.Registry.Adapter.Capability (
-    AdapterPublish (publishIdentity, publishMirrorRequirements, publishUploadEndpoint),
+    AdapterPublish (publishIdentity, publishMirrorRequirements),
     MirrorRequirements (mirrorStateRequirement),
-    UploadEndpointRequirement (ExplicitUploadEndpoint),
     UploadIdentityRequirement (NamedIdentity),
     companionsAgree,
     durableMirrorDocuments,
@@ -154,15 +152,10 @@ vetMirrorCapabilities role app = decided $ case missing of
                 <> maybe [] (publicationNeeds eco publish) (mntPublicationTarget mount)
     mirrorNeeds eco publish endpoint =
         [MirrorStateRequired eco | isJust (durableMirrorDocuments (mirrorStateRequirement (publishMirrorRequirements publish))), isJust pipeline, isNothing (cfgMirrorState app)]
-            <> [required eco "mirrorTarget" (meTarget endpoint) "uploadUrl" | separateUpload publish, mirrorWrites, isNothing (meUploadUrl endpoint)]
-            <> [required eco "mirrorTarget" (meTarget endpoint) "username" | publishIdentity publish == NamedIdentity, mirrorWrites, tgtTag (meTarget endpoint) /= TagCodeArtifact, isNothing (meUsername endpoint)]
-    -- The publication refusal says what url and uploadUrl each name, for a url that still holds the upload endpoint.
+            <> [usernameRequired eco "mirrorTarget" (meTarget endpoint) | publishIdentity publish == NamedIdentity, mirrorWrites, tgtTag (meTarget endpoint) /= TagCodeArtifact, isNothing (meUsername endpoint)]
     publicationNeeds eco publish endpoint =
-        [UploadUrlRequired eco (keyPath "publicationTarget" (peTarget endpoint) "uploadUrl") | separateUpload publish, clientWrites, isNothing (peUploadUrl endpoint)]
-            <> [required eco "publicationTarget" (peTarget endpoint) "username" | publishIdentity publish == NamedIdentity, clientWrites, isJust (peToken endpoint), tgtTag (peTarget endpoint) /= TagCodeArtifact, isNothing (peUsername endpoint)]
-    separateUpload publish = publishUploadEndpoint publish == ExplicitUploadEndpoint
-    required eco endpoint target key = UploadConfigurationRequired eco (keyPath endpoint target key)
-    keyPath endpoint target = taggedKeyPath endpoint (tgtTag target)
+        [usernameRequired eco "publicationTarget" (peTarget endpoint) | publishIdentity publish == NamedIdentity, clientWrites, isJust (peToken endpoint), tgtTag (peTarget endpoint) /= TagCodeArtifact, isNothing (peUsername endpoint)]
+    usernameRequired eco endpoint target = UploadConfigurationRequired eco (taggedKeyPath endpoint (tgtTag target) "username")
 
 -- | Accumulate every pure refusal and advisory for one role before constructing its plan.
 vetBoot :: Config -> Vet ValidatedPlan

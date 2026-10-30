@@ -148,8 +148,8 @@ client's credential and disables redirect-following, so the leg never follows a 
 ([Security posture](security.md#trust-assumptions--credential-posture)).
 A `2xx` streams and a conditional `304` passes through. An explicit private `401` or `403`
 refuses the read, because public bytes can differ from a private patch under the same identity.
-A private `404` is a private miss. Any other unsuccessful status, an unfollowed redirect included,
-and a transport failure refuse the read with `503` for every name. The leg applies **no
+A private `404` is a private miss. Any other failure refuses the read for every name, with the
+status [its cause sets](#private-availability). The leg applies **no
 serve-time integrity floor**: it fast-tracks a lockfile-pinned version from a trusted registry.
 The client and the mirror worker still verify those bytes, so the leg gives up the proactive
 refuse-weak-integrity stance, not tamper-evidence. The packument route's listing-side trusted
@@ -243,14 +243,20 @@ track which input a survivor came from, so assembly can select its retained sour
 - **Private access authority.** An explicit private `401` or `403` refuses the request even when
   public metadata succeeds. The refusal precedes merge and conditional response selection.
   See the [operator policy](../../web/content/docs/configuration.md#first-party-namespaces).
-- **Private availability.** A failed private read refuses the request with `503` for every name: a
-  transport error, a timeout, an unexpected status, a backoff, or a document that does not decode
-  or exceeds its bound. A private `404` still lets the gated public set serve. Otherwise a private
-  package whose name is not declared first-party would be replaced by its public namesake once that
-  version passed the rules, and builds would switch packages silently. First-party declarations
-  cannot close that gap, because most registries give no reliable mechanism to establish a complete
-  first-party naming system, and a missed name fails silently. The mount's availability therefore
-  follows the private upstream's.
+- <a id="private-availability"></a>**Private availability.** A failed private read refuses the
+  request for every name, on listings, metadata and artifacts alike. A private `404` still lets the
+  gated public set serve. Otherwise a private package whose name is not declared first-party would
+  be replaced by its public namesake once that version passed the rules, and builds would switch
+  packages silently. First-party declarations cannot close that gap, because most registries give no
+  reliable mechanism to establish a complete first-party naming system, and a missed name fails
+  silently. The mount's availability therefore follows the private upstream's. The cause sets the
+  status, and no public outcome changes it:
+  - `503` when the private registry is unavailable: a transport error, a timeout, a `5xx` or a
+    `429`. The refusal forwards the private registry's `Retry-After`, so a client that honours it
+    waits as that registry asked.
+  - `502` when its reply is invalid or unusable: an unfollowed redirect, another unexpected status,
+    a document for another name, or a document that does not decode or exceeds its bound. The
+    private registry answered, so retrying the same request is unlikely to help.
 - **Public availability.** If the public upstream fails while the private one succeeds, the merge
   serves the private-only union with a degraded signal (readiness stays
   [lenient about public reachability](web-layer.md#meta-routes-ping-health-and-search)). Only when
@@ -267,13 +273,14 @@ The proxy knows the requested name from the route, so an upstream's self-reporte
 is a cross-check, never the served authority. The served `name` is always a value an upstream
 genuinely reported, and validation guarantees it equals the route name. An origin whose
 `name` agrees merges normally. The proxy treats an origin whose `name` disagrees as untrusted for
-this request: it drops the origin and logs the drop. An absent or undecodable name instead makes the
-packument undecodable: a public one degrades, and a private one refuses the request. A single
-misreporting upstream drops out while any other valid origin still serves `200`. The request is `502 Bad Gateway` (`PackumentBadGateway`, see
-[Error model](web-layer.md#error-model)) only when no origin yields a valid packument *because the
-responding origins mismatched*. That is distinct from a genuine absence. This forecloses
-cache-poisoning: a misreporting upstream cannot shadow a real package or win the union with a
-divergent `name`.
+this request and logs it. A public origin drops out, and the private set still serves `200`. A
+private origin refuses the request with `502 Bad Gateway`, as any invalid private reply does
+([Private availability](#private-availability)), so a public namesake never stands in for it. An
+absent or undecodable name makes the packument undecodable, with the same split. The request is
+`502` (`PackumentBadGateway`, see [Error model](web-layer.md#error-model)) when no origin yields a
+valid packument *because the responding origins mismatched*. That is distinct from a genuine
+absence. This forecloses cache-poisoning: a misreporting upstream cannot shadow a real package or
+win the union with a divergent `name`.
 
 ### Decision surface vs served surface
 
@@ -381,7 +388,8 @@ consumes. Adapters map their protocols into this shared model. Four principles g
   determine. Boot checks each active mount's resolved policy and accumulates every blocked entry
   beside independent refusals. The engine still evaluates only core evidence.
 - **Signal availability is explicit.** A signal the adapter has not determined, or cannot
-  determine cheaply, has its own representation (`CodeExecUnknown`, `Nothing`).
+  determine cheaply, has its own representation (`CodeExecUnknown`, `DependencySourcesUnknown`,
+  `Nothing`).
   A pure rule then yields no decision rather than guessing, and an effectful rule can resolve it
   later.
 - **The policy model holds the facts that rules and admission need.** Installation fields
@@ -397,9 +405,9 @@ consumes. Adapters map their protocols into this shared model. Four principles g
 | **Identity** | `PackageName`: an ecosystem tag, an optional namespace (npm scope), a normalised `canonical` key, and a `display` form. Equality and ordering use `(ecosystem, namespace, canonical)` only, never the display or base forms. | npm is case-sensitive with scopes, PyPI normalises (PEP 503), RubyGems is verbatim. `Flask` and `flask` are one PyPI package but two npm ones, so the ecosystem tag is part of identity. Matching uses the canonical key while rendering stays faithful. |
 | **Version** | In [`Ecluse.Core.Version`](../../core/src/Ecluse/Core/Version.hs): opaque, holding the raw text plus a `Maybe VersionKey` parsed at construction. `parseVersionKey :: Ecosystem -> Text -> Either VersionError VersionKey` is the only way to a key, and `compareVersions` works only on keys, so non-canonical text never reaches the comparator. Unparseable means no key, so ordering rules abstain and the proxy still serves the version. `Version` carries no derived `Ord`. | Lexicographic ordering is wrong for every grammar (`"10.0.0" < "9.0.0"`), and the proxy must keep serving a version even when the parser can't order it. |
 | **Install-time code execution** | `CodeExecSignal = NoCodeOnInstall \| RunsCodeOnInstall reason \| CodeExecUnknown`. | Unifies npm install scripts, PyPI sdist builds, and RubyGems native extensions. Cargo and RubyGems retain `CodeExecUnknown` and block the unsupported execution-denial rule at boot. |
-| **Availability** | `Availability = Available \| Deprecated \| Yanked`, a flag with no text. | npm deprecates and RubyGems yanks whole versions. PyPI yanks individual files, so a release reads as `Yanked` only when every file of it is. |
+| **Availability** | `Availability = Available \| Deprecated \| Yanked`, a flag with no text. | npm deprecates whole versions. npm and RubyGems drop a removed or yanked version from their metadata instead of flagging it, so both block the yank deny at boot. PyPI yanks individual files, so a release reads as `Yanked` only when every file of it is. |
 | **Artifacts** | A version owns `NonEmpty Artifact`. Each carries its entry key, file name, location, algorithm-tagged `Hash`es, and size. | npm has one tarball, PyPI an sdist plus many wheels, and RubyGems one gem per platform. |
-| **Dependency sources** | `DependencySources = RegistryDependencies \| FetchesOutsideRegistry reason`. | A git or URL dependency installs straight from its source and never receives a verdict of its own, so the deny judges the version that names it. npm reads `dependencies`, `optionalDependencies` and `peerDependencies` in both read forms. PyPI, Cargo and RubyGems project `RegistryDependencies`, because their public registries refuse such dependencies at upload or a dependency there names no source. |
+| **Dependency sources** | `DependencySources = RegistryDependencies \| FetchesOutsideRegistry reason \| DependencySourcesUnknown`. | A git or URL dependency installs straight from its source and never receives a verdict of its own, so the deny judges the version that names it. npm reads `dependencies`, `optionalDependencies` and `peerDependencies` in both read forms. PyPI, Cargo and RubyGems retain `DependencySourcesUnknown` and block the dependency deny at boot. |
 | **Dependencies** | The relationships themselves are retained for installation, outside the typed policy model. | Each dependency receives its own verdict when the client fetches it. npm retains supported dependency relationships in its installation representation. Only where a dependency installs from enters the rules vocabulary, as its dependency sources. |
 
 The types live in [`Ecluse.Core.Package`](../../core/src/Ecluse/Core/Package.hs),
@@ -567,7 +575,9 @@ A conflicting coordinate quarantines its version. Selected reads still scan thro
 Full and selected reads count every nonblank row before projection against the version count, including malformed or skipped rows.
 
 RubyGems supplies no supported deprecation flag or scope. Native builds are normal installation behaviour.
-The adapter blocks `DenyIfDeprecated`, `AllowScope`, and `DenyInstallTimeExecution` through typed rule capabilities.
+Compact Index `/info` omits a yanked version instead of flagging it, so public reads and the mirror worker never see a yanked gem.
+The global `/versions` removal marker is the only yank fact, and no serve, mirror or Dredger path reads it.
+The adapter blocks `DenyIfYanked`, `DenyIfDeprecated`, `AllowScope`, `DenyInstallTimeExecution`, and `DenyExternalDependencies` through typed rule capabilities.
 No policy-only archive fetch or execution-evidence cache follows from unknown installation metadata.
 Bounded archive interpretation remains necessary for publication and mirroring.
 

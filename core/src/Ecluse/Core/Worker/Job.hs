@@ -243,7 +243,7 @@ probeInventory charge policy job = do
         Left (MetadataFetch fault) -> Left (outcomeOfFetchFault BeforePublish (probeFaultReason job) fault)
         Left (MetadataBoundExceeded limit) -> Left (outcomeOfFetchFault BeforePublish (probeFaultReason job) (FetchBoundExceeded limit))
         Left (MetadataAuthorisationFailure status) -> Left (Retried BeforePublish (probeStatusReason job status))
-        Left (MetadataHttpFailure status) -> Left (Retried BeforePublish (probeStatusReason job status))
+        Left (MetadataHttpFailure status _) -> Left (Retried BeforePublish (probeStatusReason job status))
         Left MetadataUndecodable -> Left (Retried BeforePublish (probeParseReason job "invalid mirror metadata"))
         Left (MetadataNameMismatch _) -> Left (Retried BeforePublish (probeParseReason job "mismatched package identity"))
 

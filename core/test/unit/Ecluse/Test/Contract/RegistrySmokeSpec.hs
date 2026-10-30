@@ -39,7 +39,7 @@ spec = describe "live registry verdicts" $ do
         it ("fails " <> show cause <> " instead of reporting an unavailable upstream") $
             liveMetadata "expected" (pure (Left (MetadataFetch (FetchTransport (transportFault cause "request refused")))))
                 `shouldThrow` isFailureException
-    for_ [MetadataAbsent, MetadataAuthorisationFailure 401, MetadataAuthorisationFailure 403, MetadataHttpFailure 503] $ \fault ->
+    for_ [MetadataAbsent, MetadataAuthorisationFailure 401, MetadataAuthorisationFailure 403, MetadataHttpFailure 503 Nothing] $ \fault ->
         it ("fails the status refusal " <> show fault) $
             liveMetadata "expected" (pure (Left fault)) `shouldThrow` isFailureException
     it "propagates cancellation from the fetch" $

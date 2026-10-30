@@ -384,9 +384,9 @@ mounts:
   # Every url must be an https:// URL carrying a dialable host, and none may carry
   # userinfo, a query, or a fragment: a credential belongs in its own key.
   # On mirrorTarget and publicationTarget, url is where Écluse reads and uploadUrl is
-  # where it writes. pypi and cargo upload to a separate endpoint, so a role that writes
-  # through either target refuses to boot without its uploadUrl. npm and rubygems derive
-  # the write address from url, so the load refuses uploadUrl on them.
+  # where it writes. pypi and cargo upload to a separate endpoint, so the load requires
+  # uploadUrl on both targets there. npm and rubygems derive the write address from url,
+  # so the load refuses uploadUrl on them.
   npm:
     # DenyIfYanked: npm reports no yank flag. Removed releases disappear from its metadata.
     publicUpstream:
@@ -398,8 +398,10 @@ mounts:
     # enabled: true
     # The read authority. Required on a mirrored mount, so the mirror reads back.
     # Optional on a serve-only mount, where it still merges with the gated public set.
-    # A failed private read refuses the mount's reads with 503, for every name. A private
-    # 404 still lets the gated public set serve.
+    # A failed private read refuses the mount's reads for every name: 503 while the private
+    # registry is unavailable, forwarding its Retry-After, and 502 when its reply is invalid.
+    # A private 404 still lets the gated public set serve. Each cause is listed at
+    # https://ecluse-proxy.com/docs/private-reads/#private-outage
     # Must name a different repository from this mount's publicUpstream. Boot refuses
     # equal repository identities, including equivalent URL spellings.
     # Proxy reads forward the caller's credential. Dredger uses this target's own authority.
@@ -468,7 +470,8 @@ mounts:
     # Only a first-party name may be published here, and a first-party name
     # resolves from privateUpstream alone: it is never fetched from publicUpstream,
     # never merged with a public document, and never mirrored. A private 404 answers
-    # 404. A private 401/403 answers a local 403. Other private read failures answer 503.
+    # 404. A private 401/403 answers a local 403. Other private read failures answer 503
+    # or 502, as for any other name.
     # The shape is per-ecosystem. npm reads scopes. PyPI reads PEP 503 canonical
     # distribution names, and an entry ending in a separator then * is a prefix, so
     # acme-* covers acme-tools and not acmeco. A star on no separator (acme*) is
@@ -533,6 +536,7 @@ mounts:
     #     token:
     # pypi blocks these rule types at boot, even through shared rules:
     # DenyInstallTimeExecution: Most PyPI releases offer a source distribution, which runs its own build on install, so this rule would deny nearly every release.
+    # DenyExternalDependencies: The PyPI adapter does not read where a release's dependencies install from.
     # DenyIfDeprecated: The PyPI adapter supplies no deprecation flag.
     # AllowScope: A PyPI project name has no scope, so this rule can never match one.
     # Move supported types from shared rules into mounts.npm.rules, or disable its configured
@@ -571,6 +575,7 @@ mounts:
     # firstParty: "acme-tools,acme-*"
     # cargo blocks these rule types at boot, even through shared rules:
     # DenyInstallTimeExecution: Cargo's sparse index does not declare build scripts or procedural macros. This rule is unsupported for the ecosystem.
+    # DenyExternalDependencies: The Cargo adapter does not project where a public crate's dependencies install from into rule evidence.
     # DenyIfDeprecated: Cargo's sparse index supplies no deprecation flag.
     # AllowScope: Cargo package names have no scope.
     # Move supported types from shared rules into mounts.npm.rules, or disable its configured
@@ -584,6 +589,8 @@ mounts:
   # Mirroring requires mirrorState.url and retains every supported platform artifact,
   # original compact specifications and source facts. Preserve that state across restarts.
   # DenyInstallTimeExecution: RubyGems native builds are normal installation behaviour. This rule is unsupported for the ecosystem.
+  # DenyIfYanked: RubyGems reports no yank flag in a gem's metadata. Yanked versions disappear from it.
+  # DenyExternalDependencies: A RubyGems dependency names only a gem and its requirements, never a source, so this rule can never match one.
   # DenyIfDeprecated: RubyGems metadata supplies no supported deprecation flag.
   # AllowScope: RubyGems package names have no scope.
   # Active entries refuse boot, including rules inherited from the shared policy.

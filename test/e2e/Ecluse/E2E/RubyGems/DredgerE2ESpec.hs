@@ -279,7 +279,7 @@ safetyCases recorder = aroundAll acquire $ do
         requests <- codeArtifactDeleteRequests (Native.rspControl plane)
         run <- Native.withUnsafeMirror plane (runNativeSweep plane [] Apply (FullIdentity (packageName deniedPackage)))
         sweepExit run `shouldNotBe` ExitSuccess
-        sweepOutput run `shouldSatisfy` T.isInfixOf "refills itself, so a delete changes nothing: the repository has an upstream ("
+        sweepOutput run `shouldSatisfy` T.isInfixOf "refills itself, so a delete changes nothing: the repository has an upstream (cache)"
         ((,) <$> Native.storeInventory mirror <*> Native.storeInventory cache) `shouldReturn` initialState
         codeArtifactDeleteRequests (Native.rspControl plane) `shouldReturn` requests
     it (caseLabel "rubygems/dredger-native-safety/native-yank-not-deletion" "distinguishes a native yank refusal from actual CodeArtifact archive removal") $ \(plane, mirror, _) -> do

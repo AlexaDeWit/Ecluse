@@ -169,7 +169,7 @@ indexContract =
                         chooseContract (refusalContract status406 "The requested encoding is unavailable.") $
                             chooseContract (refusalContract status500 "The registry could not decide.") $
                                 chooseContract
-                                    (refusalContract status502 "The origin returned a different identity.")
+                                    (refusalContract status502 "An origin reply was invalid or unusable, such as a different identity.")
                                     (refusalContract status503 "The registry is temporarily unavailable.")
 
 refusalContract :: Status -> Text -> ResponseContract (ResponseValue (Maybe LByteString))
@@ -192,7 +192,7 @@ renderedRefusal = Just . fromStrict . encodeUtf8 . renderRefusal
 
 -- | Native archives share streamed responses and local refusal status codes.
 artifactContract :: ResponseContract PassthroughResponse
-artifactContract = passthroughContract "Relays the selected archive. Authentication, admission, integrity and availability failures return a local refusal."
+artifactContract = passthroughContract "Relays the selected archive. Authentication, admission, integrity and availability failures return a local refusal. A private upstream reply that was invalid or unusable answers a local `502`."
 
 -- | Render public archive diagnostics while access refusals and missing archives keep quiet bodies.
 artifactReplies :: TarballReplies PassthroughResponse

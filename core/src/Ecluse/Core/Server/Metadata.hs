@@ -221,7 +221,7 @@ recordedFetch metrics upstream action = do
 metadataErrorCause :: MetadataError -> Metric.Cause
 metadataErrorCause = \case
     MetadataAbsent -> Metric.UpstreamStatus
-    MetadataHttpFailure _ -> Metric.UpstreamStatus
+    MetadataHttpFailure _ _ -> Metric.UpstreamStatus
     MetadataAuthorisationFailure _ -> Metric.OtherCause
     MetadataUndecodable -> Metric.Decode
     MetadataNameMismatch _ -> Metric.Decode

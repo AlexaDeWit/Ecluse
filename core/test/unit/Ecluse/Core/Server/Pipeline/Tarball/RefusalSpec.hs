@@ -11,9 +11,9 @@ import Test.Hspec
 
 import Ecluse.Core.Server.Context (PackumentDeps (pdFirstParty))
 import Ecluse.Core.Server.Pipeline.Internal (denialLabels, serveDecisionClass)
-import Ecluse.Core.Server.Pipeline.Origin (OriginMiss (MissAbsent, MissUnresolved))
+import Ecluse.Core.Server.Pipeline.Origin (OriginMiss (MissAbsent, MissUnresolved), ReadFailure (ReadInvalid, ReadUnavailable))
 import Ecluse.Core.Server.Pipeline.Tarball.Refusal (artifactOutcomeStatus, privateMissRefusal)
-import Ecluse.Core.Server.Response (ArtifactStatus (NotFound, Unavailable'), ServeDecision)
+import Ecluse.Core.Server.Response (ArtifactStatus (BadGateway, NotFound, Unavailable'), RetryAfter (RetryAfter), ServeDecision)
 import Ecluse.Core.Telemetry.Metrics qualified as Metric
 import Ecluse.Test.Package (leftpadName)
 import Ecluse.Test.Server.Mount (inertPackumentDeps)
@@ -25,14 +25,19 @@ spec = describe "the private miss a first-party name answers" $ do
         fmap artifactOutcomeStatus (firstPartyMiss MissAbsent) `shouldBe` Just NotFound
         fmap serveDecisionClass (firstPartyMiss MissAbsent) `shouldBe` Just Metric.Deny
 
-    it "renders an origin that was never read as a 503, suggesting no delay" $ do
-        fmap artifactOutcomeStatus (firstPartyMiss MissUnresolved) `shouldBe` Just (Unavailable' Nothing)
-        fmap serveDecisionClass (firstPartyMiss MissUnresolved) `shouldBe` Just Metric.Unavailable
+    it "renders an origin that was never read as a 503, carrying only the delay it asked for" $ do
+        fmap artifactOutcomeStatus (firstPartyMiss (MissUnresolved (ReadUnavailable Nothing))) `shouldBe` Just (Unavailable' Nothing)
+        fmap artifactOutcomeStatus (firstPartyMiss (MissUnresolved (ReadUnavailable (Just (RetryAfter 30))))) `shouldBe` Just (Unavailable' (Just (RetryAfter 30)))
+        fmap serveDecisionClass (firstPartyMiss (MissUnresolved (ReadUnavailable Nothing))) `shouldBe` Just Metric.Unavailable
+
+    it "renders an origin whose reply was invalid as a 502" $ do
+        fmap artifactOutcomeStatus (firstPartyMiss (MissUnresolved ReadInvalid)) `shouldBe` Just BadGateway
+        fmap serveDecisionClass (firstPartyMiss (MissUnresolved ReadInvalid)) `shouldBe` Just Metric.Unavailable
 
     it "carries the denial labels the artifact path records for each miss" $ do
         fmap denialLabels (reasonOf =<< firstPartyMiss MissAbsent)
             `shouldBe` Just (Just "first-party", Metric.ReasonPolicy)
-        fmap denialLabels (reasonOf =<< firstPartyMiss MissUnresolved)
+        fmap denialLabels (reasonOf =<< firstPartyMiss (MissUnresolved (ReadUnavailable Nothing)))
             `shouldBe` Just (Nothing, Metric.ReasonUnavailable)
 
 -- The decision for a name the deployment declares first-party.

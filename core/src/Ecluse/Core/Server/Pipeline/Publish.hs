@@ -179,7 +179,7 @@ targetRefusal replies deps = \case
     MetadataFetch fault -> renderRelay replies deps (Left fault)
     MetadataBoundExceeded fault -> renderRelay replies deps (Left (FetchBoundExceeded fault))
     MetadataAuthorisationFailure status -> publishError replies (mkStatus status "") [] "the publication registry refused access"
-    MetadataHttpFailure status -> publishError replies (mkStatus status "") [] "the publication registry discovery failed"
+    MetadataHttpFailure status _ -> publishError replies (mkStatus status "") [] "the publication registry discovery failed"
     MetadataAbsent -> publishError replies status502 [] "the publication registry has no discovery document"
     MetadataUndecodable -> publishError replies status502 [] "the publication registry discovery is malformed or names an unapproved API root"
     MetadataNameMismatch _ -> publishError replies status502 [] "the publication registry discovery identity disagrees"

@@ -310,7 +310,7 @@ npmPackumentContract =
                             ( chooseContract
                                 (jsonContract status500 "A permanent or internal inability to decide." npmErrorCodec)
                                 ( chooseContract
-                                    (jsonContract status502 "A responding upstream returned a packument for a different package." npmErrorCodec)
+                                    (jsonContract status502 "An upstream reply was invalid or unusable, such as a packument for a different package." npmErrorCodec)
                                     (jsonContract status503 "A transient upstream or advisory condition; retry (see `Retry-After`)." npmErrorCodec)
                                 )
                             )
@@ -326,7 +326,7 @@ npmPackumentReplies = metadataReplies summarisedRejections (NpmError . renderRef
 npmTarballContract :: ResponseContract PassthroughResponse
 npmTarballContract =
     passthroughContract
-        "An upstream-controlled artifact response is relayed transparently. Local authentication, policy, availability, and internal failures use npm's JSON error body under their corresponding status."
+        "An upstream-controlled artifact response is relayed transparently. Local authentication, policy, availability, and internal failures use npm's JSON error body under their corresponding status. A private upstream reply that was invalid or unusable answers a local `502`."
 
 npmTarballReplies :: TarballReplies PassthroughResponse
 npmTarballReplies =

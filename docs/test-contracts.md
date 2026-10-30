@@ -94,7 +94,7 @@ Each suffix expands to integration.serving.npm, integration.serving.pypi, integr
 | authorised-union | npm, PyPI, Cargo and RubyGems combine trusted-private and gated-public versions. |
 | quarantine-private-authority | Shared private young-release authority with old public survivor and rejected young public version. npm native latest-tag assertion remains in its existing gate case |
 | private-divergence | Shared private digest and exact bytes on same-version divergence. npm native latest-tag/divergence cases remain |
-| private-availability | A failing private origin (HTTP 500, HTTP 503, a closed connection) refuses listing and artifact with 503. A private 404 serves the gated public release, a private 401 or 403 refuses, and a public 503 serves the private release alone. New in every provider |
+| private-availability | An unavailable private origin (HTTP 429, 500 or 503, a closed connection) refuses listing and artifact with 503, and an invalid private reply (HTTP 302 or 400) refuses them with 502. A private 404 serves the gated public release, a private 401 or 403 refuses, and a public 503 serves the private release alone. New in every provider |
 | public-integrity | npm "filters a hashless public version out of the served listing" moves here, with PyPI counterpart |
 | trusted-integrity | npm "drops a hashless trusted-private version from the listing by default" moves here, with PyPI counterpart |
 | artifact-integrity | PyPI exact distribution bytes and advertised sha256 checks move here, with npm counterpart. Require fixture bytes, advertised digest and digest of actual response bytes |
@@ -223,7 +223,7 @@ These measurement paths retain their native sampling and verdict logic:
 | Allocation | `acceptance/app/Main.hs` over `EcosystemBench` | Four measured legs, fresh timed input allocation, forcing boundaries, corpus/advisory setup, per-capture criteria, refusals, unavailable rows, and report verdicts. |
 | Benchmarks | `bench/Main.hs` and `Ecluse/Core/*Bench.hs` over `EcosystemBench` | Native operations and synthetic checks, committed captures, independent expected output fixtures, calibration, and benchmark group order. |
 | Load | `BenchLoad.Harness`, native fixtures, `Scenarios`, and `Verdict` | Process isolation, quotas, affinity, RTS flags, upstream latency, request patterns, concurrency-one passes, success floors, refused/unavailable rows, and gating semantics. |
-| Live native protocol | npm and PyPI registry smoke specs | npm abbreviated parsing, bounded abbreviated fetch, raw SHA-1/SRI syntax, and PyPI exact wheel observations remain native. |
+| Live native protocol | npm, PyPI and RubyGems registry smoke specs | npm abbreviated parsing, bounded abbreviated fetch, raw SHA-1/SRI syntax, PyPI exact wheel observations, and RubyGems archive coordinate and checksum checks remain native. |
 
 Existing corpus bytes, expected outputs, remaining floor values, and RTS settings stay fixed.
 Provider coverage runs outside measured operations. New PyPI stress rows add samples without changing that boundary.
@@ -265,11 +265,11 @@ An unheld or missing status produces diagnostic-only evidence and keeps the nati
 | Cargo CodeArtifact maintenance | Physical deletion through deterministic native fixtures. A generic registry's yank API does not provide deletion. No live AWS fidelity claim. |
 | Hosted incremental PyPI copying | Supported under [#1639](https://github.com/AlexaDeWit/Ecluse/issues/1639). Contracts require a complete authorised served view or explicit unavailability, retry/restart, and offline completion. |
 | Filesystem or S3 package storage | Planned under [#1239](https://github.com/AlexaDeWit/Ecluse/issues/1239). Future contracts require committed completion visibility, interrupted writes, failed markers, restart, concurrent publication, and direct-read/listing invisibility. |
-| PyPI scope allow and install-time execution denial | Refused because the adapter blocks those rule types. Existing boot and capability tests keep the reasons explicit. |
+| PyPI scope allow, install-time execution denial, and external-dependency denial | Refused because the adapter blocks those rule types. Existing boot and capability tests keep the reasons explicit. |
 | RubyGems Compact Index reads, mirroring, and publication | Bundler 2.6.9 and 4.0.23. Keep `/versions` discovery, on-demand `/info` metadata, archive SHA-256 values, complete platform mirrors with original-source durable state, and native publication. See the [protocol reference](https://ecluse-proxy.com/docs/protocol-support/#rubygems). |
 | RubyGems CodeArtifact maintenance | Inventory and physical deletion through deterministic native fixtures. A native yank is not deletion. No live AWS fidelity claim. |
-| RubyGems install-time execution denial, scope allow, and deprecation rules | Refused because the adapter blocks those rule types. Existing boot and capability tests keep the reasons explicit. |
-| Cargo install-time execution denial, scope allow, and deprecation rules | Refused because the adapter blocks those rule types. Existing boot and capability tests keep the reasons explicit. |
+| RubyGems install-time execution denial, yank, external-dependency, scope allow, and deprecation rules | Refused because the adapter blocks those rule types. Existing boot and capability tests keep the reasons explicit. |
+| Cargo install-time execution denial, external-dependency, scope allow, and deprecation rules | Refused because the adapter blocks those rule types. Existing boot and capability tests keep the reasons explicit. |
 | Missing external service in smoke | Unavailable evidence, never a passing conformance result. Deterministic mirrors remain gating. |
 | Missing image, client, ownership, or Docker in required E2E | Failed setup. Pending or absent cases cannot satisfy the execution audit. |
 

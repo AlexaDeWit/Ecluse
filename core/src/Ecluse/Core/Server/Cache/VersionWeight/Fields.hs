@@ -70,6 +70,7 @@ dependencyWeight :: DependencySources -> Integer
 dependencyWeight = \case
     RegistryDependencies -> 0
     FetchesOutsideRegistry reason -> textWeight reason
+    DependencySourcesUnknown -> 0
 
 -- | Charge coordinates, source strings, digests and companion declarations.
 artifactWeight :: Artifact -> Integer

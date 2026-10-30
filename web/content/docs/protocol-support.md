@@ -167,7 +167,7 @@ In the merged index, a private version and a public version that differ only in 
 
 The age rule uses native `pubtime`. Missing or invalid time stays unknown.
 OSV `crates.io` advisories use the existing freshness, malicious-package, and exact-fix rules.
-Build scripts and procedural macros remain allowed. Cargo blocks active `DenyInstallTimeExecution`, `DenyIfDeprecated`, and `AllowScope` rules at boot.
+Build scripts and procedural macros remain allowed. Cargo blocks active `DenyInstallTimeExecution`, `DenyExternalDependencies`, `DenyIfDeprecated`, and `AllowScope` rules at boot.
 
 Cargo mirrors retain the original admitted index row, source identity, and checksum-verified archive using durable version state.
 Native-library `links` declarations must agree. Cargo defines omitted index `links` as null.
@@ -222,6 +222,7 @@ The ceiling is fixed in Écluse and independent of `limits.maxVersionCount`, whi
 A ceiling breach logs under the `version-count` bound with a cap of `2000000`.
 Private discovery uses current caller credentials and remains outside public shared retention.
 Private directory failure remains a failure rather than a public-only or stale conditional response.
+It answers as [a failing private registry](@/docs/private-reads.md#private-outage) does, except that a private `404` on the directory answers `502`.
 A malformed private directory row fails the private read.
 When the public directory times out, fails, cools down or cannot be decoded, the reply serves the caller-authorised private rows alone.
 With no private rows, the request fails: `403` when the public source refuses access, otherwise `502` or `503`.
@@ -252,7 +253,7 @@ A directory failure does not remove unrelated backend capabilities, such as publ
 Names, raw versions, and platform labels retain their native identity.
 Dependencies, version constraints, required Ruby and RubyGems versions, checksums, and supported source fields remain available.
 Malformed records and conflicting coordinates cannot supply an admitted version.
-Native builds remain allowed. RubyGems blocks active `DenyInstallTimeExecution`, `DenyIfDeprecated`, and `AllowScope` rules at boot.
+Native builds remain allowed. RubyGems blocks active `DenyInstallTimeExecution`, `DenyIfYanked`, `DenyExternalDependencies`, `DenyIfDeprecated`, and `AllowScope` rules at boot.
 Unknown installation metadata does not prove that an archive executes no code.
 
 Private reads preserve the caller's complete Basic credential pair.

@@ -87,7 +87,7 @@ Readiness does not prove that every repository or state operation succeeds.
 The shipped policy admits old releases and qualified exact advisory fixes. Configuring
 `advisories.url` activates the known-malicious deny unless you disable it. Scored CVSS and EPSS
 denies are opt-in.
-PyPI refuses `AllowScope`, `DenyInstallTimeExecution` and `DenyIfDeprecated` in an active policy.
+PyPI refuses `AllowScope`, `DenyInstallTimeExecution`, `DenyExternalDependencies` and `DenyIfDeprecated` in an active policy.
 Do not copy npm-only rules into shared rules.
 The [rule policy](@/docs/configuration.md#rule-policy) defines precedence, unavailable-data behaviour and admission versus revocation.
 The [first-party declarations](@/docs/configuration.md#first-party-namespaces) define exact names and separator-bounded prefixes.

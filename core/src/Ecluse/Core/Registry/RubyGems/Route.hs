@@ -1,7 +1,6 @@
 -- SPDX-FileCopyrightText: 2026 Alexandra de Wit
 --
 -- SPDX-License-Identifier: MIT
-{-# LANGUAGE ImportQualifiedPost #-}
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE TupleSections #-}
 
@@ -113,7 +112,7 @@ nativeCapture = Capture "coordinate" "The native package, raw version and platfo
         _ -> Nothing
 
 artifactContract :: ResponseContract PassthroughResponse
-artifactContract = passthroughContract "Relays the selected gem archive and preserves upstream statuses. Local errors retain authentication, admission, integrity and availability failures."
+artifactContract = passthroughContract "Relays the selected gem archive and preserves upstream statuses. Local errors retain authentication, admission, integrity and availability failures. A private upstream reply that was invalid or unusable answers a local `502`."
 
 artifactReplies :: TarballReplies PassthroughResponse
 artifactReplies =

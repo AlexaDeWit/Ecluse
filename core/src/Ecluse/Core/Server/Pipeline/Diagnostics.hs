@@ -89,7 +89,7 @@ documentNoun = \case
 logFailureOf :: (KatipContext m) => Subject -> Text -> MetadataError -> m ()
 logFailureOf subject baseUrl = \case
     MetadataAbsent -> logHttpFailure subject baseUrl 404 ("the upstream has no metadata for the requested " <> requestedNoun subject)
-    MetadataHttpFailure code -> logHttpFailure subject baseUrl code "the upstream refused the metadata read"
+    MetadataHttpFailure code _ -> logHttpFailure subject baseUrl code "the upstream refused the metadata read"
     MetadataAuthorisationFailure _ -> logFM WarningS "the upstream refused metadata access"
     MetadataBoundExceeded err -> logBreach subject err
     MetadataUndecodable -> warnDecodeFailure subject
@@ -159,7 +159,7 @@ warnNameMismatch subject origin reported =
     warnUpstream
         subject
         (sl "origin" (authorityLabel origin) <> sl "upstreamName" reported)
-        "dropped an upstream contribution: its packument self-reported a name for a different package"
+        "refused an upstream metadata document: its packument self-reported a name for a different package"
 
 warnUnformable :: (KatipContext m) => Subject -> Text -> UrlFormationError -> m ()
 warnUnformable subject origin urlErr =

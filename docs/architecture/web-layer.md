@@ -274,11 +274,14 @@ Once admitted, a listing pays for its full reads chunk by chunk and for its resp
 builds it. A completed read keeps less than it held while parsing, so its charge steps down to what
 it keeps. Once the body exists, nothing reaches the reads' documents, so their charges go back
 before the body is sent. A request that joins another's public fetch or render pays nothing for it,
-and an assembled hit or a conditional `304` pays for its reads alone. A gzip response also pays for
-its compression, hit or miss. A public artifact decision reads one selected release, so its entry
-step is its whole charge. A started request that runs out of budget
-pauses at its next charge, keeping its CPU slot. A pause during an upstream read ends at the
-serve-path cap, and a pause before a render at the request timeout. Both gates stay held through
+and an assembled hit or a conditional `304` pays for its reads alone. A RubyGems `/info` or
+`/versions` `304` also pays for its serialisation or merge, because its validator hashes the rendered
+bytes. A gzip response also pays for its compression, hit or miss. An npm, PyPI or Cargo public
+artifact decision reads one selected release, so its entry step is its whole charge. A RubyGems gem
+or compact specification request first resolves its coordinate from each candidate gem name's full
+`/info` document, and pays those full-read and response charges. A started request that runs out
+of budget pauses at its next charge, keeping its CPU slot. A pause during an upstream read ends at
+the serve-path cap, and a pause before a render at the request timeout. Both gates stay held through
 metadata evaluation and while the listing response is built. A listing then gives up its CPU slot
 and keeps its memory charge while Écluse writes the body, so a slow client holds memory but no CPU
 slot. Public artifact requests release both after the metadata decision, before streaming the
@@ -331,13 +334,18 @@ into a generic 403 or 500 response. For a concrete artifact request the decision
 | Policy denial (incl. deny-by-default) | `403` + denial body |
 | Undecidable, transient | `503` + `Retry-After` |
 | Undecidable, permanent | `500` |
+| Upstream reply invalid | `502` |
 | upstream miss | `404` (forwarded) |
 
 The rule: return `503` only when the condition should resolve, such as a transient upstream or
 advisory condition. Otherwise return `500`, because retrying a permanent inability to decide cannot
 help.
 
-A packument request has no single status. Écluse
+A failed private read is decided before any merge. Its cause alone sets the status, `503` for an
+unavailable private registry and `502` for an invalid reply, on listings and artifacts alike
+([Private availability](registry-model.md#private-availability)).
+
+A packument request otherwise has no single status. Écluse
 [merges the document across upstreams](registry-model.md#packument-merge-across-upstreams) and
 filters it by provenance (see [Applying verdicts](rules-engine.md#applying-verdicts-to-a-packument)).
 The proxy chooses a status only when nothing survives the merge, and the most recoverable cause

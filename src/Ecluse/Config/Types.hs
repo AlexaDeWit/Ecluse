@@ -187,7 +187,7 @@ data MirrorEndpoint = MirrorEndpoint
     { meUrl :: RegistryUrl
     , meWrite :: MirrorWrite
     , meUploadUrl :: Maybe RegistryUrl
-    -- ^ Where uploads go on a protocol with a separate upload endpoint. 'meUrl' is where reads go.
+    -- ^ Where uploads go. The load requires it on a protocol with a separate upload endpoint and refuses it elsewhere.
     , meUsername :: Maybe Text
     -- ^ Static Basic username. A managed backend supplies its own convention.
     }
@@ -214,7 +214,7 @@ meTarget endpoint = Target (writeTag (meWrite endpoint)) (meUrl endpoint)
 data PublicationEndpoint = PublicationEndpoint
     { peTarget :: Target
     , peUploadUrl :: Maybe RegistryUrl
-    -- ^ Where uploads go on a protocol with a separate upload endpoint. The target's URL is where reads go.
+    -- ^ Where uploads go. The load requires it on a protocol with a separate upload endpoint and refuses it elsewhere.
     , peToken :: Maybe Secret
     , peUsername :: Maybe Text
     -- ^ Username paired with the configured publication token.

@@ -21,10 +21,13 @@ module Ecluse.Composition.Support (
     cargoCodeArtifactEnv,
     cargoScopeRefusal,
     cargoInstallRefusal,
+    cargoDependencyRefusal,
     withRubyInstallBlock,
     rubyInstallRefusal,
     rubyScopeRefusal,
     rubyDeprecationRefusal,
+    rubyYankRefusal,
+    rubyDependencyRefusal,
     cargoDeprecationRefusal,
     privateUpstreamUrl,
     collapsingMirrorTarget,
@@ -84,7 +87,7 @@ import Ecluse.Config (AppConfig, Config (configApp), StoreBackend (BackendRegist
 import Ecluse.Core.Credential (mkSecret)
 import Ecluse.Core.Ecosystem (Ecosystem (Cargo, Npm, RubyGems))
 import Ecluse.Core.Package (PackageName, mkPackageName, mkScope)
-import Ecluse.Core.Rules.Types (RuleType (AllowScopeType, DenyIfDeprecatedType, DenyInstallTimeExecutionType))
+import Ecluse.Core.Rules.Types (RuleType (AllowScopeType, DenyExternalDependenciesType, DenyIfDeprecatedType, DenyIfYankedType, DenyInstallTimeExecutionType))
 import Ecluse.Core.Security (Limits, defaultLimits)
 import Ecluse.Core.Security.Egress (registryUrlText)
 import Ecluse.Rts (EffectiveAxis (..), EffectiveRuntimePlan (..), Provenance (FromRts))
@@ -162,6 +165,10 @@ cargoDeprecationRefusal = RuleBlockedOnMount Cargo DenyIfDeprecatedType "Cargo's
 cargoInstallRefusal :: BootError
 cargoInstallRefusal = RuleBlockedOnMount Cargo DenyInstallTimeExecutionType "Cargo's sparse index does not declare build scripts or procedural macros. This rule is unsupported for the ecosystem."
 
+-- | The dependency-source refusal: the adapter projects no dependency source into rule evidence.
+cargoDependencyRefusal :: BootError
+cargoDependencyRefusal = RuleBlockedOnMount Cargo DenyExternalDependenciesType "The Cargo adapter does not project where a public crate's dependencies install from into rule evidence."
+
 -- | Activate a Ruby mount whose explicit installation rule the adapter cannot support.
 withRubyInstallBlock :: [(String, String)] -> [(String, String)]
 withRubyInstallBlock =
@@ -179,6 +186,14 @@ rubyScopeRefusal = RuleBlockedOnMount RubyGems AllowScopeType "RubyGems package 
 -- | A deprecation deny refuses the Ruby mount, whose metadata carries no deprecation flag.
 rubyDeprecationRefusal :: BootError
 rubyDeprecationRefusal = RuleBlockedOnMount RubyGems DenyIfDeprecatedType "RubyGems metadata supplies no supported deprecation flag."
+
+-- | A yank deny refuses the Ruby mount, whose metadata drops a yanked version instead of flagging it.
+rubyYankRefusal :: BootError
+rubyYankRefusal = RuleBlockedOnMount RubyGems DenyIfYankedType "RubyGems reports no yank flag in a gem's metadata. Yanked versions disappear from it."
+
+-- | A dependency-source deny refuses the Ruby mount, whose dependencies name no source.
+rubyDependencyRefusal :: BootError
+rubyDependencyRefusal = RuleBlockedOnMount RubyGems DenyExternalDependenciesType "A RubyGems dependency names only a gem and its requirements, never a source, so this rule can never match one."
 
 -- | The private upstream the composition fixtures declare.
 privateUpstreamUrl :: (IsString s) => s
@@ -238,7 +253,8 @@ twoStoreEnv :: [(String, String)]
 twoStoreEnv =
     overrideEnv "ECLUSE_MOUNTS__PYPI__ENABLED" "true" $
         overrideEnv "ECLUSE_MOUNTS__PYPI__PRIVATE_UPSTREAM__CODE_ARTIFACT__URL" codeArtifactPypiCacheUrl $
-            overrideEnv "ECLUSE_MOUNTS__PYPI__MIRROR_TARGET__CODE_ARTIFACT__URL" codeArtifactPypiMirrorUrl codeArtifactEnvVars
+            overrideEnv "ECLUSE_MOUNTS__PYPI__MIRROR_TARGET__CODE_ARTIFACT__URL" codeArtifactPypiMirrorUrl $
+                overrideEnv "ECLUSE_MOUNTS__PYPI__MIRROR_TARGET__CODE_ARTIFACT__UPLOAD_URL" codeArtifactPypiMirrorUrl codeArtifactEnvVars
 
 -- | The repository 'twoStoreEnv' mirrors PyPI to.
 codeArtifactPypiMirrorUrl :: (IsString s, Semigroup s) => s
@@ -398,4 +414,5 @@ cargoCodeArtifactEnv =
     cargoGateEnv
         <> [ ("ECLUSE_MOUNTS__CARGO__PRIVATE_UPSTREAM__CODE_ARTIFACT__URL", codeArtifactDomain <> "/cargo/internal/")
            , ("ECLUSE_MOUNTS__CARGO__MIRROR_TARGET__CODE_ARTIFACT__URL", codeArtifactDomain <> "/cargo/mirror/")
+           , ("ECLUSE_MOUNTS__CARGO__MIRROR_TARGET__CODE_ARTIFACT__UPLOAD_URL", codeArtifactDomain <> "/cargo/mirror/")
            ]

@@ -54,7 +54,7 @@ import Ecluse.Core.Server.Contract (responseToWai)
 import Ecluse.Core.Server.Encoding (MetadataCompression (GzipWhenAccepted, IdentityOnly))
 import Ecluse.Core.Server.MetadataGzip (gzipBufferChargeBytes, gzipWorkspaceBytes)
 import Ecluse.Core.Server.Pipeline.Internal (denialLabels, packumentServeDecision)
-import Ecluse.Core.Server.Pipeline.Origin (OriginMiss (MissAbsent, MissUnresolved))
+import Ecluse.Core.Server.Pipeline.Origin (OriginMiss (MissAbsent, MissUnresolved), ReadFailure (ReadInvalid, ReadUnavailable))
 import Ecluse.Core.Server.Pipeline.Packument (
     PackumentReplies (..),
     firstPartyMissDecision,
@@ -66,6 +66,7 @@ import Ecluse.Core.Server.Response (
     PackumentStatus (..),
     RejectReason (Unavailable, UpstreamInvalid),
     Rejection (Rejection),
+    RetryAfter (RetryAfter),
     ServeDecision (Reject),
     Transience (WillResolve),
     mkHelpMessage,
@@ -374,16 +375,24 @@ firstPartyMissSpec = describe "a first-party name whose private origin yielded n
         replyFor MissAbsent `shouldBe` "not-found"
 
     it "renders an origin that was never read as a 503" $
-        replyFor MissUnresolved `shouldBe` "unavailable"
+        replyFor (MissUnresolved (ReadUnavailable Nothing)) `shouldBe` "unavailable"
+
+    it "renders an origin whose reply was invalid as a 502" $
+        replyFor (MissUnresolved ReadInvalid) `shouldBe` "bad-gateway"
 
     it "counts an absence as a denial the first-party rule decided" $ do
         packumentServeDecision [decisionFor MissAbsent] `shouldBe` Metric.Deny
         fmap denialLabels (reasonOf (decisionFor MissAbsent))
             `shouldBe` Just (Just "first-party", Metric.ReasonPolicy)
 
-    it "counts an unread origin as an outage, suggesting no delay" $ do
-        packumentServeDecision [decisionFor MissUnresolved] `shouldBe` Metric.Unavailable
-        reasonOf (decisionFor MissUnresolved) `shouldBe` Just (Unavailable (WillResolve Nothing))
+    it "counts an unread origin as an outage, carrying only the delay the origin asked for" $ do
+        packumentServeDecision [decisionFor (MissUnresolved (ReadUnavailable Nothing))] `shouldBe` Metric.Unavailable
+        reasonOf (decisionFor (MissUnresolved (ReadUnavailable Nothing))) `shouldBe` Just (Unavailable (WillResolve Nothing))
+        reasonOf (decisionFor (MissUnresolved (ReadUnavailable (Just (RetryAfter 30))))) `shouldBe` Just (Unavailable (WillResolve (Just (RetryAfter 30))))
+
+    it "counts an invalid private reply as an invalid upstream" $ do
+        packumentServeDecision [decisionFor (MissUnresolved ReadInvalid)] `shouldBe` Metric.Unavailable
+        reasonOf (decisionFor (MissUnresolved ReadInvalid)) `shouldBe` Just UpstreamInvalid
 
 -- Each reply factory answers its own name, so a case reads back which one the pipeline chose.
 namedReplies :: PackumentReplies Text

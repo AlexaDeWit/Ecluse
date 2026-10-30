@@ -271,7 +271,7 @@ spec = describe "decodeDocument" $ do
     it "reports every incomplete mirrored mount in one load, not only the first" $ do
         let doc =
                 "{\"mounts\":{\"npm\":{\"mirrorTarget\":{\"registry\":{\"url\":\"https://m1.example.test\",\"token\":\"t\"}}},\
-                \\"pypi\":{\"mirrorTarget\":{\"registry\":{\"url\":\"https://m2.example.test\",\"token\":\"t\"}}}}}"
+                \\"pypi\":{\"mirrorTarget\":{\"registry\":{\"url\":\"https://m2.example.test\",\"uploadUrl\":\"https://m2.example.test/legacy/\",\"token\":\"t\"}}}}}"
         let outcome = loadConfig [] (Just doc)
         outcome `shouldSatisfy` decodeErrorMentions "mounts.npm.privateUpstream"
         outcome `shouldSatisfy` decodeErrorMentions "mounts.pypi.privateUpstream"

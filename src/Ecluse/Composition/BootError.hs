@@ -15,8 +15,10 @@ module Ecluse.Composition.BootError (
     renderAdvisory,
 ) where
 
+import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Data.Time (NominalDiffTime)
+import Data.Universe.Class qualified as Universe
 import UnliftIO (tryAny)
 
 import Ecluse.Config (
@@ -28,7 +30,8 @@ import Ecluse.Config (
  )
 import Ecluse.Config.Resolve (mountDocRef, mountKeyRef)
 import Ecluse.Core.Credential (Secret)
-import Ecluse.Core.Ecosystem (Ecosystem (Npm), ecosystemName)
+import Ecluse.Core.Ecosystem (Ecosystem, ecosystemName)
+import Ecluse.Core.Registry.Adapter (RegistryAdapter (adapterRuleBlocks), adapterFor)
 import Ecluse.Core.Registry.Maintenance.Upstream (
     ExternalConnection (externalConnectionText),
     PermissionName (permissionNameText),
@@ -39,6 +42,7 @@ import Ecluse.Core.Registry.Maintenance.Upstream (
 import Ecluse.Core.Rules.Types (RuleType)
 import Ecluse.Core.Security (authorityLabel)
 import Ecluse.Core.Security.Egress (RegistryUrl, registryUrlText)
+import Ecluse.Core.Text (joinAlternatives)
 import Ecluse.Core.Wire (renderWire)
 import Ecluse.Runtime.Aws.Fault (displayAwsFaultT)
 
@@ -68,10 +72,8 @@ data BootError
       MirrorCompanionMismatch Ecosystem
     | -- | A durable mirror role cannot retain or validate its expected inventory without durable state.
       MirrorStateRequired Ecosystem
-    | -- | An active native writer lacks its endpoint or credential convention. Carries the key path.
+    | -- | An active native writer lacks the Basic username its credential convention needs. Carries the key path.
       UploadConfigurationRequired Ecosystem Text
-    | -- | A client-upload relay on a protocol with a separate upload endpoint has no publication @uploadUrl@. Carries the key path.
-      UploadUrlRequired Ecosystem Text
     | -- | A publication target has no adapter that can write its ecosystem's protocol.
       PublicationTargetWithoutPublish Ecosystem
     | -- | A publication target with no first-party namespaces leaves the anti-shadowing guard nothing to enforce.
@@ -175,8 +177,8 @@ renderBootError = \case
             <> ecosystemName eco
             <> " ecosystem blocks: "
             <> reason
-            <> " A rule in shared rules reaches every mount. Move this type from shared rules into "
-            <> mountDocRef Npm "rules"
+            <> " A rule in shared rules reaches every mount. "
+            <> sharedRuleRemedy ty
             <> ", or disable its configured entry with enabled: false under "
             <> mountDocRef eco "rules"
             <> " ("
@@ -224,11 +226,6 @@ renderBootError = \case
         "mirrorState.url is required for mirroring on the " <> ecosystemName eco <> " mount"
     UploadConfigurationRequired eco key ->
         mountDocRef eco key <> " is required before this role writes native uploads"
-    UploadUrlRequired eco key ->
-        mountDocRef eco key
-            <> " ("
-            <> mountKeyRef eco key
-            <> ") is required before this role writes native uploads: url names where Écluse reads and uploadUrl names where it writes. If url holds the upload endpoint, move that address to uploadUrl and set url to the registry's read root."
     PublicationTargetWithoutPublish eco ->
         mountKeyRef eco "publicationTarget"
             <> " is set but this build writes nothing for the "
@@ -362,6 +359,12 @@ renderBootError = \case
         "ECLUSE_LIMITS__MIN_PROGRESS_BYTES (limits.minProgressBytes) is "
             <> show configured
             <> ": the bytes an upstream must deliver in each progress window must be a positive count"
+
+-- Move a blocked shared rule into the rules of every mount whose adapter supports its type.
+sharedRuleRemedy :: RuleType -> Text
+sharedRuleRemedy ty = case [mountDocRef eco "rules" | eco <- Universe.universe, Just adapter <- [adapterFor eco], Map.notMember ty (adapterRuleBlocks adapter)] of
+    [] -> "Remove this type from shared rules"
+    supporting -> "Move this type from shared rules into " <> joinAlternatives supporting
 
 renderStoreMaintenanceReason :: Ecosystem -> StoreMaintenanceReason -> Text
 renderStoreMaintenanceReason eco = \case

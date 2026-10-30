@@ -28,7 +28,7 @@ import Ecluse.Core.Osv.Types (UpperBound (FixedBefore))
 import Ecluse.Core.Package (
     Availability (Available, Deprecated, Yanked),
     CodeExecSignal (CodeExecUnknown, NoCodeOnInstall, RunsCodeOnInstall),
-    DependencySources (FetchesOutsideRegistry, RegistryDependencies),
+    DependencySources (DependencySourcesUnknown, FetchesOutsideRegistry, RegistryDependencies),
     PackageDetails (pkgAvailability, pkgDependencySources, pkgInstallCode, pkgPublishedAt),
     mkScope,
     pkgEcosystem,
@@ -344,7 +344,7 @@ genEvidence = do
   where
     genPublishedAt = Gen.element [Unread, Known Nothing, Known (Just (daysAgo 30)), Known (Just (daysAgo 1))]
     genInstallCode = Gen.element [Unread, Known NoCodeOnInstall, Known (RunsCodeOnInstall "postinstall hook"), Known CodeExecUnknown]
-    genDependencies = Gen.element [Unread, Known RegistryDependencies, Known (FetchesOutsideRegistry "dependency 'left-pad' in dependencies names a git source")]
+    genDependencies = Gen.element [Unread, Known RegistryDependencies, Known DependencySourcesUnknown, Known (FetchesOutsideRegistry "dependency 'left-pad' in dependencies names a git source")]
     daysAgo days = addUTCTime (negate (days * nominalDay)) now
 
 laterAdvisory :: TestContractEscape

@@ -32,6 +32,8 @@ import Ecluse.Core.Osv.Provenance (SourcePathRecording (FingerprintSourcePath, R
 import Ecluse.Core.Osv.Publication (Percent, mkPercent)
 import Ecluse.Core.Package (Scope)
 import Ecluse.Core.Package.Integrity (parseMinIntegrity, parseMinTrustedIntegrity)
+import Ecluse.Core.Registry.Adapter (uploadEndpointFor)
+import Ecluse.Core.Registry.Adapter.Capability (UploadEndpointRequirement (ExplicitUploadEndpoint))
 import Ecluse.Core.Registry.Cargo.FirstParty qualified as Cargo
 import Ecluse.Core.Registry.Maintenance.Budget (parseQuotaDimension, parseRequestKind)
 import Ecluse.Core.Registry.Npm.Project (projectScope)
@@ -52,12 +54,21 @@ mountDecoder eco =
         <$> optionalPlainKey "enabled"
         <*> optionalKey "privateUpstream" parseReadTarget
         <*> requiredKey "publicUpstream" parsePublicUpstream
-        <*> optionalKey "mirrorTarget" parseMirrorTarget
-        <*> optionalKey "publicationTarget" parsePublicationTarget
+        <*> optionalKey "mirrorTarget" (parseMirrorTarget upload)
+        <*> optionalKey "publicationTarget" (parsePublicationTarget upload)
         <*> optionalKey "firstParty" (parseFirstParty eco)
         <*> nestedKey "integrity" (decodeGroup "integrity" mountIntegrityDecoder)
         <*> optionalKey "maxRequestBytes" parsePositiveInt
         <* unreadKey "rules"
+  where
+    upload = uploadUrlKey eco
+
+-- A protocol with a separate upload endpoint requires uploadUrl on both write targets. On any
+-- other protocol the key stays optional here, and "Ecluse.Config.Mirror" refuses it.
+uploadUrlKey :: Ecosystem -> GroupDecoder (Maybe RegistryUrl)
+uploadUrlKey eco
+    | uploadEndpointFor eco == Just ExplicitUploadEndpoint = Just <$> requiredKey "uploadUrl" parseRegistryUrl
+    | otherwise = optionalKey "uploadUrl" parseRegistryUrl
 
 -- Each endpoint admits exactly the tags and keys its cell of the store admission matrix names,
 -- so a shape outside the cell has nothing to parse into and refuses with the key path.
@@ -70,23 +81,23 @@ parseReadTarget = taggedTarget [readCase TagRegistry, readCase TagCodeArtifact, 
     readCase tag = TagCase (tagKey tag) (PrivateEndpoint . Target tag <$> targetUrl <*> pure Nothing <*> pure DeletionWithheld)
     verdaccio = TagCase (tagKey TagVerdaccio) (PrivateEndpoint . Target TagVerdaccio <$> targetUrl <*> optionalKey "token" parseSecret <*> deletionConsent)
 
-parseMirrorTarget :: String -> Value -> Parser MirrorEndpoint
-parseMirrorTarget =
+parseMirrorTarget :: GroupDecoder (Maybe RegistryUrl) -> String -> Value -> Parser MirrorEndpoint
+parseMirrorTarget upload =
     taggedTarget
         [ TagCase (tagKey TagRegistry) (mirrorEndpoint (WriteRegistry <$> writeToken))
         , TagCase (tagKey TagCodeArtifact) (mirrorEndpoint (WriteCodeArtifact <$> mintLifetime))
         , TagCase (tagKey TagVerdaccio) (mirrorEndpoint (WriteVerdaccio <$> writeToken <*> deletionConsent))
         ]
   where
-    mirrorEndpoint write = MirrorEndpoint <$> targetUrl <*> write <*> optionalKey "uploadUrl" parseRegistryUrl <*> optionalKey "username" parseCredentialUsername
+    mirrorEndpoint write = MirrorEndpoint <$> targetUrl <*> write <*> upload <*> optionalKey "username" parseCredentialUsername
     writeToken = requiredKey "token" parseSecret
     mintLifetime = optionalKey "tokenDuration" parseCodeArtifactDuration
 
-parsePublicationTarget :: String -> Value -> Parser PublicationEndpoint
-parsePublicationTarget = taggedTarget (map publishCase [TagRegistry, TagCodeArtifact, TagVerdaccio])
+parsePublicationTarget :: GroupDecoder (Maybe RegistryUrl) -> String -> Value -> Parser PublicationEndpoint
+parsePublicationTarget upload = taggedTarget (map publishCase [TagRegistry, TagCodeArtifact, TagVerdaccio])
   where
     publishCase tag =
-        TagCase (tagKey tag) (PublicationEndpoint . Target tag <$> targetUrl <*> optionalKey "uploadUrl" parseRegistryUrl <*> optionalKey "token" parseSecret <*> optionalKey "username" parseCredentialUsername)
+        TagCase (tagKey tag) (PublicationEndpoint . Target tag <$> targetUrl <*> upload <*> optionalKey "token" parseSecret <*> optionalKey "username" parseCredentialUsername)
 
 parseCredentialUsername :: String -> Text -> Parser Text
 parseCredentialUsername field username

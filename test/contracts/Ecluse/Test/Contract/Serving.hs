@@ -119,12 +119,13 @@ servingContract provider driver = describe "shared serving contract" $ do
             responseStatus artifact `shouldBe` 200
             responseBody artifact `shouldBe` "private bytes"
     contractExample "private-availability" "refuses on a failing private origin, and serves after a private 404 or a public outage" $ do
-        for_ [FaultStatus 500, FaultStatus 503, FaultClosed] $ \fault ->
+        -- An unavailable private origin answers 503, and an invalid private reply answers 502.
+        for_ [(FaultStatus 429, 503), (FaultStatus 500, 503), (FaultStatus 503, 503), (FaultClosed, 503), (FaultStatus 302, 502), (FaultStatus 400, 502)] $ \(fault, refusal) ->
             faulted (ServingFaults (Just fault) Nothing) [] [old] $ \session -> do
                 response <- requestMetadata session methodGet []
-                (responseStatus response, responseVersions response) `shouldBe` (503, [])
+                (responseStatus response, responseVersions response) `shouldBe` (refusal, [])
                 artifact <- requestArtifact session methodGet [] "1.2.3"
-                responseStatus artifact `shouldBe` 503
+                responseStatus artifact `shouldBe` refusal
         faulted (ServingFaults (Just (FaultStatus 404)) Nothing) [] [old] $ \session -> do
             response <- requestMetadata session methodGet []
             (responseStatus response, responseVersions response) `shouldBe` (200, ["1.2.3"])

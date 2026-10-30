@@ -14,7 +14,7 @@ import Data.List (lookup)
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Data.Time (UTCTime (UTCTime), fromGregorian, nominalDay)
-import Network.HTTP.Types (Method, Status, hContentType, methodGet, methodHead, status200, status206, status302, status304, status400, status401, status403, status404, status429, status500, status503, statusCode)
+import Network.HTTP.Types (Method, Status, hContentType, methodGet, methodHead, status200, status206, status302, status304, status400, status401, status403, status404, status410, status429, status500, status503, statusCode)
 
 import Ecluse.Core.Credential (ClientCredential (credSecret), bareCredential, mkSecret, unSecret)
 import Ecluse.Core.Cve (AdvisoryRange (AdvisoryRange))
@@ -38,6 +38,7 @@ import Ecluse.Core.Registry.Npm.Route.Internal (
 import Ecluse.Core.Registry.PyPI.Credential (pypiCredential)
 import Ecluse.Core.Registry.PyPI.Mirror (pypiMirrorDocuments)
 import Ecluse.Core.Registry.PyPI.Route (pypiRouter)
+import Ecluse.Core.Registry.PyPI.Route.Internal (artifactCoordinate)
 import Ecluse.Core.Registry.Request (CredentialMapping, credentialMapping)
 import Ecluse.Core.Registry.Sweep (sweepCycle)
 import Ecluse.Core.Registry.Sweep.Outcome (CycleOutcome (outcomeTally), SweepTally (tallyDeleted, tallyExamined))
@@ -69,6 +70,7 @@ import Ecluse.Core.Server.Contract (responseToWai)
 import Ecluse.Core.Server.Pipeline (headPackument, headTarball, servePackument, serveTarball)
 import Ecluse.Core.Server.Pipeline.Publish ()
 import Ecluse.Core.Server.Pipeline.Shared (hRetryAfter)
+import Ecluse.Core.Server.Pipeline.Sidecar (sidecarAction)
 import Ecluse.Core.Server.Upstream (MirrorServePlan (MirrorOnAdmit, NoMirrorWrite))
 import Ecluse.Core.Telemetry.Metrics (Decision (Admit, Deny, Unavailable), SweepResult (SweepDeleted), SweepTarget (SweepPrivate))
 import Ecluse.Core.Telemetry.Metrics qualified as Metric
@@ -100,7 +102,7 @@ import Ecluse.Test.Server.Handler (MissingFixtureResponse (MissingFixtureRespons
 import Ecluse.Test.Server.Mount (npmServeDeps, pypiServeDeps, withPrivateBaseUrl)
 import Ecluse.Test.Sweep (RecordedSweep (recPorts, recTargetResults), recordingPorts, testMount, testPacing, withPrivateCache)
 import Ecluse.Test.Wai (countingUpstream, selfBaseUrl)
-import Network.HTTP.Types.Header (RequestHeaders, hAcceptEncoding, hConnection, hContentEncoding, hContentRange, hDate, hETag, hHost, hIfNoneMatch)
+import Network.HTTP.Types.Header (RequestHeaders, hAcceptEncoding, hConnection, hContentEncoding, hContentRange, hDate, hETag, hHost, hIfNoneMatch, hLocation)
 import Network.Wai (Application, Request (rawPathInfo, requestHeaders, requestMethod), defaultRequest, mapResponseHeaders, responseHeaders, responseLBS, responseStatus)
 import Network.Wai.Handler.Warp (testWithApplication)
 import Network.Wai.Internal (Response)
@@ -221,12 +223,34 @@ spec = describe "Ecluse.Core.Server.Pipeline (core handlers over a ServeRuntime)
             readIORef hits >>= (`shouldSatisfy` (> 0))
             decisions >>= (`shouldBe` [Unavailable, Unavailable])
 
-    for_ [(status404, 200, Admit), (status302, 503, Unavailable), (status400, 503, Unavailable), (status429, 503, Unavailable), (status500, 503, Unavailable), (status503, 503, Unavailable)] $ \(privateStatus, expectedStatus, expectedDecision) ->
+    for_ [(status404, 200, Admit), (status302, 502, Unavailable), (status400, 502, Unavailable), (status429, 503, Unavailable), (status500, 503, Unavailable), (status503, 503, Unavailable)] $ \(privateStatus, expectedStatus, expectedDecision) ->
         it ("answers " <> show expectedStatus <> " for a merged packument after private HTTP " <> show (statusCode privateStatus) <> " for GET and HEAD") $
-            mergedListingAfter (responseLBS privateStatus [] "private refusal") expectedStatus expectedDecision
+            mergedListingAfter (responseLBS privateStatus [] "private refusal") expectedStatus Nothing expectedDecision
 
-    it "answers 503 for a merged packument after an undecodable private document for GET and HEAD" $
-        mergedListingAfter (responseLBS status200 [(hContentType, "application/json")] "not a packument") 503 Unavailable
+    for_ [(status429, 503, Just "120"), (status503, 503, Just "120"), (status302, 502, Nothing)] $ \(privateStatus, expectedStatus, expectedRetry) ->
+        it ("answers " <> show expectedStatus <> " for a merged packument after private HTTP " <> show (statusCode privateStatus) <> " with Retry-After, keeping the delay only on a 503") $
+            mergedListingAfter (responseLBS privateStatus [(hRetryAfter, "120")] "private refusal") expectedStatus expectedRetry Unavailable
+
+    it "answers 502 for a merged packument after an undecodable private document for GET and HEAD" $
+        mergedListingAfter (responseLBS status200 [(hContentType, "application/json")] "not a packument") 502 Nothing Unavailable
+
+    it "answers 502 for a merged packument whose private document names another package, for GET and HEAD" $
+        mergedListingAfter (responseLBS status200 [(hContentType, "application/json")] (encode misnamedPackument)) 502 Nothing Unavailable
+
+    it "answers 502 in first-party wording when a first-party name's private origin redirects, without a public read" $ withSweeper $ \deadlines -> do
+        (metricsPort, decisions) <- recordingMetricsPort
+        rt <- testServeRuntime deadlines metricsPort
+        hits <- newIORef (0 :: Int)
+        testWithApplication (pure (countingUpstream hits upstreamApp)) $ \publicPort ->
+            testWithApplication (pure (\_ respond -> respond (responseLBS status302 [(hLocation, "http://elsewhere.test/leftpad")] ""))) $ \privatePort -> do
+                base <- depsFor publicPort
+                let deps = withPrivateBaseUrl (Just (loopbackRegistryUrl ("http://localhost:" <> show privatePort))) base{pdFirstParty = (== leftpadName)}
+                response <- captureServe npmPackumentContract rt (mountWith deps) (servePackument npmPackumentReplies leftpadName defaultRequest)
+                statusCode (responseStatus response) `shouldBe` 502
+                body <- responseBytes response
+                LBS.toStrict body `shouldSatisfy` BS.isInfixOf "first-party to this deployment"
+                readIORef hits `shouldReturn` 0
+                decisions `shouldReturn` [Unavailable]
 
     it "keeps a first-party artifact off the public upstream, answering 503 when the private port is closed" $ withSweeper $ \deadlines -> do
         (metricsPort, decisions) <- recordingMetricsPort
@@ -246,7 +270,7 @@ spec = describe "Ecluse.Core.Server.Pipeline (core handlers over a ServeRuntime)
             readIORef hits `shouldReturn` 0
             decisions `shouldReturn` [Unavailable, Unavailable]
 
-    for_ [(status404, 404, Deny), (status302, 503, Unavailable), (status400, 503, Unavailable), (status429, 503, Unavailable), (status500, 503, Unavailable), (status503, 503, Unavailable)] $ \(privateStatus, expectedStatus, expectedDecision) ->
+    for_ [(status404, 404, Deny), (status302, 502, Unavailable), (status400, 502, Unavailable), (status429, 503, Unavailable), (status500, 503, Unavailable), (status503, 503, Unavailable)] $ \(privateStatus, expectedStatus, expectedDecision) ->
         it ("keeps first-party artifact HTTP " <> show (statusCode privateStatus) <> " private, answering " <> show expectedStatus <> " for GET and HEAD") $ withSweeper $ \deadlines -> do
             (metricsPort, decisions) <- recordingMetricsPort
             rt <- testServeRuntime deadlines metricsPort
@@ -288,22 +312,30 @@ spec = describe "Ecluse.Core.Server.Pipeline (core handlers over a ServeRuntime)
             testWithApplication (pure (\_ respond -> respond (responseLBS status404 [] "private refusal"))) $ \privatePort ->
                 fetch (withPrivateBaseUrl (Just (loopbackRegistryUrl ("http://localhost:" <> show privatePort))) base) >>= assertSame
 
-    it "refuses a merged artifact with 503 after every other private miss, without a public read" $ withSweeper $ \deadlines -> do
+    it "refuses a merged artifact with 503 after a private outage, forwarding the private Retry-After, without a public read" $ withSweeper $ \deadlines -> do
         (metricsPort, decisions) <- recordingMetricsPort
         rt <- testServeRuntime deadlines metricsPort
         publicHits <- newIORef (0 :: Int)
         testWithApplication (pure (countingUpstream publicHits upstreamApp)) $ \publicPort -> do
             base <- depsFor publicPort
-            let refused deps = for_ [serveTarball, headTarball] $ \serve -> do
-                    response <- captureServe npmTarballContract rt (mountWith deps) (serve npmTarballReplies leftpadName (npmVersion "1.0.0") (unsafeFilename "leftpad-1.0.0.tgz") defaultRequest)
-                    statusCode (responseStatus response) `shouldBe` 503
-                    lookup hRetryAfter (responseHeaders response) `shouldBe` Nothing
-            refused (closedPrivate base)
-            for_ [status302, status400, status429, status500, status503] $ \privateStatus ->
-                testWithApplication (pure (\_ respond -> respond (responseLBS privateStatus [] "private refusal"))) $ \privatePort ->
-                    refused (withPrivateBaseUrl (Just (loopbackRegistryUrl ("http://localhost:" <> show privatePort))) base)
+            refusedArtifact rt (closedPrivate base) 503 Nothing
+            for_ [(status429, []), (status500, []), (status503, []), (status429, [(hRetryAfter, "120")]), (status503, [(hRetryAfter, "120")])] $ \(privateStatus, headers) ->
+                testWithApplication (pure (\_ respond -> respond (responseLBS privateStatus headers "private refusal"))) $ \privatePort ->
+                    refusedArtifact rt (withPrivateBaseUrl (Just (loopbackRegistryUrl ("http://localhost:" <> show privatePort))) base) 503 (lookup hRetryAfter headers)
             readIORef publicHits `shouldReturn` 0
             decisions `shouldReturn` replicate 12 Unavailable
+
+    it "refuses a merged artifact with 502 after a private redirect or another unexpected status, without a public read" $ withSweeper $ \deadlines -> do
+        (metricsPort, decisions) <- recordingMetricsPort
+        rt <- testServeRuntime deadlines metricsPort
+        publicHits <- newIORef (0 :: Int)
+        testWithApplication (pure (countingUpstream publicHits upstreamApp)) $ \publicPort -> do
+            base <- depsFor publicPort
+            for_ [status302, status400, status410] $ \privateStatus ->
+                testWithApplication (pure (\_ respond -> respond (responseLBS privateStatus [(hRetryAfter, "120")] "private refusal"))) $ \privatePort ->
+                    refusedArtifact rt (withPrivateBaseUrl (Just (loopbackRegistryUrl ("http://localhost:" <> show privatePort))) base) 502 Nothing
+            readIORef publicHits `shouldReturn` 0
+            decisions `shouldReturn` replicate 6 Unavailable
 
     for_ [(200, upstreamApp), (206, partialUpstream)] $ \(expected, upstream) ->
         it ("relays an upstream " <> show expected <> " npm artifact unchanged to a client that accepts gzip, for GET and HEAD") $
@@ -1106,7 +1138,7 @@ pypiPrivateArtifactSpec = describe "PyPI first-party private artifacts" $ do
             readIORef publicHits `shouldReturn` 0
             decisions `shouldReturn` [Unavailable, Unavailable]
 
-    for_ [(status404, 404, Deny), (status302, 503, Unavailable), (status429, 503, Unavailable), (status500, 503, Unavailable)] $ \(privateStatus, expectedStatus, expectedDecision) ->
+    for_ [(status404, 404, Deny), (status302, 502, Unavailable), (status429, 503, Unavailable), (status500, 503, Unavailable)] $ \(privateStatus, expectedStatus, expectedDecision) ->
         it ("answers " <> show expectedStatus <> " after a private index hit and artifact HTTP " <> show (statusCode privateStatus)) $ withSweeper $ \deadlines -> do
             (metricsPort, decisions) <- recordingMetricsPort
             rt <- testServeRuntime deadlines metricsPort
@@ -1122,9 +1154,45 @@ pypiPrivateArtifactSpec = describe "PyPI first-party private artifacts" $ do
                     readIORef publicHits `shouldReturn` 0
                     decisions `shouldReturn` [expectedDecision, expectedDecision]
 
+    for_ [("requests-1.0.0.tar.gz", "artifact"), ("requests-1.0.0.tar.gz.metadata", "companion")] $ \(file, served) ->
+        it ("answers 502 for the " <> served <> " of a name outside first-party when the private index names another project, without a public read") $ withSweeper $ \deadlines -> do
+            rt <- testServeRuntime deadlines noopMetricsPort
+            publicHits <- newIORef (0 :: Int)
+            testWithApplication (pure (countingUpstream publicHits (pypiPublicAppWith True status200))) $ \publicPort ->
+                testWithApplication (pure misnamedPypiApp) $ \privatePort -> do
+                    let deps = (pypiPrivateDeps privatePort publicPort){pdFirstParty = const False}
+                    for_ [methodGet, methodHead] $ \method -> do
+                        response <- fetchPypiPath rt deps method file []
+                        statusCode (simpleStatus response) `shouldBe` 502
+                    readIORef publicHits `shouldReturn` 0
+
+    for_ [(status302, 502, Nothing), (status503, 503, Just "120")] $ \(companionStatus, expectedStatus, expectedRetry) ->
+        it ("answers " <> show expectedStatus <> " after a private index hit and companion HTTP " <> show (statusCode companionStatus) <> ", without a public read") $ withSweeper $ \deadlines -> do
+            rt <- testServeRuntime deadlines noopMetricsPort
+            publicHits <- newIORef (0 :: Int)
+            testWithApplication (pure (countingUpstream publicHits (pypiPublicAppWith True status200))) $ \publicPort ->
+                testWithApplication (pure (pypiPrivateCompanionApp companionStatus)) $ \privatePort ->
+                    for_ [methodGet, methodHead] $ \method -> do
+                        response <- fetchPypiPath rt (pypiPrivateDeps privatePort publicPort){pdFirstParty = const False} method "requests-1.0.0.tar.gz.metadata" []
+                        statusCode (simpleStatus response) `shouldBe` expectedStatus
+                        lookup hRetryAfter (simpleHeaders response) `shouldBe` expectedRetry
+            readIORef publicHits `shouldReturn` 0
+
+    for_ [(status302, 502, "returned an invalid or unusable reply"), (status503, 503, "was unavailable")] $ \(companionStatus, expectedStatus, expectedWords) ->
+        it ("keeps the first-party wording after a private index hit and companion HTTP " <> show (statusCode companionStatus) <> ", without a public read") $ withSweeper $ \deadlines -> do
+            rt <- testServeRuntime deadlines noopMetricsPort
+            publicHits <- newIORef (0 :: Int)
+            testWithApplication (pure (countingUpstream publicHits (pypiPublicAppWith True status200))) $ \publicPort ->
+                testWithApplication (pure (pypiPrivateCompanionApp companionStatus)) $ \privatePort -> do
+                    response <- captureWordedCompanion rt (pypiPrivateDeps privatePort publicPort)
+                    statusCode (responseStatus response) `shouldBe` expectedStatus
+                    body <- responseBytes response
+                    LBS.toStrict body `shouldSatisfy` BS.isInfixOf ("the private upstream for this first-party artifact " <> expectedWords)
+            readIORef publicHits `shouldReturn` 0
+
 -- A merged listing whose public origin admits leftpad and whose private origin gives one fixed answer.
-mergedListingAfter :: Response -> Int -> Decision -> Expectation
-mergedListingAfter privateResponse expectedStatus expectedDecision = withSweeper $ \deadlines -> do
+mergedListingAfter :: Response -> Int -> Maybe ByteString -> Decision -> Expectation
+mergedListingAfter privateResponse expectedStatus expectedRetry expectedDecision = withSweeper $ \deadlines -> do
     (metricsPort, decisions) <- recordingMetricsPort
     rt <- testServeRuntime deadlines metricsPort
     testWithApplication (pure upstreamApp) $ \publicPort ->
@@ -1134,8 +1202,26 @@ mergedListingAfter privateResponse expectedStatus expectedDecision = withSweeper
             for_ [servePackument, headPackument] $ \serve -> do
                 response <- captureServe npmPackumentContract rt (mountWith deps) (serve npmPackumentReplies leftpadName defaultRequest)
                 statusCode (responseStatus response) `shouldBe` expectedStatus
-                lookup hRetryAfter (responseHeaders response) `shouldBe` Nothing
+                lookup hRetryAfter (responseHeaders response) `shouldBe` expectedRetry
             decisions `shouldReturn` [expectedDecision, expectedDecision]
+
+-- The leftpad artifact refused for GET and HEAD with this status and Retry-After.
+refusedArtifact :: ServeRuntime -> PackumentDeps -> Int -> Maybe ByteString -> Expectation
+refusedArtifact rt deps expectedStatus expectedRetry =
+    for_ [serveTarball, headTarball] $ \serve -> do
+        response <- captureServe npmTarballContract rt (mountWith deps) (serve npmTarballReplies leftpadName (npmVersion "1.0.0") (unsafeFilename "leftpad-1.0.0.tgz") defaultRequest)
+        statusCode (responseStatus response) `shouldBe` expectedStatus
+        lookup hRetryAfter (responseHeaders response) `shouldBe` expectedRetry
+
+-- A well-formed packument that names another package.
+misnamedPackument :: Value
+misnamedPackument =
+    packumentValue
+        "other"
+        "1.0.0"
+        [("1.0.0", versionValue (versionSpec "other" "1.0.0" "http://localhost/other/-/other-1.0.0.tgz"){vsIntegrity = Just (sha512Integrity artifactBytes)})]
+        ["1.0.0" .= oldPublishTime]
+        []
 
 pypiPrivateDeps :: Int -> Int -> PackumentDeps
 pypiPrivateDeps privatePort publicPort =
@@ -1146,10 +1232,18 @@ pypiPrivateDeps privatePort publicPort =
 capturePypiArtifact :: ServeRuntime -> PackumentDeps -> Method -> IO Response
 capturePypiArtifact rt deps method =
     case pypiRouter method [] ["simple", "requests", "requests-1.0.0.tar.gz"] of
-        RouteAction contract (RunPipeline _ action) -> captureServe contract rt binding (action defaultRequest)
+        RouteAction contract (RunPipeline _ action) -> captureServe contract rt (pypiBinding deps) (action defaultRequest)
         _ -> throwIO MissingFixtureResponse
-  where
-    binding = (mountUnder pypiCredential deps){bindingPrefix = "pypi" :| [], bindingRouter = pypiRouter}
+
+-- The companion of the requests sdist under npm's error body, because a PyPI refusal carries no words to read.
+captureWordedCompanion :: ServeRuntime -> PackumentDeps -> IO Response
+captureWordedCompanion rt deps =
+    case uncurry (sidecarAction npmTarballReplies methodGet requestsName) <$> artifactCoordinate requestsName "requests-1.0.0.tar.gz" of
+        Just (RunPipeline _ action) -> captureServe npmTarballContract rt (pypiBinding deps) (action defaultRequest)
+        _ -> throwIO MissingFixtureResponse
+
+pypiBinding :: PackumentDeps -> MountBinding
+pypiBinding deps = (mountUnder pypiCredential deps){bindingPrefix = "pypi" :| [], bindingRouter = pypiRouter}
 
 pypiPrivateApp :: Status -> Application
 pypiPrivateApp privateStatus req respond
@@ -1158,6 +1252,19 @@ pypiPrivateApp privateStatus req respond
     | otherwise = respond (responseLBS privateStatus [] "private refusal")
   where
     index = simpleIndex "requests" [withFileKeys [("url", String (selfBaseUrl req <> "/files/requests-1.0.0.tar.gz"))] (simpleFile "requests-1.0.0.tar.gz")]
+
+-- A private index whose one file declares a companion that answers with the given status.
+pypiPrivateCompanionApp :: Status -> Application
+pypiPrivateCompanionApp companionStatus req respond
+    | rawPathInfo req == "/simple/requests/" = respond (responseLBS status200 [(hContentType, "application/vnd.pypi.simple.v1+json")] (encode index))
+    | otherwise = respond (responseLBS companionStatus [(hRetryAfter, "120")] "private refusal")
+  where
+    index = simpleIndex "requests" [withFileKeys [("url", String (selfBaseUrl req <> "/files/requests-1.0.0.tar.gz")), ("core-metadata", Bool True)] (simpleFile "requests-1.0.0.tar.gz")]
+
+-- A private index whose document names another project.
+misnamedPypiApp :: Application
+misnamedPypiApp req respond =
+    respond (responseLBS status200 [(hContentType, "application/vnd.pypi.simple.v1+json")] (encode (simpleIndex "other-project" [withFileKeys [("url", String (selfBaseUrl req <> "/files/requests-1.0.0.tar.gz"))] (simpleFile "requests-1.0.0.tar.gz")])))
 
 -- The zero waiting room makes a held step refuse the next request at once.
 fullDoorRuntime :: Deadlines -> MetricsPort -> IO (ServeRuntime, MemoryMeter)
@@ -1277,10 +1384,8 @@ fetchPypiPath rt deps method file headers =
         RouteAction contract (RunPipeline _ action) -> do
             logEnv <- newTestLogEnv
             runSession (WaiTest.request defaultRequest{requestMethod = method, requestHeaders = headers}) $ \req respond ->
-                runHandler logEnv mempty (RequestCtx rt binding) (action req (respond . responseToWai contract))
+                runHandler logEnv mempty (RequestCtx rt (pypiBinding deps)) (action req (respond . responseToWai contract))
         _ -> throwIO MissingFixtureResponse
-  where
-    binding = (mountUnder pypiCredential deps){bindingPrefix = "pypi" :| [], bindingRouter = pypiRouter}
 
 -- An upstream that answers the artifact with a partial reply, as a range-serving store may.
 partialUpstream :: Application

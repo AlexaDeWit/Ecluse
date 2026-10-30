@@ -137,6 +137,7 @@ previewCachesSpec = describe "vetPrivateCaches" $ do
         let env =
                 [ ("ECLUSE_MOUNTS__PYPI__PRIVATE_UPSTREAM__REGISTRY__URL", "https://private.example.test/pypi/")
                 , ("ECLUSE_MOUNTS__PYPI__MIRROR_TARGET__CODE_ARTIFACT__URL", "https://test-111122223333.d.codeartifact.us-east-1.amazonaws.com/pypi/mirror/")
+                , ("ECLUSE_MOUNTS__PYPI__MIRROR_TARGET__CODE_ARTIFACT__UPLOAD_URL", "https://test-111122223333.d.codeartifact.us-east-1.amazonaws.com/pypi/mirror/")
                 ]
                     <> [("ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM__REGISTRY__URL", "https://private.example.test/")]
                     <> withoutPrivateUpstreamUrl codeArtifactEnvVars

@@ -187,6 +187,9 @@ tasks:
         vars: {ECOSYSTEM: rubygems}
 
   ecosystem-completion:
+    internal: true
+    requires:
+      vars: [ECOSYSTEM]
     vars: *identity-vars
     env: *identity-env
     cmds:

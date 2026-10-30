@@ -1,7 +1,6 @@
 -- SPDX-FileCopyrightText: 2026 Alexandra de Wit
 --
 -- SPDX-License-Identifier: MIT
-{-# LANGUAGE ImportQualifiedPost #-}
 
 -- | Native Cargo manifest interpretation and publication translation contracts.
 module Ecluse.Core.Registry.Cargo.ManifestSpec (spec) where
@@ -213,7 +212,7 @@ spec = do
                     Object fields -> Object (KeyMap.insert "deps" (toJSON ([] :: [Value])) fields)
                     value -> value
             checkPublicationIndex defaultLimits metadata changed `shouldBe` Left (ParseError "Cargo manifest and index dependency counts disagree")
-        it "refuses two manifest dependencies that share one index identity" $ do
+        it "attributes a repeated dependency identity to the side that repeats it" $ do
             let dependencyRow name = object ["name" .= (name :: Text), "req" .= ("^1" :: Text), "target" .= ("cfg(unix)" :: Text)]
                 row deps = object ["name" .= ("example" :: Text), "vers" .= ("1.2.3" :: Text), "deps" .= map dependencyRow deps]
             single <- expectRight (parse (basic <> "[target.'cfg(unix)'.dependencies]\nshared='1'\n"))
@@ -221,7 +220,11 @@ spec = do
             checkPublicationIndex defaultLimits singleMetadata (row ["shared"]) `shouldSatisfy` isRight
             spaced <- expectRight (parse (basic <> "[target.'cfg(unix)'.dependencies]\nshared='1'\n[target.'cfg( unix )'.dependencies]\nshared='1'\n"))
             spacedMetadata <- expectRight (publicationMetadata spaced Map.empty)
-            checkPublicationIndex defaultLimits spacedMetadata (row ["shared", "unrelated"]) `shouldBe` Left (ParseError "Cargo index repeats a dependency identity")
+            checkPublicationIndex defaultLimits spacedMetadata (row ["shared", "unrelated"]) `shouldBe` Left (ParseError "Cargo manifest repeats a dependency identity")
+            pair <- expectRight (parse (basic <> "[target.'cfg(unix)'.dependencies]\nshared='1'\nother='1'\n"))
+            pairMetadata <- expectRight (publicationMetadata pair Map.empty)
+            checkPublicationIndex defaultLimits pairMetadata (row ["shared", "other"]) `shouldSatisfy` isRight
+            checkPublicationIndex defaultLimits pairMetadata (row ["shared", "shared"]) `shouldBe` Left (ParseError "Cargo index repeats a dependency identity")
         it "refuses unresolved dependency sources after a valid version declaration" $ do
             for_ ["path='local'", "git='https://registry.test/source'", "branch='main'", "rev='abc123'", "tag='v1'", "registry='private'", "workspace=true"] $ \source -> do
                 manifest <- expectRight (parse (basic <> "[dependencies.alias]\nversion='1'\n" <> source <> "\n"))
@@ -315,6 +318,14 @@ spec = do
             case metadata of
                 Object fields -> checkUploadAgreement defaultLimits selectedRegistry manifest (Object (KeyMap.insert "rust_version" Null fields)) `shouldBe` Right ()
                 _ -> expectationFailure "literal metadata is not an object"
+        it "refuses a repeated dependency identity on either side with the text its client receives" $ do
+            let dependency = object ["name" .= ("dependency" :: Text), "version_req" .= ("1" :: Text), "features" .= ([] :: [Text]), "optional" .= False, "default_features" .= True, "registry" .= cratesIoIndex]
+                upload deps = object ["deps" .= deps, "features" .= object []]
+            manifest <- expectRight (parse (basic <> "[dependencies]\ndependency='1'\n"))
+            checkUploadAgreement defaultLimits selectedRegistry manifest (upload [dependency]) `shouldBe` Right ()
+            checkUploadAgreement defaultLimits selectedRegistry manifest (upload [dependency, dependency]) `shouldBe` Left (ParseError "Cargo index repeats a dependency identity")
+            spaced <- expectRight (parse (basic <> "[target.'cfg(unix)'.dependencies]\ndependency='1'\n[target.'cfg( unix )'.dependencies]\ndependency='1'\n"))
+            checkUploadAgreement defaultLimits selectedRegistry spaced (upload [dependency]) `shouldBe` Left (ParseError "Cargo index repeats a dependency identity")
         it "preserves prerelease constraints, comparator precision and quoted target values" $ do
             let requirementPairs :: [(Text, Text)]
                 requirementPairs = [("1.2.3-alpha", "^1.2.3"), (">1.2", ">=1.2"), ("=1.2", "=1.2.0"), ("1 .2", "^1.2"), ("1.2.3-a b", "^1.2.3-ab"), ("1.*.2", "1.*")]

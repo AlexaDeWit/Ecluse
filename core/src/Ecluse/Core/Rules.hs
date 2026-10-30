@@ -143,6 +143,7 @@ verdictSource = \case
         Unread -> CannotVet FailDeny DependencySourcesUnread
         Known (FetchesOutsideRegistry which) -> Deny Nothing (FetchesOutside which)
         Known RegistryDependencies -> NoDecision DependenciesThroughRegistry
+        Known DependencySourcesUnknown -> NoDecision DependencySourcesUndetermined
     DenyIfYanked -> availabilityVerdict Yanked VersionYanked VersionNotYanked
     DenyIfDeprecated -> availabilityVerdict Deprecated VersionDeprecated VersionNotDeprecated
     DenyByIdentity ident -> FromEvidence $ \_ ev ->

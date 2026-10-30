@@ -193,7 +193,7 @@ pypiIndexContract =
                             ( chooseContract
                                 (refusalContract status500 "A permanent or internal inability to decide.")
                                 ( chooseContract
-                                    (refusalContract status502 "A responding upstream returned an index for a different project.")
+                                    (refusalContract status502 "An upstream reply was invalid or unusable, such as an index for a different project.")
                                     (refusalContract status503 "A transient upstream or advisory condition; retry (see `Retry-After`).")
                                 )
                             )
@@ -220,7 +220,7 @@ notAcceptable headers help =
 pypiArtifactContract :: ResponseContract PassthroughResponse
 pypiArtifactContract =
     passthroughContract
-        "An upstream-controlled distribution response is relayed transparently. Local authentication, policy, availability, and internal failures answer a bare status under their own code."
+        "An upstream-controlled distribution response is relayed transparently. Local authentication, policy, availability, and internal failures answer a bare status under their own code. A private upstream reply that was invalid or unusable answers a local `502`."
 
 pypiArtifactReplies :: TarballReplies PassthroughResponse
 pypiArtifactReplies =

@@ -18,6 +18,7 @@ reference = "/docs/operations/"
 | No matching version | The minimum age, npm install scripts, npm dependencies on a git source or a remote URL, explicit denies, and file eligibility. Filtered versions do not appear in listings. |
 | 403 from an artifact request | The deciding policy rule or integrity refusal in the response and logs. Also check private credentials. |
 | 503 | Whether Écluse can obtain required evidence or upstream data. Check advisory state, managed mirror completion, and whether the private registry answers. A failed private read refuses every package on the mount. |
+| 502 | Whether the private registry answers with a redirect, an unexpected status, or a document Écluse cannot use. An invalid private reply refuses every package on the mount. A public document for another package with nothing else to serve, or metadata past its bound, also answers 502. |
 | A first-party package is missing | The private repository and declared names. First-party requests never fall back to public. |
 | The package downloads from a public host | Client overrides, lockfiles, the configured public URL, and the network boundary. |
 | The proxy logs no request | Client caches and registry selection before changing policy. |
