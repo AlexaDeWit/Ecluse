@@ -457,6 +457,8 @@ uploadGuardSpec = describe "uploadClaims (the first-party new-release guard)" $ 
         , "workspace:*"
         , "workspace:left-pad@*"
         , "a/b/c"
+        , "packages/@acme/widget"
+        , "@acme/widget"
         ]
     widget :: Text
     widget = "@acme/widget"
