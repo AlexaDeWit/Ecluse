@@ -154,7 +154,7 @@ projectRubyGemsTree limits name bytes = do
     archiveFilename observed = renderPackageName name <> "-" <> rowVersion observed <> (if rowPlatform observed == "ruby" then "" else "-" <> rowPlatform observed) <> ".gem"
     insert versions (version, filename, row) =
         let artifact = Artifact (grEntryKey row) filename ("https://rubygems.org/gems/" <> filename) [grChecksum row] Nothing Nothing
-         in Map.insertWith (\new old -> old <> new) version ((artifact, grPublishedAt row) :| []) versions
+         in Map.insertWith (flip (<>)) version ((artifact, grPublishedAt row) :| []) versions
     settle version artifacts = PackageDetails name (mkVersion RubyGems version) (groupedAge artifacts) CodeExecUnknown Available (fmap fst artifacts)
     -- The newest upload, or no age once any artifact's time is unknown.
     groupedAge ((_, firstTime) :| rest) = foldl' (\newest (_, time) -> max <$> newest <*> time) firstTime rest
