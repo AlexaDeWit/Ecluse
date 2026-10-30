@@ -29,13 +29,14 @@ import UnliftIO.Exception (evaluate)
 import Ecluse.Core.Package (PackageName)
 import Ecluse.Core.Package.Hash (HashAlg (SHA512), computeDigest, hexDigestText, sha256Hex)
 import Ecluse.Core.Registry (ParseError (..), parseRefusal)
-import Ecluse.Core.Registry.Archive.Inflate (InflateFormat (GzipMembers), inflateBounded, splitArchiveCharge, withInflatedChunks)
+import Ecluse.Core.Registry.Archive.Inflate (InflateFormat (GzipMembers), inflateBounded, withInflatedChunks)
 import Ecluse.Core.Registry.Archive.Tar (TarMember (..), TarScan, scanTar, sourceReader, tarContents, tarMembers)
 import Ecluse.Core.Registry.RubyGems.Archive.Metadata
 import Ecluse.Core.Registry.RubyGems.Archive.Yaml
 import Ecluse.Core.Registry.RubyGems.CompactSpec (GemSpecification (..), specificationCoordinate)
 import Ecluse.Core.Registry.RubyGems.Project
 import Ecluse.Core.Security.Limits (Limits (..))
+import Ecluse.Core.Server.Admission.Meter (newChargePair)
 
 -- | Private construction preserves the complete checked artifact and native metadata.
 data GemArchive = GemArchive
@@ -97,7 +98,7 @@ decodeMembers limits nativePay metadataGzip dataGzip raw sums = do
 -- The inner data tar's non-directory members, within what the decoded metadata left of the artifact bound.
 dataInventory :: Limits -> (Int -> IO ()) -> Int -> ByteString -> IO (Either ParseError (Set Text))
 dataInventory limits nativePay decoded dataGzip = do
-    (decoderCharge, treeCharge) <- splitArchiveCharge nativePay
+    (decoderCharge, treeCharge) <- newChargePair nativePay
     let innerLimits = limits{maxMirrorArtifactBytes = maxMirrorArtifactBytes limits - decoded}
     inner <- scanTar innerLimits treeCharge (const (Right False)) (\consume -> withInflatedChunks (GzipMembers 1) decoderCharge dataGzip (consume . sourceReader))
     pure (Map.keysSet . Map.filter (/= Directory) . tarMembers <$> inner)
