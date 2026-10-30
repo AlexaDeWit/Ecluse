@@ -5,7 +5,9 @@
 module Ecluse.Core.Registry.RubyGems.Directory (
     GemDirectory (..),
     directoryWeight,
+    directoryNameCeiling,
     directorySteps,
+    directoryStepsWithin,
     directoryMergeWorkspace,
     mergeDirectories,
 ) where
@@ -19,7 +21,7 @@ import Data.Text.Encoding qualified as TE
 import Ecluse.Core.Registry.JsonStream (Steps (..))
 import Ecluse.Core.Registry.Metadata.RecordStream (recordFragmentCharge, recordSteps)
 import Ecluse.Core.Registry.RubyGems.Project (projectName)
-import Ecluse.Core.Security (Limits (..), checkArtifactCount, checkVersionCountOf)
+import Ecluse.Core.Security (LimitError (TooManyVersions), withinCeiling)
 import Ecluse.Core.Server.MemoryModel (decodedDocumentCharge, saturatingCharge)
 
 -- | Sorted complete rows carry an explicit blank info-file hint.
@@ -30,31 +32,37 @@ newtype GemDirectory = GemDirectory {directoryBytes :: ByteString}
 directoryWeight :: GemDirectory -> Int
 directoryWeight directory = BS.length (directoryBytes directory) + 256
 
-data Scan = Scan Bool Bool Int Int Int (Map ByteString ByteString)
+-- | Distinct gem names one directory may hold. config/default.yaml and the RubyGems protocol reference document it.
+directoryNameCeiling :: Int
+directoryNameCeiling = 2_000_000
+
+data Scan = Scan Bool Bool Int Int (Map ByteString ByteString)
 
 -- | Repeated rows apply additions and removals before packing the final snapshot.
-directorySteps :: (Monad m) => (Int -> m ()) -> Limits -> Steps m GemDirectory
-directorySteps pay limits = recordSteps reserve consume complete (Scan False False 0 0 0 Map.empty)
+directorySteps :: (Monad m) => (Int -> m ()) -> Steps m GemDirectory
+directorySteps = directoryStepsWithin directoryNameCeiling
+
+-- | 'directorySteps' under another gem-name ceiling. The metadata byte cap bounds the rows.
+directoryStepsWithin :: (Monad m) => Int -> (Int -> m ()) -> Steps m GemDirectory
+directoryStepsWithin nameCeiling pay = recordSteps reserve consume complete (Scan False False 0 0 Map.empty)
   where
-    reserve (Scan _ _ _ retained workspace _) previous fragment = do
+    reserve (Scan _ _ retained workspace _) previous fragment = do
         let cost = recordFragmentCharge previous fragment
         pay (saturatingCharge (2 * toInteger retained + toInteger workspace + toInteger cost))
         pure cost
-    consume (Scan header bad count retained workspace rows) _ bytes
-        | not header = Right (Scan (bytes == "---") bad count retained workspace rows)
-        | BS.null bytes = Right (Scan header bad count retained workspace rows)
-        | otherwise = do
-            checkArtifactCount limits (count + 1)
-            case decodeRow bytes of
-                Nothing -> Right (Scan header True (count + 1) retained workspace rows)
-                Just (name, changes) -> do
-                    let previous = Map.lookup name rows
-                        versions = maybe (initialVersions changes) (`applyChanges` changes) previous
-                        next = Map.insert (BS.copy name) versions rows
-                        weight = retained + BS.length name + BS.length versions + 256 - maybe 0 (\old -> BS.length name + BS.length old + 256) previous
-                    checkVersionCountOf limits (Map.size next)
-                    Right (Scan header bad (count + 1) weight (max workspace (decodedDocumentCharge versions)) next)
-    complete (Scan header bad _ _ _ rows)
+    consume (Scan header bad retained workspace rows) _ bytes
+        | not header = Right (Scan (bytes == "---") bad retained workspace rows)
+        | BS.null bytes = Right (Scan header bad retained workspace rows)
+        | otherwise = case decodeRow bytes of
+            Nothing -> Right (Scan header True retained workspace rows)
+            Just (name, changes) -> do
+                let previous = Map.lookup name rows
+                    versions = maybe (initialVersions changes) (`applyChanges` changes) previous
+                    next = Map.insert (BS.copy name) versions rows
+                    weight = retained + BS.length name + BS.length versions + 256 - maybe 0 (\old -> BS.length name + BS.length old + 256) previous
+                withinCeiling TooManyVersions nameCeiling (Map.size next)
+                Right (Scan header bad weight (max workspace (decodedDocumentCharge versions)) next)
+    complete (Scan header bad _ _ rows)
         | not header || bad = Failed "RubyGems directory is malformed or has no header delimiter"
         | otherwise = Finished (GemDirectory (BS.concat [name <> " " <> versions <> " \n" | (name, versions) <- Map.toAscList rows, not (BS.null versions)]))
 
