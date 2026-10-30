@@ -15,6 +15,9 @@ module Ecluse.Test.Registry.Cargo.Publish (
     cargoForeignRegistryMetadata,
     cargoForeignRegistryArchive,
     cargoForeignRegistryRefusal,
+    cargoForeignDevManifest,
+    cargoForeignDevMetadata,
+    cargoForeignDevArchive,
     cargoSourceVersion,
     observeCargoRelay,
 ) where
@@ -100,27 +103,48 @@ cargoForeignRegistryArchive = resolverArchive cargoForeignRegistryManifest
 cargoForeignRegistryRefusal :: Text
 cargoForeignRegistryRefusal = "Cargo dependency 'original' comes from a registry other than crates.io or this proxy: publish it through this proxy first, then depend on this proxy's copy"
 
--- The renamed dependency's source varies. Every other declaration comes from crates.io or the publication registry.
+-- | The resolver manifest with its development dependency declared from a registry outside Écluse.
+cargoForeignDevManifest :: ByteString
+cargoForeignDevManifest = resolverManifestWith "sparse+https://proxy.test/cargo" "helper={version='1.0.0+build',registry-index='sparse+https://foreign.test/index/'}"
+
+-- | An upload that agrees with 'cargoForeignDevManifest', whose only foreign source is a development dependency.
+cargoForeignDevMetadata :: Value
+cargoForeignDevMetadata = resolverMetadataWith "sparse+https://proxy.test/cargo/" "sparse+https://foreign.test/index/"
+
+-- | The crate archive that carries 'cargoForeignDevManifest'.
+cargoForeignDevArchive :: IO ByteString
+cargoForeignDevArchive = resolverArchive cargoForeignDevManifest
+
 resolverManifest :: ByteString -> ByteString
-resolverManifest renamedSource =
+resolverManifest renamedSource = resolverManifestWith renamedSource "helper='1.0.0+build'"
+
+-- The renamed and development dependencies vary. Every other declaration comes from crates.io or the publication registry.
+resolverManifestWith :: ByteString -> ByteString -> ByteString
+resolverManifestWith renamedSource helper =
     "[package]\nname='fixture'\nversion='1.0.0'\nrust-version='1.74'\nlinks='native_foo'\nbuild='build.rs'\n"
         <> "[dependencies]\nlocal={version='1.2',registry-index='sparse+https://proxy.test/cargo/',features=['beta','alpha'],default-features=false}\n"
         <> "renamed={package='original',version='1.X',registry-index='"
         <> renamedSource
         <> "',optional=true}\nauto={version='0.3',optional=true}\n"
-        <> "[dev-dependencies]\nhelper='1.0.0+build'\n"
-        <> "[target.'cfg(all(unix,target_os = \"linux\",))'.build-dependencies]\ntool={version='>=1.2.3-alpha, <2',features=['derive']}\n"
+        <> "[dev-dependencies]\n"
+        <> helper
+        <> "\n[target.'cfg(all(unix,target_os = \"linux\",))'.build-dependencies]\ntool={version='>=1.2.3-alpha, <2',features=['derive']}\n"
         <> "[features]\ndefault=['full','auto']\nfull=['dep:renamed','renamed?/extra','local/alpha']\n"
 
 resolverMetadata :: Text -> Value
-resolverMetadata renamedSource =
+resolverMetadata renamedSource = resolverMetadataWith renamedSource cratesIo
+  where
+    cratesIo = "https://github.com/rust-lang/crates.io-index"
+
+resolverMetadataWith :: Text -> Text -> Value
+resolverMetadataWith renamedSource helperSource =
     object
         [ "name" .= ("fixture" :: Text)
         , "vers" .= ("1.0.0" :: Text)
         , "deps"
             .= [ dep "tool" ">=1.2.3-alpha, <2" ["derive"] False True (Just "cfg(all(unix, target_os=\"linux\"))") "build" (Just cratesIo) Nothing
                , dep "original" "1.*" [] True True Nothing "normal" (Just renamedSource) (Just "renamed")
-               , dep "helper" "^1.0.0" [] False True Nothing "dev" (Just cratesIo) (Just "helper")
+               , dep "helper" "^1.0.0" [] False True Nothing "dev" (Just helperSource) (Just "helper")
                , dep "local" "^1.2" ["alpha", "beta"] False False Nothing "normal" Nothing Nothing
                , dep "auto" "^0.3" [] True True Nothing "normal" (Just "sparse+https://index.crates.io/") Nothing
                ]
