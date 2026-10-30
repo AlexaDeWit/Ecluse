@@ -43,6 +43,7 @@ module Ecluse.Core.Mirror.State.Internal (
     declaredCompanion,
     declaredSourceCompanion,
     verifySourceCompanionBytes,
+    checkStateFiles,
 ) where
 
 import Data.Aeson (Object)
@@ -60,7 +61,8 @@ import Ecluse.Core.Package.Integrity (IntegrityResult (..), verifyIntegrity)
 import Ecluse.Core.Registry (CompanionRequirement (DeclaredCompanions, NativeCompanions))
 import Ecluse.Core.Registry.MirrorUpload
 import Ecluse.Core.Registry.MirrorUpload.Internal (restoreMirrorFragment)
-import Ecluse.Core.Security (LimitError, Limits (..), checkArtifactCount, checkVersionCountOf)
+import Ecluse.Core.Registry.PyPI.Document (simpleDocument, simpleEnvelope, simpleFiles)
+import Ecluse.Core.Security (LimitError (TooManyArtifacts), Limits (..), checkVersionCountOf, withinCeiling)
 import Ecluse.Core.Version (Version, renderVersion)
 
 -- | A digest of the configured target, never a credential or caller authorisation.
@@ -180,11 +182,15 @@ extendProjectRecord format limits target inventory previous = do
     let (envelope, _) = envelopeSplit (msfEnvelope format) (inventoryReadData inventory)
         result = record{projectEnvelope = envelope, projectVersions = Map.insert key updated (recordVersions record)}
     first StateBound (checkVersionCountOf limits (Map.size (recordVersions result)))
-    first StateBound (checkArtifactCount limits (sum (map (Map.size . versionFiles) (Map.elems (recordVersions result)))))
+    first StateBound (checkStateFiles limits (sum (map (Map.size . versionFiles) (Map.elems (recordVersions result)))))
     pure result
 
-extendVersion :: MirrorStateFormat -> MirrorInventory -> Maybe MirrorVersion -> Either MirrorStateFault MirrorVersion
-extendVersion format inventory previous = do
+-- | Refuse a record count over the fixed mirror-state file ceiling, so every write stays readable.
+checkStateFiles :: Limits -> Int -> Either LimitError ()
+checkStateFiles limits = withinCeiling TooManyArtifacts (mirrorStateFileCeiling limits)
+
+extendVersion :: MirrorInventory -> Maybe MirrorVersion -> Either MirrorStateFault MirrorVersion
+extendVersion inventory previous = do
     let oldFiles = maybe Map.empty versionFiles previous
         incoming = Map.fromList [(artFilename (expectedArtifact file), file) | file <- toList (inventoryFiles inventory)]
     for_ (Map.toList incoming) $ \(name, file) -> for_ (Map.lookup name oldFiles) $ \old ->
