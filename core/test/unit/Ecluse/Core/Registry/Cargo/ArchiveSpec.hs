@@ -38,7 +38,7 @@ spec = do
         it "uses only the effective manifest and enumerates every regular file" $ do
             bytes <- fixture [("Cargo.toml", manifest), ("Cargo.toml.orig", "unparsed original"), ("build.rs", "never execute")]
             metadata <- inspect defaultLimits bytes >>= expectRight
-            cargoArchiveInventory metadata `shouldBe` Set.fromList ["Cargo.toml", "Cargo.toml.orig", "build.rs"]
+            caInventory metadata `shouldBe` Set.fromList ["Cargo.toml", "Cargo.toml.orig", "build.rs"]
         it "requires exact manifest identity and the one admitted archive root" $ do
             for_ ["[package]\nname='Example'\nversion='1.2.3'", "[package]\nname='example'\nversion='1.2.3+other'"] $ \other -> do
                 bytes <- fixture [("Cargo.toml", other)]
@@ -53,7 +53,7 @@ spec = do
             path <- expectRight (Tar.toTarPath False "example-1.2.3/Cargo.toml")
             let info = Tar.fileEntry path (BSL.fromStrict manifest)
             metadata <- inspect defaultLimits (compress (Tar.write [Tar.simpleEntry root Tar.Directory, info])) >>= expectRight
-            cargoArchiveInventory metadata `shouldBe` Set.singleton "Cargo.toml"
+            caInventory metadata `shouldBe` Set.singleton "Cargo.toml"
             result <- inspect defaultLimits (compress (Tar.write [Tar.fileEntry rootFile BSL.empty, info]))
             void result `shouldBe` Left (ParseError "Cargo archive root is not a directory")
         it "rejects duplicates and a missing effective root manifest" $ do

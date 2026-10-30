@@ -9,7 +9,6 @@ module Ecluse.Core.Registry.Cargo.Manifest (
     CargoManifest,
     CargoPublishMetadata,
     decodeManifest,
-    manifestExecution,
     manifestTextPaths,
     publicationMetadata,
     checkPublicationIndex,
@@ -76,27 +75,6 @@ decodeManifest limits name version bytes = do
         edition <- string value
         unless (edition `elem` ["2015", "2018", "2021", "2024"]) (parseRefusal "unsupported Cargo edition")
     pure (CargoManifest actualName actualVersion package root)
-
--- | Missing or unsupported execution declarations fail closed. Inventory names are relative to the package root.
-manifestExecution :: CargoManifest -> Set Text -> Either ParseError Bool
-manifestExecution manifest inventory = do
-    build <- case Map.lookup "build" (cmPackage manifest) of
-        Nothing -> pure (Set.member "build.rs" inventory)
-        Just (Toml.Bool' _ False) -> pure False
-        Just (Toml.Bool' _ True) -> activeScript "build.rs"
-        Just (Toml.Text' _ path) -> activeScript path
-        _ -> parseRefusal "unsupported Cargo build declaration"
-    library <- optionalTable "lib" (cmRoot manifest)
-    macro <- aliased "proc-macro" "proc_macro" library >>= traverse boolean
-    crateTypes <- aliased "crate-type" "crate_type" library >>= traverse strings
-    for_ (fromMaybe [] crateTypes) $ \kind ->
-        unless (kind `elem` ["lib", "rlib", "dylib", "cdylib", "staticlib", "proc-macro"]) (parseRefusal "unsupported Cargo library crate type")
-    pure (build || fromMaybe False macro || "proc-macro" `elem` fromMaybe [] crateTypes)
-  where
-    activeScript path = do
-        canonical <- checkedPath path
-        unless (Set.member canonical inventory) (parseRefusal "Cargo build declaration names an absent regular file")
-        pure True
 
 -- | Select Cargo's declared or default README and licence file without retaining other text payloads.
 manifestTextPaths :: CargoManifest -> Set Text -> Either ParseError [Text]
