@@ -41,6 +41,7 @@ import Ecluse.Composition.Support (
     cargoCodeArtifactEnv,
     cargoDeprecationRefusal,
     cargoGateEnv,
+    cargoDependencyRefusal,
     cargoInstallRefusal,
     cargoMirrorEnv,
     cargoScopeRefusal,
@@ -54,6 +55,7 @@ import Ecluse.Composition.Support (
     overrideEnv,
     publicGateEnv,
     pypiMirrorEnv,
+    rubyDependencyRefusal,
     rubyDeprecationRefusal,
     rubyGemsMirrorEnv,
     rubyInstallRefusal,
@@ -93,7 +95,7 @@ import Ecluse.Core.Registry.Adapter.Capability (AdapterPublish (publishCodec))
 import Ecluse.Core.Registry.Publish (MirrorCompanion, PublishCodec (pcMirrorCompanion))
 import Ecluse.Core.Registry.RubyGems.Mirror (rubyMirrorCompanion)
 import Ecluse.Core.Registry.Sweep.Types (minimumChunkPause)
-import Ecluse.Core.Rules.Types (PrecededRule (prRule), RuleType (AllowScopeType, DenyIfYankedType, DenyInstallTimeExecutionType), ruleName)
+import Ecluse.Core.Rules.Types (PrecededRule (prRule), RuleType (AllowScopeType, DenyExternalDependenciesType, DenyIfYankedType, DenyInstallTimeExecutionType), ruleName)
 import Ecluse.Core.Security (mkProgressFloor, serveCapSeconds)
 import Ecluse.Core.Security.Egress (registryUrlText)
 
@@ -250,7 +252,7 @@ cargoRuleBlocksSpec = describe "resolved Cargo rule blocks" $
             plan <- expectVetted role cargoGateEnv
             map vmEcosystem (vpMounts plan) `shouldBe` [Cargo]
             map (ruleName . prRule) (concatMap (mountPolicy . vmMount) (vpMounts plan)) `shouldBe` ["AllowIfOlderThan"]
-        for_ [(scopeRule, cargoScopeRefusal), (deprecatedRule, cargoDeprecationRefusal), (installRule, cargoInstallRefusal)] $ \(rules, refusal) ->
+        for_ [(scopeRule, cargoScopeRefusal), (deprecatedRule, cargoDeprecationRefusal), (installRule, cargoInstallRefusal), (dependencyRule, cargoDependencyRefusal)] $ \(rules, refusal) ->
             it ("refuses the shared " <> show refusal) $
                 refusalsFor role (overrideEnv "ECLUSE_RULES" rules cargoGateEnv) `shouldReturn` [refusal]
         it "refuses aliased Cargo blocks below a higher allow with an admission-only deny" $ do
@@ -284,6 +286,7 @@ cargoRuleBlocksSpec = describe "resolved Cargo rule blocks" $
     scopeRule = "{\"scope\":{\"type\":\"AllowScope\",\"scope\":\"acme\"}}"
     deprecatedRule = "{\"deprecated\":{\"type\":\"DenyIfDeprecated\"}}"
     installRule = "{\"install\":{\"type\":\"DenyInstallTimeExecution\"}}"
+    dependencyRule = "{\"dependency\":{\"type\":\"DenyExternalDependencies\"}}"
     bothRules = "{\"scope\":{\"type\":\"AllowScope\",\"scope\":\"acme\"},\"deprecated\":{\"type\":\"DenyIfDeprecated\"}}"
 
 cargoMaintenanceCapabilitiesSpec :: Spec
@@ -378,9 +381,9 @@ ruleBlocksSpec = describe "vetBoot -- ecosystem rule blocks" $ do
         it "ignores a disabled PyPI mount's blocked declaration" $
             refusalsFor role (overrideEnv "ECLUSE_MOUNTS__PYPI__ENABLED" "false" (overrideEnv "ECLUSE_RULES" installRule bothMounts))
                 `shouldReturn` []
-        it "accepts a shared external-dependency deny on every ecosystem's mount" $
+        it "refuses a shared external-dependency deny on the PyPI, Cargo and RubyGems mounts" $
             refusalsFor role (overrideEnv "ECLUSE_MOUNTS__CARGO__ENABLED" "true" (overrideEnv "ECLUSE_MOUNTS__RUBYGEMS__ENABLED" "true" (overrideEnv "ECLUSE_RULES" "{\"no-external\":{\"type\":\"DenyExternalDependencies\"}}" bothMounts)))
-                `shouldReturn` []
+                >>= (`shouldMatchList` [pypiDependencyBlock, cargoDependencyRefusal, rubyDependencyRefusal])
         it "clears the external-dependency deny when it lives under npm alone" $
             refusalsFor role (overrideEnv "ECLUSE_MOUNTS__NPM__RULES" "{\"no-external\":{\"type\":\"DenyExternalDependencies\"}}" bothMounts)
                 `shouldReturn` []
@@ -398,6 +401,7 @@ ruleBlocksSpec = describe "vetBoot -- ecosystem rule blocks" $ do
     installBlock = RuleBlockedOnMount PyPI DenyInstallTimeExecutionType "Most PyPI releases offer a source distribution, which runs its own build on install, so this rule would deny nearly every release."
     scopeBlock = RuleBlockedOnMount PyPI AllowScopeType "A PyPI project name has no scope, so this rule can never match one."
     npmYankBlock = RuleBlockedOnMount Npm DenyIfYankedType "npm reports no yank flag. Removed releases disappear from its metadata."
+    pypiDependencyBlock = RuleBlockedOnMount PyPI DenyExternalDependenciesType "The PyPI adapter does not read where a release's dependencies install from."
 
 advisoryStoreSpec :: Spec
 advisoryStoreSpec = describe "vetBoot -- an advisory deny with no advisory store" $ do

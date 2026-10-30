@@ -26,13 +26,13 @@ import Ecluse.Composition.BootError (
     BootError (AwsEndpointMalformed, FirstPartyWithoutPrivateUpstream, MirrorRoleWithoutMirroring, PrivateUpstreamOnPublicUpstream, RuleBlockedOnMount, SplitRoleNeedsDurableQueue),
     renderBootError,
  )
-import Ecluse.Composition.Support (captureBoot, cargoDeprecationRefusal, cargoGateEnv, cargoInstallRefusal, cargoScopeRefusal, collapsedMirrorRefusal, collapsingMirrorTarget, expectAppConfig, malformedAwsEndpoint, noMaintenanceBackend, overrideEnv, privateInventoryRefusal, privateUpstreamUrl, publicGateEnv, reportLines, rubyYankRefusal, withRubyInstallBlock, withoutMirrorTargetToken, withoutMirrorTargetUrl, withoutQueueUrl)
+import Ecluse.Composition.Support (captureBoot, cargoDeprecationRefusal, cargoGateEnv, cargoDependencyRefusal, cargoInstallRefusal, cargoScopeRefusal, collapsedMirrorRefusal, collapsingMirrorTarget, expectAppConfig, malformedAwsEndpoint, noMaintenanceBackend, overrideEnv, privateInventoryRefusal, privateUpstreamUrl, publicGateEnv, reportLines, rubyDependencyRefusal, rubyYankRefusal, withRubyInstallBlock, withoutMirrorTargetToken, withoutMirrorTargetUrl, withoutQueueUrl)
 import Ecluse.Composition.Types (BootRole (BootWithoutPipeline))
 import Ecluse.Config (AppConfig (cfgServer), Config (configApp), ServerSettings (srvAuthToken), loadConfig)
 import Ecluse.Core.Credential (Secret, mkSecret, unSecret)
 import Ecluse.Core.Deadline qualified as Deadline
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
-import Ecluse.Core.Rules.Types (RuleType (AllowScopeType, DenyIfDeprecatedType, DenyIfYankedType, DenyInstallTimeExecutionType))
+import Ecluse.Core.Rules.Types (RuleType (AllowScopeType, DenyExternalDependenciesType, DenyIfDeprecatedType, DenyIfYankedType, DenyInstallTimeExecutionType))
 import Ecluse.Core.Server.Readiness (Readiness (Latched), alwaysReady)
 import Ecluse.Core.Worker (Liveness (Liveness), alwaysLive)
 import Ecluse.Dredger (dredgerServerConfig)
@@ -78,7 +78,7 @@ spec :: Spec
 spec = sequential $ do
     describe "blocked rules at both entry points" $ do
         let bothMounts = overrideEnv "ECLUSE_MOUNTS__PYPI__ENABLED" "true" publicGateEnv
-        for_ [(PyPI, "DenyInstallTimeExecution", "", DenyInstallTimeExecutionType, "Most PyPI releases offer a source distribution, which runs its own build on install, so this rule would deny nearly every release."), (PyPI, "AllowScope", ",\"scope\":\"acme\"", AllowScopeType, "A PyPI project name has no scope, so this rule can never match one."), (Npm, "DenyIfYanked", "", DenyIfYankedType, "npm reports no yank flag. Removed releases disappear from its metadata."), (PyPI, "DenyIfDeprecated", "", DenyIfDeprecatedType, "The PyPI adapter supplies no deprecation flag.")] $ \(eco, name, parameters, ty, reason) ->
+        for_ [(PyPI, "DenyInstallTimeExecution", "", DenyInstallTimeExecutionType, "Most PyPI releases offer a source distribution, which runs its own build on install, so this rule would deny nearly every release."), (PyPI, "AllowScope", ",\"scope\":\"acme\"", AllowScopeType, "A PyPI project name has no scope, so this rule can never match one."), (Npm, "DenyIfYanked", "", DenyIfYankedType, "npm reports no yank flag. Removed releases disappear from its metadata."), (PyPI, "DenyIfDeprecated", "", DenyIfDeprecatedType, "The PyPI adapter supplies no deprecation flag."), (PyPI, "DenyExternalDependencies", "", DenyExternalDependenciesType, "The PyPI adapter does not read where a release's dependencies install from.")] $ \(eco, name, parameters, ty, reason) ->
             it ("refuses " <> name <> " with the same block line") $
                 refusesWithBlockLine (overrideEnv "ECLUSE_RULES" (customRule name parameters) bothMounts) (RuleBlockedOnMount eco ty reason)
         it "boots and checks each availability rule on its supported mount" $ do
@@ -103,14 +103,16 @@ spec = sequential $ do
             [ ("AllowScope", ",\"scope\":\"acme\"", cargoScopeRefusal)
             , ("DenyIfDeprecated", "", cargoDeprecationRefusal)
             , ("DenyInstallTimeExecution", "", cargoInstallRefusal)
+            , ("DenyExternalDependencies", "", cargoDependencyRefusal)
             ]
             $ \(name, parameters, refusal) ->
                 it ("refuses Cargo " <> name <> " at boot and check-config") $
                     refusesWithBlockLine (overrideEnv "ECLUSE_RULES" (customRule name parameters) cargoGateEnv) refusal
-        it "refuses RubyGems DenyIfYanked at boot and check-config" $
-            refusesWithBlockLine
-                (overrideEnv "ECLUSE_MOUNTS__RUBYGEMS__RULES" (customRule "DenyIfYanked" "") (overrideEnv "ECLUSE_MOUNTS__RUBYGEMS__ENABLED" "true" publicGateEnv))
-                rubyYankRefusal
+        for_ [("DenyIfYanked", rubyYankRefusal), ("DenyExternalDependencies", rubyDependencyRefusal)] $ \(name, refusal) ->
+            it ("refuses RubyGems " <> name <> " at boot and check-config") $
+                refusesWithBlockLine
+                    (overrideEnv "ECLUSE_MOUNTS__RUBYGEMS__RULES" (customRule name "") (overrideEnv "ECLUSE_MOUNTS__RUBYGEMS__ENABLED" "true" publicGateEnv))
+                    refusal
         it "boots and checks the Cargo defaults without mirror state" $ do
             checkConfig cargoGateEnv `shouldReturn` Left ExitSuccess
             serves ["proxy"] cargoGateEnv
