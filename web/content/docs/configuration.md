@@ -487,7 +487,7 @@ The following types are blocked:
 | pypi | `DenyIfDeprecated` | The PyPI adapter supplies no deprecation flag. |
 | pypi | `AllowScope` | A PyPI project name has no scope, so this rule can never match one. |
 | cargo | `DenyInstallTimeExecution` | Cargo's sparse index does not declare build scripts or procedural macros. This rule is unsupported for the ecosystem. |
-| cargo | `DenyExternalDependencies` | The Cargo adapter does not read where a crate's dependencies install from. |
+| cargo | `DenyExternalDependencies` | The Cargo adapter does not project where a public crate's dependencies install from into rule evidence. |
 | cargo | `AllowScope` | Cargo package names have no scope. |
 | cargo | `DenyIfDeprecated` | Cargo's sparse index supplies no deprecation flag. |
 | rubygems | `DenyInstallTimeExecution` | RubyGems native builds are normal installation behaviour. This rule is unsupported for the ecosystem. |
