@@ -37,43 +37,47 @@ import Ecluse.Core.Server.Cache (resolveDirectory)
 import Ecluse.Core.Server.Cache.Types (directoryKey)
 import Ecluse.Core.Server.Context
 import Ecluse.Core.Server.Metadata (recordedFetch)
-import Ecluse.Core.Server.Pipeline.Diagnostics (logDirectoryInvalidEntries)
+import Ecluse.Core.Server.Pipeline.Diagnostics (logDirectoryFailure, logDirectoryInvalidEntries)
 import Ecluse.Core.Server.Pipeline.Packument (PackumentReplies (..), answerDigestedMetadataBytes, mapPackumentReplies, withObservedAdmittedDocument)
 import Ecluse.Core.Server.Pipeline.Origin (publicSource)
 import Ecluse.Core.Server.Pipeline.Shared (flightOf, forwardedCredential, withListingAdmission)
 import Ecluse.Core.Server.Response (mkRefusal)
 import Ecluse.Core.Telemetry.Metrics qualified as Metric
+import Ecluse.Core.Telemetry.Record (MetricsPort (mpServeDecision))
 import Ecluse.Core.Telemetry.Span (TracingPort (spanDirectoryDecode, spanDirectoryFetch))
 import Ecluse.Core.Telemetry.Upstream (PublicReadKind (Listing))
 
--- | Share admission and a whole-request deadline across discovery and response assembly.
+-- | Share admission and a whole-request deadline across discovery and response assembly, recording one serve decision.
 serveDirectory :: Request -> (RubyResponse -> IO ResponseReceived) -> Handler ResponseReceived
 serveDirectory request respond =
     withNativeRequest
         withListingAdmission
         request
         (liftIO . respond)
-        (const (directoryFailure (MetadataHttpFailure 503)))
+        (const (Metric.Unavailable, directoryFailure (MetadataHttpFailure 503)))
         (answerDirectory request)
-        (liftIO . respond)
+        ( \(decision, response) -> do
+            metrics <- asks (srMetrics . ctxRuntime)
+            liftIO (mpServeDecision metrics decision *> respond response)
+        )
 
 -- A private fault answers before any public read. A public fault keeps the private rows unless it breached a bound.
-answerDirectory :: Request -> MemoryTicket -> PackumentDeps -> Handler RubyResponse
+answerDirectory :: Request -> MemoryTicket -> PackumentDeps -> Handler (Metric.Decision, RubyResponse)
 answerDirectory request ticket deps = do
     privateRead <- liftIO (newChargePart ticket)
     publicRead <- liftIO (newChargePart ticket)
     private <- readPrivateDirectory request deps privateRead
     case private of
-        Left fault -> pure (directoryFailure fault)
+        Left fault -> pure (privateDecision fault, directoryFailure fault)
         Right privateView -> do
             public <- readPublicDirectory ticket deps publicRead
             case (public, privateView) of
                 (Left fault, Just own) | not (boundBreach fault) && not (BS.null (directoryBytes own)) -> answerBody [publicRead] ("---\n" <> directoryBytes own)
-                (Left fault, _) -> pure (directoryFailure fault)
+                (Left fault, _) -> pure (Metric.Unavailable, directoryFailure fault)
                 (Right shared, _) -> do
                     let privateBytes = maybe 0 (BS.length . directoryBytes) privateView
                     if BS.length (directoryBytes shared) + privateBytes + 4 > maxMetadataBytes limits
-                        then pure (directoryFailure (MetadataBoundExceeded (BodyTooLarge (MetadataBodyLimit (maxMetadataBytes limits)))))
+                        then pure (Metric.Unavailable, directoryFailure (MetadataBoundExceeded (BodyTooLarge (MetadataBodyLimit (maxMetadataBytes limits)))))
                         else do
                             liftIO (charge ticket (2 * (directoryWeight shared + privateBytes) + maybe 0 (directoryMergeWorkspace shared) privateView + 4096))
                             let merged = maybe shared (mergeDirectories shared) privateView
@@ -84,7 +88,11 @@ answerDirectory request ticket deps = do
     answerBody released body = do
         bytes <- evaluate body
         liftIO (traverse_ (`stepDown` 0) released)
-        answerCompact deps ticket request bytes
+        (if overMetadataBound deps bytes then Metric.Unavailable else Metric.Admit,) <$> answerCompact deps ticket request bytes
+    -- A private refusal denies, as on a package read. Any other fault leaves the request unanswered.
+    privateDecision = \case
+        MetadataAuthorisationFailure _ -> Metric.Deny
+        _ -> Metric.Unavailable
 
 -- The caller's credential reads private discovery on every request, outside shared retention.
 readPrivateDirectory :: Request -> PackumentDeps -> ChargePart -> Handler (Either MetadataError (Maybe GemDirectory))
@@ -94,9 +102,9 @@ readPrivateDirectory request deps privateRead = case pdPrivateBase deps of
         runtime <- asks ctxRuntime
         mount <- asks ctxMount
         let source = DirectorySource (srPrivateClient runtime) Uncontrolled base (forwardedCredential mount request)
-        withRunInIO $ \runInIO -> fmap Just <$> fetchDirectory runInIO (srTracing runtime) (chargePart privateRead) (pdLimits deps) source
+        withRunInIO $ \runInIO -> fmap Just <$> recordedFetch (srMetrics runtime) Metric.Private (fetchDirectory runInIO (srTracing runtime) (chargePart privateRead) (pdLimits deps) source)
 
--- Only the flight leader fetches, records the fetch and logs dropped rows. Followers and retained snapshots do neither.
+-- Only the flight leader fetches, records the fetch and logs. Followers and retained snapshots do neither.
 readPublicDirectory :: MemoryTicket -> PackumentDeps -> ChargePart -> Handler (Either MetadataError GemDirectory)
 readPublicDirectory ticket deps publicRead
     | pdReadSourceSelection deps == PrivateOnly = pure (Right (GemDirectory ""))
@@ -160,7 +168,7 @@ serveInfo name request respond =
 -- One directory source: its transport, read control, base and the caller's credential, if any.
 data DirectorySource = DirectorySource ExchangeClient ReadControl BaseRequest (Maybe ClientCredential)
 
--- Read one directory inside the metadata fetch and decode spans, and log the rows it dropped under the source's authority.
+-- Read one directory inside the metadata fetch and decode spans, and log its failure or dropped rows under the source's authority.
 fetchDirectory :: (Handler () -> IO ()) -> TracingPort -> (Int -> IO ()) -> Limits -> DirectorySource -> IO (Either MetadataError GemDirectory)
 fetchDirectory runInIO tracing pay limits (DirectorySource client control base credential) = do
     workspace <- newChargeRegion pay
@@ -178,12 +186,15 @@ fetchDirectory runInIO tracing pay limits (DirectorySource client control base c
                     (sealRequest <$> gemDirectoryRequestUnder base credential)
                 )
     let parsed = result >>= first (const MetadataUndecodable) . streamValue
-    for_ parsed $ \directory -> unless (null (readDropped directory)) (runInIO (logDirectoryInvalidEntries (registryUrlText (baseRequestUrl base)) (readDropped directory)))
+        origin = registryUrlText (baseRequestUrl base)
+    case parsed of
+        Left fault -> runInIO (logDirectoryFailure origin fault)
+        Right directory -> unless (null (readDropped directory)) (runInIO (logDirectoryInvalidEntries origin (readDropped directory)))
     pure (readDirectory <$> parsed)
 
 answerCompact :: PackumentDeps -> MemoryTicket -> Request -> ByteString -> Handler RubyResponse
 answerCompact deps ticket request bytes
-    | BS.length bytes > maxMetadataBytes (pdLimits deps) = pure (directoryFailure (MetadataBoundExceeded (BodyTooLarge (MetadataBodyLimit (maxMetadataBytes (pdLimits deps))))))
+    | overMetadataBound deps bytes = pure (directoryFailure (MetadataBoundExceeded (BodyTooLarge (MetadataBodyLimit (maxMetadataBytes (pdLimits deps))))))
     | otherwise = answerDigestedMetadataBytes replies deps ticket request digest bytes
   where
     -- One SHA-256 serves the strong ETag and Repr-Digest, which Bundler checks against the decoded native file.
@@ -194,6 +205,9 @@ answerCompact deps ticket request bytes
             { packumentOk = \headers -> packumentOk rubyReplies (("Repr-Digest", reprDigest) : headers)
             , packumentNotModified = \headers -> packumentNotModified rubyReplies (("Repr-Digest", reprDigest) : headers)
             }
+
+overMetadataBound :: PackumentDeps -> ByteString -> Bool
+overMetadataBound deps bytes = BS.length bytes > maxMetadataBytes (pdLimits deps)
 
 directoryFailure :: MetadataError -> RubyResponse
 directoryFailure fault = case fault of
