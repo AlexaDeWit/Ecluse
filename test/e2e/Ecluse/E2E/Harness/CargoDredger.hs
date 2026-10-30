@@ -162,7 +162,7 @@ storeNamesUnder store = codeArtifactNamesUnder (cspControl (cssPlane store)) (cs
 storeArtifactBytes :: CargoSweepStore -> Text -> Text -> IO (Int, LBS.ByteString)
 storeArtifactBytes store name version = do
     let registry = cspRegistry (cssPlane store)
-        path = "http://127.0.0.1:" <> show (registryPort registry) <> "/crates/" <> name <> "/" <> version <> "/" <> name <> "-" <> version <> ".crate"
+        path = "http://127.0.0.1:" <> show (registryPort registry) <> "/" <> cargoArchivePathFor name version
     base <- Http.parseRequest (toString path)
     let request = base{Http.requestHeaders = [("Host", encodeUtf8 (nativeHost (cssRepository store))), ("Authorization", encodeUtf8 cargoRegistryToken)]}
     response <- Http.httpLbs request (e2eManager (observedProxy (cssObserved store)))

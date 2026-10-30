@@ -28,7 +28,7 @@ cargoSweepClientOps =
         , clientRefusedIn = installIn
         , clientInstalledVersion = installedVersion
         , clientPublish = publish
-        , clientArtifact = \store name version -> fetchStorePath store ("crates/" <> name <> "/" <> version <> "/" <> name <> "-" <> version <> ".crate")
+        , clientArtifact = \store name version -> fetchStorePath store (cargoArchivePathFor name version)
         , clientMetadataStatus = \store name -> fst <$> fetchStorePath store (cargoShard name)
         }
 
