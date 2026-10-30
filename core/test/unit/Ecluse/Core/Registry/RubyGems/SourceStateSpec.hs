@@ -23,7 +23,7 @@ import Ecluse.Core.Registry.Metadata (VersionDoc (..))
 import Ecluse.Core.Registry.MirrorUpload
 import Ecluse.Core.Registry.Publish (MirrorCompanion (mcValidate))
 import Ecluse.Core.Registry.RubyGems.Document
-import Ecluse.Core.Registry.RubyGems.Mirror (mirrorRow, rubyMirrorCompanion)
+import Ecluse.Core.Registry.RubyGems.Mirror (mirrorRow, rubyGemsMirrorDocuments, rubyMirrorCompanion)
 import Ecluse.Core.Registry.RubyGems.Project
 import Ecluse.Core.Registry.RubyGems.Projection (projectGemRows)
 import Ecluse.Core.Registry.RubyGems.SourceState
@@ -60,12 +60,12 @@ spec = describe "RubyGems durable source" $ do
         let targetDetails = details{pkgPublishedAt = Nothing, pkgArtifacts = fmap (\artifact -> artifact{artUrl = "https://private.test/gems/" <> artFilename artifact}) (pkgArtifacts details)}
         targetVersion <- maybe (fail "missing expected version") pure (recordVersion nativeVersion retained)
         checkMirrorCompletion targetVersion (toList (pkgArtifacts targetDetails)) `shouldBe` MirrorComplete
-        restored <- expectRight (mirrorVersionView nativeVersion retained (Just (VersionDoc targetDetails Nothing)))
+        restored <- expectRight (mirrorVersionView rubyGemsMirrorDocuments nativeVersion retained (Just (VersionDoc targetDetails Nothing)))
         fmap (pkgPublishedAt . vdDetails) restored `shouldBe` Just (pkgPublishedAt details)
         fmap (fmap gemRows . (snd rubyGemsCached <=< vdRaw)) restored `shouldBe` Just (Just [row{grEntryKey = RecordEntry position} | (position, row) <- zip [0 ..] (gemRows document)])
-        mirrorVersionView nativeVersion retained Nothing `shouldSatisfy` isLeft
+        mirrorVersionView rubyGemsMirrorDocuments nativeVersion retained Nothing `shouldSatisfy` isLeft
         let missing = targetDetails{pkgArtifacts = takeOne (pkgArtifacts targetDetails)}
-        mirrorVersionView nativeVersion retained (Just (VersionDoc missing Nothing)) `shouldSatisfy` isLeft
+        mirrorVersionView rubyGemsMirrorDocuments nativeVersion retained (Just (VersionDoc missing Nothing)) `shouldSatisfy` isLeft
 
     it "rekeys overlapping physical positions after a later platform upload" $ do
         (document, _, inventory) <- fixture
@@ -80,7 +80,7 @@ spec = describe "RubyGems durable source" $ do
         extended <- expectRight (extendProjectRecord defaultLimits target incoming (Just firstRetained))
         complete <- foldM (retain incoming) extended (filter ((/= grCoordinate firstRow) . grCoordinate) (gemRows changed) >>= \row -> filter ((== grEntryKey row) . artEntryKey . expectedArtifact) (toList (inventoryFiles incoming)))
         let details = inventoryDetails inventory
-        restored <- expectRight (mirrorVersionView nativeVersion complete (Just (VersionDoc details Nothing)))
+        restored <- expectRight (mirrorVersionView rubyGemsMirrorDocuments nativeVersion complete (Just (VersionDoc details Nothing)))
         let source = restored >>= vdRaw >>= snd rubyGemsCached
         fmap (map grEntryKey . gemRows) source `shouldBe` Just (map RecordEntry [0 .. 3])
         fmap (pkgPublishedAt . vdDetails) restored `shouldBe` Just (pkgPublishedAt details)

@@ -32,7 +32,7 @@ import Ecluse.Core.Security (HostPort, Limits (progressFloor), Origin (..), host
 import Ecluse.Core.Server.Admission.Meter (MemoryTicket)
 import Ecluse.Core.Server.Conditional (Conditional (..), etagHeader, evaluateETag, forwardValidators, mkStrongETag)
 import Ecluse.Core.Server.Context (Handler, MountBinding (bindingPackumentDeps), PackumentDeps (..), ResponseAction (RunPipeline), ServeRuntime (..), ctxMount, ctxRuntime, pdPrivateBase, pdTarballHostGate, tarballHostHonoured)
-import Ecluse.Core.Server.MirrorView (mirrorVersionView, publicMirrorCoverage, readMirrorCompanion, validateMirrorProject)
+import Ecluse.Core.Server.MirrorView (mirrorVersionView, mirrorViewDocuments, publicMirrorCoverage, readMirrorCompanion, validateMirrorProject)
 import Ecluse.Core.Server.Path (Filename, unFilename)
 import Ecluse.Core.Server.Pipeline.Origin (OriginMiss (..), withPrivateMetadataClient, withPublicMetadata)
 import Ecluse.Core.Server.Pipeline.Shared
@@ -92,7 +92,7 @@ privateSelection ctx token ticket = case pdPrivateBase deps of
                             Right Nothing -> pure (ordinary result)
                             Right (Just (_, record)) -> case recordVersion (arVersion ctx) record of
                                 Nothing -> pure (ordinary result)
-                                Just expected -> case mirrorVersionView (arVersion ctx) record (either (const Nothing) (either (const Nothing) vrVersion) result) of
+                                Just expected -> case mirrorVersionView (mirrorViewDocuments mirror) (arVersion ctx) record (either (const Nothing) (either (const Nothing) vrVersion) result) of
                                     Left _ -> pure (Incomplete expected)
                                     Right _ | Map.notMember (unFilename (arFile ctx)) (versionFiles expected) -> pure NewPublicFile
                                     Right restored -> case restored >>= selectSidecar (pdMinTrustedIntegrity deps) (tarballHostHonoured TrustedOrigin deps privateHost . hostPortAddress . artUrl) (unFilename (arFile ctx)) . vdDetails of

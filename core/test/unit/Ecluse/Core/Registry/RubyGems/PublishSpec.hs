@@ -146,7 +146,7 @@ spec = describe "RubyGems publication" $ do
                         _ -> expectationFailure "expected one authorised native write"
 
     it "requires durable native state and an independent proof after every publication reply" $ do
-        mirrorStateRequirement (publishMirrorRequirements publisher) `shouldBe` DurableVersionState
+        isJust (durableMirrorDocuments (mirrorStateRequirement (publishMirrorRequirements publisher))) `shouldBe` True
         classifyPublish 200 "written" `shouldBe` Right ()
         classifyPublish 409 "already present" `shouldSatisfy` isLeft
         classifyPublish 403 "refused" `shouldSatisfy` isLeft

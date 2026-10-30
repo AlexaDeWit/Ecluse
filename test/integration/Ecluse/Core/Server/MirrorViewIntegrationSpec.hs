@@ -19,6 +19,7 @@ import Network.Wai.Test (SResponse (simpleBody, simpleHeaders, simpleStatus))
 import Test.Hspec
 
 import Ecluse.Core.Ecosystem (Ecosystem (Cargo, PyPI, RubyGems), ecosystemName)
+import Ecluse.Core.Mirror.Documents (MirrorDocuments)
 import Ecluse.Core.Mirror.State
 import Ecluse.Core.Mirror.State.Codec (chargedDecodeProjectRecord)
 import Ecluse.Core.Mirror.State.Internal (StateRevision (StateRevision), VerifiedCompanionBytes (VerifiedCompanionBytes))
@@ -26,9 +27,12 @@ import Ecluse.Core.Package (HashAlg (SHA512), mkPackageName)
 import Ecluse.Core.Package.Integrity (mkMinIntegrity)
 import Ecluse.Core.Queue (MirrorJob (jobPackage, jobTriggerFilename, jobVersion), MirrorQueue (enqueue))
 import Ecluse.Core.Registry.Adapter (RegistryAdapter, adapterFor)
+import Ecluse.Core.Registry.Cargo.Mirror (cargoMirrorDocuments)
 import Ecluse.Core.Registry.MirrorUpload (MirrorReadData (..), inventoryFiles, inventoryReadData)
 import Ecluse.Core.Registry.PyPI.Adapter (pypiAdapter)
 import Ecluse.Core.Registry.PyPI.Document (simpleEnvelope, simpleFiles)
+import Ecluse.Core.Registry.PyPI.Mirror (pypiMirrorDocuments)
+import Ecluse.Core.Registry.RubyGems.Mirror (rubyGemsMirrorDocuments)
 import Ecluse.Core.Rules (prepare)
 import Ecluse.Core.Rules.Types (DenyIfCveParams (DenyIfCveParams), FailureAlignment (FailDeny), Rule (AllowByIdentity, DenyByIdentity, DenyIfCve), RuleVerdict (Deny))
 import Ecluse.Core.Security (defaultLimits)
@@ -350,7 +354,7 @@ cargoReads = describe "managed Cargo mirror reads" $
             original version = Cargo.cargoIndexRecord (release version)
             crateTarget = stateTarget "https://private.test/cargo"
         record <- cargoMirrorRecord crateTarget name (Cargo.releaseArchive (release "1.9.0")) [(0, original "1.9.0"), (1, original "1.10.0")]
-        view <- testViewAt crateTarget (pure (Right (StateLoaded (StateRevision crateTarget name "complete") record)))
+        view <- testViewAt cargoMirrorDocuments crateTarget (pure (Right (StateLoaded (StateRevision crateTarget name "complete") record)))
         adapter <- requiredAdapter Cargo
         withMountProxy Cargo adapter (\deps -> deps{pdEgressUrl = Right . loopbackRegistryUrl}) view (crateIndex (map republished [original "1.10.0", original "1.9.0"])) unavailable $ \app -> do
             response <- getPath "/cargo/th/in/thing" app
@@ -369,7 +373,7 @@ rubyGemsReads = describe "managed RubyGems mirror reads" $
         let gemTarget = rubyStateTarget fixture
             name = rubyStatePackage fixture
         record <- chargedDecodeProjectRecord (const pass) defaultLimits gemTarget name (rubyStateEncodedRecord fixture) >>= expectRight
-        view <- testViewAt gemTarget (pure (Right (StateLoaded (StateRevision gemTarget name "complete") record)))
+        view <- testViewAt rubyGemsMirrorDocuments gemTarget (pure (Right (StateLoaded (StateRevision gemTarget name "complete") record)))
         original <- readFileBS "test/fixtures/rubygems/info/ecluse-fixture-platform"
         let republished = encodeUtf8 (T.replace "created_at:2020-" "created_at:2026-" (decodeUtf8 original))
         adapter <- requiredAdapter RubyGems
@@ -460,18 +464,18 @@ testView :: IO (Either MirrorStateFault StateRead) -> IO MirrorView
 testView readState = testViewWith readState (\_ -> pure (Left StateMissingCompanion))
 
 testViewWith :: IO (Either MirrorStateFault StateRead) -> (CompanionRef -> IO (Either MirrorStateFault ByteString)) -> IO MirrorView
-testViewWith = viewAt target
+testViewWith = viewAt pypiMirrorDocuments target
 
 -- A view over another state target that retains no companion bytes.
-testViewAt :: StateTarget -> IO (Either MirrorStateFault StateRead) -> IO MirrorView
-testViewAt viewTarget readState = viewAt viewTarget readState (\_ -> pure (Left StateMissingCompanion))
+testViewAt :: MirrorDocuments -> StateTarget -> IO (Either MirrorStateFault StateRead) -> IO MirrorView
+testViewAt documents viewTarget readState = viewAt documents viewTarget readState (\_ -> pure (Left StateMissingCompanion))
 
-viewAt :: StateTarget -> IO (Either MirrorStateFault StateRead) -> (CompanionRef -> IO (Either MirrorStateFault ByteString)) -> IO MirrorView
-viewAt viewTarget readState companion = do
+viewAt :: MirrorDocuments -> StateTarget -> IO (Either MirrorStateFault StateRead) -> (CompanionRef -> IO (Either MirrorStateFault ByteString)) -> IO MirrorView
+viewAt documents viewTarget readState companion = do
     pool <- newLocalPool 20 10_000_000
     cache <- newMirrorRetention pool 60 (StoreBudget 0 0)
     let store = MirrorState (\_ _ _ -> readState) (\_ _ _ _ -> pure (Left (StateInvalid "unexpected state write"))) (\_ _ -> pure (Left StateMissingCompanion)) (const companion)
-    pure (newMirrorView defaultLimits viewTarget store cache)
+    pure (newMirrorView defaultLimits viewTarget store cache documents)
 
 withManagedProxy :: MirrorView -> Bool -> Application -> Application -> (Application -> IO a) -> IO a
 withManagedProxy view firstParty private public action = do

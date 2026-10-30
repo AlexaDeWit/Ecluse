@@ -25,10 +25,13 @@ import Ecluse.Core.Package
 import Ecluse.Core.Package.Entry (EntryKey (ArrayEntry, RecordEntry))
 import Ecluse.Core.Registry.CachedDocument (CachedDoc, cargoCached, pypiPacked, pypiSimpleCached, rubyGemsCached)
 import Ecluse.Core.Registry.Cargo.Document (cargoDocument, cargoRecords)
+import Ecluse.Core.Registry.Cargo.Mirror (cargoMirrorDocuments)
 import Ecluse.Core.Registry.Metadata (Manifest (..), VersionDoc (..))
 import Ecluse.Core.Registry.MirrorUpload
 import Ecluse.Core.Registry.PyPI.Document (simpleFiles)
+import Ecluse.Core.Registry.PyPI.Mirror (pypiMirrorDocuments)
 import Ecluse.Core.Registry.RubyGems.Document (GemDocument (..), GemRow (..), selectGemVersion)
+import Ecluse.Core.Registry.RubyGems.Mirror (rubyGemsMirrorDocuments)
 import Ecluse.Core.Registry.RubyGems.Project (coordinateVersion, projectName)
 import Ecluse.Core.Registry.RubyGems.Projection (projectGemRows)
 import Ecluse.Core.Registry.RubyGems.Wire (decodeInfoRow)
@@ -54,13 +57,13 @@ spec = do
             bytes <- expectRight (encodeProjectRecord defaultLimits record)
             reopened <- chargedDecodeProjectRecord (const (pure ())) defaultLimits target (pkgName (vdDetails original)) bytes >>= expectRight
             current <- cargoTarget original
-            restored <- expectRight (mirrorVersionView (pkgVersion (vdDetails original)) reopened (Just current))
+            restored <- expectRight (mirrorVersionView cargoMirrorDocuments (pkgVersion (vdDetails original)) reopened (Just current))
             fmap vdDetails restored `shouldBe` Just (vdDetails original){pkgArtifacts = pkgArtifacts (vdDetails current)}
             fmap (fmap cargoRecords . (snd cargoCached <=< vdRaw)) restored `shouldBe` Just (fmap cargoRecords (vdRaw original >>= snd cargoCached))
             let reopenedRevision = StateRevision target (pkgName (vdDetails original)) "reopened"
                 details = vdDetails current
                 manifest = Manifest (PackageInfo (pkgName details) (Map.singleton "1.0.0" details) mempty []) (fromMaybe (fst cargoCached (cargoDocument [])) (vdRaw current)) 0 (digestOf "target")
-            (_, managed, incomplete) <- expectRight (mirrorProjectViews reopenedRevision reopened (Just manifest))
+            (_, managed, incomplete) <- expectRight (mirrorProjectViews cargoMirrorDocuments reopenedRevision reopened (Just manifest))
             Map.null incomplete `shouldBe` True
             let rows = concat [cargoRecords source | value <- maybeToList managed, source <- maybeToList (snd cargoCached (manifestRaw value))]
             map fst rows `shouldBe` [RecordEntry 0]
@@ -71,11 +74,11 @@ spec = do
             current <- cargoTarget original
             let details = vdDetails current
                 noHash = current{vdDetails = details{pkgArtifacts = fmap (\artifact -> artifact{artHashes = []}) (pkgArtifacts details)}}
-            mirrorVersionView (pkgVersion details) record Nothing `shouldSatisfy` isLeft
-            mirrorVersionView (pkgVersion details) record (Just noHash) `shouldSatisfy` isLeft
+            mirrorVersionView cargoMirrorDocuments (pkgVersion details) record Nothing `shouldSatisfy` isLeft
+            mirrorVersionView cargoMirrorDocuments (pkgVersion details) record (Just noHash) `shouldSatisfy` isLeft
             other <- expectRight (mkHash SHA256 ("a" <> toText (replicate 63 '0')))
             let conflicting = current{vdDetails = details{pkgArtifacts = fmap (\artifact -> artifact{artHashes = [other]}) (pkgArtifacts details)}}
-            mirrorVersionView (pkgVersion details) record (Just conflicting) `shouldSatisfy` isLeft
+            mirrorVersionView cargoMirrorDocuments (pkgVersion details) record (Just conflicting) `shouldSatisfy` isLeft
         it "rejects corrupt retained source facts and retains the first admitted row on re-admission" $ do
             (original, inventory) <- cargoInventory
             record <- expectRight (extendProjectRecord defaultLimits target inventory Nothing)
@@ -95,7 +98,7 @@ spec = do
             record <- expectRight (extendProjectRecord defaultLimits target later (Just initial))
             targetInventory <- mirrorSample [1, 2] False "https://private.test/moved/" "stripped"
             let current = Just (VersionDoc (inventoryDetails targetInventory) Nothing)
-            restored <- expectRight (mirrorVersionView mirrorVersion record current)
+            restored <- expectRight (mirrorVersionView pypiMirrorDocuments mirrorVersion record current)
             let documents = [document | doc <- maybeToList restored, sourceDoc <- maybeToList (vdRaw doc), document <- maybeToList (snd pypiSimpleCached sourceDoc)]
                 values = concatMap simpleFiles documents
             map fst values `shouldBe` [ArrayEntry 0, ArrayEntry 1]
@@ -107,13 +110,13 @@ spec = do
             record <- expectRight (extendProjectRecord defaultLimits target inventory Nothing)
             let details = inventoryDetails inventory
                 firstFile :| _ = pkgArtifacts details
-            mirrorVersionView mirrorVersion record (Just (VersionDoc details{pkgArtifacts = firstFile :| []} Nothing)) `shouldSatisfy` isLeft
-            mirrorVersionView mirrorVersion record (Just (VersionDoc details{pkgArtifacts = fmap (\artifact -> artifact{artHashes = []}) (pkgArtifacts details)} Nothing)) `shouldSatisfy` isLeft
+            mirrorVersionView pypiMirrorDocuments mirrorVersion record (Just (VersionDoc details{pkgArtifacts = firstFile :| []} Nothing)) `shouldSatisfy` isLeft
+            mirrorVersionView pypiMirrorDocuments mirrorVersion record (Just (VersionDoc details{pkgArtifacts = fmap (\artifact -> artifact{artHashes = []}) (pkgArtifacts details)} Nothing)) `shouldSatisfy` isLeft
 
         it "requires a declared companion to be retained even when every native wheel exists" $ do
             inventory <- mirrorSample [1] True "https://public.test/" "source"
             record <- expectRight (extendProjectRecord defaultLimits target inventory Nothing)
-            mirrorVersionView mirrorVersion record (Just (VersionDoc (inventoryDetails inventory) Nothing)) `shouldSatisfy` isLeft
+            mirrorVersionView pypiMirrorDocuments mirrorVersion record (Just (VersionDoc (inventoryDetails inventory) Nothing)) `shouldSatisfy` isLeft
 
         it "allows a complete public fallback but rejects an apparently successful shortened source" $ do
             inventory <- mirrorSample [1, 2, 3] False "https://public.test/" "source"
@@ -126,8 +129,8 @@ spec = do
             inventory <- mirrorSample [1, 2] False "https://private.test/" "source"
             record <- expectRight (extendProjectRecord defaultLimits target inventory Nothing)
             let private = Manifest (info inventory) (raw inventory) 1024 (digestOf "private")
-            (_, initialManifest, incompleteVersions) <- expectRight (mirrorProjectViews revision record (Just private))
-            (_, updatedManifest, _) <- expectRight (mirrorProjectViews (rev "new") record (Just private))
+            (_, initialManifest, incompleteVersions) <- expectRight (mirrorProjectViews pypiMirrorDocuments revision record (Just private))
+            (_, updatedManifest, _) <- expectRight (mirrorProjectViews pypiMirrorDocuments (rev "new") record (Just private))
             incompleteVersions `shouldSatisfy` Map.null
             (initialManifest >>= snd pypiPacked . manifestRaw) `shouldSatisfy` isJust
             fmap manifestDigest initialManifest `shouldNotBe` fmap manifestDigest updatedManifest
@@ -137,7 +140,7 @@ spec = do
             let name = mkPackageName Cargo Nothing "thing"
                 release = minimalCargoRelease "thing"
             record <- cargoMirrorRecord target name (releaseArchive (release "1.9.0")) [(0, cargoIndexRecord (release "1.9.0")), (1, cargoIndexRecord (release "1.10.0"))]
-            (_, managed, incomplete) <- expectRight (mirrorProjectViews (StateRevision target name "ordered") record (Just (retainedManifest record (fst cargoCached (cargoDocument [])))))
+            (_, managed, incomplete) <- expectRight (mirrorProjectViews cargoMirrorDocuments (StateRevision target name "ordered") record (Just (retainedManifest record (fst cargoCached (cargoDocument [])))))
             incomplete `shouldSatisfy` Map.null
             let rows = concat [cargoRecords document | value <- maybeToList managed, document <- maybeToList (snd cargoCached (manifestRaw value))]
             map fst rows `shouldBe` [RecordEntry 0, RecordEntry 1]
@@ -145,7 +148,7 @@ spec = do
 
         it "orders restored RubyGems versions by version text" $ do
             (record, rows) <- rubyGemsRecord
-            (_, managed, incomplete) <- expectRight (mirrorProjectViews (StateRevision target (recordPackage record) "ordered") record (Just (retainedManifest record (fst rubyGemsCached (GemDocument (recordPackage record) "---\n" [])))))
+            (_, managed, incomplete) <- expectRight (mirrorProjectViews rubyGemsMirrorDocuments (StateRevision target (recordPackage record) "ordered") record (Just (retainedManifest record (fst rubyGemsCached (GemDocument (recordPackage record) "---\n" [])))))
             incomplete `shouldSatisfy` Map.null
             let restored = [row | value <- maybeToList managed, document <- maybeToList (snd rubyGemsCached (manifestRaw value)), row <- gemRows document]
             map (renderVersion . coordinateVersion . grCoordinate) restored `shouldBe` ["10.0.0", "9.0.0"]
@@ -159,7 +162,7 @@ spec = do
             let readState _ previous = do
                     modifyIORef' requests (<> [previous])
                     pure (Right (maybe (StateLoaded revision record) StateUnchanged previous))
-            view <- mirrorViewWith target readState
+            view <- mirrorViewWith pypiMirrorDocuments target readState
             runRead view `shouldReturn` Right (Just (revision, record))
             runRead view `shouldReturn` Right (Just (revision, record))
             readIORef requests `shouldReturn` [Nothing, Just revision]
@@ -167,7 +170,7 @@ spec = do
         it "owns a retained revision without changing its bytes" $ do
             record <- sampleRecord
             let original = BS.take 4 (BS.replicate 65536 97)
-            view <- mirrorViewWith target (\_ _ -> pure (Right (StateLoaded (rev original) record)))
+            view <- mirrorViewWith pypiMirrorDocuments target (\_ _ -> pure (Right (StateLoaded (rev original) record)))
             result <- runRead view >>= expectRight
             case result of
                 Just (StateRevision _ _ owned, _) -> do
@@ -180,17 +183,17 @@ spec = do
         it "rejects stale cached state during an outage despite a smaller current public inventory" $ do
             record <- sampleRecord
             answer <- newIORef (Right (StateLoaded revision record))
-            view <- mirrorViewWith target (\_ _ -> readIORef answer)
+            view <- mirrorViewWith pypiMirrorDocuments target (\_ _ -> readIORef answer)
             runRead view `shouldReturn` Right (Just (revision, record))
             writeIORef answer (Left (StateInvalid "outage"))
             runRead view `shouldReturn` Left (StateInvalid "outage")
 
         it "rejects an unsolicited 304 and a 304 for a different revision" $ do
-            view <- mirrorViewWith target (\_ _ -> pure (Right (StateUnchanged revision)))
+            view <- mirrorViewWith pypiMirrorDocuments target (\_ _ -> pure (Right (StateUnchanged revision)))
             runRead view `shouldReturn` Left StateRevisionMismatch
             record <- sampleRecord
             answer <- newIORef (Right (StateLoaded revision record))
-            warmed <- mirrorViewWith target (\_ _ -> readIORef answer)
+            warmed <- mirrorViewWith pypiMirrorDocuments target (\_ _ -> readIORef answer)
             void (runRead warmed)
             writeIORef answer (Right (StateUnchanged (rev "other")))
             runRead warmed `shouldReturn` Left StateRevisionMismatch
@@ -199,7 +202,7 @@ spec = do
             record <- sampleRecord
             requests <- newIORef (0 :: Int)
             answer <- newIORef (Right StateAbsent)
-            view <- mirrorViewWith target (\_ _ -> modifyIORef' requests (+ 1) >> readIORef answer)
+            view <- mirrorViewWith pypiMirrorDocuments target (\_ _ -> modifyIORef' requests (+ 1) >> readIORef answer)
             runRead view `shouldReturn` Right Nothing
             writeIORef answer (Right (StateLoaded revision record))
             runRead view `shouldReturn` Right (Just (revision, record))

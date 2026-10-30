@@ -58,7 +58,7 @@ import Ecluse.Core.Server.Context (
     pdTarballHostGate,
     tarballHostHonoured,
  )
-import Ecluse.Core.Server.MirrorView (mirrorVersionView, publicMirrorCoverage, validateMirrorProject)
+import Ecluse.Core.Server.MirrorView (mirrorVersionView, mirrorViewDocuments, publicMirrorCoverage, validateMirrorProject)
 import Ecluse.Core.Server.Path (unFilename)
 import Ecluse.Core.Server.Pipeline.Origin (
     OriginMiss (MissAbsent, MissUnresolved),
@@ -174,7 +174,7 @@ byIndexedLocation ticket ctx token privateBase privateHostPort = do
                         Right Nothing -> pure (ordinary resolved)
                         Right (Just (_, record)) -> case recordVersion (arVersion ctx) record of
                             Nothing -> pure (ordinary resolved)
-                            Just expected -> case mirrorVersionView (arVersion ctx) record (either (const Nothing) (either (const Nothing) vrVersion) resolved) of
+                            Just expected -> case mirrorVersionView (mirrorViewDocuments mirror) (arVersion ctx) record (either (const Nothing) (either (const Nothing) vrVersion) resolved) of
                                 Left _ -> pure (PrivateIncomplete expected)
                                 Right _ | Map.notMember (unFilename (arFile ctx)) (versionFiles expected) -> pure (PrivateMissing MissAbsent)
                                 Right restored -> pure (maybe PrivateUnavailable (PrivateRequest True) (restored >>= requestForDetails . vdDetails))

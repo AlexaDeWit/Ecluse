@@ -20,6 +20,7 @@ module Ecluse.Core.Registry.Adapter.Capability (
     MirrorRequirements (..),
     WorkerMetadataRead (..),
     MirrorStateRequirement (..),
+    durableMirrorDocuments,
     UploadEndpointRequirement (..),
     UploadIdentityRequirement (..),
 
@@ -37,6 +38,7 @@ import Network.HTTP.Client (Request)
 import Network.HTTP.Types.Header (RequestHeaders)
 
 import Ecluse.Core.Credential (ClientCredential, Secret)
+import Ecluse.Core.Mirror.Documents (MirrorDocuments)
 import Ecluse.Core.Package (PackageName)
 import Ecluse.Core.Package.Merge (MergePlan, SourceId)
 import Ecluse.Core.Registry (
@@ -118,8 +120,14 @@ data WorkerMetadataRead
 -- | Completion uses native inventory or requires durable version state.
 data MirrorStateRequirement
     = NativeVersionState
-    | DurableVersionState
-    deriving stock (Eq, Show)
+    | -- | Completion and outage reads restore retained source documents through these operations.
+      DurableVersionState MirrorDocuments
+
+-- | The durable format's document operations, absent where native inventory proves completion.
+durableMirrorDocuments :: MirrorStateRequirement -> Maybe MirrorDocuments
+durableMirrorDocuments = \case
+    NativeVersionState -> Nothing
+    DurableVersionState documents -> Just documents
 
 -- | Whether the protocol writes at its read root or at a separate endpoint.
 data UploadEndpointRequirement

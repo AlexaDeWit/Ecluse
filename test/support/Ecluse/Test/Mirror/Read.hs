@@ -50,6 +50,7 @@ import Ecluse.Core.Registry.MirrorUpload.Internal (restoreMirrorInventory)
 import Ecluse.Core.Registry.PyPI.Adapter (pypiAdapter)
 import Ecluse.Core.Registry.PyPI.Document (simpleDocument, simpleEnvelope, simpleFiles)
 import Ecluse.Core.Registry.PyPI.Metadata (projectPyPIPacked)
+import Ecluse.Core.Registry.PyPI.Mirror (pypiMirrorDocuments)
 import Ecluse.Core.Security (Limits (maxMetadataBytes), defaultLimits)
 import Ecluse.Core.Server.Admission.Budget (scaleCharge)
 import Ecluse.Core.Server.Admission.Meter (MemoryMeter, charge, takeLargestCharge, withMemoryEntry)
@@ -183,7 +184,7 @@ newSession target limits privateBytes load = do
     (info, packed) <- expectRight (projectPyPIPacked readLimits mirrorPackage streamed)
     let private = Manifest info (fst pypiPacked packed) (BS.length privateBytes) (digestFromContext (hashUpdate hashInit privateBytes))
         store = MirrorState (fetch changed exchanges) (\_ _ _ _ -> pure (Left StateRetryExhausted)) (\_ _ -> pure (Left StateMissingCompanion)) (\_ _ -> pure (Left StateMissingCompanion))
-    pure (ReadSession (newMirrorView limits target store retention) meter private changed exchanges)
+    pure (ReadSession (newMirrorView limits target store retention pypiMirrorDocuments) meter private changed exchanges)
   where
     fetch changed exchanges pay name held = do
         modifyIORef' exchanges $ \(count, history) ->
@@ -224,7 +225,7 @@ readManagedProject :: ReadSession -> IO ReadResult
 readManagedProject (ReadSession view meter private _ _) = do
     outcome <- withMemoryEntry noopMetricsPort meter $ \ticket -> do
         validated <- validateMirrorProject view ticket mirrorPackage >>= expectRight >>= maybe (fail "missing project") pure
-        (unmanaged, managed, pending) <- expectRight (uncurry mirrorProjectViews validated (Just private))
+        (unmanaged, managed, pending) <- expectRight (uncurry (mirrorProjectViews (mirrorViewDocuments view)) validated (Just private))
         let sources = map contribution (catMaybes [unmanaged, managed])
         plan <- maybe (fail "empty merge") pure (mergePackuments [(srcProvenance source, Snapshot (srcDigest source) (srcInfo source)) | source <- sources])
         charge ticket (scaleCharge (cfOutputPermille (metadataChargeFactors metadata)) (outputBasisBytes plan sources))

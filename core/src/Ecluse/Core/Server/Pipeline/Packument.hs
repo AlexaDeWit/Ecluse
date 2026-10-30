@@ -35,6 +35,7 @@ import UnliftIO.Exception (catchAny, evaluate, throwIO)
 
 import Ecluse.Core.Credential (ClientCredential)
 import Ecluse.Core.Cve.Types (DbEtag)
+import Ecluse.Core.Mirror.Documents (MirrorDocuments)
 import Ecluse.Core.Mirror.State (ProjectMirrorRecord, StateRevision)
 import Ecluse.Core.Package (
     Artifact (artHashes),
@@ -92,7 +93,7 @@ import Ecluse.Core.Server.Encoding (
  )
 import Ecluse.Core.Server.Fault (RenderEscape (RenderEscape))
 import Ecluse.Core.Server.MetadataGzip (GzipBody (gzipLength), gzipLazyBody, gzipMetadata)
-import Ecluse.Core.Server.MirrorView (mirrorProjectViews, publicMirrorCoverage, validateMirrorProject)
+import Ecluse.Core.Server.MirrorView (mirrorProjectViews, mirrorViewDocuments, publicMirrorCoverage, validateMirrorProject)
 import Ecluse.Core.Server.Pipeline.Diagnostics (warnDivergences)
 import Ecluse.Core.Server.Pipeline.Internal (
     VersionVerdict (..),
@@ -336,7 +337,7 @@ serveAdmittedPackument serving clientToken = do
                 OriginAuthorisationFailure code -> privateAccessRefused serving code
                 _ -> case checked of
                     Left _ -> mirrorUnavailable serving
-                    Right record -> serveMergedPackument serving evalCtx record private public
+                    Right record -> serveMergedPackument serving evalCtx ((mirrorViewDocuments mirror,) <$> record) private public
         _ -> do
             (private, public) <- resolveOrigins serving clientToken
             case private of
@@ -364,7 +365,7 @@ privateAccessRefused serving code = do
 serveMergedPackument ::
     PackumentServing response ->
     EvalContext ->
-    Maybe (StateRevision, ProjectMirrorRecord) ->
+    Maybe (MirrorDocuments, (StateRevision, ProjectMirrorRecord)) ->
     OriginResult ->
     OriginResult ->
     Handler response
@@ -421,7 +422,7 @@ serveMergedPackument serving evalCtx record privResult pubResult
     rt = psvRuntime serving
     views = case record of
         Nothing -> Right (originManifest privResult, Nothing, Map.empty)
-        Just (revision, current) -> mirrorProjectViews revision current (originManifest privResult)
+        Just (documents, (revision, current)) -> mirrorProjectViews documents revision current (originManifest privResult)
 
 withCheckedSourceDocuments :: PackumentServing response -> [Manifest] -> Handler response -> Handler response
 withCheckedSourceDocuments serving manifests action = go manifests

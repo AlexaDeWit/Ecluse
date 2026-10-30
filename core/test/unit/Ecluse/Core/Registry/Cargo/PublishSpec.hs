@@ -20,7 +20,7 @@ import Ecluse.Core.Credential (bareCredential, mkSecret)
 import Ecluse.Core.Package (PackageDetails (pkgName, pkgVersion), PackageInfo (..))
 import Ecluse.Core.Package.Entry (EntryKey (RecordEntry))
 import Ecluse.Core.Registry (FetchFault (FetchBoundExceeded, FetchUrlUnformable), ParseError (..), PublishBodyFault (PublishMalformed), PublishError (PublishError), PublishFault (..), UrlFormationError (UnparseableUrl))
-import Ecluse.Core.Registry.Adapter.Capability (AdapterPublish (publishMirrorRequirements, publishRelay), MirrorRequirements (mirrorStateRequirement), MirrorStateRequirement (DurableVersionState), PublishExtras (NoPublishExtras), PublishRequestBody (PublishRequestBody))
+import Ecluse.Core.Registry.Adapter.Capability (AdapterPublish (publishMirrorRequirements, publishRelay), MirrorRequirements (mirrorStateRequirement), PublishExtras (NoPublishExtras), PublishRequestBody (PublishRequestBody), durableMirrorDocuments)
 import Ecluse.Core.Registry.CachedDocument (cargoCached)
 import Ecluse.Core.Registry.Cargo.Document (cargoDocument)
 import Ecluse.Core.Registry.Cargo.Publish
@@ -199,7 +199,7 @@ spec = do
             doc <- cargoSourceVersion (cargoIndexRecord release)
             let details = vdDetails doc
             pcNativeComplete codec (pkgName details) (pkgVersion details) (PackageInfo (pkgName details) (Map.singleton (renderVersion (pkgVersion details)) details) mempty []) `shouldBe` False
-            mirrorStateRequirement (publishMirrorRequirements (cargoPublish factors)) `shouldBe` DurableVersionState
+            isJust (durableMirrorDocuments (mirrorStateRequirement (publishMirrorRequirements (cargoPublish factors)))) `shouldBe` True
     describe "Cargo first-party claims" $ do
         it "refuses authorised-name disagreement and query or fragment API roots before sending a credential" $
             withRoutedStub (targetReply "/registry") $ \stub -> do
