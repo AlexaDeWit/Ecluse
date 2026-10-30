@@ -110,8 +110,8 @@ renderSpec = describe "renderLabel" $ do
     it "keeps cache outcomes and refusal stores distinct on the wire" $ do
         map (renderLabel . LCacheResult) [Hit, Miss, Collapsed]
             `shouldBe` [("result", "hit"), ("result", "miss"), ("result", "collapsed")]
-        map (renderLabel . LCacheStore) [FullStore, VersionStore, AssembledStore]
-            `shouldBe` [("store", "full"), ("store", "version"), ("store", "assembled")]
+        map (renderLabel . LCacheStore) [FullStore, VersionStore, AssembledStore, DirectoryStore]
+            `shouldBe` [("store", "full"), ("store", "version"), ("store", "assembled"), ("store", "directory")]
 
     it "renders the serve decision to admit/deny/unavailable" $ do
         renderLabel (LDecision Admit) `shouldBe` ("decision", "admit")

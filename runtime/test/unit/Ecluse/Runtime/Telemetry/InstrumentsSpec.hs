@@ -19,7 +19,7 @@ import Ecluse.Core.Telemetry.Metrics (
     BreakerSource (CredentialMint, EffectfulRule),
     BreakerState (Closed, HalfOpen, Open),
     CacheResult (Collapsed, Hit, Miss),
-    CacheStore (AssembledStore, FullStore, VersionStore),
+    CacheStore (AssembledStore, DirectoryStore, FullStore, VersionStore),
     Cause (Connection, Decode, Timeout),
     CredentialResult (RefreshFailed, Refreshed),
     Decision (Admit, Deny, Unavailable),
@@ -101,6 +101,19 @@ spec = describe "Ecluse.Telemetry.Instruments" $ do
                 points `shouldMatchList` [(metricAttributes [LCacheResult result], 1) | result <- [Hit, Miss, Collapsed]]
             refused <- sumPoints "ecluse.metadata_cache.refused" meterEnv
             refused `shouldMatchList` [(metricAttributes [LCacheStore store], 1) | store <- [FullStore, VersionStore, AssembledStore]]
+
+    it "exports directory outcomes, refusals and resident bytes under store=directory" $
+        withTestTelemetry $ \telemetry meterEnv -> do
+            port <- metricsPortOf <$> newMetrics telemetry
+            traverse_ (mpDirectoryCacheRequest port) [Hit, Miss, Collapsed]
+            mpCacheRefused port DirectoryStore
+            mpCacheResidentBytes port 1000
+            mpDirectoryCacheResidentBytes port 4000
+            requests <- sumPoints "ecluse.metadata_cache.requests" meterEnv
+            requests `shouldMatchList` [(metricAttributes [LCacheResult result, LCacheStore DirectoryStore], 1) | result <- [Hit, Miss, Collapsed]]
+            sumPoints "ecluse.metadata_cache.refused" meterEnv `shouldReturn` [(metricAttributes [LCacheStore DirectoryStore], 1)]
+            resident <- gaugePoints "ecluse.metadata_cache.resident_bytes" meterEnv
+            resident `shouldMatchList` [(emptyAttributes, 1000), (metricAttributes [LCacheStore DirectoryStore], 4000)]
 
     it "collects a decreasing lifetime, floors fractional seconds and retains zero after expiry" $
         withTestTelemetry $ \telemetry meterEnv -> do

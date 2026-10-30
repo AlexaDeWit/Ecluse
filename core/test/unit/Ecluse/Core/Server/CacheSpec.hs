@@ -23,6 +23,7 @@ import Ecluse.Core.Package (Artifact (artEntryKey), PackageDetails (pkgArtifacts
 import Ecluse.Core.Package.Entry (EntryKey (ObjectEntry))
 import Ecluse.Core.Registry.CachedDocument (CachedDoc, npmCached)
 import Ecluse.Core.Registry.Metadata (MetadataError (MetadataUndecodable), VersionRead)
+import Ecluse.Core.Registry.RubyGems.Directory (GemDirectory (GemDirectory))
 import Ecluse.Core.Security (defaultLimits)
 import Ecluse.Core.Server.Cache (
     CacheConfig (..),
@@ -35,6 +36,7 @@ import Ecluse.Core.Server.Cache qualified as Cache
 import Ecluse.Core.Server.Cache.Backend (BackendStorage (..))
 import Ecluse.Core.Server.Cache.Provider (cacheProvider)
 import Ecluse.Core.Server.Cache.Store (executePrepared)
+import Ecluse.Core.Server.Cache.Types (directoryKey)
 import Ecluse.Core.Server.Cache.VersionWeight (weighVersion)
 import Ecluse.Core.Telemetry.Metrics qualified as Metric
 import Ecluse.Core.Telemetry.Record (MetricsPort (..))
@@ -348,6 +350,30 @@ spec = do
                     `shouldReturn` Right (untaggedRead Nothing)
                 Cache.resolveAssembled port c (assembledKeyFor "assembled") (pure "raw") `shouldReturn` "raw"
             readIORef refused `shouldReturn` concat (replicate 2 [Metric.AssembledStore, Metric.VersionStore])
+
+        it "records directory outcomes, residency and refusals under the directory store" $ do
+            full <- newIORef []
+            directory <- newIORef []
+            resident <- newIORef []
+            refused <- newIORef []
+            let port =
+                    noopMetricsPort
+                        { mpCacheRequest = \r -> modifyIORef' full (r :)
+                        , mpDirectoryCacheRequest = \r -> modifyIORef' directory (r :)
+                        , mpDirectoryCacheResidentBytes = \bytes -> modifyIORef' resident (bytes :)
+                        , mpCacheRefused = \store -> modifyIORef' refused (store :)
+                        }
+                key = directoryKey (Source "https://index.rubygems.org") 1024
+                fetch = pure (Right (GemDirectory "a 1.0 \n"))
+            retained <- newMetadataCache (config 60 8)
+            replicateM_ 2 (Cache.resolveDirectory port retained key fetch `shouldReturn` Right (GemDirectory "a 1.0 \n"))
+            readIORef directory `shouldReturn` [Metric.Hit, Metric.Miss]
+            readIORef full `shouldReturn` []
+            readIORef resident >>= (`shouldSatisfy` any (> 0))
+            readIORef refused `shouldReturn` []
+            small <- newMetadataCache (configBytes 60 8 1)
+            Cache.resolveDirectory port small key fetch `shouldReturn` Right (GemDirectory "a 1.0 \n")
+            readIORef refused `shouldReturn` [Metric.DirectoryStore]
 
         it "reports assembled expiry before retaining a replacement" $ do
             seen <- newIORef []
