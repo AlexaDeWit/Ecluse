@@ -266,9 +266,11 @@ addField key value observed = case observed of
             ScalarValue scalar -> parseMaybe (parseJSON @Text) scalar $> keepHook key held
             _ -> Nothing
     fields@(DependencyFields field held) -> case value of
+        -- Chosen before it is wrapped, so a map of external specs holds no chain of thunks.
         ExternalSpec source ->
             let found = ExternalDependency field key source
-             in DependencyFields field (Just (maybe found (`earlierDependency` found) held))
+                !chosen = maybe found (`earlierDependency` found) held
+             in DependencyFields field (Just chosen)
         _ -> fields
 
 keepHook :: Text -> Map Text Text -> Map Text Text
@@ -282,7 +284,9 @@ addManifest key value manifest = case (key, value) of
     ("license", LicenseValue licence) -> manifest{manifestLicense = Just <$> licence}
     ("_npmUser", PersonValue valid) -> manifest{manifestPublisher = valid}
     ("scripts", ScriptValue scripts) -> manifest{manifestScripts = scripts}
-    (_, ExternalMap found) -> manifest{manifestExternal = Just (maybe found (`earlierDependency` found) (manifestExternal manifest))}
+    (_, ExternalMap found) ->
+        let !chosen = maybe found (`earlierDependency` found) (manifestExternal manifest)
+         in manifest{manifestExternal = Just chosen}
     (_, ScalarValue scalar) -> case key of
         "name" -> manifest{manifestName = parseMaybe parseJSON scalar}
         "version" -> manifest{manifestVersion = parseMaybe parseJSON scalar}
