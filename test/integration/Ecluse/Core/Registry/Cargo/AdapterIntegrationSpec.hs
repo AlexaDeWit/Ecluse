@@ -25,7 +25,7 @@ import Ecluse.Core.Mirror.State.Internal (StateRevision (..))
 import Ecluse.Core.Package (PackageName, mkPackageName)
 import Ecluse.Core.Registry.Cargo.Mirror (cargoMirrorDocuments, cargoStateFormat)
 import Ecluse.Core.Rules (prepare)
-import Ecluse.Core.Rules.Types (Rule (AllowIfOlderThan))
+import Ecluse.Core.Rules.Types (Rule (AllowIfOlderThan, DenyExternalDependencies))
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Core.Server.Admission.Meter (MemoryMeter, meterSnapshot, steerMeter, takeLargestCharge)
 import Ecluse.Core.Server.Admission.Types (BrakeLevel (Calm), MeterSnapshot (snChargedBytes))
@@ -359,6 +359,10 @@ nativeRecord version = case Fixture.cargoIndexRecord (Fixture.minimalCargoReleas
 row :: Text -> ByteString
 row = toStrict . encode . Object . nativeRecord
 
+-- A native row whose one dependency, of the given kind, names a registry other than crates.io.
+dependencyRow :: Text -> Text -> ByteString
+dependencyRow version kind = toStrict (encode (Object (KeyMap.insert "deps" (Array (fromList [object ["name" .= ("foreign-leaf" :: Text), "req" .= ("^1.0" :: Text), "features" .= ([] :: [Text]), "optional" .= False, "default_features" .= True, "target" .= Null, "kind" .= kind, "registry" .= ("sparse+https://foreign.test/index/" :: Text)]])) (KeyMap.insert "features2" (object []) (nativeRecord version)))))
+
 observedRows :: SResponse -> IO [KeyMap.KeyMap Value]
 observedRows response = do
     simpleStatus response `shouldBe` status200
@@ -434,6 +438,12 @@ admissionSpec = describe "Cargo selected admission" $ do
                         peak `shouldSatisfy` (>= 12 * size)
                         pure peak
                 zipWith (<) peaks (drop 1 peaks) `shouldBe` [True]
+    native "028" "denies a public crate whose normal or build dependency names another registry, and admits a foreign dev-dependency" $ do
+        let body = BS.intercalate "\n" [row "1.2.3", dependencyRow "2.0.0" "normal", dependencyRow "2.1.0" "build", dependencyRow "2.2.0" "dev"]
+        withCargoProxy privateMiss (indexReply body) $ \proxy -> do
+            rules <- prepare inertRuleDeps [atDefaultPrecedence DenyExternalDependencies, atDefaultPrecedence (AllowIfOlderThan (7 * nominalDay))]
+            response <- getPath indexPath (proxyWith proxy (\deps -> (withPrivateBaseUrl Nothing deps){pdRules = rules}))
+            map (KeyMap.lookup "vers") <$> observedRows response `shouldReturn` [Just (String "1.2.3"), Just (String "2.2.0")]
     native "025" "reads no durable mirror state for a declared first-party name" $
         withCargoProxy defaultReply defaultReply $ \proxy -> do
             stateReads <- newIORef (0 :: Int)
