@@ -39,7 +39,7 @@ assumptions:
       - 987569ac-0a3a-4b7f-8b0a-7b67ee234097
     appliesToModel: false
   - id: as-mirror-state-durability
-    prose: "The configured mirror-state store provides strong reads and conditional create and replace operations. The operator preserves expected records and referenced companions across process restarts, without expiry or deletion by another role. Confirmed absence means an unmanaged project, so loss of previously committed history is outside this storage contract. Cargo's public replacement excludes unrecorded target content. Missing state cannot prove an original-source copy during outage."
+    prose: "The configured mirror-state store provides strong reads and conditional create and replace operations. The operator preserves expected records and referenced companions across process restarts, without expiry or deletion by another role. Confirmed absence means an unmanaged project, so loss of previously committed history is outside this storage contract. Cargo serves unrecorded target content that reaches it through the private upstream as trusted private content, as PyPI and RubyGems do. Missing state cannot prove an original-source copy during outage."
     status: valid
     threats:
       - 0ec10e5e-0000-4000-8000-000000000107
@@ -57,7 +57,7 @@ assumptions:
       - 0ec10e5e-0000-4000-8000-000000000108
     appliesToModel: false
   - id: as-private-origin-trusted
-    prose: "Écluse trusts the private upstream to hold content it admitted before or first-party content, and a private read does not repeat public admission. Newly MAL-denied copies remain readable until eligible Dredger deletion. When the private and public copies disagree, the disagreement proves neither copy correct, and a damaged private copy can stay served on client-verified streaming paths. Client checksum verification checks byte agreement, not the honesty of the private metadata assertion. Écluse keeps no persistent conflict state, does not revalidate the public copy on each read, and does not delete on divergence alone. Cargo's private alternate permits ordinary caller-authorised private reads without public fallback. Its crates.io replacement permits only public source content and completed managed mirrors, never private-only additions or declared first-party names."
+    prose: "Écluse trusts the private upstream to hold content it admitted before or first-party content, and a private read does not repeat public admission. Newly MAL-denied copies remain readable until eligible Dredger deletion. When the private and public copies disagree, the disagreement proves neither copy correct, and a damaged private copy can stay served on client-verified streaming paths. Client checksum verification checks byte agreement, not the honesty of the private metadata assertion. Écluse keeps no persistent conflict state, does not revalidate the public copy on each read, and does not delete on divergence alone. Cargo merges private and public content like the other ecosystems. A Cargo mirror row without a durable record is trusted private content, served with the target's republished publication time and yank state."
     status: valid
     threats:
       - 0ec10e5e-0000-4000-8000-00000000010b
@@ -103,6 +103,12 @@ assumptions:
     appliesToModel: false
   - id: as-first-party-declaration-review
     prose: Before an operator declares a namespace first-party, they review its existing copies in the mirror and in the private read repository, remove the public-derived versions they do not want, apply the declaration to every role, and check both stores again after older writes finish. Écluse does not hold back, clean up, or override the first-party guard for a newly declared namespace, so copies retained before the declaration stay served and protected from the Dredger.
+    status: valid
+    threats:
+      - 0ec10e5e-0000-4000-8000-000000000126
+    appliesToModel: false
+  - id: as-cargo-lockfile-crates-io-identity
+    prose: "Cargo.lock records every crate served through `/cargo/`, private crates included, under the crates.io source identity with the checksum Écluse served. Consumers resolve only through Écluse, as on npm. A build that bypasses Écluse and resolves those names from crates.io is outside this model."
     status: valid
     threats:
       - 0ec10e5e-0000-4000-8000-000000000126
@@ -1107,7 +1113,7 @@ elements:
     name: |-
       Authorised private
       metadata and bytes
-    description: The private endpoint returns discovery, metadata, or package bytes after authorising the caller credential forwarded by the proxy. Private preparation and reads remain request-local without shared retention or single-flight. Cargo's alternate view uses this authority without public fallback.
+    description: The private endpoint returns discovery, metadata, or package bytes after authorising the caller credential forwarded by the proxy. Private preparation and reads remain request-local without shared retention or single-flight.
     outOfScope: false
     reasonOutOfScope: ""
     protocol: HTTPS
@@ -1527,7 +1533,7 @@ elements:
     name: |-
       Listing request
       and response
-    description: The caller requests npm metadata, a PyPI Simple listing, a Cargo sparse index, or RubyGems Compact Index `/versions` discovery and on-demand `/info` records. npm, PyPI, and RubyGems combine authorised private and admitted public content. Cargo separates crates.io replacement from its private alternate. Local discovery and manifests direct archive downloads through Écluse.
+    description: The caller requests npm metadata, a PyPI Simple listing, a Cargo sparse index, or RubyGems Compact Index `/versions` discovery and on-demand `/info` records. npm, PyPI, Cargo, and RubyGems combine authorised private and admitted public content. Local discovery and manifests direct archive downloads through Écluse.
     outOfScope: false
     reasonOutOfScope: ""
     protocol: HTTPS
@@ -1546,7 +1552,7 @@ elements:
     name: |-
       Anonymous
       public metadata
-    description: The proxy reads public metadata and required Cargo origin discovery anonymously through controlled transport. First-party names never take this public leg. Local Cargo discovery uses only selected trusted discovery after edge authentication, or answers locally when no trusted origin exists.
+    description: The proxy reads public metadata and required Cargo origin discovery anonymously through controlled transport. First-party names never take this public leg. Cargo's client discovery is answered locally from configuration after edge authentication, and declares auth-required when a private upstream or edge token is configured.
     outOfScope: false
     reasonOutOfScope: ""
     protocol: HTTPS
@@ -1871,7 +1877,7 @@ mitigations:
       - df1fed56-04ce-499e-8815-1edb2ec9e196
   - id: mit-artifact-location-authority
     title: Same-authority artifact locations
-    prose: "A disallow-by-default same-authority policy applies to every upstream-declared artifact location, matched on host and port, with the hosts an ecosystem serves artifact bytes from as its one equivalence. Écluse upgrades a legacy http location to https on the same host, and drops and records a file whose scheme or authority the policy refuses. The projection and the download gate read one definition of the check, so a refused file is absent from the served listing, and a release drops when none of its files survive. Companion selection checks the parent and derived companion location against the same origin-sensitive host and port rule. Cargo binds published name, raw version, logical filename, and SHA-256 to a checked download template. Current authorised discovery supplies restored mirror addresses. Retained source rows grant no transport authority. Local discovery routes every archive through the selected Écluse view."
+    prose: "A disallow-by-default same-authority policy applies to every upstream-declared artifact location, matched on host and port, with the hosts an ecosystem serves artifact bytes from as its one equivalence. Écluse upgrades a legacy http location to https on the same host, and drops and records a file whose scheme or authority the policy refuses. The projection and the download gate read one definition of the check, so a refused file is absent from the served listing, and a release drops when none of its files survive. Companion selection checks the parent and derived companion location against the same origin-sensitive host and port rule. Cargo binds published name, raw version, logical filename, and SHA-256 to a checked download template. Current authorised discovery supplies restored mirror addresses. Retained source rows grant no transport authority. Local discovery routes every archive through Écluse's `/cargo/` registry."
     status: implemented
     threats:
       - 0ec10e5e-0000-4000-8000-000000000105
@@ -1911,7 +1917,7 @@ mitigations:
       - 0ec10e5e-0000-4000-8000-000000000107
   - id: mit-mirror-completeness
     title: Durable whole-version proof before managed native reads
-    prose: "The worker conditionally persists the complete supported expected file set and paired source fields before new uploads. Verified SHA-256 evidence remains separate from unverified source assertions. Current target filenames and compatible authoritative digests plus declared retained companions prove completion. Duplicate responses and version presence do not prove a PyPI version complete. The foreground validates one project record after caller-authorised private metadata and retains no private authorisation decision. Missing or unreadable expected history cannot fall back to a smaller current public index. First-party names bypass mirror reconciliation. Referenced objects require durable storage without lifecycle expiry, and the worker has no delete operation. Cargo retains the exact original admitted index row, source identity, and checksum-verified archive. Target publication can reset time or yank and omit fields. Target presence alone cannot complete an original-source read. Missing, corrupt, or unrecorded state excludes the target version from replacement listings and direct archives during outage. Retained fields reflect first admission, without continuous yank synchronisation or target-yank mutation. RubyGems binds every supported platform artifact to original rows, public times, checksums and validated compact specifications in durable state. Current target membership, verified archive digests and all required retained companions precede completion. A reset target time or duplicate upload response cannot replace original source facts. Missing or corrupt state cannot prove a faithful mirror during public outage."
+    prose: "The worker conditionally persists the complete supported expected file set and paired source fields before new uploads. Verified SHA-256 evidence remains separate from unverified source assertions. Current target filenames and compatible authoritative digests plus declared retained companions prove completion. Duplicate responses and version presence do not prove a PyPI version complete. The foreground validates one project record after caller-authorised private metadata and retains no private authorisation decision. Missing or unreadable expected history cannot fall back to a smaller current public index. First-party names bypass mirror reconciliation. Referenced objects require durable storage without lifecycle expiry, and the worker has no delete operation. Cargo retains the exact original admitted index row, source identity, and checksum-verified archive. Target publication can reset time or yank and omit fields. Target presence alone cannot complete an original-source read. Missing or corrupt state cannot supply a managed original-source copy during outage. An unrecorded target row reached through the private upstream is trusted private content. Retained fields reflect first admission, without continuous yank synchronisation or target-yank mutation. RubyGems binds every supported platform artifact to original rows, public times, checksums and validated compact specifications in durable state. Current target membership, verified archive digests and all required retained companions precede completion. A reset target time or duplicate upload response cannot replace original source facts. Missing or corrupt state cannot prove a faithful mirror during public outage."
     status: implemented
     threats:
       - 0ec10e5e-0000-4000-8000-000000000107
@@ -1959,13 +1965,13 @@ mitigations:
       - 0ec10e5e-0000-4000-8000-00000000010b
   - id: mit-private-refusal-stops-read
     title: Private refusal stops the read
-    prose: "Private authentication or authorisation refusal never permits public substitution. npm, PyPI and RubyGems map private 401 or 403 to local 403 before parsing the error body. Cargo preserves native 401 with a Cargo challenge for credential-provider retry. A true 403 remains refusal. A private 404 permits public fallback only where source selection supports it and only for non-first-party packages. Cargo's private alternate never falls back. Discovery inability stays explicit and can prevent new-client bootstrap during a trusted-registry outage."
+    prose: "Private authentication or authorisation refusal never permits public substitution. npm, PyPI and RubyGems map private 401 or 403 to local 403 before parsing the error body. Cargo preserves native 401 with a Cargo challenge for credential-provider retry. A true 403 remains refusal. A private 404 permits public fallback only for non-first-party packages."
     status: implemented
     threats:
       - 0ec10e5e-0000-4000-8000-00000000010b
   - id: mit-first-party-private-routing
     title: First-party names resolve privately only
-    prose: "A declared first-party name resolves only through the private upstream. Metadata does not fetch or merge the public origin, and an artifact read does not fall back to the public origin after a private miss. npm scopes match exactly, and PyPI declarations name canonical project names or prefixes bounded by a separator. The load refuses an empty declaration. Companion reads also preserve private-only routing after a private miss. Cargo exact and separator-bounded prefix declarations fold ASCII case and hyphen/underscore ownership aliases, preserving separator runs. They do not collapse lookup paths. Declared first-party names are absent from the public replacement and use only the private alternate."
+    prose: "A declared first-party name resolves only through the private upstream. Metadata does not fetch or merge the public origin, and an artifact read does not fall back to the public origin after a private miss. npm scopes match exactly, and PyPI declarations name canonical project names or prefixes bounded by a separator. The load refuses an empty declaration. Companion reads also preserve private-only routing after a private miss. Cargo exact and separator-bounded prefix declarations fold ASCII case and hyphen/underscore ownership aliases, preserving separator runs. They do not collapse lookup paths. Declared first-party Cargo names read only the private upstream through `/cargo/`."
     status: implemented
     threats:
       - 0ec10e5e-0000-4000-8000-000000000126
