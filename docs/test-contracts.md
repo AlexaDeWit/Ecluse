@@ -196,16 +196,19 @@ separate concerns tracked by #1349, #1182, and #1329.
 
 `Ecluse.Test.Contract.Measurement` holds independent obligations and provider metadata for the migrated smoke and reader-retention cases.
 Its independent obligation rows require every listed case before a live fetch or a heap probe can count as registered coverage.
-The core-unit `MeasurementSpec` reads the four actual npm/PyPI smoke and reader-retention declaration trees through `Binding.labelledCaseIds`.
+The core-unit `MeasurementSpec` reads the actual npm, PyPI, Cargo and RubyGems smoke and reader-retention declaration trees through `Binding.labelledCaseIds`.
 It checks their labels against independent obligations without executing network calls, fixture hooks, GC samples, or reader probes.
 Mutation controls delete each real provider or example and replace each case label with malformed or unknown text.
 Each mutation must fail validation. Genuine unlabelled native smoke examples remain outside the migrated inventory.
 `RegistrySmokeSpec` and `RetentionSpec` supply deliberately wrong observations to test the shared verdicts.
+The live version-ordering smoke fetches the `smokeNames` packages in `bench/corpus/pins.json`, which list npm, PyPI, RubyGems and Cargo names.
 
 | Original assertion | Replacement case IDs | Preserved conditions |
 |---|---|---|
 | npm live trusted package identity, non-empty versions, default version ceiling | `live/npm/react`, `live/npm/types-node`, `live/npm/lodash`, `live/npm/typescript` through `Contract.RegistrySmoke` | The same public packages, production full read, default limits, and transport-only pending classification. |
 | PyPI live index identity and wheel evidence | `live/pypi/sampleproject` through `Contract.RegistrySmoke`, followed by its native wheel checks | `sampleproject` 4.0.0, exact filename, package/version identity, SHA-256 presence, status 200, non-empty bytes, integrity verification, 65,536-byte wheel bound. |
+| RubyGems live index identity and gem evidence | `live/rubygems/rake` through `Contract.RegistrySmoke`, followed by its native archive checks | `rake` 13.2.1, no invalid rows, exact filename, package/version identity, one advertised SHA-256, status 200, non-empty bytes, integrity verification, archive coordinate and checksum checks, 1 MiB gem bound. |
+| Cargo live discovery, sparse index and crate evidence | `live/cargo/serde` through `Contract.RegistrySmoke` | crates.io discovery, `serde` 1.0.200, no invalid rows, exact filename, package/version identity, one advertised SHA-256, status 200, non-empty bytes, integrity verification, 1 MiB crate bound. |
 | npm repeated release keys, members, dependencies, and selected containers | `retention/npm/{selected,full}/{keys,members,dependencies}` and `retention/npm/selected/containers` through `Contract.Retention` | Original generators, 2,000 and 16,000 repeats, original read operations, chunking, GC sampling, and strict 256 KiB growth allowance. |
 | PyPI repeated containers/members, unselected releases, and past-limit files | `retention/pypi/selected/{containers,members,other-releases}`, `retention/pypi/full/{members,past-limit}` through `Contract.Retention` | Original generators and read modes. Each selected input still proves exactly one kept file before sampling. The past-limit case still uses `maxArtifactCount = 2`. |
 | Benchmark and allocation provider registration | `Ecluse.Test.EcosystemBench.checkBenchmarkCoverage`, enforced by `ecosystemBenches` | Reviewed native obligations and concrete providers must match the production adapter registry. Missing, duplicate, and unshipped providers fail before corpus loading. Empty corpora fail. |
