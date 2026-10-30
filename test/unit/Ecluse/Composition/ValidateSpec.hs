@@ -5,8 +5,10 @@
 -- | Check native policies and endpoint capabilities for each boot role.
 module Ecluse.Composition.ValidateSpec (spec) where
 
+import Data.List (lookup)
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
+import Network.HTTP.Client qualified as Client
 import Test.Hspec
 
 import Ecluse.Composition.BootError (
@@ -70,7 +72,7 @@ import Ecluse.Composition.Types (BootRole (..), MirrorRole (..), RegistryRole (M
 import Ecluse.Composition.Validate (
     ValidatedPlan (vpMirrorStores, vpMounts, vpPrivateCaches, vpProgressFloor, vpPublications, vpSettings),
     VettedMount (vmEcosystem, vmMount),
-    VettedPublication (vpubFirstParty, vpubStaticCredential, vpubTarget),
+    VettedPublication (vpubFirstParty, vpubStaticCredential, vpubStaticPresentation, vpubTarget),
     vetBoot,
     vetBootWith,
     vetMirrorCapabilities,
@@ -93,11 +95,14 @@ import Ecluse.Core.Registry.Adapter (RegistryAdapter (adapterPublish), adapterFo
 import Ecluse.Core.Registry.Adapter.Capability (AdapterPublish (publishCodec))
 import Ecluse.Core.Registry.Npm.Adapter (npmFirstPartyNames)
 import Ecluse.Core.Registry.Publish (MirrorCompanion, PublishCodec (pcMirrorCompanion))
+import Ecluse.Core.Registry.PyPI.Credential (pypiCredential)
+import Ecluse.Core.Registry.Request (StoreOperation (StoreWrite), attachCredential, presentedMapping)
 import Ecluse.Core.Registry.RubyGems.Mirror (rubyMirrorCompanion)
 import Ecluse.Core.Registry.Sweep.Types (minimumChunkPause)
 import Ecluse.Core.Rules.Types (PrecededRule (prRule), RuleType (AllowScopeType, DenyExternalDependenciesType, DenyIfYankedType, DenyInstallTimeExecutionType), ruleName)
 import Ecluse.Core.Security (mkProgressFloor, serveCapSeconds)
 import Ecluse.Core.Security.Egress (registryUrlText)
+import Ecluse.Test.Support (parseRequestOrFail)
 
 -- | Check accumulated refusals and the plans cleared for each registry role.
 spec :: Spec
@@ -483,6 +488,19 @@ firstPartyAuthoritySpec = describe "first-party authority" $
                     plan <- expectVetted role (overrideEnv (key "ENABLED") "false" ownedEnv)
                     map vmEcosystem (vpMounts plan) `shouldBe` []
 
+-- A PyPI mount publishing to CodeArtifact under a static token, behind an authenticated edge.
+codeArtifactPublishEnv :: [(String, String)]
+codeArtifactPublishEnv =
+    [ ("ECLUSE_SERVER__AUTH_TOKEN", "edge-token")
+    , ("ECLUSE_MOUNTS__PYPI__ENABLED", "true")
+    , ("ECLUSE_MOUNTS__PYPI__FIRST_PARTY", "acme-*")
+    , ("ECLUSE_MOUNTS__PYPI__PRIVATE_UPSTREAM__REGISTRY__URL", "https://private.example.test/pypi/")
+    , ("ECLUSE_MOUNTS__PYPI__PUBLICATION_TARGET__CODE_ARTIFACT__URL", codeArtifactDomain <> "/pypi/internal/")
+    , ("ECLUSE_MOUNTS__PYPI__PUBLICATION_TARGET__CODE_ARTIFACT__UPLOAD_URL", codeArtifactDomain <> "/pypi/internal/")
+    , ("ECLUSE_MOUNTS__PYPI__PUBLICATION_TARGET__CODE_ARTIFACT__TOKEN", "publish-token")
+    ]
+        <> publicGateEnv
+
 clearedSpec :: Spec
 clearedSpec = describe "vetBoot -- what a cleared configuration reifies" $ do
     it "clears the active mounts and leaves the raw settings on the plan beside them" $ do
@@ -499,6 +517,13 @@ clearedSpec = describe "vetBoot -- what a cleared configuration reifies" $ do
                     `shouldBe` "https://publish.example.test"
                 vpubFirstParty publication `shouldBe` FirstParty npmFirstPartyNames (pure (mkScope "acme"))
                 fmap (unSecret . credSecret) (vpubStaticCredential publication) `shouldBe` Just "publish-write-token"
+
+    it "renders a static CodeArtifact publication token under its store's Basic username" $ do
+        plan <- expectVetted MirrorWriter codeArtifactPublishEnv
+        publication <- maybe (fail "expected the PyPI publication to clear") pure (Map.lookup PyPI (vpPublications plan))
+        request <- parseRequestOrFail (codeArtifactDomain <> "/pypi/internal/")
+        lookup "Authorization" (Client.requestHeaders (attachCredential (presentedMapping (vpubStaticPresentation publication) StoreWrite pypiCredential) (vpubStaticCredential publication) request))
+            `shouldBe` Just "Basic YXdzOnB1Ymxpc2gtdG9rZW4="
 
     it "clears no publication for a mount that declares no target, so PUT stays a 405" $ do
         plan <- expectVetted MirrorWriter staticEnvVars
