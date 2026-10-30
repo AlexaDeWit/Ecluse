@@ -81,7 +81,9 @@ limits:
   # bounds the versions the Dredger gathers for one package across store listing pages,
   # and the versions one mirror-state record holds.
   maxVersionCount: 1000000
-  # Nesting in retained metadata fields and Cargo records. Skipped npm/PyPI fields do not use this limit.
+  # Nesting depth of retained metadata fields, Cargo records, manifests and cfg targets,
+  # RubyGems YAML and Marshal, and mirror state, and the path depth and link chains of tar
+  # archives. Skipped npm/PyPI fields do not use this limit.
   maxNestingDepth: 64
   # Refuse to download an advisory database larger than this many bytes (512 MiB). The
   # declared length fails fast and the streaming download enforces the cap. It bounds a
