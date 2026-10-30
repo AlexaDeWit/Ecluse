@@ -57,7 +57,7 @@ serveDirectory request respond =
             publicRead <- liftIO (newChargePart ticket)
             let credential = forwardedCredential mount request
                 limits = pdLimits deps
-                publicKey = registryUrlText (pdPublicBaseUrl deps) <> "\0" <> show (maxMetadataBytes limits, maxVersionCount limits, maxArtifactCount limits)
+                publicKey = registryUrlText (pdPublicBaseUrl deps) <> "\0" <> show (maxMetadataBytes limits)
                 flight = FlightKey FullStore (toShort ("rubygems-directory:" <> encodeUtf8 publicKey))
                 -- Once the body exists nothing reaches the released reads' views, so their charges go back before it is sent.
                 answerBody released body = do
@@ -141,7 +141,7 @@ fetchDirectory pay limits control client base credential = do
                 FetchUrlUnformable
                 ( \upstream -> runExchangeUsing control client (progressFloor limits) upstream $ \response ->
                     if statusCode (responseStatus response) == 200
-                        then fmap (SuccessBody 200) <$> readStepsWithEnd id finishRecordSteps (MetadataBodyLimit (maxMetadataBytes limits)) (directorySteps workspace limits) (brRead (responseBody response))
+                        then fmap (SuccessBody 200) <$> readStepsWithEnd id finishRecordSteps (MetadataBodyLimit (maxMetadataBytes limits)) (directorySteps workspace) (brRead (responseBody response))
                         else pure (Right (UnreadStatus (statusCode (responseStatus response))))
                 )
                 (sealRequest <$> gemDirectoryRequestUnder base credential)
