@@ -2202,8 +2202,7 @@ Discovery runs after caller or service credentials exist, never at boot, and pri
 Authority negatives cover public, neighbouring, read, upload, and artifact coordinates without sending credentials to refused destinations.
 Publication cases bind native metadata, body lengths, manifest, archive root, digest, and first-party authority before writes.
 They preserve distinct read and upload roots and bound charged archive/TOML work.
-Policy cases prove no archive evidence request on the default path or after a higher-ranked decision.
-Explicit execution denial requires verified facts or structured inability. The server never runs inspected code.
+Policy cases prove that boot and `check-config` refuse active `DenyInstallTimeExecution`, `DenyIfDeprecated`, and `AllowScope` rules with the adapter's reasons.
 
 Mirror cases require exact source rows, SHA-256 archive proof, retry, lost replies, restart, and public outage.
 Yank and timestamp controls change target metadata and verify retained original-source facts with fresh client state.

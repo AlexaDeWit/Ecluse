@@ -129,7 +129,6 @@ Do not branch on ecosystem names inside the rule engine.
 Declare a typed `adapterRuleBlocks` entry when a rule has no suitable native meaning or its fact is inherently unavailable.
 Give the reason. Boot rejects that rule in an active mount's resolved policy.
 Keep temporary missing evidence distinct from a permanent rule block.
-Declare `adapterInstallEvidence` when archive inspection resolves install-time execution. Composition binds that provider for serving, the mirror worker and the Dredger without switching on ecosystem names.
 The [rule policy](../web/content/docs/configuration.md#rule-policy) owns the operator remedies.
 
 Add the ecosystem's external advisory spelling in [Osv.Ecosystem](../core/src/Ecluse/Core/Osv/Ecosystem.hs).

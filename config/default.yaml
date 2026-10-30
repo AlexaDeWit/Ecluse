@@ -549,11 +549,12 @@ mounts:
     # acme_tools, but excludes acmeco. Cargo has no npm scope.
     # Prefix declarations must end in -* or _*. Exact names preserve each separator run.
     # firstParty: "acme-tools,acme-*"
-    # Execution denial requires an explicit rule and verified archive evidence.
-    # The shared age and advisory defaults do not inspect crate archives.
-    # Cargo blocks AllowScope and DenyIfDeprecated at boot.
-    # AllowScope: Cargo package names have no scope.
+    # cargo blocks these rule types at boot, even through shared rules:
+    # DenyInstallTimeExecution: Cargo's sparse index does not declare build scripts or procedural macros. This rule is unsupported for the ecosystem.
     # DenyIfDeprecated: Cargo's sparse index supplies no deprecation flag.
+    # AllowScope: Cargo package names have no scope.
+    # Move supported types from shared rules into mounts.npm.rules, or disable its configured
+    # entry with enabled: false under mounts.cargo.rules (ECLUSE_MOUNTS__CARGO__RULES).
   # Bundler 2.6.9 and 4.0.23 use /versions discovery and on-demand /info metadata.
   # Compact specifications and .gem downloads stay under this mount. No full specification index is served.
   # Native publication posts the original built .gem to /api/v1/gems below the target root.
