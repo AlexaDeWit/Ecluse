@@ -29,7 +29,7 @@ import Ecluse.Core.Package (
     Availability (Available, Deprecated, Yanked),
     CodeExecSignal (CodeExecUnknown, NoCodeOnInstall, RunsCodeOnInstall),
     DependencySources (FetchesOutsideRegistry, RegistryDependencies),
-    PackageDetails (pkgAvailability, pkgInstallCode, pkgPublishedAt),
+    PackageDetails (pkgAvailability, pkgDependencySources, pkgInstallCode, pkgPublishedAt),
     mkScope,
     pkgEcosystem,
  )
@@ -130,6 +130,7 @@ completeSpec = describe "completeEvidence" $ do
                     { pkgPublishedAt = Just published
                     , pkgAvailability = Deprecated
                     , pkgInstallCode = RunsCodeOnInstall "postinstall hook"
+                    , pkgDependencySources = FetchesOutsideRegistry "dependency 'left-pad' in dependencies names a git source"
                     }
             evidence = completeEvidence details
         evName evidence `shouldBe` unscopedNpm "left-pad"
@@ -137,6 +138,7 @@ completeSpec = describe "completeEvidence" $ do
         evPublishedAt evidence `shouldBe` Known (Just published)
         evAvailability evidence `shouldBe` Known Deprecated
         evInstallCode evidence `shouldBe` Known (RunsCodeOnInstall "postinstall hook")
+        evDependencySources evidence `shouldBe` Known (FetchesOutsideRegistry "dependency 'left-pad' in dependencies names a git source")
 
     it "keeps an absent publish time as a reading, not as an absent reading" $
         evPublishedAt (completeEvidence (sampleDetails (unscopedNpm "left-pad") v1_0_0))
@@ -154,6 +156,7 @@ identitySpec = describe "identityEvidence" $ do
         evPublishedAt evidence `shouldBe` Unread
         evAvailability evidence `shouldBe` Unread
         evInstallCode evidence `shouldBe` Unread
+        evDependencySources evidence `shouldBe` Unread
 
 -- A rule reads these two cases differently: it abstains on the first and refuses on the second,
 -- so nothing may collapse them.
@@ -164,6 +167,7 @@ distinctionSpec = describe "a determined absence against an unread fact" $
             unread = identityEvidence (unscopedNpm "left-pad") v1_0_0
         evPublishedAt read' `shouldNotBe` evPublishedAt unread
         evInstallCode read' `shouldNotBe` evInstallCode unread
+        evDependencySources read' `shouldNotBe` evDependencySources unread
 
 ruleDeniesSpec :: Spec
 ruleDeniesSpec = describe "ruleDenies" $

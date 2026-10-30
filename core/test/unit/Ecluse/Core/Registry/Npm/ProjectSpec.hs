@@ -28,6 +28,7 @@ import Ecluse.Core.Package (
     Artifact (artFilename, artHashes, artSize, artUrl),
     Availability (Available, Deprecated),
     CodeExecSignal (NoCodeOnInstall, RunsCodeOnInstall),
+    DependencySources (FetchesOutsideRegistry, RegistryDependencies),
     HashAlg (SHA1, SRI),
     InvalidEntry (invalidKey, invalidKind, invalidValue),
     InvalidEntryKind (InvalidDistTag, InvalidPublishTime, InvalidVersionManifest),
@@ -266,6 +267,22 @@ signalMappingSpec = describe "signal mapping" $ do
                 selected <- expectRight (projectNpmVersion defaultLimits flaggedName (mkVersion Npm "1.0.0") body)
                 pkgAvailability <$> Map.lookup "1.0.0" (infoVersions full) `shouldBe` Just expected
                 pkgAvailability . vdDetails <$> vrVersion selected `shouldBe` Just expected
+
+    describe "installable dependency specs → DependencySources" $ do
+        for_ dependencyForms $ \(form, members, expected) ->
+            it ("reads " <> form <> " alike on the full and the selected read") $ do
+                let body = flaggedPackument members
+                (full, _) <- expectRight (projectNpmFull defaultLimits flaggedName body)
+                selected <- expectRight (projectNpmVersion defaultLimits flaggedName (mkVersion Npm "1.0.0") body)
+                pkgDependencySources <$> Map.lookup "1.0.0" (infoVersions full) `shouldBe` Just expected
+                pkgDependencySources . vdDetails <$> vrVersion selected `shouldBe` Just expected
+        for_ repeatedDependencyForms $ \(form, members, expected) ->
+            it ("keeps the first of " <> form <> " on the full and the selected read") $ do
+                let body = rawFlaggedPackument members
+                (full, _) <- expectRight (projectNpmFull defaultLimits flaggedName body)
+                selected <- expectRight (projectNpmVersion defaultLimits flaggedName (mkVersion Npm "1.0.0") body)
+                pkgDependencySources <$> Map.lookup "1.0.0" (infoVersions full) `shouldBe` Just expected
+                pkgDependencySources . vdDetails <$> vrVersion selected `shouldBe` Just expected
 
     describe "time[version] → pkgPublishedAt" $ do
         it "fills the publish time from the packument time map (is-odd)" $ do
@@ -657,6 +674,38 @@ flaggedPackument member =
     encodeToBody (NpmFixture.packumentValue "flagged" "1.0.0" [("1.0.0", NpmFixture.versionValue release)] [] [])
   where
     release = (NpmFixture.versionSpec "flagged" "1.0.0" "https://registry.npmjs.org/flagged/-/flagged-1.0.0.tgz"){NpmFixture.vsExtraPairs = member}
+
+-- Releases whose dependency maps a consumer's install reads, and the fact each projects.
+dependencyForms :: [(String, [Pair], DependencySources)]
+dependencyForms =
+    [ (field <> " naming a git source", [fromString field .= object ["left-pad" .= git]], FetchesOutsideRegistry ("dependency 'left-pad' in " <> toText field <> " names a git source"))
+    | field <- ["dependencies", "optionalDependencies", "peerDependencies"]
+    ]
+        <> [ ("a remote URL", ["dependencies" .= object ["left-pad" .= ("https://example.test/left-pad.tgz" :: Text)]], FetchesOutsideRegistry "dependency 'left-pad' in dependencies names a remote URL")
+           , ("registry ranges and an alias", ["dependencies" .= object ["left-pad" .= ("^1.0.0" :: Text), "pad" .= ("npm:left-pad@1" :: Text)]], RegistryDependencies)
+           , ("a git source only in devDependencies", ["devDependencies" .= object ["left-pad" .= git]], RegistryDependencies)
+           , ("a dependency map that is not an object", ["dependencies" .= git], RegistryDependencies)
+           , ("the earliest field, then the smallest name", ["peerDependencies" .= object ["alpha" .= git], "optionalDependencies" .= object ["zeta" .= git, "beta" .= git]], FetchesOutsideRegistry "dependency 'beta' in optionalDependencies names a git source")
+           , ("no dependency maps", [], RegistryDependencies)
+           ]
+  where
+    git = "github:acme/left-pad" :: Text
+
+-- Repeated keys, which aeson's encoder cannot write: the first occurrence decides, as it does for every npm member.
+repeatedDependencyForms :: [(String, ByteString, DependencySources)]
+repeatedDependencyForms =
+    [ ("a registry range, then a git source, under one name", "\"dependencies\":{\"left-pad\":\"^1.0.0\",\"left-pad\":\"github:acme/left-pad\"}", RegistryDependencies)
+    , ("a git source, then a registry range, under one name", "\"dependencies\":{\"left-pad\":\"github:acme/left-pad\",\"left-pad\":\"^1.0.0\"}", FetchesOutsideRegistry "dependency 'left-pad' in dependencies names a git source")
+    , ("a number, then a git source, under one name", "\"dependencies\":{\"left-pad\":1,\"left-pad\":\"github:acme/left-pad\"}", RegistryDependencies)
+    , ("two dependency maps", "\"dependencies\":{\"a\":\"^1.0.0\"},\"dependencies\":{\"b\":\"github:acme/b\"}", RegistryDependencies)
+    ]
+
+-- A one-release packument written as bytes, its release carrying the given members after its required ones.
+rawFlaggedPackument :: ByteString -> ByteString
+rawFlaggedPackument members =
+    "{\"name\":\"flagged\",\"dist-tags\":{\"latest\":\"1.0.0\"},\"versions\":{\"1.0.0\":{\"name\":\"flagged\",\"version\":\"1.0.0\",\"dist\":{\"tarball\":\"https://registry.npmjs.org/flagged/-/flagged-1.0.0.tgz\"},"
+        <> members
+        <> "}}}"
 
 multiVersionPackument :: ByteString
 multiVersionPackument =

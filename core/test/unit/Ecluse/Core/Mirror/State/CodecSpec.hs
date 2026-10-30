@@ -15,7 +15,7 @@ import Test.Hspec
 import Ecluse.Core.Mirror.State (recordExpectedInventory)
 import Ecluse.Core.Mirror.State.Codec
 import Ecluse.Core.Mirror.State.Internal
-import Ecluse.Core.Package (Availability (..), CodeExecSignal (..), PackageDetails (..))
+import Ecluse.Core.Package (Availability (..), CodeExecSignal (..), DependencySources (..), PackageDetails (..))
 import Ecluse.Core.Registry.MirrorUpload (inventoryDetails, inventoryFiles, inventoryReadData)
 import Ecluse.Core.Registry.MirrorUpload.Internal (restoreMirrorInventory)
 import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), LimitError (..), Limits (..), defaultLimits)
@@ -61,6 +61,14 @@ spec = describe "durable record codec" $ do
             record <- expectRight (extendProjectRecord defaultLimits target inventory Nothing)
             bytes <- expectRight (encodeProjectRecord defaultLimits record)
             decode bytes `shouldReturn` Right record
+
+    it "preserves a dependency fetched from outside the registry through restart" $ do
+        original <- mirrorSample [1] False "https://first.test/" "original"
+        let details = (inventoryDetails original){pkgDependencySources = FetchesOutsideRegistry "dependency 'left-pad' in dependencies names a git source"}
+        inventory <- expectRight (restoreMirrorInventory details (inventoryReadData original))
+        record <- expectRight (extendProjectRecord defaultLimits target inventory Nothing)
+        bytes <- expectRight (encodeProjectRecord defaultLimits record)
+        decode bytes `shouldReturn` Right record
 
     for_ invalidFields $ \(label, path, replacement, reason) ->
         it label $ do

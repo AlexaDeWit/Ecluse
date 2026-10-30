@@ -11,7 +11,7 @@ import Data.Text qualified as T
 import Ecluse.Core.Package (HashAlg (SHA1, SHA512))
 import Ecluse.Core.Package.Integrity (mkMinIntegrity, mkMinTrustedIntegrity)
 import Ecluse.Core.Rules (prepare)
-import Ecluse.Core.Rules.Types (Rule (AllowIfOlderThan, DenyIfDeprecated))
+import Ecluse.Core.Rules.Types (Rule (AllowIfOlderThan, DenyExternalDependencies, DenyIfDeprecated))
 import Ecluse.Core.Server.Context (PackumentDeps (..))
 import Ecluse.Server.Pipeline.ServingDriver (npmServingDriver)
 import Ecluse.Server.Pipeline.TestSupport
@@ -31,6 +31,7 @@ spec = do
     servingContract "npm" npmServingDriver
     mergeSpec
     availabilitySpec
+    externalDependencySpec
     cacheSpec
     noSurvivorsSpec
     edgeAuthSpec
@@ -592,3 +593,24 @@ availabilitySpec = describe "admission-only deprecation policy" $
                 status response `shouldBe` expected
                 unless stored $ seenAuth privateUp `shouldReturn` []
                 when (expected == 403) $ simpleBody response `shouldSatisfy` (not . T.isInfixOf "obsolete release line" . decodeUtf8 . LBS.toStrict)
+
+externalDependencySpec :: Spec
+externalDependencySpec = describe "admission-only dependency deny" $
+    it (caseLabel "integration/npm-metadata/native-036" "denies a public version whose dependency names a git source while admitting a private one") $ do
+        let gitDependent = withKeys ["dependencies" .= object ["left-pad" .= ("github:acme/left-pad" :: Text)]] . plainVersion
+        publicUp <-
+            servingUpstream
+                ( encodePackument
+                    ( packument
+                        [("1.0.0", plainVersion "1.0.0"), ("1.1.0", gitDependent "1.1.0")]
+                        "1.1.0"
+                        [("1.0.0", publishedDaysAgo 30), ("1.1.0", publishedDaysAgo 30)]
+                    )
+                )
+        privateUp <- servingUpstream (encodePackument (privatePackument [("2.0.0", gitDependent "2.0.0")] "2.0.0"))
+        queue <- newTestMemoryQueue
+        rules <- prepare inertRuleDeps [admissionOnly (atDefaultPrecedence DenyExternalDependencies), atDefaultPrecedence (AllowIfOlderThan 0)]
+        withProxyEnvQueueDeps queue privateUp publicUp Nothing (\deps -> deps{pdRules = rules}) $ \app _ _ -> do
+            response <- getThing Nothing app
+            status response `shouldBe` 200
+            servedVersions response `shouldBe` ["1.0.0", "2.0.0"]
