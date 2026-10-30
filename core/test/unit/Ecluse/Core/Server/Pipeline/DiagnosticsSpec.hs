@@ -18,7 +18,7 @@ import Ecluse.Core.Package (
     mkInvalidEntry,
  )
 import Ecluse.Core.Registry (UrlFormationError (EmptyBaseUrl, UnparseableUrl))
-import Ecluse.Core.Registry.Metadata (MetadataError (MetadataAbsent, MetadataAuthorisationFailure, MetadataHttpFailure))
+import Ecluse.Core.Registry.Metadata (MetadataError (MetadataAbsent, MetadataAuthorisationFailure, MetadataHttpFailure, MetadataUndecodable))
 import Ecluse.Core.Server.Pipeline.Diagnostics (
     logDecodeFailure,
     logDirectoryFailure,
@@ -48,7 +48,7 @@ upstreamWarningSpec = do
             logged `shouldSatisfy` T.isInfixOf "\"sev\":\"Warning\""
             logged `shouldSatisfy` T.isInfixOf "\"module\":\"Ecluse.Server.Pipeline.Internal\""
             logged `shouldSatisfy` T.isInfixOf "\"package\":\"is-odd\""
-            logged `shouldSatisfy` T.isInfixOf "did not decode"
+            logged `shouldSatisfy` T.isInfixOf "did not decode into a usable packument"
 
     describe "logNameMismatch" $
         it "logs a WARNING carrying both names and the origin when an upstream reports a different package" $ do
@@ -160,7 +160,19 @@ directoryInvalidEntriesSpec = describe "logDirectoryInvalidEntries" $
         logged `shouldSatisfy` (not . T.isInfixOf "\"package\"")
 
 directoryFailureSpec :: Spec
-directoryFailureSpec = describe "logDirectoryFailure" $
+directoryFailureSpec = describe "logDirectoryFailure" $ do
+    it "logs a missing directory as a WARNING fault rather than a DEBUG absence" $ do
+        logged <- runJsonLog (logDirectoryFailure "https://index.rubygems.org" MetadataAbsent)
+        logged `shouldSatisfy` T.isInfixOf "\"sev\":\"Warning\""
+        logged `shouldSatisfy` T.isInfixOf "\"status\":404"
+        logged `shouldSatisfy` T.isInfixOf "the upstream has no metadata for the requested directory"
+        logged `shouldSatisfy` (not . T.isInfixOf "\"package\"")
+    it "names the directory rather than a packument when a directory does not decode" $ do
+        logged <- runJsonLog (logDirectoryFailure "https://index.rubygems.org" MetadataUndecodable)
+        logged `shouldSatisfy` T.isInfixOf "\"sev\":\"Warning\""
+        logged `shouldSatisfy` T.isInfixOf "did not decode into a usable directory"
+        logged `shouldSatisfy` (not . T.isInfixOf "packument")
+        logged `shouldSatisfy` (not . T.isInfixOf "\"package\"")
     it "logs a directory refusal with its upstream and status and no package field" $ do
         logged <- runJsonLog (logDirectoryFailure "https://index.rubygems.org" (MetadataHttpFailure 503))
         logged `shouldSatisfy` T.isInfixOf "\"sev\":\"Error\""
