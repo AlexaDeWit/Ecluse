@@ -28,7 +28,7 @@ import Ecluse.Core.Registry.RubyGems.Project (GemCoordinate, mkCoordinate, mkGem
 import Ecluse.Core.Strict (strictElements)
 import Ecluse.Core.Text.Iso8601 (readIso8601Utc)
 import Ecluse.Core.Version (Version, mkVersion)
-import Ecluse.Core.Version.Gem (gemRequirementOperators)
+import Ecluse.Core.Version.Gem (isGemRequirementOperator)
 
 -- | Native syntax failure differs from an explicitly unsupported wire representation.
 data GemRowError
@@ -89,7 +89,7 @@ parseGemRequirement raw = do
         let stripped = T.strip clause
             (operator, rest) = T.span (`elem` ['=', '!', '<', '>', '~']) stripped
             version = T.strip rest
-        unless (operator `elem` gemRequirementOperators && not (T.null version) && isRight (projectVersion version)) (malformed "invalid RubyGems requirement")
+        unless (isGemRequirementOperator operator && not (T.null version) && isRight (projectVersion version)) (malformed "invalid RubyGems requirement")
         pure (T.copy stripped)
 
 parseIdentity :: PackageName -> Text -> Either ParseError GemCoordinate
