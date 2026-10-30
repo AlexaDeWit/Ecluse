@@ -10,11 +10,12 @@ module Ecluse.Test.Registry.Cargo.Publish (
     cargoResolverMetadata,
     cargoResolverAgreements,
     cargoResolverContradictions,
+    cargoResolverDependencyField,
     cargoSourceVersion,
     observeCargoRelay,
 ) where
 
-import Data.Aeson (Value (..), object, toJSON, (.=))
+import Data.Aeson (Key, Value (..), object, toJSON, (.=))
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.Text qualified as T
 import Network.HTTP.Client (defaultManagerSettings, newManager)
@@ -110,14 +111,16 @@ cargoResolverArchive =
 -- | Native registry interning can retain a different equivalent spelling from the archived declaration.
 cargoResolverAgreements :: [Value]
 cargoResolverAgreements =
-    cargoResolverMetadata : case cargoResolverMetadata of
-        Object fields -> case KeyMap.lookup "deps" fields of
-            Just (Array dependencies) -> case toList dependencies of
-                Object dependency : rest ->
-                    [Object (KeyMap.insert "deps" (toJSON (Object (KeyMap.insert "registry" (String source) dependency) : rest)) fields) | source <- ["https://github.com/rust-lang/crates.io-index/", "https://GITHUB.com/RUST-LANG/CRATES.IO-INDEX.git/"]]
-                _ -> []
-            _ -> []
-        _ -> []
+    cargoResolverMetadata : [cargoResolverDependencyField "registry" (String source) | source <- ["https://github.com/rust-lang/crates.io-index/", "https://GITHUB.com/RUST-LANG/CRATES.IO-INDEX.git/"]]
+
+-- | The literal upload with one field of its first dependency, the crates.io build dependency, replaced.
+cargoResolverDependencyField :: Key -> Value -> Value
+cargoResolverDependencyField key value = case cargoResolverMetadata of
+    Object fields
+        | Just (Array dependencies) <- KeyMap.lookup "deps" fields
+        , Object firstDependency : rest <- toList dependencies ->
+            Object (KeyMap.insert "deps" (toJSON (Object (KeyMap.insert key value firstDependency) : rest)) fields)
+    _ -> Null
 
 -- | Each wire-valid mutation changes one resolver fact against the same literal agreeing control.
 cargoResolverContradictions :: [Value]
@@ -127,15 +130,12 @@ cargoResolverContradictions = case cargoResolverMetadata of
                 Just (Array values) -> toList values
                 _ -> []
             changed key value = Object (KeyMap.insert key value fields)
-            changeDependency key value = case dependencies of
-                Object firstDependency : rest -> changed "deps" (toJSON (Object (KeyMap.insert key value firstDependency) : rest))
-                _ -> Null
             features = case KeyMap.lookup "features" fields of
                 Just (Object values) -> values
                 _ -> mempty
             extra = [Object (KeyMap.insert "name" (String "extra") fields') | Object fields' <- take 1 dependencies]
          in [changed "deps" (toJSON (drop 1 dependencies)), changed "deps" (toJSON (dependencies <> take 1 dependencies)), changed "deps" (toJSON (dependencies <> extra))]
-                <> [changeDependency key value | (key, value) <- [("name", String "another"), ("explicit_name_in_toml", String "another"), ("target", String "cfg(windows)"), ("target", String "cfg(any(unix,,windows))"), ("target", String ("cfg(" <> T.replicate (maxNestingDepth defaultLimits) "not(" <> "unix" <> T.replicate (maxNestingDepth defaultLimits) ")" <> ")")), ("kind", String "dev"), ("registry", Null), ("registry", String "git+https://github.com/rust-lang/crates.io-index"), ("registry", String "not a registry URL"), ("registry", String "sparse+https://index.crates.io/.git/"), ("version_req", String ">1.2.3-alpha, <2"), ("optional", Bool True), ("default_features", Bool False), ("features", toJSON ["other" :: Text])]]
+                <> [cargoResolverDependencyField key value | (key, value) <- [("name", String "another"), ("explicit_name_in_toml", String "another"), ("target", String "cfg(windows)"), ("target", String "cfg(any(unix,,windows))"), ("target", String ("cfg(" <> T.replicate (maxNestingDepth defaultLimits) "not(" <> "unix" <> T.replicate (maxNestingDepth defaultLimits) ")" <> ")")), ("kind", String "dev"), ("registry", Null), ("registry", String "git+https://github.com/rust-lang/crates.io-index"), ("registry", String "not a registry URL"), ("registry", String "sparse+https://index.crates.io/.git/"), ("version_req", String ">1.2.3-alpha, <2"), ("optional", Bool True), ("default_features", Bool False), ("features", toJSON ["other" :: Text])]]
                 <> [ changed "features" (Object (KeyMap.delete "full" features))
                    , changed "features" (Object (KeyMap.insert "extra" (toJSON ([] :: [Text])) features))
                    , changed "features" (Object (KeyMap.insert "full" (toJSON ["dep:foreign", "foreign/extra", "local/alpha" :: Text]) features))
