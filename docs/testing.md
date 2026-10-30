@@ -720,7 +720,7 @@ decompressed byte accounting and overrides, not the heap cost of arbitrary 128 M
 CI runs smoke tests on main pushes, the nightly schedule and manual dispatches.
 A pull request skips them. Dispatch `ci.yml` on the PR branch when its change needs a live registry check.
 
-Make live calls to the public npm and PyPI registries to check JSON decoding and protocol handling.
+Make live calls to the public npm, PyPI, RubyGems and Cargo registries to check decoding and protocol handling.
 The PyPI case reads a project index and one bounded wheel through the shipped adapter, then checks
 the bytes against the advertised integrity. Only transport unavailability makes that case pending.
 The cases depend on uncontrolled external services, so an occasional failure is normal
