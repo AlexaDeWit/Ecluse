@@ -101,7 +101,7 @@ readPrivateDirectory request deps privateRead = case pdPrivateBase deps of
     Just base -> do
         runtime <- asks ctxRuntime
         mount <- asks ctxMount
-        let source = DirectorySource (srPrivateClient runtime) Uncontrolled base (forwardedCredential mount request)
+        let source = DirectorySource RejectMalformedRows (srPrivateClient runtime) Uncontrolled base (forwardedCredential mount request)
         withRunInIO $ \runInIO -> fmap Just <$> recordedFetch (srMetrics runtime) Metric.Private (fetchDirectory runInIO (srTracing runtime) (chargePart privateRead) (pdLimits deps) source)
 
 -- Only the flight leader fetches, records the fetch and logs. Followers and retained snapshots do neither.
@@ -110,7 +110,7 @@ readPublicDirectory ticket deps publicRead
     | pdReadSourceSelection deps == PrivateOnly = pure (Right (GemDirectory ""))
     | otherwise = do
         runtime <- asks ctxRuntime
-        let source = DirectorySource (srPublicClient runtime) (Controlled (srPublicControl runtime) Listing) (pdPublicBase deps) Nothing
+        let source = DirectorySource DropMalformedRows (srPublicClient runtime) (Controlled (srPublicControl runtime) Listing) (pdPublicBase deps) Nothing
         withRunInIO $ \runInIO ->
             awaitingFlight ticket flight $
                 resolveDirectory (srMetrics runtime) (srMetadataCache runtime) key $
@@ -165,12 +165,15 @@ serveInfo name request respond =
         )
         (liftIO . respond)
 
--- One directory source: its transport, read control, base and the caller's credential, if any.
-data DirectorySource = DirectorySource ExchangeClient ReadControl BaseRequest (Maybe ClientCredential)
+-- One directory source: its malformed-row policy, transport, read control, base and the caller's credential, if any.
+data DirectorySource = DirectorySource MalformedRows ExchangeClient ReadControl BaseRequest (Maybe ClientCredential)
+
+-- Public discovery drops a malformed row, as merged listings drop a malformed entry. Private discovery fails on one.
+data MalformedRows = DropMalformedRows | RejectMalformedRows
 
 -- Read one directory inside the metadata fetch and decode spans, and log its failure or dropped rows under the source's authority.
 fetchDirectory :: (Handler () -> IO ()) -> TracingPort -> (Int -> IO ()) -> Limits -> DirectorySource -> IO (Either MetadataError GemDirectory)
-fetchDirectory runInIO tracing pay limits (DirectorySource client control base credential) = do
+fetchDirectory runInIO tracing pay limits (DirectorySource policy client control base credential) = do
     workspace <- newChargeRegion pay
     result <-
         metadataResponse
@@ -185,12 +188,19 @@ fetchDirectory runInIO tracing pay limits (DirectorySource client control base c
                     )
                     (sealRequest <$> gemDirectoryRequestUnder base credential)
                 )
-    let parsed = result >>= first (const MetadataUndecodable) . streamValue
+    let parsed = result >>= first (const MetadataUndecodable) . streamValue >>= keptUnder policy
         origin = registryUrlText (baseRequestUrl base)
     case parsed of
         Left fault -> runInIO (logDirectoryFailure origin fault)
         Right directory -> unless (null (readDropped directory)) (runInIO (logDirectoryInvalidEntries origin (readDropped directory)))
     pure (readDirectory <$> parsed)
+
+-- A read that dropped a row fails when its policy rejects malformed rows, or when no row survived.
+keptUnder :: MalformedRows -> DirectoryRead -> Either MetadataError DirectoryRead
+keptUnder policy parsed
+    | null (readDropped parsed) = Right parsed
+    | DropMalformedRows <- policy, not (BS.null (directoryBytes (readDirectory parsed))) = Right parsed
+    | otherwise = Left MetadataUndecodable
 
 answerCompact :: PackumentDeps -> MemoryTicket -> Request -> ByteString -> Handler RubyResponse
 answerCompact deps ticket request bytes
