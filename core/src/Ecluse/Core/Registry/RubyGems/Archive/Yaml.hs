@@ -197,13 +197,13 @@ plainNativeString value
         c0 : rest -> wordClass c0 || (c0 `notElem` ("0123456789.:-" :: String) && any wordClass rest)
         [] -> False
     keyword
-        | T.length value > 5 || T.take 1 lower `notElem` ["y", "t", "o", "n", "f", "~"] = Right (Just value)
+        | T.compareLength value 5 == GT || T.take 1 lower `notElem` ["y", "t", "o", "n", "f", "~"] = Right (Just value)
         | value == "~" || lower == "null" = Right Nothing
         | lower `elem` ["yes", "true", "on", "no", "false", "off"] = Left notNativeString
         | otherwise = Right (Just value)
     gregorianDate = case T.splitOn "-" value of
         [year, month, day]
-            | T.length year == 4 && all (\part -> not (T.null part) && T.all isDigit part) [year, month, day] && T.length month <= 2 && T.length day <= 2 ->
+            | T.compareLength year 4 == EQ && all (\part -> not (T.null part) && T.all isDigit part) [year, month, day] && T.compareLength month 2 /= GT && T.compareLength day 2 /= GT ->
                 isJust (fromGregorianValid (readDigits year) (fromInteger (readDigits month)) (fromInteger (readDigits day)))
         _ -> False
     readDigits = T.foldl' (\total digit -> total * 10 + toInteger (fromEnum digit - fromEnum '0')) 0
