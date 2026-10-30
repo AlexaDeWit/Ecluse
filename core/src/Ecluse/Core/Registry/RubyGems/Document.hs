@@ -10,14 +10,19 @@ module Ecluse.Core.Registry.RubyGems.Document (
     GemDocument (..),
     restrictGemDocument,
     selectGemVersion,
+    gemDocumentBytes,
 ) where
 
+import Data.ByteString qualified as BS
+import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import Data.Time (UTCTime)
 
-import Ecluse.Core.Package (Hash, PackageName)
+import Ecluse.Core.Package (Hash, PackageName, hashValue, renderPackageName)
 import Ecluse.Core.Package.Entry (EntryKey)
-import Ecluse.Core.Registry.RubyGems.Project (GemCoordinate, coordinateVersion)
+import Ecluse.Core.Registry.RubyGems.Project (GemCoordinate, coordinateFilename, coordinatePlatform, coordinateVersion, unGemPlatform)
+import Ecluse.Core.Server.Path (unFilename)
+import Ecluse.Core.Text (textStorageBytes)
 import Ecluse.Core.Version (Version, renderVersion)
 
 -- | Conjunctive native clauses retain their exact operators and version spelling.
@@ -62,3 +67,26 @@ selectGemVersion version document = do
     let rows = filter ((== renderVersion version) . renderVersion . coordinateVersion . grCoordinate) (gemRows document)
     guard (not (null rows))
     pure document{gemRows = rows}
+
+{- | Cache units for a retained document. Every row carries the document's gem name, so the name is
+measured once and counted per row.
+-}
+gemDocumentBytes :: GemDocument -> Int64
+gemDocumentBytes document = 64 + nameBytes + fromIntegral (BS.length (gemHeader document)) + sum (map rowBytes (gemRows document))
+  where
+    nameBytes = nativeTextBytes (renderPackageName (gemName document))
+    rowBytes row =
+        let coordinate = grCoordinate row
+            strings = [renderVersion (coordinateVersion coordinate), unGemPlatform (coordinatePlatform coordinate), unFilename (coordinateFilename coordinate), hashValue (grChecksum row)]
+            requirementBytes values = sum [32 + nativeTextBytes clause | clause <- toList values]
+         in 256
+                + nameBytes
+                + sum (map nativeTextBytes strings)
+                + fromIntegral (BS.length (grSource row))
+                + requirementBytes (grRequiredRuby row)
+                + requirementBytes (grRequiredRubyGems row)
+                + sum [64 + nativeTextBytes (renderPackageName (gdName dependency)) + requirementBytes (gdRequirement dependency) | dependency <- grDependencies row]
+                + sum [64 + nativeTextBytes key + nativeTextBytes value | (key, value) <- Map.toList (grExtras row)]
+
+nativeTextBytes :: Text -> Int64
+nativeTextBytes = fromIntegral . textStorageBytes
