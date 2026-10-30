@@ -85,7 +85,7 @@ spec = do
                                 , ptLimits = defaultLimits
                                 , ptTracing = passthroughTracingPort
                                 }
-                        factory = PrepareRead $ \_ origin -> do
+                        factory = PrepareRead $ \origin -> do
                             modifyIORef' events (<> ["prepare"])
                             ocToken origin `shouldBe` credential
                             originBaseUrl origin `shouldBe` registryUrlText target
