@@ -400,8 +400,8 @@ uploadGuardSpec = describe "uploadClaims (the first-party new-release guard)" $ 
                     , "optionalDependencies" .= object ["zeta" .= git, "alpha" .= ("https://example.test/alpha.tgz" :: Text)]
                     ]
         uploadClaims (toStrict release) `shouldBe` Left (PublishMalformed (ParseError (npmExternalDependencyRefusal "alpha" "optionalDependencies" "a remote URL")))
-    it "ignores a dependency map that is not an object and a spec that is not a string" $
-        for_
+    it "ignores a dependency map that is not an object and a spec that is not a string"
+        $ for_
             [ toJSON ["github:acme/left-pad" :: Text]
             , String "github:acme/left-pad"
             , Null
@@ -409,8 +409,8 @@ uploadGuardSpec = describe "uploadClaims (the first-party new-release guard)" $ 
             , object ["left-pad" .= ["github:acme/left-pad" :: Text]]
             , object ["left-pad" .= object ["url" .= ("github:acme/left-pad" :: Text)]]
             ]
-            $ \dependencies ->
-                uploadClaims (toStrict (npmDependentRelease ["dependencies" .= dependencies])) `shouldBe` Right [widget, widget, widget]
+        $ \dependencies ->
+            uploadClaims (toStrict (npmDependentRelease ["dependencies" .= dependencies])) `shouldBe` Right [widget, widget, widget]
   where
     installableFields = ["dependencies", "optionalDependencies", "peerDependencies"]
     externalSpecs :: [(Text, Text)]
