@@ -5,7 +5,6 @@
 -- | Cargo HTTP reads and whole-version worker load scenarios over native local fixtures.
 module Ecluse.BenchLoad.Cargo (
     cargoFixture,
-    cargoPrivateCopy,
     cargoLoadNotes,
     selectWarmArtifacts,
     indexStubWithArtifacts,
