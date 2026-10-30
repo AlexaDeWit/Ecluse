@@ -14,7 +14,7 @@ import Network.HTTP.Types (status200, status304, status400, status401, status403
 
 import Ecluse.Core.Server.Contract (BodySchema (SchemaOpaque, SchemaText), ResponseChoice (..), ResponseContract, ResponseValue, chooseContract, emptyContract, mediaContract, responseValue)
 import Ecluse.Core.Server.Pipeline.Packument (PackumentReplies (..), mapPackumentReplies)
-import Ecluse.Core.Server.Pipeline.Packument.Response (MetadataResponse, keepPrivateUnauthorised, metadataReplies)
+import Ecluse.Core.Server.Pipeline.Packument.Response (MetadataResponse, metadataReplies)
 import Ecluse.Core.Server.Response (renderRefusal)
 import Ecluse.Core.Server.Response.Summary (detailedRejections)
 
@@ -36,11 +36,9 @@ rubyContract media =
   where
     text status description = mediaContract status description (SchemaText "text/plain")
 
--- | Preserve the shared failure classification while encoding native response bytes.
+-- | Preserve the shared failure classification, including a local 403 for a private 401 or 403, while encoding native bytes.
 rubyReplies :: PackumentReplies RubyResponse
-rubyReplies = mapPackumentReplies SecondResponse base{packumentPrivateRefused = keepPrivateUnauthorised base}
-  where
-    base = metadataReplies detailedRejections (fromStrict . encodeUtf8 . renderRefusal)
+rubyReplies = mapPackumentReplies SecondResponse (metadataReplies detailedRejections (fromStrict . encodeUtf8 . renderRefusal))
 
 -- | Refuse query syntax before admission or upstream work.
 rubyBadRequest :: Text -> RubyResponse
