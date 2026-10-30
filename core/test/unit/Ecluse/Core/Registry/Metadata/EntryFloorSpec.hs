@@ -12,7 +12,7 @@ import Data.Primitive.PrimVar (PrimVar, newPrimVar, readPrimVar, writePrimVar)
 import Test.Hspec
 
 import Ecluse.Core.Registry.JsonStream (Steps (..), StreamResult (..))
-import Ecluse.Core.Registry.Metadata.EntryFloor (RetainedEntries (RetainedEntries), countingEntries, entryFloorBytes, readFlooredWalk)
+import Ecluse.Core.Registry.Metadata.EntryFloor (RetainedEntries (RetainedEntries), countingEntries, entryFloorBytes, entryFloorCharge, readFlooredWalk, releaseFloorBytes)
 import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), LimitError (TooManyVersions))
 import Ecluse.Test.Registry.JsonStream (heldChunks)
 
@@ -20,6 +20,16 @@ spec :: Spec
 spec = describe "the full-read entry floor" $ do
     it "charges each retained entry at least 704 bytes" $
         entryFloorBytes `shouldBe` 704
+
+    it "charges each npm version and PyPI file at least 1152 bytes" $
+        releaseFloorBytes `shouldBe` 1152
+
+    it "owes the release floor for each version or file and the entry floor for every other entry" $ do
+        entryFloorCharge (RetainedEntries 2 3) `shouldBe` 2 * 1152 + 3 * 704
+        entryFloorCharge mempty `shouldBe` 0
+
+    it "saturates the floors at the largest charge" $
+        entryFloorCharge (RetainedEntries maxBound 1) `shouldBe` maxBound
 
     it "pays nothing while the per-byte charge covers every entry" $ do
         (result, payments) <- floored 1000 ["{" <> BS.replicate 1000 120 <> ",}"]
