@@ -1359,6 +1359,7 @@ test-suite ecluse-core-unit
     Ecluse.Core.Registry.RubyGems.SourceStateSpec
     Ecluse.Core.Server.Pipeline.PublishSpec
     Ecluse.Test.Corpus.RubyGemsSpec
+    Ecluse.Core.Registry.RubyGems.AdapterSpec
     Ecluse.Core.Registry.RubyGems.Archive.MetadataSpec
     Ecluse.Core.Registry.RubyGems.Archive.YamlSpec
     Ecluse.Core.Registry.RubyGems.ArchiveSpec
