@@ -17,6 +17,7 @@ reference = "/docs/configuration/#rule-policy"
 | --- | --- |
 | Public version is at least seven days old | The age rule can admit it if no earlier rule decides otherwise. |
 | npm version has install-time execution | The npm admission rule denies it. This default does not remove stored copies. |
+| npm version has a dependency on a git source or a remote tarball URL | The npm admission rule denies it. This default does not remove stored copies. |
 | No advisory source configured | The default known-malicious and remediation rules stay inactive. |
 | Advisory source configured | Known-malicious denial and qualifying remediation admission become active. |
 | No rule allows the version | Public admission is denied. |
@@ -26,7 +27,7 @@ reference = "/docs/configuration/#rule-policy"
 
 Higher precedence runs first. A decisive allow can prevent lower rules from running. A check that was not reached is not a successful check.
 
-An identity allow at its default precedence overrides scored CVSS and EPSS denies. It does not override the default known-malicious or npm install-script denies.
+An identity allow at its default precedence overrides scored CVSS and EPSS denies. It does not override the default known-malicious, npm install-script or npm external-dependency denies.
 
 Print the resolved order with `check-config`. Use that order when reviewing an exception.
 

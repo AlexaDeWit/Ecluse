@@ -1452,8 +1452,8 @@ lists it right after that counterpart, so their allocations per success sit side
 | `rubygems/revalidate-not-modified-advisories` | `rubygems/revalidate-not-modified` | The shipped policy | The captured advisories for `rails`, the first gem in the working set |
 
 The load harness boots the shipped mount policy. npm therefore also carries the admission-only
-`deny-scripts` rule, while PyPI, Cargo, and RubyGems carry only the shared defaults. Two captured npm versions declare
-`postinstall` and the default denies them. Check a scheduled-equivalent npm run against the existing
+`deny-scripts` and `deny-external-dependencies` rules, while PyPI, Cargo, and RubyGems carry only the shared defaults. Two captured npm versions declare
+`postinstall` and the default denies them. No captured npm version has a git or URL dependency. Check a scheduled-equivalent npm run against the existing
 success floors when changing this default, keeping every failure visible.
 
 A fail-closed advisory rule answers a version it cannot decide with 503, and the report counts

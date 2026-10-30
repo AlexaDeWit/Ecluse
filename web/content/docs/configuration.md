@@ -370,7 +370,7 @@ The policy is a named map of rules over the deny-by-default gate described in
 `ECLUSE_RULES` carries the same object as JSON, which suits a one-rule tweak, and the document
 stays the reviewable home for a real policy.
 
-Écluse ships eleven built-in rule types, catalogued below. A shipped name patches the rule it names,
+Écluse ships twelve built-in rule types, catalogued below. A shipped name patches the rule it names,
 `enabled: false` suppresses it, and a new name with a `type` adds a rule. A rule reads only its own
 type's knobs, and a knob written under a type that does not read it fails the load. The table lists
 the types from the highest default precedence to the lowest, so an earlier row wins over a later
@@ -382,6 +382,7 @@ one:
 | `DenyIfDeprecated` | No | Denies a version carrying the npm deprecation flag, including whole packages and release lines. | None |
 | `DenyIfYanked` | No | Denies a yanked Cargo version or a PyPI release whose every file is yanked. | None |
 | `DenyInstallTimeExecution` | npm only | `deny-scripts` denies npm install scripts at admission. Stored copies stay. | None |
+| `DenyExternalDependencies` | npm only | `deny-external-dependencies` denies a public npm version whose `dependencies`, `optionalDependencies` or `peerDependencies` name a git source or a remote tarball URL, at admission. Stored copies stay. | None |
 | `DenyIfKnownMalicious` | With `advisories.url` | Denies affected versions named by an active primary `MAL-` advisory. Named `deny-known-malicious`, precedence 300, both phases. | `onUnavailable` |
 | `AllowByIdentity` | No | Admits a package or `package@version`, and a bare name matches every version. It overrides scored advisory denies. Override MAL denial with precedence above 300. | `identity` |
 | `DenyIfCve` | No | Denies a version that a synced advisory marks as affected at or above a CVSS threshold. | `minCvss` (0-10), `onUnavailable` |
@@ -427,11 +428,21 @@ deprecates or yanks a first-party release at the publication target. Écluse ans
 result: a first-party npm version keeps its `deprecated` member, and a PyPI file keeps its
 `yanked` status.
 
-The npm mount adds `deny-scripts` at precedence 300 with `appliesTo: [admission]`.
-The default applies only when you enable the npm mount. It does not enable a mount itself.
+The npm mount adds `deny-scripts` and `deny-external-dependencies`, each at precedence 300 with
+`appliesTo: [admission]`. These defaults apply only when you enable the npm mount. They do not
+enable a mount themselves.
 PyPI inherits only the shared defaults, so an admitted release keeps its source distributions and wheels.
 
-Disable this default under `mounts.npm.rules`, or admit a named package with an `AllowByIdentity`
+`deny-external-dependencies` denies a public version whose installable dependencies a client would
+fetch directly, past Écluse: a git source (`git+https:`, `git:`, `git+ssh:`, `ssh:`, `github:`,
+`gitlab:`, `bitbucket:`, `gist:`, `sourcehut:`, `user/repo` shorthand, or a `user@host:path`
+address) or a remote tarball URL (`http:` or `https:`). It reads the specs the packument already
+carries, so it adds no fetch. `devDependencies`, which consumers do not install, `file:`, `link:` and
+`workspace:` specs, and `npm:` aliases do not trigger it. The type also loads on PyPI, Cargo and RubyGems
+mounts, where it abstains: pypi.org and crates.io refuse such dependencies at upload, and a
+RubyGems dependency names no source.
+
+Disable either default under `mounts.npm.rules`, or admit a named package with an `AllowByIdentity`
 pin whose explicit `precedence` is above 300:
 
 ```yaml
@@ -455,11 +466,11 @@ mounts:
 ```
 
 `ECLUSE_MOUNTS__NPM__RULES` carries the same patch as JSON, for example
-`'{"deny-scripts":{"enabled":false}}'`. Disabling `deny-scripts` in the shared `rules` object
-fails the load because that shared list defines no rule by this name.
+`'{"deny-scripts":{"enabled":false}}'`. Disabling `deny-scripts` or `deny-external-dependencies`
+in the shared `rules` object fails the load because that shared list defines no rule by either name.
 Mount rules resolve over the shared policy, then the shipped mount rules, then your mount patch.
-To extend the npm deny to stored copies, set
-`deny-scripts: {appliesTo: [admission, revocation]}` under `mounts.npm.rules`.
+To extend an npm deny to stored copies, restate its phases under `mounts.npm.rules`, for example
+`deny-scripts: {appliesTo: [admission, revocation]}`.
 
 Each adapter declares the rule types its ecosystem blocks, with a reason.
 Boot and `ecluse check-config` refuse every blocked entry in each active mount's resolved policy.
@@ -513,7 +524,7 @@ mounts:
 
 `ECLUSE_MOUNTS__PYPI__RULES` takes that mount patch as JSON, for example
 `'{"custom-code":{"enabled":false},"custom-scope":{"enabled":false}}'`.
-The shipped npm default remains under `mounts.npm.rules.deny-scripts`.
+The shipped npm defaults remain under `mounts.npm.rules`.
 PyPI's install-code signal and the served source distributions and wheels remain unchanged.
 
 The advisory rules carry details the table leaves out:
@@ -574,8 +585,8 @@ The precedence values, the patch/add/suppress merge model, and the strict valida
 
 ### Where a rule applies
 
-A new rule applies at two phases unless you limit it. The shipped npm `deny-scripts` applies only
-at admission. Admission is the gate: a listing, an artifact request, and the mirror worker's check before it writes a version to your mirror target.
+A new rule applies at two phases unless you limit it. The shipped npm `deny-scripts` and
+`deny-external-dependencies` apply only at admission. Admission is the gate: a listing, an artifact request, and the mirror worker's check before it writes a version to your mirror target.
 Revocation is the Dredger's check of the versions your stores already hold. The `appliesTo` list
 on a rule names its phases:
 

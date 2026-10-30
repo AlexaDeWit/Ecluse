@@ -162,10 +162,11 @@ The **default precedence ladder** climbs from most-passive to most-decisive:
 ```text
 AllowIfOlderThan (100) < AllowIfRemediatesCve (150) < AllowScope (200) <
 DenyIfCve = DenyIfEpss (225) < AllowByIdentity (250) <
-DenyIfDeprecated = DenyIfYanked = DenyIfKnownMalicious = DenyInstallTimeExecution (300) < DenyByIdentity (400)
+DenyIfDeprecated = DenyIfYanked = DenyIfKnownMalicious = DenyInstallTimeExecution =
+DenyExternalDependencies (300) < DenyByIdentity (400)
 ```
 
-`DenyIfKnownMalicious`, availability denies, `DenyInstallTimeExecution`, and `DenyByIdentity` default above every allow. The two
+`DenyIfKnownMalicious`, availability denies, `DenyInstallTimeExecution`, `DenyExternalDependencies`, and `DenyByIdentity` default above every allow. The two
 scored advisory denies share a rung **below** `AllowByIdentity` (225 against 250), so an operator's
 exact-identity allow overrides either. That is the explicit "I have decided this version must ship"
 escape hatch. Both still sit above the quarantine, the remediation lane, and a scope
@@ -174,10 +175,15 @@ raise a specific allow above a specific deny, or the reverse, with an explicit p
 
 The source-free [default policy](configuration.md#the-default-policy) has one shared rule: the pure
 `AllowIfOlderThan` quarantine (`min-age`).
-The npm mount also ships `deny-scripts` (`DenyInstallTimeExecution`) at admission only, so it
-refuses new public admission without deleting stored copies. Disable it with `enabled: false`
-under `mounts.npm.rules`, or admit a named package with an `AllowByIdentity` pin whose explicit
-precedence is above 300. When `advisories.url` is configured, two more shared defaults activate:
+The npm mount also ships `deny-scripts` (`DenyInstallTimeExecution`) and
+`deny-external-dependencies` (`DenyExternalDependencies`) at admission only, so they refuse new
+public admission without deleting stored copies. Disable either with `enabled: false` under
+`mounts.npm.rules`, or admit a named package with an `AllowByIdentity` pin whose explicit
+precedence is above 300. `DenyExternalDependencies` exists because no consumer fetch may leave
+Écluse: an npm git or URL dependency installs straight from its source, past the quarantine, the
+advisories and the mirror. It reads specs the packument already carries, so it adds no fetch. Its
+type loads on every mount, and PyPI, Cargo and RubyGems project registry-only dependencies, because
+their public registries refuse such dependencies at upload or a dependency there names no source. When `advisories.url` is configured, two more shared defaults activate:
 `DenyIfKnownMalicious` and the `AllowIfRemediatesCve` fast lane. The remaining rules opt in by name.
 
 ## CVE subsystem
