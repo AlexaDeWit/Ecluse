@@ -52,7 +52,7 @@ import Ecluse.Composition.Vet (runVet)
 import Ecluse.Config (
     Config (configMounts),
     ConfigError (..),
-    FirstParty (FirstPartyNpmScopes, FirstPartyPyPI, FirstPartyRubyGems),
+    FirstParty (FirstPartyCargo, FirstPartyNpmScopes, FirstPartyPyPI, FirstPartyRubyGems),
     Mount (mountPolicy),
     PolicyError (UnknownRuleType),
     StoreTag (TagRegistry),
@@ -590,6 +590,13 @@ firstPartySpec = describe "firstPartyName (the derived first-party predicate)" $
                 (firstPartyName (FirstPartyRubyGems (OwnedName owned :| [])))
                 [owned, mkPackageName RubyGems Nothing "acme-tools", mkPackageName Npm Nothing "Acme_Tools"]
                 `shouldBe` [True, False, False]
+
+    it "dispatches Cargo ownership through its collision key, refusing another ecosystem" $
+        let owned = mkPackageName Cargo Nothing "acme_tools"
+         in map
+                (firstPartyName (FirstPartyCargo (OwnedName owned :| [])))
+                [owned, mkPackageName Cargo Nothing "acme-tools", mkPackageName Cargo Nothing "acme-toolsx", mkPackageName RubyGems Nothing "acme_tools"]
+                `shouldBe` [True, True, False, False]
 
     it "wires the same predicate onto the mount's serve deps, deny by default" $ do
         let testEnv = [("ECLUSE_MOUNTS__NPM__FIRST_PARTY", "@acme")] <> staticEnvVars
