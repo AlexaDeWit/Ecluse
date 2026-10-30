@@ -124,6 +124,8 @@ import Ecluse.BenchLoad.RtsProbe (rtsStatsFlag)
 import Ecluse.BenchLoad.RtsWindow (Collection (MajorCollection), RtsSnapshot, collectionName)
 import Ecluse.BenchLoad.Verdict (ProxyEnding, classifyEnding)
 import Ecluse.Core.Ecosystem (Ecosystem (Cargo, Npm, PyPI, RubyGems), ecosystemName)
+import Ecluse.Core.Registry.Adapter (uploadEndpointFor)
+import Ecluse.Core.Registry.Adapter.Capability (UploadEndpointRequirement (ExplicitUploadEndpoint))
 import Ecluse.Core.Server.Encoding (MetadataCompression (IdentityOnly))
 import Ecluse.Rts.Cgroup (parseMemoryMax, readIfExists)
 import Ecluse.Runtime.Server (listeningPrefix, proxyListener)
@@ -446,7 +448,9 @@ proxyEnvironment settings shape capabilities dir (port, controlPort, scrapePort)
         , ("ECLUSE_MOUNTS__" <> mount <> "__MIRROR_TARGET__REGISTRY__TOKEN", "fixture-token")
         , ("ECLUSE_MOUNTS__" <> mount <> "__MIRROR_TARGET__REGISTRY__USERNAME", "fixture-user")
         ]
-            <> foldMap (\p -> [upstream "MIRROR_TARGET" p, ("ECLUSE_MOUNTS__" <> mount <> "__MIRROR_TARGET__REGISTRY__UPLOAD_URL", upstreamUrl "MIRROR_TARGET" p <> "/upload")]) privatePort
+            <> foldMap (\p -> upstream "MIRROR_TARGET" p : [("ECLUSE_MOUNTS__" <> mount <> "__MIRROR_TARGET__REGISTRY__UPLOAD_URL", upstreamUrl "MIRROR_TARGET" p <> "/upload") | separateUpload]) privatePort
+    -- A protocol that derives its upload address from url refuses an uploadUrl at load.
+    separateUpload = uploadEndpointFor (psEcosystem settings) == Just ExplicitUploadEndpoint
     pinned =
         catMaybes
             [ upstream "PRIVATE_UPSTREAM" <$> privatePort
