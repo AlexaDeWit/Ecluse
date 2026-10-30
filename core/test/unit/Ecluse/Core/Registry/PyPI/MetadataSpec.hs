@@ -20,10 +20,11 @@ import Ecluse.Core.Package (
 import Ecluse.Core.Package.Admission (ArtifactAdmission (AdmissionAdmit, AdmissionDenied))
 import Ecluse.Core.Package.Entry (EntryKey (ArrayEntry))
 import Ecluse.Core.Registry.Metadata (
+    Manifest (manifestInfo),
     MetadataError (MetadataBoundExceeded, MetadataUndecodable),
  )
 import Ecluse.Core.Registry.PyPI.Document (simpleEnvelope)
-import Ecluse.Core.Registry.PyPI.Metadata (projectPyPIStream)
+import Ecluse.Core.Registry.PyPI.Metadata (projectPyPIStream, pypiRead)
 import Ecluse.Core.Registry.PyPI.Streaming (PyPIRead (..))
 import Ecluse.Core.Rules (prepare)
 import Ecluse.Core.Rules.Types (EvalContext (EvalContext), Rule (AllowByIdentity, AllowIfOlderThan), completeEvidence)
@@ -33,12 +34,15 @@ import Ecluse.Core.Security (
     defaultLimits,
  )
 import Ecluse.Test.Contract.Metadata.Projection (MetadataFraming (SingleDocument), ProjectionDriver (..), metadataProjectionContract)
+import Ecluse.Test.Corpus (CaptureUpstream (upstreamOrigin), pypiCaptureUpstream)
 import Ecluse.Test.Json (encodeStrict)
 import Ecluse.Test.Package (defaultMinIntegrity, pypiVersion, requestsName, unsafeFilename)
 import Ecluse.Test.Package.Admission (admitArtifactWithEvidence)
+import Ecluse.Test.Registry.Metadata.Fetch (heldManifest, heldVersion)
 import Ecluse.Test.Registry.PyPI (filesNamed, simpleFile, simpleIndex, simpleIndexWith, withFileKeys)
 import Ecluse.Test.Registry.PyPI.Metadata (projectPyPIChunks, projectPyPIIndex, projectPyPIVersion, simpleValue)
 import Ecluse.Test.Rules (admittedBy, atDefaultPrecedence, evalRules, inertRuleDeps)
+import Ecluse.Test.Snapshot (readDetails)
 import Ecluse.Test.Support (expectRight)
 
 spec :: Spec
@@ -242,11 +246,12 @@ indexOf = indexNamed "requests"
 indexNamed :: Text -> [Text] -> ByteString
 indexNamed name = encodeStrict . simpleIndex name . filesNamed
 
+-- | The production full and selected reads, from the index whose file host the fixture names.
 projectionDriver :: ProjectionDriver
 projectionDriver =
     ProjectionDriver
-        { projectFull = \limits bytes -> pure (fst <$> projectPyPIIndex limits requestsName bytes)
-        , projectSelected = \limits version bytes -> pure (projectPyPIVersion limits requestsName (pypiVersion version) bytes)
+        { projectFull = \limits bytes -> fmap manifestInfo <$> heldManifest pypiRead limits (upstreamOrigin pypiCaptureUpstream) requestsName [bytes]
+        , projectSelected = \limits version bytes -> fmap readDetails <$> heldVersion pypiRead limits (upstreamOrigin pypiCaptureUpstream) requestsName (pypiVersion version) [bytes]
         , projectionFraming = SingleDocument
         , projectionDocument = \name versions -> indexNamed name [name <> "-" <> version <> ".tar.gz" | version <- versions]
         , projectionPackageName = "requests"
