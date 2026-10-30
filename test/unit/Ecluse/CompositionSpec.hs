@@ -6,6 +6,9 @@ module Ecluse.CompositionSpec (spec) where
 
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
+import Network.HTTP.Types (hAuthorization, hContentType, methodPost, status200)
+import Network.Wai (Request (requestHeaders, requestMethod), defaultRequest)
+import Network.Wai.Test (SRequest (SRequest), runSession, setPath, simpleStatus, srequest)
 import Test.Hspec
 
 import Ecluse.Composition (
@@ -21,6 +24,7 @@ import Ecluse.Composition.Credential (initTargetCredentialProviders)
 import Ecluse.Composition.MirrorRole (MirrorMintPlan (MintMirrorWrite, SkipMirrorWrite))
 import Ecluse.Composition.Support (
     cargoMirrorEnv,
+    codeArtifactDomain,
     completeMountDoc,
     expectConfig,
     expectEnv,
@@ -28,6 +32,7 @@ import Ecluse.Composition.Support (
     expectValidated,
     fixedNow,
     overrideEnv,
+    pubUrlEnv,
     rubyInstallRefusal,
     scopedName,
     staticEnvVars,
@@ -62,6 +67,7 @@ import Ecluse.Core.Rules (PreparedRule (prepName), bootOrder, renderBootOrder)
 import Ecluse.Core.Rules.Types (EvalContext (EvalContext), identityEvidence)
 import Ecluse.Core.Security (Limits (maxMetadataBytes, maxNestingDepth, maxVersionCount), defaultLimits)
 import Ecluse.Core.Security.Egress (registryUrlText)
+import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Core.Server.Admission.Bytes (newByteAdmission)
 import Ecluse.Core.Server.Context (
     MountBinding (bindingPackumentDeps, bindingPrefix, bindingPublishDeps),
@@ -78,10 +84,14 @@ import Ecluse.Core.Server.Upstream (
     mountUpstreams,
     upstreamTarballHostGate,
  )
+import Ecluse.Runtime.Server (application, mkServerConfig)
+import Ecluse.Runtime.Test.Support (newTestEnv)
 import Ecluse.Service (mountBindingFor)
 import Ecluse.Test.Credential (noCredentialReporters)
+import Ecluse.Test.Deadline (withSweeper)
 import Ecluse.Test.Package (defaultMinIntegrity, defaultMinTrustedIntegrity, pypiVersion, thingName, unscopedPyPI, v1_0_0)
 import Ecluse.Test.Rules (blockedBy, evalRules, inertRuleDeps)
+import Ecluse.Test.Stub (allCaptured, headerValue, stubBaseUrl, withRoutedStub)
 
 -- | The composition root's boot wiring: every problem is an aggregated boot error, with no IO beyond the injected clock and resolver.
 spec :: Spec
@@ -470,6 +480,46 @@ publishWiringSpec = describe "resolveBootWiring (first-party publish deps)" $ do
                 Nothing -> pure ()
                 Just _ -> expectationFailure "expected no publish deps when no publication target is configured"
             _ -> expectationFailure "expected a single wired binding"
+
+    it "presents a static CodeArtifact RubyGems publication token as Bearer" $
+        relayedRubyGemsAuthorization
+            [ ("ECLUSE_MOUNTS__RUBYGEMS__PUBLICATION_TARGET__CODE_ARTIFACT__TOKEN", "publish-key")
+            , ("ECLUSE_SERVER__AUTH_TOKEN", "edge-key")
+            ]
+            "edge-key"
+            `shouldReturn` [Just "Bearer publish-key"]
+
+    it "passes a caller's RubyGems publication key through unchanged to a CodeArtifact target" $
+        relayedRubyGemsAuthorization [] "caller-key" `shouldReturn` [Just "caller-key"]
+
+{- Compose a RubyGems mount that publishes to CodeArtifact, point its cleared target at a stub,
+push the fixture gem under @key@, and return the Authorization of each request the target saw. -}
+relayedRubyGemsAuthorization :: [(String, String)] -> ByteString -> IO [Maybe ByteString]
+relayedRubyGemsAuthorization extraEnv key = do
+    archive <- readFileBS "test/fixtures/rubygems/gems/ecluse-fixture-root-1.0.0.gem"
+    planFrom (extraEnv <> rubyGemsCodeArtifactPublicationEnv) Nothing >>= \case
+        Right [binding] | Just deps <- bindingPublishDeps binding ->
+            withRoutedStub (const (status200, [], "Successfully registered gem")) $ \stub -> withSweeper $ \deadlines -> do
+                let target = loopbackRegistryUrl (stubBaseUrl stub)
+                    retargeted = binding{bindingPublishDeps = Just deps{pubReadUrl = target, pubTargetUrl = target}}
+                    push = setPath defaultRequest{requestMethod = methodPost, requestHeaders = [(hAuthorization, key), (hContentType, "application/octet-stream")]} "/rubygems/api/v1/gems"
+                app <- application (mkServerConfig [retargeted]) <$> newTestEnv deadlines
+                response <- runSession (srequest (SRequest push (toLazy archive))) app
+                simpleStatus response `shouldBe` status200
+                map (headerValue "Authorization") <$> allCaptured stub
+        Right _ -> [] <$ expectationFailure "expected one RubyGems binding with publish deps"
+        Left errs -> [] <$ expectationFailure ("expected the RubyGems publication to boot: " <> show errs)
+
+-- A RubyGems mount whose first-party namespace owns the fixture gem and publishes to a CodeArtifact repository.
+rubyGemsCodeArtifactPublicationEnv :: [(String, String)]
+rubyGemsCodeArtifactPublicationEnv =
+    pubUrlEnv
+        <> [ ("ECLUSE_MOUNTS__NPM__ENABLED", "false")
+           , ("ECLUSE_MOUNTS__RUBYGEMS__ENABLED", "true")
+           , ("ECLUSE_MOUNTS__RUBYGEMS__PRIVATE_UPSTREAM__REGISTRY__URL", "https://private.example.test/")
+           , ("ECLUSE_MOUNTS__RUBYGEMS__FIRST_PARTY", "ecluse-fixture-root")
+           , ("ECLUSE_MOUNTS__RUBYGEMS__PUBLICATION_TARGET__CODE_ARTIFACT__URL", codeArtifactDomain <> "/ruby/internal/")
+           ]
 
 {- The mirror serve plan's declared target as characters. The wired value carries the
 https-only egress witness, and these assertions read the configured URL back out of it. -}
