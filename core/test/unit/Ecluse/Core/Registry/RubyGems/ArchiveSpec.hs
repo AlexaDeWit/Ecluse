@@ -81,8 +81,8 @@ spec = describe "native gem validation" $ do
     it "verifies every checksum algorithm and member in well-formed members" $ do
         bytes <- readFileBS fixture
         members <- nativeMembers bytes
-        metadataGzip <- maybe (fail "native fixture has no metadata member") pure (lookup "metadata.gz" members)
-        dataGzip <- maybe (fail "native fixture has no data member") pure (lookup "data.tar.gz" members)
+        metadataGzip <- fixtureMember "metadata.gz" members
+        dataGzip <- fixtureMember "data.tar.gz" members
         let sha256 = "SHA256:\n  metadata.gz: " <> sha256Hex metadataGzip <> "\n  data.tar.gz: " <> sha256Hex dataGzip <> "\n"
             zeros = T.replicate 128 "0"
         for_
@@ -98,7 +98,7 @@ spec = describe "native gem validation" $ do
     it "reaches nested tar validation after accepting recomputed member checksums" $ do
         bytes <- readFileBS fixture
         members <- nativeMembers bytes
-        dataGzip <- maybe (fail "native fixture has no data member") pure (lookup "data.tar.gz" members)
+        dataGzip <- fixtureMember "data.tar.gz" members
         let nativeTar = GZip.decompress (BSL.fromStrict dataGzip)
         trailing <- repack members (BSL.toStrict (GZip.compress (nativeTar <> "junk")))
         void <$> inspect defaultLimits trailing `shouldReturn` Left (ParseError "tar archive has trailing nonzero bytes")
@@ -125,7 +125,7 @@ spec = describe "native gem validation" $ do
         bytes <- readFileBS fixture
         members <- nativeMembers bytes
         length members `shouldBe` 3
-        dataGzip <- maybe (fail "native fixture has no data member") pure (lookup "data.tar.gz" members)
+        dataGzip <- fixtureMember "data.tar.gz" members
         entries <- tarEntries (GZip.decompress (BSL.fromStrict dataGzip))
         directories <- forM [1 .. 512 :: Int] $ \index -> do
             path <- expectRight (Tar.toTarPath True ("inventory-" <> show index))
@@ -212,7 +212,7 @@ nativeMembers bytes = tarEntries (BSL.fromStrict bytes) >>= traverse member
 
 repack :: [(Text, ByteString)] -> ByteString -> IO ByteString
 repack members payload = do
-    metadataGzip <- maybe (fail "native fixture has no metadata member") pure (lookup "metadata.gz" members)
+    metadataGzip <- fixtureMember "metadata.gz" members
     let checksums = TE.encodeUtf8 ("---\nSHA256:\n  metadata.gz: " <> sha256Hex metadataGzip <> "\n  data.tar.gz: " <> sha256Hex payload <> "\n")
         checksumGzip = BSL.toStrict (GZip.compress (BSL.fromStrict checksums))
     BSL.toStrict <$> tarBytes [("metadata.gz", metadataGzip), ("data.tar.gz", payload), ("checksums.yaml.gz", checksumGzip)]
@@ -220,8 +220,8 @@ repack members payload = do
 -- The genuine metadata and data members under the given checksums document, every member well-formed.
 repackChecksums :: [(Text, ByteString)] -> Text -> IO ByteString
 repackChecksums members checksums = do
-    metadataGzip <- maybe (fail "native fixture has no metadata member") pure (lookup "metadata.gz" members)
-    dataGzip <- maybe (fail "native fixture has no data member") pure (lookup "data.tar.gz" members)
+    metadataGzip <- fixtureMember "metadata.gz" members
+    dataGzip <- fixtureMember "data.tar.gz" members
     let checksumGzip = BSL.toStrict (GZip.compress (BSL.fromStrict (TE.encodeUtf8 checksums)))
     BSL.toStrict <$> tarBytes [("metadata.gz", metadataGzip), ("data.tar.gz", dataGzip), ("checksums.yaml.gz", checksumGzip)]
 
