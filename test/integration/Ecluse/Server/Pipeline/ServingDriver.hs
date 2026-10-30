@@ -35,7 +35,6 @@ import Ecluse.Core.Ecosystem (Ecosystem (Cargo, Npm, PyPI))
 import Ecluse.Core.Mirror.State (StateRead (..), extendProjectRecord, stateTarget)
 import Ecluse.Core.Mirror.State.Internal (StateRevision (..), retainVerifiedIdentity)
 import Ecluse.Core.Package (mkPackageName)
-import Ecluse.Core.Registry.Adapter (adapterFor)
 import Ecluse.Core.Registry.Adapter.Capability (AdapterMetadata (metadataRead))
 import Ecluse.Core.Registry.Adapter.Types (RegistryAdapter (adapterMetadata))
 import Ecluse.Core.Registry.CachedDocument (cargoCached)
@@ -67,7 +66,7 @@ import Ecluse.Test.Registry.Cargo.Fixtures qualified as Cargo
 import Ecluse.Test.Registry.Cargo.Reference qualified as Reference
 import Ecluse.Test.Registry.Npm (VersionSpec (..), versionSpec, versionValue)
 import Ecluse.Test.Rules (atDefaultPrecedence, inertRuleDeps)
-import Ecluse.Test.Server.Mount (serveDepsFor)
+import Ecluse.Test.Server.Mount (requiredAdapter, serveDepsFor)
 import Ecluse.Test.Support (expectRight)
 import Ecluse.Test.Wai (closedResponse, decodedBody, localhost, selfBaseUrl)
 
@@ -82,9 +81,6 @@ pypiServingDriver = nativeDriver PyPI pypiAdapter "/pypi" "/simple/thing" pypiAr
 -- | Cargo uses the production registration, native LF records and checksum observations.
 cargoServingDriver :: ServingDriver
 cargoServingDriver = cargoDriver
-
-requiredCargoAdapter :: IO RegistryAdapter
-requiredCargoAdapter = maybe (fail "Cargo has no production adapter registration") pure (adapterFor Cargo)
 
 nativeDriver :: Ecosystem -> RegistryAdapter -> ByteString -> ByteString -> (Text -> ByteString) -> (Text -> [ServingRelease] -> Value) -> (SResponse -> ServingResponse) -> (ByteString -> Text) -> ServingDriver
 nativeDriver ecosystem adapter mount metadataPath artifactPath document observe =
@@ -275,7 +271,7 @@ cargoDriver =
     serving compression faults rules privateReleases publicReleases action =
         testWithApplication (pure (faulted (privateFault faults) (cargoUpstream privateReleases))) $ \privatePort ->
             testWithApplication (pure (faulted (publicFault faults) (cargoUpstream publicReleases))) $ \publicPort -> withSweeper $ \deadlines -> do
-                adapter <- requiredCargoAdapter
+                adapter <- requiredAdapter Cargo
                 queue <- newTestMemoryQueue
                 manager <- newManager defaultManagerSettings
                 env <- newTestEnvWithQueue deadlines queue manager

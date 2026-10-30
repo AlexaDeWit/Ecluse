@@ -50,6 +50,7 @@ import Ecluse.Test.Maintenance (FakeStore (fakeMaintenance), defaultFakeStoreCon
 import Ecluse.Test.Package (npmVersion, unsafeRegistryUrl, unscopedNpm)
 import Ecluse.Test.Port (passthroughTracingPort)
 import Ecluse.Test.Registry.Cargo.Metadata (cargoTestName, cargoTestRecord)
+import Ecluse.Test.Server.Mount (requiredAdapter)
 import Ecluse.Test.Stub (Captured (capMethod, capPath), allCaptured, headerValue, stubBaseUrl, withRoutedStub)
 import Ecluse.Test.Support (expectRight)
 import Network.HTTP.Types.Status (status200, status201, status404)
@@ -199,7 +200,7 @@ captureMetadataRequests ::
     Maybe CredentialProvider ->
     IO [Request]
 captureMetadataRequests eco build cleared credential = withSweeper $ \deadlines -> do
-    adapter <- maybe (fail "missing adapter") pure (adapterFor eco)
+    adapter <- requiredAdapter eco
     captured <- newIORef []
     let capture _ origin name = do
             nativeRead <- prepareRead (metadataRead (adapterMetadata adapter)) origin >>= either (fail . show) pure

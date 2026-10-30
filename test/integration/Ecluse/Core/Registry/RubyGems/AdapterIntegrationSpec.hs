@@ -12,21 +12,18 @@ import Network.Wai.Test (SResponse (simpleStatus))
 import Test.Hspec
 
 import Ecluse.Core.Ecosystem (Ecosystem (RubyGems))
-import Ecluse.Core.Registry.Adapter (RegistryAdapter, adapterFor)
 import Ecluse.Server.Pipeline.ServingDriver (NativeObservation (..), nativeByteDriver, responseBytes, responseEvidence)
 import Ecluse.Server.Pipeline.TestSupport (publishedDaysAgo)
 import Ecluse.Test.Contract.Serving
 import Ecluse.Test.Package (hexSha256Of)
 import Ecluse.Test.Registry.RubyGems.Reference (RubyInfoRow (..), referenceInfo)
+import Ecluse.Test.Server.Mount (requiredAdapter)
 
 spec :: Spec
 spec = servingContract "rubygems" rubyServingDriver
 
-requiredAdapter :: IO RegistryAdapter
-requiredAdapter = maybe (fail "RubyGems has no production adapter registration") pure (adapterFor RubyGems)
-
 rubyServingDriver :: ServingDriver
-rubyServingDriver = nativeByteDriver RubyGems requiredAdapter "/rubygems" "/info/thing" "/info/thing" artifact document observation hexSha256Of
+rubyServingDriver = nativeByteDriver RubyGems (requiredAdapter RubyGems) "/rubygems" "/info/thing" "/info/thing" artifact document observation hexSha256Of
   where
     artifact version = encodeUtf8 ("/gems/thing-" <> version <> ".gem")
     document _ releases = "---\n" <> BS.intercalate "\n" (map releaseRow releases) <> "\n"
