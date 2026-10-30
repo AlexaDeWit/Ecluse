@@ -127,7 +127,7 @@ fixture = do
         firstRow :| otherRows = members
         published = foldl' (\instant row -> newestUpload instant (grPublishedAt row)) (grPublishedAt firstRow) otherRows
         document = GemDocument name "---\n" rows
-        details = PackageDetails name nativeVersion published CodeExecUnknown DependencySourcesUnknown Available artifacts
+        details = PackageDetails name nativeVersion published CodeExecUnknown RegistryDependencies Available artifacts
         doc = VersionDoc details (Just (fst rubyGemsCached document))
     inventory <- expectRight (checkedMirrorInventory name nativeVersion doc (RubyGemsMirrorRead document))
     pure (document, details, inventory)

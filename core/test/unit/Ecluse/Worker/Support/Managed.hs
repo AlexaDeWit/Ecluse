@@ -149,7 +149,7 @@ fixturePublish record target uploads probes reject loseReply transform onProbe =
             number <- atomicModifyIORef' probes (\n -> (n + 1, n + 1))
             readIORef onProbe >>= ($ number)
             files <- readIORef target
-            let versions = maybe mempty (Map.singleton "1" . PackageDetails name mirrorVersion Nothing NoCodeOnInstall DependencySourcesUnknown Available) (nonEmpty files)
+            let versions = maybe mempty (Map.singleton "1" . PackageDetails name mirrorVersion Nothing NoCodeOnInstall RegistryDependencies Available) (nonEmpty files)
             pure (Right (PackageInfo name versions mempty []))
         , mpPrepareVersion = \name version doc -> do
             raw <- maybeToRight (PublishSourceUnavailable "missing fixture source") (vdRaw doc >>= snd pypiSimpleCached)

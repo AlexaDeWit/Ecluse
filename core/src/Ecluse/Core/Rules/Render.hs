@@ -65,7 +65,6 @@ renderReason = \case
     InstallCodeUndetermined -> "install-time code execution not yet determined"
     FetchesOutside which -> "installs a dependency from outside the registry: " <> which
     DependenciesThroughRegistry -> "every installable dependency resolves through the registry"
-    DependencySourcesUndetermined -> "dependency sources not yet determined"
     VersionYanked -> "version is yanked"
     VersionNotYanked -> "version is not yanked"
     VersionDeprecated -> "version is deprecated"

@@ -62,7 +62,7 @@ spec = describe "durable record codec" $ do
             bytes <- expectRight (encodeProjectRecord defaultLimits record)
             decode bytes `shouldReturn` Right record
 
-    for_ [RegistryDependencies, FetchesOutsideRegistry "dependency 'left-pad' in dependencies names a git source", DependencySourcesUnknown] $ \dependencies ->
+    for_ [RegistryDependencies, FetchesOutsideRegistry "dependency 'left-pad' in dependencies names a git source"] $ \dependencies ->
         it ("preserves the dependency fact through restart: " <> show dependencies) $ do
             original <- mirrorSample [1] False "https://first.test/" "original"
             let details = (inventoryDetails original){pkgDependencySources = dependencies}

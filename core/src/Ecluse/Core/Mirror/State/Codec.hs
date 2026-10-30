@@ -307,7 +307,7 @@ parseDetails = withObject "admission facts" $ \value -> do
     PackageDetails name version
         <$> value .: "published"
         <*> (value .: "install" >>= parseInstall)
-        <*> (value .:? "dependencies" >>= maybe (pure DependencySourcesUnknown) parseDependencies)
+        <*> (value .:? "dependencies" >>= maybe (pure RegistryDependencies) parseDependencies)
         <*> (value .: "availability" >>= parseAvailability)
         <*> (value .: "artifacts" >>= traverse parseArtifact >>= nonempty "empty source fragment")
 
@@ -324,16 +324,14 @@ parseInstall = withObject "install fact" $ \value ->
         "runs" -> RunsCodeOnInstall <$> value .: "reason"
         (_ :: Text) -> fail "unknown install fact"
 
--- Absent when undetermined, as in every record written before the fact existed.
+-- Absent for the registry-only fact, so records written before the fact existed keep their bytes.
 dependencyValue :: DependencySources -> [Pair]
-dependencyValue DependencySourcesUnknown = []
-dependencyValue RegistryDependencies = ["dependencies" .= object ["kind" .= ("registry" :: Text)]]
+dependencyValue RegistryDependencies = []
 dependencyValue (FetchesOutsideRegistry reason) = ["dependencies" .= object ["kind" .= ("outside" :: Text), "reason" .= reason]]
 
 parseDependencies :: Value -> Parser DependencySources
 parseDependencies = withObject "dependency fact" $ \value ->
     value .: "kind" >>= \case
-        "registry" -> pure RegistryDependencies
         "outside" -> FetchesOutsideRegistry <$> value .: "reason"
         (_ :: Text) -> fail "unknown dependency fact"
 

@@ -218,8 +218,6 @@ data DependencySources
       RegistryDependencies
     | -- | A dependency installs from elsewhere, such as a git repository. The text names it, for the audit trail.
       FetchesOutsideRegistry Text
-    | -- | Not determined: the adapter does not read dependency sources. Pure rules abstain.
-      DependencySourcesUnknown
     deriving stock (Eq, Show)
 
 {- | Whether a version is offered, advisory-deprecated, or withdrawn. The registry's notice text
