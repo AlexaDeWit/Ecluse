@@ -57,8 +57,8 @@ spec = describe "full completion" $ do
         let altered = completion{completionEvidence = filter ((/= "recovery") . evidenceFamily) (completionEvidence completion)}
         validateCompletion altered [catalogue] `shouldSatisfy` isLeft
     it "rejects another tier or an unknown case as evidence" $
-        forM_ [\e -> e{evidenceTier = Load}, \e -> e{evidenceCase = "missing"}] $ \change ->
-            validateCompletion completion{completionEvidence = map change (completionEvidence completion)} [catalogue] `shouldSatisfy` isLeft
+        forM_ [(\e -> e{evidenceTier = Load}, "completion group missing: backend: Load"), (\e -> e{evidenceCase = "missing"}, "completion case missing: missing")] $ \(change, fault) ->
+            validateCompletion completion{completionEvidence = zipWith ($) (change : repeat id) (completionEvidence completion)} [catalogue] `shouldBe` Left [fault]
     it "rejects one passing case relabelled as several business laws" $ do
         let altered = completion{completionEvidence = map (\e -> e{evidenceCase = "backend/reads/present"}) (completionEvidence completion)}
         validateCompletion altered [catalogue] `shouldSatisfy` isLeft
@@ -67,13 +67,20 @@ spec = describe "full completion" $ do
             Left faults -> expectationFailure (show faults :: String)
             Right plan -> do
                 auditCompletion completion [(Fixture.executionIdentity, plan, [report])] `shouldBe` []
-                forM_ (reportCases report) $ \result -> do
-                    let omitted = report{reportCases = filter ((/= crCaseId result) . crCaseId) (reportCases report)}
-                        failed = report{reportCases = map (\actual -> if crCaseId actual == crCaseId result then actual{crStatus = Failed} else actual) (reportCases report)}
-                    auditCompletion completion [(Fixture.executionIdentity, plan, [omitted])] `shouldSatisfy` (not . null)
-                    auditCompletion completion [(Fixture.executionIdentity, plan, [failed])] `shouldSatisfy` (not . null)
+                forM_ (completionEvidence completion) $ \evidence -> do
+                    let omitted = report{reportCases = filter ((/= evidenceCase evidence) . crCaseId) (reportCases report)}
+                        failed = report{reportCases = map (\actual -> if crCaseId actual == evidenceCase evidence then actual{crStatus = Failed} else actual) (reportCases report)}
+                    auditCompletion completion [(Fixture.executionIdentity, plan, [omitted])] `shouldContain` ["completion case did not execute: " <> evidenceCase evidence]
+                    auditCompletion completion [(Fixture.executionIdentity, plan, [failed])] `shouldContain` ["completion law did not pass: " <> evidenceFamily evidence <> "/" <> evidenceLaw evidence]
+    it "refuses another partition's passing report as evidence for the subject's cases" $
+        case makePlan sharedCatalogue of
+            Left faults -> expectationFailure (show faults :: String)
+            Right plan -> do
+                auditCompletion completion [(Fixture.executionIdentity, plan, [report, otherReport])] `shouldBe` []
+                auditCompletion completion [(Fixture.executionIdentity, plan, [otherReport])]
+                    `shouldBe` ["completion case did not execute: " <> evidenceCase evidence | evidence <- completionEvidence completion]
     it "rejects absent execution reports" $
-        auditCompletion completion [] `shouldSatisfy` (not . null)
+        auditCompletion completion [] `shouldContain` ["completion has no execution evidence"]
 
 completion :: Completion
 completion = Completion "backend" FullPackageStore [LawEvidence family law Unit "backend" ("backend/" <> family <> "/" <> law) | (family, law) <- laws]
@@ -103,3 +110,17 @@ scenarioGroup = Group "backend" "package-store" "backend" Unit "backend" [Case i
 
 report :: Report
 report = Report 1 Fixture.executionIdentity "backend" False [GroupResult "backend" Passed 0 [] (PhaseTimings 0 0 0)] [CaseResult identifier "backend" Passed 0 [] | identifier <- obligationCases obligation] 1 [scenarioGroup]
+
+-- | One plan shared by the subject's partition and an unrelated partition, as an E2E plan is.
+sharedCatalogue :: Catalogue
+sharedCatalogue = catalogue{catalogueObligations = [obligation, otherObligation], catalogueGroups = [scenarioGroup, otherGroup]}
+
+otherObligation :: Obligation
+otherObligation = obligation{obligationId = "other", obligationCases = ["other/case"]}
+
+otherGroup :: Group
+otherGroup = scenarioGroup{groupId = "other", groupPartition = "other", groupCases = [Case "other/case" ["other"]]}
+
+-- | A fully passing report for the unrelated partition alone.
+otherReport :: Report
+otherReport = Report 1 Fixture.executionIdentity "other" False [GroupResult "other" Passed 0 [] (PhaseTimings 0 0 0)] [CaseResult "other/case" "other" Passed 0 []] 1 [otherGroup]
