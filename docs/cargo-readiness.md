@@ -8,7 +8,7 @@ Use these sources for the implemented contract:
 | Concern | Authoritative source |
 |---|---|
 | Client setup and credential providers | [Connect Cargo](../web/content/docs/connect.md#cargo) |
-| Native views, retained fields, and protocol limits | [Cargo protocol](../web/content/docs/protocol-support.md#cargo) |
+| Routes, retained fields, and protocol limits | [Cargo protocol](../web/content/docs/protocol-support.md#cargo) |
 | Configuration keys and defaults | [Default configuration](../config/default.yaml) |
 | Discovery, source identity, and durable completion rationale | [Cargo integration](architecture/registry-model.md#cargo-integration) |
 | Native fixtures, full contracts, and resource evidence | [Cargo testing](testing.md#cargo-native-provider) |
