@@ -139,10 +139,9 @@ spec = do
                 held `shouldBe` 2 * (directoryWeight (GemDirectory "public-gem 1.0 \n") + BS.length "private-gem 1.0 \n") + 4096
         it "refuses a merged directory one byte over the metadata bound" $
             withDirectorySources $ \runtime binding _ _ -> do
-                let bounded limit = binding{bindingPackumentDeps = (bindingPackumentDeps binding){pdLimits = (pdLimits (bindingPackumentDeps binding)){maxMetadataBytes = limit}}}
                 -- The header and the packed public and private rows take 37 bytes.
-                simpleStatus <$> capture runtime (bounded 37) "GET" "/versions" [] `shouldReturn` status200
-                simpleStatus <$> capture runtime (bounded 36) "GET" "/versions" [] `shouldReturn` status502
+                simpleStatus <$> capture runtime (metadataByteCap 37 binding) "GET" "/versions" [] `shouldReturn` status200
+                simpleStatus <$> capture runtime (metadataByteCap 36 binding) "GET" "/versions" [] `shouldReturn` status502
         it "keeps a native400 directory limit failure at the capability boundary" $
             withDirectorySources $ \runtime binding hits privateStatus -> do
                 writeIORef privateStatus status400
@@ -175,7 +174,7 @@ spec = do
                                 private = BS.drop (BS.length coordinateBudgetHeader) paddedPrivate
                                 oneNameBytes = BS.length denied + BS.length private
                                 cap = oneNameBytes - if exact then 0 else 1
-                                binding = coordinateByteCap cap original
+                                binding = metadataByteCap cap original
                                 deps = bindingPackumentDeps binding
                                 public = binding{bindingPackumentDeps = withPrivateBaseUrl Nothing deps}
                             runtime <- if warm then warmPublicDocuments uncached public hits [("acme-1", status403)] else pure uncached
@@ -200,7 +199,7 @@ spec = do
                         writeIORef hits []
                         writeIORef privateStatus refused
                         let cap = BS.length (fst (coordinateListings coordinateBudgetHeader release)) - 1
-                        denied <- capture runtime (coordinateByteCap cap binding) method "/info/acme-1" []
+                        denied <- capture runtime (metadataByteCap cap binding) method "/info/acme-1" []
                         simpleStatus denied `shouldBe` refused
                         readIORef hits `shouldReturn` [["private", "info", "acme-1"]]
         for_ ["GET", "HEAD"] $ \method ->
@@ -214,7 +213,7 @@ spec = do
                         binding = original{bindingPackumentDeps = deps{pdFirstParty = rubyGemsFirstPartyName (owned :| [])}}
                     writeIORef privateStatus status404
                     let cap = BS.length (fst (coordinateListings coordinateBudgetHeader release)) - 1
-                    response <- capture runtime (coordinateByteCap cap binding) method "/info/acme" []
+                    response <- capture runtime (metadataByteCap cap binding) method "/info/acme" []
                     simpleStatus response `shouldBe` status404
                     readIORef hits `shouldReturn` [["private", "info", "acme"]]
 
@@ -265,7 +264,7 @@ spec = do
                 for_ [False, True] $ \warm ->
                     it ("retains denial for the actual recent coordinate for " <> show (warm, method, path)) $
                         withCoordinateSources PublicCandidateSource $ \uncached original hits _ -> do
-                            let binding = coordinateByteCap 200 original
+                            let binding = metadataByteCap 200 original
                             runtime <- if warm then warmCoordinateCache uncached binding hits else pure uncached
                             response <- capture runtime binding method path []
                             simpleStatus response `shouldBe` status403
@@ -390,7 +389,7 @@ spec = do
             for_ ["/gems/acme-1-1.0.gem", "/quick/Marshal.4.8/acme-1-1.0.gemspec.rz"] $ \path -> do
                 it ("counts warm denied source bytes for " <> show method <> " " <> show path) $
                     withCoordinateSources PublicCandidateSource $ \uncached original hits release -> do
-                        let binding = coordinateByteCap 200 original
+                        let binding = metadataByteCap 200 original
                             (recent, admitted) = coordinateListings "" release
                         map BS.length [recent, admitted] `shouldSatisfy` all (<= 200)
                         BS.length recent + BS.length admitted `shouldSatisfy` (> 200)
@@ -403,7 +402,7 @@ spec = do
                         withCoordinateSourceHeader coordinateBudgetHeader PublicCandidateSource $ \uncached original hits release -> do
                             let (recent, admitted) = coordinateListings coordinateBudgetHeader release
                                 cap = BS.length recent + BS.length admitted - 1
-                                binding = coordinateByteCap cap original
+                                binding = metadataByteCap cap original
                             map BS.length [recent, admitted] `shouldSatisfy` all (<= cap)
                             runtime <- if warm then warmCoordinateCache uncached binding hits else pure uncached
                             response <- capture runtime binding method path []
@@ -419,7 +418,7 @@ spec = do
                                 body = if compact then releaseCompact release else releaseArchive release
                                 sourceTotal = BS.length recent + BS.length admitted
                                 cap = sourceTotal + if compact && not warm then BS.length body else 0
-                                binding = coordinateByteCap cap original
+                                binding = metadataByteCap cap original
                             runtime <- if warm then warmCoordinateCache uncached binding hits else pure uncached
                             response <- capture runtime binding method path []
                             checkCoordinateResponse method path body response
@@ -435,7 +434,7 @@ spec = do
                     let (recent, admitted) = coordinateListings coordinateBudgetHeader release
                         sourceTotal = BS.length recent + BS.length admitted
                         cap = sourceTotal + BS.length (releaseCompact release) - 1
-                        binding = coordinateByteCap cap original
+                        binding = metadataByteCap cap original
                     sourceTotal `shouldSatisfy` (<= cap)
                     response <- capture runtime binding method "/quick/Marshal.4.8/acme-1-1.0.gemspec.rz" []
                     simpleStatus response `shouldBe` status502
@@ -494,8 +493,7 @@ spec = do
                 readIORef hits `shouldReturn` []
                 missing <- capture runtime binding "GET" "/quick/Marshal.4.8/ecluse-fixture-root-99.0.0.gemspec.rz" wildcard
                 simpleStatus missing `shouldBe` status404
-                let capped = binding{bindingPackumentDeps = (bindingPackumentDeps binding){pdLimits = (pdLimits (bindingPackumentDeps binding)){maxMetadataBytes = 16}}}
-                bounded <- capture runtime capped "GET" "/versions" wildcard
+                bounded <- capture runtime (metadataByteCap 16 binding) "GET" "/versions" wildcard
                 simpleStatus bounded `shouldBe` status502
 
 metadataPaths :: [ByteString]
@@ -661,8 +659,8 @@ missingDatabaseForVersion version rule = case prepEval rule of
     PerPackage _ -> rule
     PerInstallEvidence _ -> rule
 
-coordinateByteCap :: Int -> MountBinding -> MountBinding
-coordinateByteCap cap binding =
+metadataByteCap :: Int -> MountBinding -> MountBinding
+metadataByteCap cap binding =
     let deps = bindingPackumentDeps binding
      in binding{bindingPackumentDeps = deps{pdLimits = (pdLimits deps){maxMetadataBytes = cap}}}
 
