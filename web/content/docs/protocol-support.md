@@ -167,10 +167,7 @@ Cargo versions use native SemVer identity and ordering. Build metadata does not 
 
 The age rule uses native `pubtime`. Missing or invalid time stays unknown.
 OSV `crates.io` advisories use the existing freshness, malicious-package, and exact-fix rules.
-The default age and advisory path makes no archive evidence request.
-An explicit `DenyInstallTimeExecution` rule inspects bounded, checksum-verified archive and TOML evidence only when ordered evaluation reaches it.
-Higher-ranked decisions and first-party treatment retain their precedence.
-Required unavailable evidence produces structured inability. Écluse never runs the inspected code.
+Build scripts and procedural macros remain allowed. Cargo blocks active `DenyInstallTimeExecution`, `DenyIfDeprecated`, and `AllowScope` rules at boot.
 
 Cargo mirrors retain the original admitted index row, source identity, and checksum-verified archive using durable version state.
 Native-library `links` declarations must agree. Cargo defines omitted index `links` as null.

@@ -41,8 +41,8 @@ RubyGems requires the supported Bundler clients with checksum validation enabled
 The mirror worker verifies archive bytes before publication.
 HEAD authorises and checks availability without reading or hashing an archive body.
 
-An explicit Cargo execution rule can inspect bounded archive and manifest evidence for build scripts and procedural macros.
-RubyGems permits native builds and blocks the unsupported installation-execution rule at boot.
+Cargo build scripts, procedural macros and RubyGems native builds remain allowed.
+Both adapters block the unsupported installation-execution rule at boot.
 The server never runs the inspected code. A registry checksum proves agreement with that registry's assertion, not harmlessness.
 
 Écluse checks neither Certificate Transparency nor certificate revocation. It trusts any certificate

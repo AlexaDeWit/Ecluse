@@ -378,7 +378,7 @@ consumes. Adapters map their protocols into this shared model. Four principles g
 |---|---|---|
 | **Identity** | `PackageName`: an ecosystem tag, an optional namespace (npm scope), a normalised `canonical` key, and a `display` form. Equality and ordering use `(ecosystem, namespace, canonical)` only, never the display or base forms. | npm is case-sensitive with scopes, PyPI normalises (PEP 503), RubyGems is verbatim. `Flask` and `flask` are one PyPI package but two npm ones, so the ecosystem tag is part of identity. Matching uses the canonical key while rendering stays faithful. |
 | **Version** | In [`Ecluse.Core.Version`](../../core/src/Ecluse/Core/Version.hs): opaque, holding the raw text plus a `Maybe VersionKey` parsed at construction. `parseVersionKey :: Ecosystem -> Text -> Either VersionError VersionKey` is the only way to a key, and `compareVersions` works only on keys, so non-canonical text never reaches the comparator. Unparseable means no key, so ordering rules abstain and the proxy still serves the version. `Version` carries no derived `Ord`. | Lexicographic ordering is wrong for every grammar (`"10.0.0" < "9.0.0"`), and the proxy must keep serving a version even when the parser can't order it. |
-| **Install-time code execution** | `CodeExecSignal = NoCodeOnInstall \| RunsCodeOnInstall reason \| CodeExecUnknown`. | Unifies npm install scripts, PyPI sdist builds, and RubyGems native extensions. RubyGems retains `CodeExecUnknown` and blocks the unsupported execution-denial rule at boot. |
+| **Install-time code execution** | `CodeExecSignal = NoCodeOnInstall \| RunsCodeOnInstall reason \| CodeExecUnknown`. | Unifies npm install scripts, PyPI sdist builds, and RubyGems native extensions. Cargo and RubyGems retain `CodeExecUnknown` and block the unsupported execution-denial rule at boot. |
 | **Availability** | `Availability = Available \| Deprecated \| Yanked`, a flag with no text. | npm deprecates and RubyGems yanks whole versions. PyPI yanks individual files, so a release reads as `Yanked` only when every file of it is. |
 | **Artifacts** | A version owns `NonEmpty Artifact`. Each carries its entry key, file name, location, algorithm-tagged `Hash`es, and size. | npm has one tarball, PyPI an sdist plus many wheels, and RubyGems one gem per platform. |
 | **Dependencies** | Retained for installation, outside the typed policy model. | Each dependency receives its own verdict when the client fetches it. npm retains supported dependency relationships in its installation representation, without adding them to the rules vocabulary. |
@@ -446,13 +446,10 @@ An available admitted public source can still supply a version.
 The private alternate separately permits ordinary caller-authorised private reads.
 Retained facts reflect first admission. There is no continuous yank synchronisation or target-yank mutation.
 
-### Bounded native evidence and publication
+### Bounded archive inspection and publication
 
-The default Cargo age and advisory path performs no archive evidence read.
-Ordered execution denial resolves evidence lazily when that rule is reached.
-The subject binds immutable identity, checksum, approved address, role, deadline, and cumulative work bounds.
-Higher-ranked decisions perform no evidence request. Required unavailable facts produce structured inability.
-Private maintenance evidence uses the authenticated store reader and stays outside shared anonymous retention.
+The sparse index declares no build script or procedural macro, and archive inspection for each evaluated version costs too much on the serve path.
+The adapter blocks `DenyInstallTimeExecution` through its typed rule capability, so no policy decision reads an archive.
 
 Archive inspection verifies complete bounded compressed bytes and the effective TOML manifest without executing code.
 Publication can make one further local pass over those same bytes for selected text.

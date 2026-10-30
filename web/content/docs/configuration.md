@@ -368,7 +368,7 @@ one:
 | `DenyByIdentity` | No | Denies a package or `package@version`. This is the revoke. | `identity` |
 | `DenyIfDeprecated` | No | Denies a version carrying the npm deprecation flag, including whole packages and release lines. | None |
 | `DenyIfYanked` | No | Denies a yanked Cargo version or a PyPI release whose every file is yanked. | None |
-| `DenyInstallTimeExecution` | npm only | `deny-scripts` denies npm install scripts at admission. Cargo requires explicit activation and verified archive evidence. Stored copies stay. | None |
+| `DenyInstallTimeExecution` | npm only | `deny-scripts` denies npm install scripts at admission. Stored copies stay. | None |
 | `DenyIfKnownMalicious` | With `advisories.url` | Denies affected versions named by an active primary `MAL-` advisory. Named `deny-known-malicious`, precedence 300, both phases. | `onUnavailable` |
 | `AllowByIdentity` | No | Admits a package or `package@version`, and a bare name matches every version. It overrides scored advisory denies. Override MAL denial with precedence above 300. | `identity` |
 | `DenyIfCve` | No | Denies a version that a synced advisory marks as affected at or above a CVSS threshold. | `minCvss` (0-10), `onUnavailable` |
@@ -460,6 +460,7 @@ The following types are blocked:
 | npm | `DenyIfYanked` | npm reports no yank flag. Removed releases disappear from its metadata. |
 | pypi | `DenyIfDeprecated` | The PyPI adapter supplies no deprecation flag. |
 | pypi | `AllowScope` | A PyPI project name has no scope, so this rule can never match one. |
+| cargo | `DenyInstallTimeExecution` | Cargo's sparse index does not declare build scripts or procedural macros. This rule is unsupported for the ecosystem. |
 | cargo | `AllowScope` | Cargo package names have no scope. |
 | cargo | `DenyIfDeprecated` | Cargo's sparse index supplies no deprecation flag. |
 | rubygems | `DenyInstallTimeExecution` | RubyGems native builds are normal installation behaviour. This rule is unsupported for the ecosystem. |
