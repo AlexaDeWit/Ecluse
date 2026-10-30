@@ -21,6 +21,8 @@ module Ecluse.Core.Package (
     pkgBaseName,
     renderPackageName,
     unscopedName,
+    WireNameRefusal (..),
+    unnamespacedWireName,
 
     -- * The name charset boundary
     isAsciiNameComponent,
@@ -178,6 +180,18 @@ renderPackageName = TS.toText . pkgDisplay
 -- | The unscoped (base) name as 'Text': @\@babel\/code-frame@ reads back as @code-frame@.
 unscopedName :: PackageName -> Text
 unscopedName = TS.toText . pkgBaseName
+
+-- | Why a wire name did not yield an unnamespaced package name.
+data WireNameRefusal e
+    = -- | The wire carried a non-empty namespace.
+      WireNamespaced
+    | -- | The ecosystem's grammar refused the bare name.
+      WireNameUnusable e
+    deriving stock (Eq, Show)
+
+-- | Refuse a non-empty wire namespace, then read the bare name through the ecosystem's grammar.
+unnamespacedWireName :: (Text -> Either e PackageName) -> Maybe Text -> Text -> Either (WireNameRefusal e) PackageName
+unnamespacedWireName parse namespace raw = unless (maybe True T.null namespace) (Left WireNamespaced) *> first WireNameUnusable (parse raw)
 
 {- | Whether one component of a package name is ASCII with no control character: the boundary
 every ecosystem's grammar rests on, because an invisible codepoint renders two names as one.
