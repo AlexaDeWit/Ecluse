@@ -316,6 +316,7 @@ dependencyReleases =
     , ("a repeated dependencies map", "\"dependencies\":{\"a\":\"^1.0.0\"},\"dependencies\":{\"b\":\"github:acme/b\"}", RegistryDependencies)
     , ("an escaped name and spec", "\"dependencies\":{\"l\\u0065ft-pad\":\"github:acme\\/left-pad\"}", outside "left-pad" "dependencies" "a git source")
     , ("a git source only in devDependencies", "\"devDependencies\":{\"left-pad\":\"github:acme/left-pad\"},\"dependencies\":{\"other\":\"^1.0.0\"}", RegistryDependencies)
+    , ("an unsupported scheme beside an alias and local specs", "\"dependencies\":{\"alias\":\"npm:left-pad@1\",\"local\":\"link:../local\",\"std\":\"jsr:@std/path@^1\",\"tree\":\"workspace:*\"}", outside "std" "dependencies" "an unsupported scheme")
     , ("dependency maps that are not objects", "\"dependencies\":\"github:acme/left-pad\",\"optionalDependencies\":[\"github:acme/left-pad\"],\"peerDependencies\":null", RegistryDependencies)
     ]
   where
