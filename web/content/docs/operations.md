@@ -658,13 +658,14 @@ it uses it, against one budget:
 | A request that joins another request's public fetch or render | Nothing for that fetch or render |
 | A first-party publication, once its upload is read | Its archive inspection for Cargo and RubyGems, and for Cargo a full metadata read of the target registry's `config.json` |
 
-An npm or PyPI full read also pays at least 256 bytes for each entry it retains: each npm version,
+An npm or PyPI full read also pays at least 704 bytes for each entry it retains: each npm version,
 timestamp and dist-tag, and each PyPI file, dropped version entry, and `alternate-locations` and
-`meta.tracks` item. After each 32 KiB it parses, the read raises its charge to that floor, less what
-its source bytes already paid. A document of many tiny versions, timestamps, dist-tags or files pays
-for them as it reads. A PyPI read counts `alternate-locations` and `meta.tracks` items when their
-array closes, so the floor reaches them from the next 32 KiB it parses. Realistic listings carry
-enough bytes per entry that the floor adds nothing.
+`meta.tracks` item. The read counts each entry as it reads it. After each 32 KiB it parses, it raises
+its charge to that floor, less what its source bytes already paid, so a document of many tiny
+entries pays for them as it reads. A realistic listing carries enough bytes per entry that the floor
+adds nothing to what it keeps once read. While it reads, a listing whose first 32 KiB hold many
+entries can pay some floor until its bytes catch up: about 12 KiB for `@types/node`, which opens with
+43 dist-tags.
 
 A listing's output basis is the larger of two estimates. One starts from the largest document the
 listing merges. The other starts from the base document, whose top-level fields the response
@@ -675,7 +676,8 @@ share no version, pays for every byte it merges.
 
 A listing gives charges back as it finishes each phase. When a full read completes, its charge
 steps down to what the read keeps: 0.9 bytes per source byte for npm, 3.3 bytes for PyPI, 1.5 bytes
-for Cargo, 17.3 bytes for RubyGems. A failed read keeps nothing. Once the response body exists, the reads' charges go back, so only the response
+for Cargo, 17.3 bytes for RubyGems. An npm or PyPI read keeps the entry floor for the entries it
+retained instead, when that is larger. A failed read keeps nothing. Once the response body exists, the reads' charges go back, so only the response
 charge and any gzip charge stay while the body is sent.
 
 RubyGems per-gem `/info` documents are small, but their per-byte charges are the highest of the four

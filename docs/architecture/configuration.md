@@ -252,7 +252,7 @@ excess. The sampler measures it as live data outside the charges after the next 
 and the ceiling the budget may reach, set out below, falls as that remainder grows.
 
 One such shape is a document of many tiny entries, whose map nodes, keys and typed values outweigh
-the source bytes they come from. An npm or PyPI full read therefore pays at least 256 bytes for each
+the source bytes they come from. An npm or PyPI full read therefore pays at least 704 bytes for each
 entry it retains, through its workspace, after each piece it parses:
 
 | Full read | Entries the floor charges | Of those, entries no count bounds |
@@ -260,10 +260,17 @@ entry it retains, through its workspace, after each piece it parses:
 | npm | Versions, timestamps and dist-tags | Timestamps and dist-tags |
 | PyPI | Files, dropped version entries, and `alternate-locations` and `meta.tracks` items | Dropped version entries, and `alternate-locations` and `meta.tracks` items |
 
-A PyPI read counts `alternate-locations` and `meta.tracks` items when their array closes, so the
-floor reaches them from the next piece. Realistic listings carry enough bytes per entry that the
-floor adds nothing. The floor is the condition for later dropping the version count from listing
-reads, where it still caps the entries a dense document retains.
+The read counts each entry as it reads it, so a PyPI array of items pays for them before it
+closes. The residency tier reads a dense document of each entry kind and measures what the read
+holds per entry. The heaviest, npm versions with empty bodies, peaks at 524 bytes per entry while
+read and holds 338 once read. The floor is 1.25 times the largest such figure, rounded up to
+64 bytes. Every corpus listing's bytes pay more than the floor for each entry it retains, so the
+floor adds nothing to what a realistic listing keeps. While it reads, `@types/node` holds 69 entries
+in its first 32 KiB, 43 of them dist-tags, so its read pays 12,531 bytes of floor and holds them
+until it completes. A version or file with a minimal valid body, about 90
+source bytes, holds more than the floor: up to 885 bytes per entry while read. The version count
+still bounds those entries. The floor is the condition for later dropping the version count from
+listing reads, where it still caps the entries a dense document retains.
 
 A listing's response pays per byte of its output basis. The basis is the larger of two estimates,
 one anchored on the largest document the listing merges and one on the base document, whose
@@ -286,7 +293,9 @@ listing's output working set, heavy bases included, and the tier checks that too
 A completed read keeps less than its peak, and nothing reaches its document once the body exists.
 So when a full read completes, its charge steps down to the kept charge: 1.25 times the largest
 shared cache entry per source byte that the residency tier measures, rounded up to a tenth. That is
-0.9 for npm (react at 0.699300) and 3.3 for PyPI (requests at 2.601638). Once the body exists, the
+0.9 for npm (react at 0.699300) and 3.3 for PyPI (requests at 2.601638). An npm or PyPI listing
+keeps the entry floor for each entry its read retained instead, when that is larger, so a dense
+document stays charged until its response renders. Once the body exists, the
 reads' charges go back, and the response holds only its own charge while it is sent. The residency
 tier checks each phase against what the meter holds then. Its heap census of the live listing path
 also covers the policy and merge plan between the reads and the render.
