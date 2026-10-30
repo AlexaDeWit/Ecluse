@@ -4,12 +4,14 @@
 {-# LANGUAGE TupleSections #-}
 
 {- | Read private archives under the caller's credential.
-Access refusals stop fallback, and managed mirror copies require retained completion proof.
+Access refusals and failed reads stop fallback. Managed mirror copies require retained
+completion proof.
 -}
 module Ecluse.Core.Server.Pipeline.Tarball.Private (
     PrivateLeg (..),
     streamPrivateArtifact,
     privateMetadataMiss,
+    privateReadUnresolved,
 ) where
 
 import Data.Map.Strict qualified as Map
@@ -166,6 +168,7 @@ byIndexedLocation ticket ctx token privateBase privateHostPort = do
     resolved <- tryAny (withPrivateMetadataClient (arRuntime ctx) deps ticket privateBase token (\client -> fetchVersionMetadata client (arPackage ctx) (arVersion ctx)))
     case resolved of
         Right (Left (MetadataAuthorisationFailure code)) -> pure (PrivateRefused code)
+        _ | privateReadUnresolved resolved -> pure (PrivateMissing MissUnresolved)
         _ -> case (pdMirrorState deps, ticket) of
             (Just mirror, Just admitted)
                 | not (pdFirstParty deps (arPackage ctx)) ->
@@ -209,3 +212,10 @@ privateMetadataMiss = \case
     MetadataBoundExceeded{} -> Just MissUnresolved
     MetadataFetch{} -> Just MissUnresolved
     MetadataUndecodable -> Just MissUnresolved
+
+-- | Whether a private version read failed, rather than settling absence or refusing access.
+privateReadUnresolved :: Either SomeException (Either MetadataError VersionRead) -> Bool
+privateReadUnresolved = \case
+    Left _ -> True
+    Right (Left err) -> privateMetadataMiss err == Just MissUnresolved
+    Right (Right _) -> False

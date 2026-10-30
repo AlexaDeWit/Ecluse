@@ -3,7 +3,8 @@
 -- SPDX-License-Identifier: MIT
 
 {- | Serve caller-authorised private artifacts and policy-admitted public artifacts.
-A private miss falls back to the public leg except for a first-party name. GET and HEAD share admission.
+Only a settled private absence reaches the public leg, and never for a first-party name.
+GET and HEAD share admission.
 -}
 module Ecluse.Core.Server.Pipeline.Tarball (
     tarballAction,
@@ -28,17 +29,17 @@ import Ecluse.Core.Server.Context (
  )
 import Ecluse.Core.Server.Path (Filename)
 import Ecluse.Core.Server.Pipeline.Internal (recordDenials, serveDecisionClass)
-import Ecluse.Core.Server.Pipeline.Origin (OriginMiss)
+import Ecluse.Core.Server.Pipeline.Origin (OriginMiss (MissUnresolved))
 import Ecluse.Core.Server.Pipeline.Shared
 import Ecluse.Core.Server.Pipeline.Tarball.Private (
     PrivateLeg (PrivateAnswered, PrivateHandled, PrivateMissed),
     streamPrivateArtifact,
  )
 import Ecluse.Core.Server.Pipeline.Tarball.Public (servePublicArtifact)
-import Ecluse.Core.Server.Pipeline.Tarball.Refusal (artifactError, firstPartyMissRefusal)
+import Ecluse.Core.Server.Pipeline.Tarball.Refusal (artifactError, firstPartyMissRefusal, upstreamUnavailable)
 import Ecluse.Core.Server.Pipeline.Tarball.Relay (ArtifactServe (ServeFull, ServeHead))
 import Ecluse.Core.Server.Pipeline.Tarball.Types (ArtifactRequest (..), TarballReplies (..))
-import Ecluse.Core.Server.Response (mkRefusal)
+import Ecluse.Core.Server.Response (ServeDecision, mkRefusal)
 import Ecluse.Core.Server.Route (isHead)
 import Ecluse.Core.Telemetry.Record (MetricsPort (..))
 import Ecluse.Core.Version (Version)
@@ -124,15 +125,15 @@ serveArtifactLegs ctx token =
             liftIO (mpServeDecision (srMetrics (arRuntime ctx)) decision)
             pure received
         PrivateMissed miss
-            | pdFirstParty (arDeps ctx) (arPackage ctx) -> refuseFirstParty ctx miss
+            | pdFirstParty (arDeps ctx) (arPackage ctx) -> refuseMiss ctx (firstPartyMissRefusal miss)
+            | MissUnresolved <- miss -> refuseMiss ctx upstreamUnavailable
             | otherwise -> servePublicArtifact ctx
 
--- A first-party name has one authority, so its private miss ends the request here rather than
--- falling through to the public leg.
-refuseFirstParty :: ArtifactRequest response -> OriginMiss -> Handler ResponseReceived
-refuseFirstParty ctx miss = do
+-- A first-party name has one authority, and an unread private origin may hold any name, so either
+-- miss ends the request here rather than falling through to the public leg.
+refuseMiss :: ArtifactRequest response -> ServeDecision -> Handler ResponseReceived
+refuseMiss ctx decision = do
     let metrics = srMetrics (arRuntime ctx)
-        decision = firstPartyMissRefusal miss
     liftIO (mpServeDecision metrics (serveDecisionClass decision))
     liftIO (recordDenials metrics [decision])
     liftIO (arRespond ctx (artifactError (arReplies ctx) (arDeps ctx) decision))
