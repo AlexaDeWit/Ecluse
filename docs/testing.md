@@ -2217,7 +2217,8 @@ Upstream discovery runs after caller or service credentials exist, never at boot
 Authority negatives cover public, neighbouring, read, upload, and artifact coordinates without sending credentials to refused destinations.
 Publication cases bind native metadata, body lengths, manifest, archive root, digest, and first-party authority before writes.
 They preserve distinct read and upload roots and bound charged archive/TOML work.
-Policy cases prove that boot and `check-config` refuse active `DenyInstallTimeExecution`, `DenyExternalDependencies`, `DenyIfDeprecated`, and `AllowScope` rules with the adapter's reasons.
+Policy cases prove that boot and `check-config` refuse active `DenyInstallTimeExecution`, `DenyIfDeprecated`, and `AllowScope` rules with the adapter's reasons.
+They also prove that an active `DenyExternalDependencies` entry boots and denies a public row whose normal or build dependency names another registry.
 
 Mirror cases require exact source rows, SHA-256 archive proof, retry, lost replies, restart, and public outage.
 Yank and timestamp controls change target metadata and verify retained original-source facts with fresh client state.

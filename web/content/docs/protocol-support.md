@@ -167,7 +167,9 @@ In the merged index, a private version and a public version that differ only in 
 
 The age rule uses native `pubtime`. Missing or invalid time stays unknown.
 OSV `crates.io` advisories use the existing freshness, malicious-package, and exact-fix rules.
-Build scripts and procedural macros remain allowed. Cargo blocks active `DenyInstallTimeExecution`, `DenyExternalDependencies`, `DenyIfDeprecated`, and `AllowScope` rules at boot.
+Build scripts and procedural macros remain allowed. Cargo blocks active `DenyInstallTimeExecution`, `DenyIfDeprecated`, and `AllowScope` rules at boot.
+An active `DenyExternalDependencies` entry denies a public crate whose index row names a registry other than crates.io for a normal or build dependency.
+A null registry, either crates.io spelling and development dependencies pass. No Cargo entry ships by default.
 
 Cargo mirrors retain the original admitted index row, source identity, and checksum-verified archive using durable version state.
 Native-library `links` declarations must agree. Cargo defines omitted index `links` as null.
