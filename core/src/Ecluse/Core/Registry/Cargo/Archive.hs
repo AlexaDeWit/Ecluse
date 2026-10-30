@@ -26,13 +26,14 @@ import UnliftIO.Exception (evaluate)
 
 import Ecluse.Core.Package.Hash (sha256Hex)
 import Ecluse.Core.Registry (ParseError (..), parseRefusal)
-import Ecluse.Core.Registry.Archive.Inflate (InflateFormat (GzipMembers), splitArchiveCharge, withInflatedChunks)
+import Ecluse.Core.Registry.Archive.Inflate (InflateFormat (GzipMembers), withInflatedChunks)
 import Ecluse.Core.Registry.Archive.Tar (TarMember (..), TarScan, scanTar, sourceReader, tarContents, tarMembers)
 import Ecluse.Core.Registry.CachedDocument (estimateValueBytes)
 import Ecluse.Core.Registry.Cargo.Manifest (CargoManifest, CargoPublishMetadata, checkPublicationIndex, checkUploadAgreement, decodeManifest, manifestExecution, manifestTextPaths, publicationMetadata, publishMetadataValue)
 import Ecluse.Core.Registry.Cargo.Project (cargoArchiveStem)
 import Ecluse.Core.Registry.Cargo.Wire (cargoTreeCharge)
 import Ecluse.Core.Security.Limits (Limits (..))
+import Ecluse.Core.Server.Admission.Meter (newChargePair)
 import Ecluse.Core.Server.MemoryModel (saturatingCharge)
 
 -- | The inspected source bytes, checked against the admitted SHA-256 when one exists.
@@ -137,7 +138,7 @@ dropArchiveRoot = T.drop 1 . snd . T.breakOn "/"
 
 archivePass :: Limits -> (Int -> IO ()) -> Text -> Set Text -> ByteString -> IO (Either ParseError (TarScan, Int))
 archivePass limits charge root selected bytes = do
-    (decoderCharge, retainedCharge) <- splitArchiveCharge charge
+    (decoderCharge, retainedCharge) <- newChargePair charge
     inflated <- newIORef (0 :: Integer)
     result <- scanTar limits retainedCharge select $ \consume ->
         withInflatedChunks (GzipMembers (maxArtifactCount limits)) decoderCharge bytes $ \pull ->
