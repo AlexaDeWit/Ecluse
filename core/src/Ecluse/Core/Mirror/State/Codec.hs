@@ -10,6 +10,7 @@ module Ecluse.Core.Mirror.State.Codec (
     chargedDecodeProjectRecord,
     chargedEncodeProjectRecord,
     stateExchangeCharge,
+    saturatingStateCharge,
     mirrorInventoryWeight,
 ) where
 
@@ -197,6 +198,10 @@ forceRecordSources record = force (recordEnvelope record) `seq` foldl' forceVers
 -- | Fixed per-exchange metadata bookkeeping, independent of the configured maximum object size.
 stateExchangeCharge :: Int
 stateExchangeCharge = 4096
+
+-- | 'saturatingCharge' under the name the runtime S3 state store imports.
+saturatingStateCharge :: Integer -> Int
+saturatingStateCharge = saturatingCharge
 
 checkRecord :: Limits -> Int -> ProjectMirrorRecord -> Either MirrorStateFault ()
 checkRecord limits size record = do
