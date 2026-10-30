@@ -258,7 +258,7 @@ Unknown installation metadata does not prove that an archive executes no code.
 Private reads preserve the caller's complete Basic credential pair.
 A caller's publication keeps its complete native API-key header value and an optional validated `OTP` header.
 On a `codeArtifact` store, Écluse's own tokens read with Basic and username `aws` and publish with Bearer.
-That covers the mirror worker's token and a static `publicationTarget` token, so store the bare secret in either one.
+That covers the mirror worker's minted token and a static `publicationTarget` token. Store the static token as the bare secret.
 The backend declaration selects this presentation, not a hostname guess.
 Static publication credentials retain the required edge-token guard.
 
