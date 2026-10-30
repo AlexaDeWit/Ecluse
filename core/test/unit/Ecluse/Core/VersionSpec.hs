@@ -43,6 +43,19 @@ spec = do
             parseAdvisoryVersionKey Npm "v1.2.3" `shouldSatisfy` isRight
             renderVersionKey <$> parseVersionKey Cargo "18446744073709551615.0.0" `shouldBe` Right "18446744073709551615.0.0"
 
+    describe "releaseIdentity" $ do
+        it "treats Cargo versions that differ only in build metadata as one release" $
+            map (releaseIdentity . mkVersion Cargo) ["1.0.7+corp", "1.0.7", "1.0.7+other"] `shouldBe` ["1.0.7", "1.0.7", "1.0.7"]
+        it "keeps a Cargo prerelease distinct from its release" $ do
+            releaseIdentity (mkVersion Cargo "1.2.3-rc.1+b") `shouldBe` "1.2.3-rc.1"
+            releaseIdentity (mkVersion Cargo "1.2.3-rc.1+b") `shouldNotBe` releaseIdentity (mkVersion Cargo "1.2.3")
+        it "keeps the raw spelling of an unparseable Cargo version" $
+            releaseIdentity (mkVersion Cargo "not-a-version") `shouldBe` "not-a-version"
+        it "keeps the raw spelling in other ecosystems" $ do
+            releaseIdentity (mkVersion Npm "1.0.0+a") `shouldBe` "1.0.0+a"
+            map (releaseIdentity . mkVersion RubyGems) ["1.0", "1.0.0"] `shouldBe` ["1.0", "1.0.0"]
+            releaseIdentity (mkVersion PyPI "1.0") `shouldBe` "1.0"
+
     describe "versionKeyIn" $
         it "is the key mkVersion builds under that ecosystem, whichever ecosystem built the version" $
             hedgehog $ do

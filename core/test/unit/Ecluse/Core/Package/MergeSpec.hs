@@ -410,6 +410,25 @@ spec = do
             integrityDivergences trusted (versions [unsafeHash SRI sriPriv, unsafeHash SHA1 sha1Abc]) `shouldBe` Set.empty
             Set.size (integrityDivergences trusted (versions [unsafeHash SRI sriPriv, unsafeHash SRI sriPub])) `shouldBe` 1
 
+    describe "withoutTrustedReleases" $ do
+        let cargoInfo raws = (packument [(raw, sriSame) | raw <- raws]){infoVersions = Map.fromList [(raw, (detailsWith raw [unsafeHash SRI sriSame]){pkgVersion = mkVersion Cargo raw}) | raw <- raws]}
+            remaining trusted gated = Map.keys (infoVersions (withoutTrustedReleases (infoVersions trusted) gated))
+        it "drops a gated version whose release a trusted build-metadata spelling claims" $
+            remaining (cargoInfo ["1.0.7+corp"]) (cargoInfo ["1.0.7", "1.0.8"]) `shouldBe` ["1.0.8"]
+        it "drops a gated build-metadata spelling of a trusted release" $
+            remaining (cargoInfo ["1.0.7"]) (cargoInfo ["1.0.7+build"]) `shouldBe` []
+        it "keeps an exact key collision for the merge to resolve" $
+            remaining (cargoInfo ["1.0.7"]) (cargoInfo ["1.0.7"]) `shouldBe` ["1.0.7"]
+        it "keeps a prerelease and a different patch" $
+            remaining (cargoInfo ["1.0.7+corp"]) (cargoInfo ["1.0.7-rc.1", "1.0.8"]) `shouldBe` ["1.0.7-rc.1", "1.0.8"]
+        it "keeps npm versions that differ only in build metadata" $
+            remaining (packument [("1.0.0+a", sriSame)]) (packument [("1.0.0+b", sriSame)]) `shouldBe` ["1.0.0+b"]
+        it "leaves the package name and dist-tags unchanged" $ do
+            let gated = cargoInfo ["1.0.7", "1.0.8"]
+                kept = withoutTrustedReleases (infoVersions (cargoInfo ["1.0.7+corp"])) gated
+            infoName kept `shouldBe` infoName gated
+            infoDistTags kept `shouldBe` infoDistTags gated
+
     describe "mergePackuments" $ do
         it "returns Nothing on an empty input (nothing to serve)" $
             mergePackuments [] `shouldBe` Nothing
