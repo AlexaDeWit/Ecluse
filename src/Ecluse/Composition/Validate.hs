@@ -71,7 +71,7 @@ import Ecluse.Config (
     mountPolicy,
     mountRegistries,
     regMirrorTarget,
-    storeTagName,
+    taggedKeyPath,
  )
 import Ecluse.Core.Credential (ClientCredential (ClientCredential), Secret)
 import Ecluse.Core.Ecosystem (Ecosystem)
@@ -154,9 +154,8 @@ vetMirrorCapabilities role app = decided $ case missing of
         [uploadUrlRequired eco "publicationTarget" (peTarget endpoint) | separateUpload publish, clientWrites, isNothing (peUploadUrl endpoint)]
             <> [usernameRequired eco "publicationTarget" (peTarget endpoint) | publishIdentity publish == NamedIdentity, clientWrites, isJust (peToken endpoint), tgtTag (peTarget endpoint) /= TagCodeArtifact, isNothing (peUsername endpoint)]
     separateUpload publish = publishUploadEndpoint publish == ExplicitUploadEndpoint
-    keyPath endpoint target key = endpoint <> "." <> storeTagName (tgtTag target) <> "." <> key
-    uploadUrlRequired eco endpoint target = UploadUrlRequired eco (keyPath endpoint target "uploadUrl")
-    usernameRequired eco endpoint target = UploadConfigurationRequired eco (keyPath endpoint target "username")
+    uploadUrlRequired eco endpoint target = UploadUrlRequired eco (taggedKeyPath endpoint (tgtTag target) "uploadUrl")
+    usernameRequired eco endpoint target = UploadConfigurationRequired eco (taggedKeyPath endpoint (tgtTag target) "username")
 
 -- | Accumulate every pure refusal and advisory for one role before constructing its plan.
 vetBoot :: Config -> Vet ValidatedPlan

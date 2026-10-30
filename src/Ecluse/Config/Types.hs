@@ -13,6 +13,7 @@ module Ecluse.Config.Types (
     splitHttpScheme,
     StoreTag (..),
     storeTagName,
+    taggedKeyPath,
     Target (..),
     PrivateEndpoint (..),
     DeletionConsent (..),
@@ -152,6 +153,10 @@ storeTagName = \case
     TagRegistry -> "registry"
     TagCodeArtifact -> "codeArtifact"
     TagVerdaccio -> "verdaccio"
+
+-- | A key's path under an endpoint's tag, as refusals name it: @mirrorTarget.codeArtifact.uploadUrl@.
+taggedKeyPath :: Text -> StoreTag -> Text -> Text
+taggedKeyPath endpoint tag key = endpoint <> "." <> storeTagName tag <> "." <> key
 
 -- | An endpoint as a mount declares it: the tag naming its store, and the URL under that tag.
 data Target = Target
