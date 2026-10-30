@@ -129,7 +129,7 @@ spec = do
                         absent <- captureCargo runtime disabled methodPut path bytes
                         simpleStatus absent `shouldBe` status405
                         lookup "Allow" (simpleHeaders absent) `shouldBe` Just "PUT"
-                        simpleBody absent `shouldBe` "publishing is not enabled on this mount"
+                        simpleBody absent `shouldBe` "publishing is not enabled on this view"
                         malformed <- captureCargo runtime enabled methodPut path "broken"
                         simpleStatus malformed `shouldBe` status400
                         simpleBody malformed `shouldBe` "Cargo upload section exceeds its byte bound"
