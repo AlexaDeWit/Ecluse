@@ -248,6 +248,11 @@ A declared CodeArtifact service role uses Basic with username `aws` for reads an
 The backend declaration selects this presentation, not a hostname guess.
 Static publication credentials retain the required edge-token guard.
 
+RubyGems' own archive reader treats PAX and GNU extended tar headers as ordinary members.
+So `POST /api/v1/gems` answers `400` when the outer gem tar carries a PAX (`x`, `g`) or GNU (`L`, `K`) extended header, or a member name split by a ustar prefix, because Écluse and the store could read different gem names.
+Archives that `gem build` writes carry neither.
+Mirroring refuses a public archive that carries one too, so Écluse does not mirror that version.
+
 Mirroring copies every supported platform artifact of an admitted raw version, with original compact specifications and durable source facts.
 The worker verifies exact archives and native identities without executing Ruby, constructing YAML objects, or extracting files to disk.
 Target publication timestamps do not replace the original public age.
