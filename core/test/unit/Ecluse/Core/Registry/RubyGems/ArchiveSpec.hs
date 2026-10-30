@@ -182,6 +182,7 @@ spec = describe "native gem validation" $ do
         runRubyReference "archive" crafted >>= \case
             Object native -> KeyMap.lookup "name" native `shouldBe` Just (String "ecluse-fixture-leaf")
             _ -> fail "native archive reference is not an object"
+        fmap (renderPackageName . gemArchiveName) <$> inspect defaultLimits crafted `shouldReturn` Right "ecluse-fixture-root"
         void <$> published crafted `shouldReturn` Left extendedRefusal
     it "binds the checked archive to an exact admitted coordinate and digest" $ do
         bytes <- readFileBS fixture
