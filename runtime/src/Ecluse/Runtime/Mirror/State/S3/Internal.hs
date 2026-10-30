@@ -28,12 +28,12 @@ import UnliftIO.Exception (catch, throwIO)
 
 import Ecluse.Core.Deadline (Deadlines)
 import Ecluse.Core.Fault (TransportCause (TransportTimeout), TransportFault, transportFault)
-import Ecluse.Core.Mirror.State.Codec (saturatingStateCharge, stateExchangeCharge)
+import Ecluse.Core.Mirror.State.Codec (stateExchangeCharge)
 import Ecluse.Core.Mirror.State.Internal (StateCharge)
 import Ecluse.Core.Registry.Exchange (accumulatingChargeFrom, chargedRead)
 import Ecluse.Core.Registry.Progress (Watch, meteredReader, meteredUpload, watched)
 import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), Limits (..), boundedRead)
-import Ecluse.Core.Server.MemoryModel (bufferedChunkCharge, decodedDocumentCharge)
+import Ecluse.Core.Server.MemoryModel (bufferedChunkCharge, decodedDocumentCharge, saturatingCharge)
 import Ecluse.Core.Stream (boundBytes)
 import Ecluse.Runtime.Aws.Env (singleAttemptEnv)
 import Ecluse.Runtime.Aws.Fault (classifyAwsTransport, foldTransportEscapes, serviceStatus)
@@ -92,7 +92,7 @@ instance Exception ObjectLimit
 
 sendBounded :: (AWS.AWSRequest request, AWS.AWSResponse request ~ RawResponse, AWS.AWSRequest native) => StateCharge -> Int -> Bool -> Deadlines -> AWS.Env -> Limits -> request -> Proxy native -> ResourceT IO (Either AWS.Error (AWS.AWSResponse native))
 sendBounded charge requestCharge consumesBody deadlines env limits request native = do
-    liftIO $ charge (saturatingStateCharge (toInteger stateExchangeCharge + toInteger requestCharge))
+    liftIO $ charge (saturatingCharge (toInteger stateExchangeCharge + toInteger requestCharge))
     received <- withRunInIO $ \run -> watched deadlines (progressFloor limits) $ \watch -> run $ do
         let metered =
                 env
@@ -114,7 +114,7 @@ sendBounded charge requestCharge consumesBody deadlines env limits request nativ
         Just (Left err) -> pure (Left err)
         Just (Right (wireCharge, bytes, service, response)) -> do
             let decodeCharge = if consumesBody || statusCode (HTTP.responseStatus response) >= 300 then decodedDocumentCharge bytes else 0
-            liftIO $ charge (saturatingStateCharge (toInteger wireCharge + toInteger decodeCharge))
+            liftIO $ charge (saturatingCharge (toInteger wireCharge + toInteger decodeCharge))
             fmap HTTP.responseBody <$> AWS.response pure service native response
 
 readSource :: StateCharge -> Int -> Watch -> Limits -> Types.ClientBody -> ResourceT IO (Int, ByteString)
