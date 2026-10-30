@@ -59,7 +59,7 @@ import Ecluse.Service (mountBindingFor)
 import Ecluse.Test.Contract.Catalogue (caseLabel)
 import Ecluse.Test.Deadline (withSweeper)
 import Ecluse.Test.Registry.Cargo.Fixtures (CargoRelease (releaseArchive), cargoUpload, cargoUploadMetadata, cargoUploadWithMetadata)
-import Ecluse.Test.Registry.Cargo.Publish (cargoPublicationFixture, cargoResolverAgreements, cargoResolverArchive, cargoResolverContradictions, cargoResolverDependencyField)
+import Ecluse.Test.Registry.Cargo.Publish (cargoForeignRegistryArchive, cargoForeignRegistryMetadata, cargoForeignRegistryRefusal, cargoPublicationFixture, cargoResolverAgreements, cargoResolverArchive, cargoResolverContradictions, cargoResolverDependencyField)
 import Ecluse.Test.Registry.Npm.Publish (npmDeprecateDocument, npmMisfiledVersion, npmReleaseDocument, npmRepeatedAttachments, npmTaggedRelease)
 import Ecluse.Test.Server.Mount (inertDepsFor, inertPackumentDeps)
 import Ecluse.Test.Stub (Captured (capBody, capHeaders, capMethod, capPath), Stub, allCaptured, headerValue, stubBaseUrl, stubPort, withRoutedStub, withStubHeaders)
@@ -623,6 +623,15 @@ cargoPublishSpec = describe "first-party Cargo publication relay" $ do
                 reply <- cargoPut (fromStrict bytes) app
                 status reply `shouldBe` 400
                 decodeUtf8 (simpleBody reply) `shouldSatisfy` T.isInfixOf "Cargo upload dependency 'tool' carries an unstable artifact, bindep_target, lib or public field"
+            allCaptured stub `shouldReturn` []
+    it (caseLabel "integration/publication/cargo-006" "refuses a dependency on another registry with 400 naming it and the fix before any upstream request") $ do
+        archive <- cargoForeignRegistryArchive
+        bytes <- expectRight (cargoUploadWithMetadata cargoForeignRegistryMetadata archive)
+        withRoutedStub cargoTargetReply $ \stub -> withSweeper $ \deadlines -> do
+            app <- cargoProxy deadlines stub
+            reply <- cargoPut (fromStrict bytes) app
+            status reply `shouldBe` 400
+            decodeUtf8 (simpleBody reply) `shouldBe` cargoForeignRegistryRefusal
             allCaptured stub `shouldReturn` []
   where
     uploadRefusal captured

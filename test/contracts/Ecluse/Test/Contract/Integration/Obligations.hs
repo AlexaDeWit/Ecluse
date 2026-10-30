@@ -306,6 +306,7 @@ integrationObligations =
         , "integration/publication/cargo-003"
         , "integration/publication/cargo-004"
         , "integration/publication/cargo-005"
+        , "integration/publication/cargo-006"
         , "integration/publication/native-001"
         , "integration/publication/native-002"
         , "integration/publication/native-003"
