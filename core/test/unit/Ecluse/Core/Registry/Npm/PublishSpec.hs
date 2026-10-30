@@ -38,6 +38,7 @@ import Ecluse.Core.Registry.Publish (
     PublishCodec (pcNativeComplete),
     PublishPlan (PublishPlan, ppLatest),
  )
+import Ecluse.Core.Registry.Request (nativePresentation)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Core.Version (mkVersion)
 import Ecluse.Test.Package (hexSha1Of, hexSha256Of, pypiVersion, sriSha256Of, sriSha512Of, unsafeHash, unscopedNpm, unscopedPyPI, v1_0_0)
@@ -273,7 +274,7 @@ stubPublish :: Deadlines -> Stub -> IO MirrorPublish
 stubPublish deadlines stub = publishAt deadlines (stubBaseUrl stub)
 
 publishAt :: Deadlines -> Text -> IO MirrorPublish
-publishAt deadlines = anonymousPublishAt deadlines npmPublishCodec . loopbackRegistryUrl
+publishAt deadlines = anonymousPublishAt deadlines (npmPublishCodec nativePresentation) . loopbackRegistryUrl
 
 sizedArtifact :: MirrorArtifact
 sizedArtifact = dummyArtifact{maSize = Just 1234, maHashes = unsafeHash SHA1 (hexSha1Of dummyTarballBytes) :| []}
@@ -324,7 +325,7 @@ nativeCompletionSpec :: Spec
 nativeCompletionSpec = describe "native atomic npm completion" $ do
     let details = vdDetails (mirrorVersionDoc isOdd v1_0_0 isOddVersionDoc sizedArtifact)
         inventory = PackageInfo isOdd (Map.singleton "1.0.0" details) mempty []
-        complete = pcNativeComplete npmPublishCodec isOdd v1_0_0
+        complete = pcNativeComplete (npmPublishCodec nativePresentation) isOdd v1_0_0
         changed update = inventory{infoVersions = Map.singleton "1.0.0" (update details)}
     it "proves one supported native artifact without a source snapshot" $
         complete inventory `shouldBe` True

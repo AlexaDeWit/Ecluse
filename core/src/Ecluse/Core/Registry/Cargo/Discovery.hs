@@ -38,6 +38,7 @@ import Ecluse.Core.Registry.Exchange (boundedIncrementalRead, formThen, withSucc
 import Ecluse.Core.Registry.Metadata (MetadataError (MetadataBoundExceeded, MetadataUndecodable), metadataResponse)
 import Ecluse.Core.Registry.Origin (OriginClient (..), originBaseUrl)
 import Ecluse.Core.Registry.Public (ReadControl (..))
+import Ecluse.Core.Registry.Request (CredentialMapping, presentedRequest)
 import Ecluse.Core.Security (AllowedHostPorts, BodyLimit (MetadataBodyLimit), LimitError (BodyTooLarge), Limits (maxMetadataBytes, maxNestingDepth, progressFloor), ecosystemArtifactAuthorities)
 import Ecluse.Core.Server.Path (Filename, encodeComponent, mkFilename)
 import Ecluse.Core.Telemetry.Upstream (PublicReadKind (Listing))
@@ -63,10 +64,10 @@ discoveryIndex (CargoDiscovery _ _ index _) = index
 discoveryOrigin :: CargoDiscovery -> ArtifactOrigin
 discoveryOrigin (CargoDiscovery _ _ _ origin) = origin
 
--- | Read bounded discovery through the same transport and public control as index metadata.
-cargoDiscovery :: OriginClient -> IO (Either MetadataError CargoDiscovery)
-cargoDiscovery origin = do
-    response <- formThen FetchUrlUnformable exchange (cargoConfigRequest (ocBaseRequest origin) (ocToken origin))
+-- | Read bounded discovery under @mapping@, through the same transport and public control as index metadata.
+cargoDiscovery :: CredentialMapping -> OriginClient -> IO (Either MetadataError CargoDiscovery)
+cargoDiscovery mapping origin = do
+    response <- formThen FetchUrlUnformable exchange (presentedRequest mapping (ocToken origin) (cargoConfigRequest (ocBaseRequest origin)))
     pure $ do
         (_, bytes) <- metadataResponse response
         parseDiscoveryWithDepth (min 32 (maxNestingDepth limits)) (ecosystemArtifactAuthorities cargoArtifactHosts) (originBaseUrl origin) bytes

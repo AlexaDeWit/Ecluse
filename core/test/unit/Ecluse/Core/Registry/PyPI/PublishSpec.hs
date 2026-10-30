@@ -27,6 +27,7 @@ import Ecluse.Core.Registry.Metadata (VersionDoc (..))
 import Ecluse.Core.Registry.MirrorUpload (inventoryFiles, inventoryPackage, inventoryVersion, verifyMirrorBytes)
 import Ecluse.Core.Registry.Publish (MirrorPublish (..), MirrorTransport (..), PublishCodec (..), PublishPlan (..), newMirrorPublish, pmvInventory, pmvPrepareUpload, publishPrepared)
 import Ecluse.Core.Registry.PyPI.Publish (classifyPublish, pypiPublishCodec)
+import Ecluse.Core.Registry.Request (nativePresentation)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Core.Security.Limits (defaultLimits)
 import Ecluse.Test.Deadline (withExchangeClient, withSweeper)
@@ -47,7 +48,7 @@ spec = do
                 withExchangeClient (newManager defaultManagerSettings) $ \exchanges -> do
                     let target = loopbackRegistryUrl (stubBaseUrl stub <> "/custom-upload")
                         transport = MirrorTransport exchanges (pure (Just (ClientCredential (Just "publisher") (mkSecret "password")))) defaultLimits passthroughTracingPort
-                        writer = newMirrorPublish transport (loopbackRegistryUrl (stubBaseUrl stub)) target pypiPublishCodec
+                        writer = newMirrorPublish transport (loopbackRegistryUrl (stubBaseUrl stub)) target (pypiPublishCodec nativePresentation)
                     version <- expectRight (mpPrepareVersion writer (unscopedPyPI "example") (pypiVersion "1") snapshot)
                     let inventory = pmvInventory version
                         file = NE.head (inventoryFiles inventory)
@@ -77,7 +78,7 @@ spec = do
             it ("refuses verified malformed archive bytes for " <> toString filename) $ do
                 let bytes = "not an archive"
                 snapshot <- sourceSnapshotFor filename bytes
-                case pypiPublishCodec of
+                case pypiPublishCodec nativePresentation of
                     PublishCodec{pcPrepareSource = prepareSource, pcPrepareUpload = prepareUpload} -> withSweeper $ \deadlines -> do
                         (inventory, source) <- expectRight (prepareSource (unscopedPyPI "example") (pypiVersion "1") snapshot)
                         let file = NE.head (inventoryFiles inventory)

@@ -28,7 +28,7 @@ import Ecluse.Core.Registry.Exchange.Types (ExchangeClient (ecDeadlines))
 import Ecluse.Core.Registry.Metadata (MetadataError (..))
 import Ecluse.Core.Registry.Origin (OriginClient (ocBaseRequest, ocChargeFullRead, ocClient), originClient)
 import Ecluse.Core.Registry.Publish (PublishCodec (pcPrepareTarget, pcTargetReadPermille))
-import Ecluse.Core.Registry.Request (credentialRecover, mkBaseRequest)
+import Ecluse.Core.Registry.Request (ServicePresentation, credentialRecover, mkBaseRequest, nativePresentation)
 import Ecluse.Core.Security (BodyLimit (PublishRequestBodyLimit), Limits (maxPublishRequestBytes, progressFloor), boundedRead)
 import Ecluse.Core.Server.Admission.Budget (scaleCharge)
 import Ecluse.Core.Server.Admission.Bytes (withByteAdmission)
@@ -105,6 +105,8 @@ publishWithDeps replies deps registry clientToken name request respond
         KnownLength n -> fromIntegral n
         ChunkedBody -> pubMaxRequestBytes deps
 
+    (credential, presentation) = publicationAuthority deps clientToken
+
     readThenAdmit rt extras =
         boundedRead (PublishRequestBodyLimit (pubMaxRequestBytes deps)) (getRequestBodyChunk request) >>= \case
             Left _ -> pure (publishTooLarge replies deps)
@@ -113,7 +115,7 @@ publishWithDeps replies deps registry clientToken name request respond
                 withMetadataAdmission
                     rt
                     (\headers -> pure (publishError replies shedStatus headers shedMessage))
-                    (\ticket -> inspectAndRelay replies deps registry ticket (publicationTarget deps rt clientToken) name body)
+                    (\ticket -> inspectAndRelay replies deps registry ticket (publicationTarget deps rt credential) presentation name body)
                     pure
 
 -- The byte reservation, the memory ticket and the CPU slot all stay held through the relay.
@@ -123,10 +125,11 @@ inspectAndRelay ::
     Text ->
     MemoryTicket ->
     OriginClient ->
+    ServicePresentation ->
     Maybe PackageName ->
     PublishRequestBody ->
     IO response
-inspectAndRelay replies deps registry ticket target name body = do
+inspectAndRelay replies deps registry ticket target presentation name body = do
     workspace <- newChargeRegion (charge ticket)
     claims <- publishUploadClaims (pubAdapter deps) ((pubLimits deps){maxPublishRequestBytes = pubMaxRequestBytes deps}) workspace registry body
     case claims of
@@ -135,13 +138,15 @@ inspectAndRelay replies deps registry ticket target name body = do
             Left refusal -> pure refusal
             Right agreed -> do
                 outcome <- withinServeCap (ecDeadlines (ocClient target)) (progressFloor (pubLimits deps)) MetadataFetch $ do
-                    fullRead <- accumulatingCharge (workspace . scaleCharge (pcTargetReadPermille (publishCodec (pubAdapter deps))))
-                    prepared <- pcPrepareTarget (publishCodec (pubAdapter deps)) target{ocChargeFullRead = fullRead} (pubTargetUrl deps)
+                    fullRead <- accumulatingCharge (workspace . scaleCharge (pcTargetReadPermille codec))
+                    prepared <- pcPrepareTarget codec target{ocChargeFullRead = fullRead} (pubTargetUrl deps)
                     case prepared of
                         Left fault -> pure (Left fault)
-                        Right approved -> first MetadataFetch <$> publishRelay (pubAdapter deps) target{ocBaseRequest = mkBaseRequest approved} agreed body
+                        Right approved -> first MetadataFetch <$> publishRelay (pubAdapter deps) presentation target{ocBaseRequest = mkBaseRequest approved} agreed body
                 pure (either (targetRefusal replies deps) (renderRelay replies deps . Right) outcome)
   where
+    codec = publishCodec (pubAdapter deps) presentation
+
     resolveName claims = case name of
         Just pathName -> case bodyNameDisagreement (pubProjectName deps) pathName claims of
             Just declared -> Left (bodyNameMismatch replies deps pathName declared)
@@ -157,18 +162,17 @@ inspectAndRelay replies deps registry ticket target name body = do
     invalidName = publishError replies status400 [] (appendHelp (pubHelp deps) "the publish body must declare one valid agreed package name")
 
 publicationTarget :: PublishDeps -> ServeRuntime -> Maybe ClientCredential -> OriginClient
-publicationTarget deps rt clientToken =
+publicationTarget deps rt =
     originClient
         ((pubLimits deps){maxPublishRequestBytes = pubMaxRequestBytes deps})
         (srPrivateClient rt)
         (pubReadUrl deps)
-        (publicationCredential deps clientToken)
 
--- Static publication credentials require an authenticated edge.
-publicationCredential :: PublishDeps -> Maybe ClientCredential -> Maybe ClientCredential
-publicationCredential deps clientToken = case (pubInboundToken deps, pubStaticCredential deps) of
-    (Just _, Just staticToken) -> Just staticToken
-    _ -> clientToken
+-- Static publication credentials require an authenticated edge, and present as the target's store asks.
+publicationAuthority :: PublishDeps -> Maybe ClientCredential -> (Maybe ClientCredential, ServicePresentation)
+publicationAuthority deps clientToken = case (pubInboundToken deps, pubStaticCredential deps) of
+    (Just _, Just staticToken) -> (Just staticToken, pubStaticPresentation deps)
+    _ -> (clientToken, nativePresentation)
 
 targetRefusal :: PublishReplies response -> PublishDeps -> MetadataError -> response
 targetRefusal replies deps = \case

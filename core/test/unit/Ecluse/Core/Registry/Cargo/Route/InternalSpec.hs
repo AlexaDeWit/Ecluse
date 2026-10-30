@@ -24,6 +24,7 @@ import Ecluse.Core.Registry.Cargo.Project (projectName)
 import Ecluse.Core.Registry.Cargo.Publish (cargoPublish)
 import Ecluse.Core.Registry.Cargo.Route.Internal (artifactContract, artifactCoordinate, artifactReplies, cargoRouter, cargoRoutes, indexContract, indexReplies, takeIndexPath)
 import Ecluse.Core.Registry.Npm.Route.Internal (npmPackumentContract, npmPackumentReplies, npmTarballContract, npmTarballReplies)
+import Ecluse.Core.Registry.Request (nativePresentation)
 import Ecluse.Core.Security (Limits (maxPublishRequestBytes), defaultLimits)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Core.Server.Admission (newServeAdmissionTuned, withServeAdmission)
@@ -312,6 +313,7 @@ routePublication stub budget =
         , pubTargetUrl = loopbackRegistryUrl (stubBaseUrl stub <> "/registry")
         , pubAllowed = \name -> projectName "fixture" == Right name
         , pubStaticCredential = Nothing
+        , pubStaticPresentation = nativePresentation
         , pubInboundToken = Nothing
         , pubMaxRequestBytes = maxPublishRequestBytes defaultLimits
         , pubLimits = defaultLimits

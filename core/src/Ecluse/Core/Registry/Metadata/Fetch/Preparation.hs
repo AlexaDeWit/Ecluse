@@ -7,6 +7,7 @@ module Ecluse.Core.Registry.Metadata.Fetch.Preparation (
     PrepareRead (PrepareRead),
     staticRead,
     prepareRead,
+    presentedRead,
     bindToOrigin,
     canChargeFullReadWorkspace,
     prepareManifest,
@@ -19,7 +20,7 @@ import Ecluse.Core.Registry.Metadata (MetadataError (MetadataUndecodable), Versi
 import Ecluse.Core.Registry.Metadata.Fetch (fetchManifest, fetchVersion)
 import Ecluse.Core.Registry.Metadata.Fetch.Types (EcosystemRead (..), ManifestFetch)
 import Ecluse.Core.Registry.Origin (OriginClient)
-import Ecluse.Core.Registry.Request (baseRequestUrl)
+import Ecluse.Core.Registry.Request (CredentialMapping, baseRequestUrl, presentedRequest)
 import Ecluse.Core.Security.Egress (registryUrlText)
 import Ecluse.Core.Telemetry.Span (TracingPort)
 import Ecluse.Core.Version (Version)
@@ -38,6 +39,16 @@ prepareRead :: PrepareRead -> OriginClient -> IO (Either MetadataError Ecosystem
 prepareRead = \case
     StaticRead nativeRead -> \_ -> pure (Right nativeRead)
     PrepareRead prepare -> prepare
+
+{- | Present the reader's credential under @mapping@ through 'presentedRequest'. A static reader
+stays static, and the reader's own request checks still run.
+-}
+presentedRead :: CredentialMapping -> PrepareRead -> PrepareRead
+presentedRead mapping = \case
+    StaticRead nativeRead -> StaticRead (present nativeRead)
+    PrepareRead prepare -> PrepareRead (fmap (fmap present) . prepare)
+  where
+    present nativeRead = nativeRead{erRequest = \base credential name -> presentedRequest mapping credential (\anonymous -> erRequest nativeRead base anonymous name)}
 
 {- | Hold a prepared reader to the origin at @root@: a request under another base is refused with
 @refusal@, and a finish located against another base is undecodable.

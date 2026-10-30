@@ -57,6 +57,7 @@ import Ecluse.Core.Registry.Npm.Route (npmRouter)
 import Ecluse.Core.Registry.Npm.Route.Internal (npmNotFound)
 import Ecluse.Core.Registry.PyPI.Adapter (pypiAdapter)
 import Ecluse.Core.Registry.ServedDocument (RenderRefused (RenderRefused))
+import Ecluse.Core.Registry.Request (nativePresentation)
 import Ecluse.Core.Rules (prepare)
 import Ecluse.Core.Rules.Types (
     DenyIfCveParams (DenyIfCveParams),
@@ -154,6 +155,7 @@ basePublishDeps bodyBudget =
         , pubTargetUrl = loopbackRegistryUrl "http://127.0.0.1:1" -- an unconnectable port
         , pubAllowed = NpmPublish.npmPublishAllowed [mkScope "acme"]
         , pubStaticCredential = Nothing
+        , pubStaticPresentation = nativePresentation
         , pubMaxRequestBytes = maxPublishRequestBytes defaultLimits
         , pubInboundToken = Nothing
         , pubLimits = defaultLimits{maxPublishRequestBytes = 26214400}
@@ -383,7 +385,7 @@ spec = do
                 -- the URL. It reaches the relay (502 to the unconnectable target), not a 403.
                 request methodPut "/npm/@acme/widget" [] (npmReleaseDocument widgetName widgetName widgetName) `shouldRespondWith` 502
 
-        withSweptApp (publishAppWith (\b -> (basePublishDeps b){pubAdapter = npmPublish{publishRelay = \_ _ _ -> throwIO (RelayContractEscape "simulated relay contract escape")}})) $
+        withSweptApp (publishAppWith (\b -> (basePublishDeps b){pubAdapter = npmPublish{publishRelay = \_ _ _ _ -> throwIO (RelayContractEscape "simulated relay contract escape")}})) $
             it "answers a relay contract escape with the route's declared 500 (not a torn session, not a 502)" $
                 -- The relay reports its failures as typed values, so a throw is an invariant break.
                 -- The perimeter answers it with the neutral 500 and the session survives.

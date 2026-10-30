@@ -35,7 +35,7 @@ import Ecluse.Core.Registry.Publish (
     PublishPlan (PublishPlan, ppLatest),
     newMirrorPublish,
  )
-import Ecluse.Core.Registry.Request (baseRequestUrl)
+import Ecluse.Core.Registry.Request (baseRequestUrl, nativePresentation)
 import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), LimitError (BodyTooLarge), Limits (maxMetadataBytes), defaultLimits)
 import Ecluse.Core.Security.Egress (registryUrlText)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
@@ -91,11 +91,11 @@ spec = do
                             originBaseUrl origin `shouldBe` registryUrlText target
                             ocChargeFullRead origin 13
                             pure (Left MetadataUndecodable)
-                        codec = npmPublishCodec{pcTargetRead = factory}
+                        codec = (npmPublishCodec nativePresentation){pcTargetRead = factory}
                         publish = newMirrorPublish transport target target codec
                     mpProbeInventory publish (\bytes -> modifyIORef' charges (<> [bytes])) isOdd `shouldReturn` Left MetadataUndecodable
                     readIORef events `shouldReturn` ["mint", "prepare"]
-                    readIORef charges `shouldReturn` [scaleCharge (2 * pcTargetReadPermille npmPublishCodec) 13]
+                    readIORef charges `shouldReturn` [scaleCharge (2 * pcTargetReadPermille (npmPublishCodec nativePresentation)) 13]
                     allCaptured stub `shouldReturn` []
 
         it "mints the bearer per publish and attaches it to the wire" $
@@ -132,7 +132,7 @@ spec = do
                                 , ptLimits = defaultLimits{maxMetadataBytes = 16}
                                 , ptTracing = passthroughTracingPort
                                 }
-                        publish = newMirrorPublish transport (loopbackRegistryUrl (stubBaseUrl stub)) (loopbackRegistryUrl (stubBaseUrl stub)) npmPublishCodec
+                        publish = newMirrorPublish transport (loopbackRegistryUrl (stubBaseUrl stub)) (loopbackRegistryUrl (stubBaseUrl stub)) (npmPublishCodec nativePresentation)
                     outcome <- mpProbeInventory publish (const (pure ())) isOdd
                     outcome `shouldBe` Left (MetadataFetch (FetchBoundExceeded (BodyTooLarge (MetadataBodyLimit 16))))
 
@@ -146,20 +146,20 @@ spec = do
                                 , ptLimits = defaultLimits{maxMetadataBytes = 16}
                                 , ptTracing = passthroughTracingPort
                                 }
-                        publish = newMirrorPublish transport (loopbackRegistryUrl (stubBaseUrl stub)) (loopbackRegistryUrl (stubBaseUrl stub)) npmPublishCodec
+                        publish = newMirrorPublish transport (loopbackRegistryUrl (stubBaseUrl stub)) (loopbackRegistryUrl (stubBaseUrl stub)) (npmPublishCodec nativePresentation)
                     outcome <- publishFixture publish
                     outcome `shouldSatisfy` isBoundExceededPublish
 
     describe "the codec's request formers (credential invariants per married client)" $ do
         it "the probe request attaches the bearer at the single attach point with redirects disabled" $
-            case pcProbeRequest npmPublishCodec "https://mirror.test" (Just (bareCredential (mkSecret "tok"))) isOdd of
+            case pcProbeRequest (npmPublishCodec nativePresentation) "https://mirror.test" (Just (bareCredential (mkSecret "tok"))) isOdd of
                 Left err -> fail ("expected a formed probe request, got " <> show err)
                 Right request -> do
                     Client.redirectCount request `shouldBe` 0
                     lookup "Authorization" (Client.requestHeaders request) `shouldBe` Just "Bearer tok"
 
         it "the publish request attaches the bearer with redirects disabled" $
-            case npmPublishCodec of
+            case npmPublishCodec nativePresentation of
                 PublishCodec{pcPrepareSource, pcPrepareUpload, pcPublishRequest} -> withSweeper $ \deadlines -> do
                     (inventory, source) <- expectRight (pcPrepareSource isOdd v1_0_0 (mirrorVersionDoc isOdd v1_0_0 isOddVersionDoc dummyArtifact))
                     let file :| _ = inventoryFiles inventory
@@ -197,12 +197,12 @@ unsealedCodec :: PublishCodec
 unsealedCodec =
     PublishCodec
         { pcProbeRequest = \targetUrl _token _name -> unsealed (targetUrl <> "/probe")
-        , pcVersionListWalk = pcVersionListWalk npmPublishCodec
+        , pcVersionListWalk = pcVersionListWalk (npmPublishCodec nativePresentation)
         , pcMirrorCompanion = Nothing
-        , pcNativeComplete = pcNativeComplete npmPublishCodec
-        , pcTargetReadPermille = pcTargetReadPermille npmPublishCodec
+        , pcNativeComplete = pcNativeComplete (npmPublishCodec nativePresentation)
+        , pcTargetReadPermille = pcTargetReadPermille (npmPublishCodec nativePresentation)
         , pcTargetRead = staticRead npmRead{erRequest = \target _ _ -> unsealed (registryUrlText (baseRequestUrl target) <> "/probe")}
-        , pcPrepareTarget = pcPrepareTarget npmPublishCodec
+        , pcPrepareTarget = pcPrepareTarget (npmPublishCodec nativePresentation)
         , pcPrepareSource = prepareNpmSource
         , pcPrepareUpload = \_ _ _ inventory source file bytes -> pure (prepareNpmUpload inventory source file bytes)
         , pcPublishRequest = \targetUrl _token _plan _upload ->
@@ -250,8 +250,8 @@ mintCountingPublish deadlines stub = do
             atomicModifyIORef' mints (\n -> (n + 1, ()))
             pure (Just (bareCredential (mkSecret "minted-token")))
         transport = MirrorTransport{ptClient = exchanges, ptMintCredential = mint, ptLimits = defaultLimits, ptTracing = passthroughTracingPort}
-    pure (newMirrorPublish transport (loopbackRegistryUrl (stubBaseUrl stub)) (loopbackRegistryUrl (stubBaseUrl stub)) npmPublishCodec, mints)
+    pure (newMirrorPublish transport (loopbackRegistryUrl (stubBaseUrl stub)) (loopbackRegistryUrl (stubBaseUrl stub)) (npmPublishCodec nativePresentation), mints)
 
 -- The anonymous marriage of npm's codec against an arbitrary target URL.
 publishAt :: Deadlines -> Text -> IO MirrorPublish
-publishAt deadlines = anonymousPublishAt deadlines npmPublishCodec . loopbackRegistryUrl
+publishAt deadlines = anonymousPublishAt deadlines (npmPublishCodec nativePresentation) . loopbackRegistryUrl

@@ -22,6 +22,12 @@ module Ecluse.Core.Registry.Request (
     -- * Service credential presentation
     AuthMechanism (..),
     renderAuthMechanism,
+    StoreOperation (..),
+    ServicePresentation,
+    nativePresentation,
+    declaredPresentation,
+    presentedMapping,
+    presentedRequest,
 
     -- * Request building
     metadataGet,
@@ -152,6 +158,42 @@ renderAuthMechanism mechanism credential = case mechanism of
     AuthRawKey -> encodeUtf8 secret
   where
     secret = unSecret (credSecret credential)
+
+-- | The half of a store's protocol a service credential is presented to.
+data StoreOperation = StoreRead | StoreWrite
+    deriving stock (Bounded, Enum, Eq, Show)
+
+{- | How a store asks for a service credential on reads and on writes. An operation it declares
+nothing for keeps the ecosystem's own credential mapping.
+-}
+data ServicePresentation = ServicePresentation (Maybe AuthMechanism) (Maybe AuthMechanism)
+    deriving stock (Eq, Show)
+
+-- | A store that declares nothing: every operation keeps the ecosystem's own presentation.
+nativePresentation :: ServicePresentation
+nativePresentation = ServicePresentation Nothing Nothing
+
+-- | A store that declares its mechanism for each operation.
+declaredPresentation :: (StoreOperation -> AuthMechanism) -> ServicePresentation
+declaredPresentation mechanism = ServicePresentation (Just (mechanism StoreRead)) (Just (mechanism StoreWrite))
+
+{- | The mapping a service credential renders through for one operation: the declared mechanism on
+@Authorization@, or the ecosystem's mapping unchanged. Recovery stays the ecosystem's own.
+-}
+presentedMapping :: ServicePresentation -> StoreOperation -> CredentialMapping -> CredentialMapping
+presentedMapping (ServicePresentation onRead onWrite) operation native = case declared of
+    Nothing -> native
+    Just mechanism -> native{credentialHeader = hAuthorization, credentialRender = renderAuthMechanism mechanism}
+  where
+    declared = case operation of
+        StoreRead -> onRead
+        StoreWrite -> onWrite
+
+{- | Form a request anonymously, then attach the credential under @mapping@. The builder must use its
+credential only to attach it, as every native request builder here does.
+-}
+presentedRequest :: CredentialMapping -> Maybe ClientCredential -> (Maybe ClientCredential -> Either e Request) -> Either e Request
+presentedRequest mapping credential build = attachCredential mapping credential <$> build Nothing
 
 -- | Negotiate compressed metadata under the ecosystem's media type and credential presentation.
 metadataGet :: CredentialMapping -> Maybe ClientCredential -> ByteString -> Request -> Request

@@ -28,6 +28,7 @@ import Ecluse.Core.Registry.Cargo.Publish.Body qualified as Body
 import Ecluse.Core.Registry.Metadata (VersionDoc (..))
 import Ecluse.Core.Registry.Origin (originClient)
 import Ecluse.Core.Registry.Publish (MirrorTransport (..), PublishCodec (pcNativeComplete), PublishPlan (PublishPlan), newMirrorPublish)
+import Ecluse.Core.Registry.Request (nativePresentation)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Core.Security.Limits (BodyLimit (MetadataBodyLimit), LimitError (BodyTooLarge), Limits (maxMetadataBytes), defaultLimits)
 import Ecluse.Core.Server.Admission.Types (ChargeFactors (ChargeFactors))
@@ -210,16 +211,16 @@ spec = do
                         at target = originClient defaultLimits exchanges (loopbackRegistryUrl target) (Just (bareCredential (mkSecret "cargo-token")))
                         body = PublishRequestBody bytes Nothing NoPublishExtras
                     for_ [root <> "?query=secret", root <> "#fragment"] $ \target ->
-                        publishRelay (cargoPublish factors) (at target) cargoTestName body
+                        publishRelay (cargoPublish factors) nativePresentation (at target) cargoTestName body
                             `shouldReturn` Left (FetchUrlUnformable (UnparseableUrl "Cargo API root must not contain a query or fragment"))
                     case cargoUploadMetadata release of
                         Object fields -> do
                             changed <- LBS.toStrict <$> expectRight (Body.encodeUpload (Object (KeyMap.insert "name" (String "another") fields)) (releaseArchive release))
-                            publishRelay (cargoPublish factors) (at root) cargoTestName (PublishRequestBody changed Nothing NoPublishExtras)
+                            publishRelay (cargoPublish factors) nativePresentation (at root) cargoTestName (PublishRequestBody changed Nothing NoPublishExtras)
                                 `shouldReturn` Left (FetchUrlUnformable (UnparseableUrl "Cargo relay name differs from the authorised package"))
                         _ -> expectationFailure "fixture upload metadata is not an object"
                     allCaptured stub `shouldReturn` []
-                    void (publishRelay (cargoPublish factors) (at root) cargoTestName body >>= expectRight)
+                    void (publishRelay (cargoPublish factors) nativePresentation (at root) cargoTestName body >>= expectRight)
                     captures <- allCaptured stub
                     map capMethod captures `shouldBe` ["PUT"]
                     map capBody captures `shouldBe` [bytes]
@@ -272,7 +273,7 @@ spec = do
                             bytes <- LBS.toStrict <$> expectRight (Body.encodeUpload (Object (KeyMap.insert key value fields)) (releaseArchive release))
                             let body = PublishRequestBody bytes Nothing NoPublishExtras
                             uploadClaims defaultLimits (const (pure ())) "https://proxy.test/cargo" body >>= (`shouldSatisfy` isLeft)
-                            publishRelay (cargoPublish factors) origin cargoTestName body >>= (`shouldSatisfy` isLeft)
+                            publishRelay (cargoPublish factors) nativePresentation origin cargoTestName body >>= (`shouldSatisfy` isLeft)
                         _ -> expectationFailure "fixture upload metadata is not an object"
                     allCaptured stub `shouldReturn` []
         it "rejects different archive name, version and build spelling before relay" $ do
@@ -293,7 +294,7 @@ factors :: ChargeFactors
 factors = ChargeFactors 1000 1000 1000
 
 codec :: PublishCodec
-codec = cargoPublishCodec factors
+codec = cargoPublishCodec factors nativePresentation
 
 targetReply :: Text -> Captured -> (Status, ResponseHeaders, LByteString)
 targetReply api captured =

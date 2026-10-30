@@ -13,6 +13,9 @@ module Ecluse.Config.Target (
     vetPublicationRepository,
     parseCodeArtifactHost,
     isAccountId,
+
+    -- * Service credential presentation
+    storePresentation,
 ) where
 
 import Data.Char (isDigit)
@@ -28,10 +31,12 @@ import Ecluse.Config.Types (
     Target (..),
  )
 import Ecluse.Core.Ecosystem (Ecosystem)
+import Ecluse.Core.Registry.Request (ServicePresentation, declaredPresentation, nativePresentation)
 import Ecluse.Core.Security (hostAddress)
 import Ecluse.Core.Security.Egress (RegistryUrl, registryUrlText)
 import Ecluse.Core.Text (nonBlank, registryPath)
 import Ecluse.Runtime.Credential.CodeArtifact (CodeArtifactConfig (..))
+import Ecluse.Runtime.Credential.CodeArtifact.Presentation (codeArtifactAuthMechanism)
 import Ecluse.Runtime.Maintenance.CodeArtifact.Decide (
     CodeArtifactStore (..),
     codeArtifactFormat,
@@ -148,6 +153,13 @@ repositoryOfPath purpose format url = case (purpose, pathSegments url) of
 
 pathSegments :: Text -> [Text]
 pathSegments = filter (not . T.null) . T.splitOn "/" . registryPath
+
+-- | How a declared store asks for an ecosystem's service credential. Only CodeArtifact declares a mechanism.
+storePresentation :: StoreTag -> Ecosystem -> ServicePresentation
+storePresentation tag eco = case tag of
+    TagCodeArtifact -> declaredPresentation (codeArtifactAuthMechanism eco)
+    TagRegistry -> nativePresentation
+    TagVerdaccio -> nativePresentation
 
 -- | Parse the CodeArtifact host into domain, owner and region, allowing hyphens in the domain.
 parseCodeArtifactHost :: Text -> Maybe (Text, Text, Text)

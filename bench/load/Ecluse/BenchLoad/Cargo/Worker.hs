@@ -24,6 +24,7 @@ import Ecluse.Core.Registry.Metadata (versionEvaluation)
 import Ecluse.Core.Registry.Metadata.Fetch.Preparation (prepareVersion)
 import Ecluse.Core.Registry.Origin (chargingNativeReads, originClientOf)
 import Ecluse.Core.Registry.Publish (MirrorTransport (..), newMirrorPublish)
+import Ecluse.Core.Registry.Request (nativePresentation)
 import Ecluse.Core.Security (defaultLimits)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Core.Worker (WorkerPolicy (..))
@@ -63,7 +64,7 @@ cargoPolicy :: RegistryAdapter -> WorkerEnvironment -> IO WorkerPolicy
 cargoPolicy adapter environment = do
     let factors = metadataChargeFactors (adapterMetadata adapter)
         targetReadRoot = weTargetReadRoot environment
-        publish = newMirrorPublish (MirrorTransport (weClient environment) (pure Nothing) defaultLimits passthroughTracingPort) targetReadRoot targetReadRoot (cargoPublishCodec factors)
+        publish = newMirrorPublish (MirrorTransport (weClient environment) (pure Nothing) defaultLimits passthroughTracingPort) targetReadRoot targetReadRoot (cargoPublishCodec factors nativePresentation)
     pure
         WorkerPolicy
             { wpFirstParty = const False

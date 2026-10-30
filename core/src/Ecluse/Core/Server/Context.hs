@@ -58,7 +58,7 @@ import Ecluse.Core.Queue (MirrorQueue)
 import Ecluse.Core.Registry.Adapter.Capability (AdapterArtifact, AdapterMetadata, AdapterPublish, ProjectName)
 import Ecluse.Core.Registry.Exchange.Types (ExchangeClient)
 import Ecluse.Core.Registry.Public (PublicControl)
-import Ecluse.Core.Registry.Request (BaseRequest, CredentialMapping)
+import Ecluse.Core.Registry.Request (BaseRequest, CredentialMapping, ServicePresentation)
 import Ecluse.Core.Rules (PreparedRule)
 import Ecluse.Core.Rules.Outage (AdmissionIdentity)
 import Ecluse.Core.Security (HostPort, Limits, Origin, TarballHostGate, tarballHostAllowed, thgAllowlist, thgEcosystemHosts)
@@ -189,6 +189,8 @@ data PublishDeps = PublishDeps
     -- ^ Whether this package may publish here, checked before any upstream write. It is 'pdFirstParty'.
     , pubStaticCredential :: Maybe ClientCredential
     -- ^ Replaces the authenticated edge token on publishes. Requires 'pubInboundToken' at boot.
+    , pubStaticPresentation :: ServicePresentation
+    -- ^ How the publication target's store asks for 'pubStaticCredential'. A caller credential keeps its own.
     , pubInboundToken :: Maybe Secret
     -- ^ The read paths' inbound edge token (@ECLUSE_SERVER__AUTH_TOKEN@). 'Nothing' leaves the edge open.
     , pubMaxRequestBytes :: Int

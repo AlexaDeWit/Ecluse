@@ -700,6 +700,7 @@ library ecluse-runtime
     Ecluse.Runtime.Aws.S3.Conditional
     Ecluse.Runtime.Credential.CodeArtifact
     Ecluse.Runtime.Credential.CodeArtifact.Internal
+    Ecluse.Runtime.Credential.CodeArtifact.Presentation
     Ecluse.Runtime.Cve.Sync
     Ecluse.Runtime.Cve.Sync.Internal
     Ecluse.Runtime.Cve.Sync.S3

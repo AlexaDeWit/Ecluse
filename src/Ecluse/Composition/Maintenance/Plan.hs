@@ -57,6 +57,7 @@ import Ecluse.Core.Registry.Metadata (MetadataError (MetadataFetch))
 import Ecluse.Core.Registry.Metadata.Fetch.Preparation (prepareManifest)
 import Ecluse.Core.Registry.Metadata.Fetch.Types (ManifestFetch)
 import Ecluse.Core.Registry.Publish (PublishCodec)
+import Ecluse.Core.Registry.Request (nativePresentation)
 import Ecluse.Core.Security.Egress (RegistryUrl)
 import Ecluse.Runtime.Maintenance.CodeArtifact.Decide (CodeArtifactStore)
 
@@ -204,7 +205,7 @@ protocolStoreFor mAdapter tag token consent descriptor = do
             , cpsConsentKey = descriptor
             , cpsListing = listing
             , cpsDelete = delete
-            , cpsCodec = publishCodec publish
+            , cpsCodec = publishCodec publish nativePresentation
             }
 
 -- The read a store cleared without an adapter would make, which no boot reaches.

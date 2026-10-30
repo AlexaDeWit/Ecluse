@@ -52,6 +52,7 @@ import Ecluse.Core.Registry.Publish (
     MirrorPublish (mpProbeInventory),
     PublishPlan (ppLatest),
  )
+import Ecluse.Core.Registry.Request (nativePresentation)
 import Ecluse.Core.Rules (prepare)
 import Ecluse.Core.Rules.Types (Decision (Undecidable), DenyIfCveParams (DenyIfCveParams), FailureAlignment (FailDeny, FailNoDecision), Inability (NoDatabaseLoaded, RuleThrew), Reason (RuleUnable), Rule (AllowIfOlderThan, DenyIfCve, DenyIfDeprecated, DenyIfKnownMalicious, DenyIfYanked), Transience (WillResolve, WontResolve), ruleName)
 import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit, MirrorArtifactBodyLimit), LimitError (BodyTooLarge), defaultLimits, hostPortAddress)
@@ -1089,7 +1090,7 @@ admissionObject = fst npmCached (object ["marker" .= ("admission-time" :: Text)]
 -- The real npm codec over the shared transport against a stub mirror target, so the codec's own
 -- refusal is the one under test rather than a recording double's.
 codecPublishAt :: Deadlines -> Text -> IO MirrorPublish
-codecPublishAt deadlines = anonymousPublishAt deadlines npmPublishCodec . loopbackRegistryUrl
+codecPublishAt deadlines = anonymousPublishAt deadlines (npmPublishCodec nativePresentation) . loopbackRegistryUrl
 
 -- A resolver whose present verdict carries the given raw object beside the sample details.
 resolverCarrying :: CachedDoc -> PackageName -> Version -> IO VersionEvaluation

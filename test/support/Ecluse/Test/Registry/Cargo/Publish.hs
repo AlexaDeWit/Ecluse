@@ -36,6 +36,7 @@ import Ecluse.Core.Registry.Cargo.Publish (cargoPublish)
 import Ecluse.Core.Registry.Metadata (VersionDoc (..))
 import Ecluse.Core.Registry.Origin (originClient)
 import Ecluse.Core.Registry.ServedDocument (stringField)
+import Ecluse.Core.Registry.Request (nativePresentation)
 import Ecluse.Core.Security (defaultLimits, maxNestingDepth)
 import Ecluse.Core.Security.Egress (RegistryUrl)
 import Ecluse.Core.Server.Admission.Types (ChargeFactors (ChargeFactors))
@@ -53,7 +54,7 @@ observeCargoRelay registryAt bytes =
     withRoutedStub (const (status200, [], "{}")) $ \target ->
         withExchangeClient (newManager defaultManagerSettings) $ \client -> do
             let origin = originClient defaultLimits client (registryAt (stubBaseUrl target)) Nothing
-            void (publishRelay (cargoPublish (ChargeFactors 1000 1000 1000)) origin cargoTestName (PublishRequestBody bytes Nothing NoPublishExtras) >>= expectRight)
+            void (publishRelay (cargoPublish (ChargeFactors 1000 1000 1000)) nativePresentation origin cargoTestName (PublishRequestBody bytes Nothing NoPublishExtras) >>= expectRight)
             captured <-
                 allCaptured target >>= \case
                     [written] -> pure written

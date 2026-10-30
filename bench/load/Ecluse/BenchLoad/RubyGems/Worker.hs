@@ -22,6 +22,7 @@ import Ecluse.Core.Registry.Metadata (versionEvaluation)
 import Ecluse.Core.Registry.Metadata.Fetch.Preparation (prepareVersion)
 import Ecluse.Core.Registry.Origin (chargingNativeReads, originClientOf)
 import Ecluse.Core.Registry.Publish (MirrorTransport (..), newMirrorPublish)
+import Ecluse.Core.Registry.Request (nativePresentation)
 import Ecluse.Core.Registry.RubyGems.Metadata (prepareGemRead)
 import Ecluse.Core.Registry.RubyGems.Publish (rubyPublishCodec)
 import Ecluse.Core.Security (defaultLimits)
@@ -63,7 +64,7 @@ rubyGemsPolicy :: RegistryAdapter -> WorkerEnvironment -> IO WorkerPolicy
 rubyGemsPolicy adapter environment = do
     let factors = metadataChargeFactors (adapterMetadata adapter)
         target = weTargetReadRoot environment
-        publish = newMirrorPublish (MirrorTransport (weClient environment) (pure Nothing) defaultLimits passthroughTracingPort) target target (rubyPublishCodec factors)
+        publish = newMirrorPublish (MirrorTransport (weClient environment) (pure Nothing) defaultLimits passthroughTracingPort) target target (rubyPublishCodec factors nativePresentation)
     pure
         WorkerPolicy
             { wpFirstParty = const False

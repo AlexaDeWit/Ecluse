@@ -38,6 +38,7 @@ import Ecluse.Core.Registry.Npm.Publish (npmPublishCodec, uploadClaims)
 import Ecluse.Core.Registry.Npm.Request qualified as NpmRequest
 import Ecluse.Core.Registry.Npm.Route qualified as NpmRoute
 import Ecluse.Core.Registry.Origin (OriginClient (ocBaseRequest, ocToken))
+import Ecluse.Core.Registry.Request (StoreOperation (StoreWrite), presentedMapping)
 
 -- | npm's capability record.
 npmAdapter :: RegistryAdapter
@@ -76,7 +77,7 @@ npmPublish =
     AdapterPublish
         { publishCredential = npmCredential
         , publishRequestExtras = const (Right NoPublishExtras)
-        , publishRelay = \origin name -> relayPublishDocument origin name . publishBodyBytes
+        , publishRelay = \presentation origin name -> relayPublishDocument (presentedMapping presentation StoreWrite npmCredential) origin name . publishBodyBytes
         , publishUploadClaims = \_ _ _ -> pure . uploadClaims . publishBodyBytes
         , publishCodec = npmPublishCodec
         , publishMirrorRequirements = MirrorRequirements CachedWorkerRead NativeVersionState
