@@ -456,6 +456,9 @@ Publication can make one further local pass over those same bytes for selected t
 Both passes charge their work.
 Resolver disagreement can change the package description used for resolution without changing archive bytes.
 First-party validation therefore compares upload claims, including native-library uniqueness constraints, with the retained effective manifest before target discovery.
+It also refuses the unstable dependency fields that mirroring refuses, so both paths take one stance on nightly-only resolver features.
+After agreement, every dependency must come from crates.io or Écluse, because a dependency on another registry would send every consumer's Cargo to that registry directly.
+Écluse knows its own Cargo indexes from `server.publicUrl` and the mount path, so this check needs no configuration of its own.
 Shared bounded target parsing and logical source identities account for native formatting without changing source rows or upload bytes.
 The relay preserves validated upload bytes. Mirror publication derives required upload fields from the verified effective manifest.
 

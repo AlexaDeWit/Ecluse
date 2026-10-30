@@ -23,8 +23,9 @@ server:
   # key here.
   port: 8080
   # The proxy's own externally-reachable base URL. The proxy rewrites served tarball
-  # URLs against it. http(s) with a dialable authority, and http stays legal for
-  # loopback. Required as soon as any mount is active, else the boot refuses
+  # URLs against it, and Cargo publication accepts dependencies from the Cargo indexes
+  # under it as the proxy's own. http(s) with a dialable authority, and http stays
+  # legal for loopback. Required as soon as any mount is active, else the boot refuses
   # (PublicUrlRequired).
   # publicUrl: https://registry.example.com
   # Set via ECLUSE_SERVER__AUTH_TOKEN (a secret): clients must then present it.
