@@ -43,6 +43,7 @@ module Ecluse.Core.Mirror.State.Internal (
     declaredCompanion,
     declaredSourceCompanion,
     verifySourceCompanionBytes,
+    checkStateFiles,
 ) where
 
 import Data.Aeson (Object)
@@ -60,7 +61,7 @@ import Ecluse.Core.Registry (CompanionRequirement (DeclaredCompanions, NativeCom
 import Ecluse.Core.Registry.MirrorUpload
 import Ecluse.Core.Registry.MirrorUpload.Internal (restoreMirrorFragment)
 import Ecluse.Core.Registry.PyPI.Document (simpleDocument, simpleEnvelope, simpleFiles)
-import Ecluse.Core.Security (LimitError, Limits (..), checkArtifactCount, checkVersionCountOf)
+import Ecluse.Core.Security (LimitError (TooManyArtifacts), Limits (..), checkVersionCountOf, withinCeiling)
 import Ecluse.Core.Version (Version, renderVersion)
 
 -- | A digest of the configured target, never a credential or caller authorisation.
@@ -184,8 +185,12 @@ extendProjectRecord limits target inventory previous = do
             RubyGemsMirrorRead _ -> mempty
         result = record{projectEnvelope = envelope, projectVersions = Map.insert key updated (recordVersions record)}
     first StateBound (checkVersionCountOf limits (Map.size (recordVersions result)))
-    first StateBound (checkArtifactCount limits (sum (map (Map.size . versionFiles) (Map.elems (recordVersions result)))))
+    first StateBound (checkStateFiles limits (sum (map (Map.size . versionFiles) (Map.elems (recordVersions result)))))
     pure result
+
+-- | Refuse a record count over the fixed mirror-state file ceiling, so every write stays readable.
+checkStateFiles :: Limits -> Int -> Either LimitError ()
+checkStateFiles limits = withinCeiling TooManyArtifacts (mirrorStateFileCeiling limits)
 
 extendVersion :: MirrorInventory -> Maybe MirrorVersion -> Either MirrorStateFault MirrorVersion
 extendVersion inventory previous = do

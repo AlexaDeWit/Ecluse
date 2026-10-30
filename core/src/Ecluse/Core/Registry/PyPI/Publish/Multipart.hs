@@ -153,7 +153,7 @@ boundaryByte byte = byte >= 33 && byte <= 126 && byte /= 34 && byte /= 92
 -- Wai ignores malformed part headers, so reject ambiguity before it selects a disposition claim.
 checkParts :: Limits -> ByteString -> Int -> ByteString -> Either ParseError [Claim]
 checkParts limits boundary count bytes = do
-    when (count >= maxArtifactCount limits) (parseRefusal "multipart part count exceeds its bound")
+    when (count >= multipartPartCeiling limits) (parseRefusal "multipart part count exceeds its bound")
     let (headers, headerSuffix) = BS.breakSubstring "\r\n\r\n" bytes
     when (BS.null headerSuffix || BS.length headers > 16384) (parseRefusal "malformed multipart headers")
     claim <- checkHeaders headers

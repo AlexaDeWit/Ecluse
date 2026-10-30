@@ -48,9 +48,9 @@ archiveMetadata limits charge package version filename bytes = case fileCoordina
                         _
                             | any (`T.isSuffixOf` filename) [".tar.gz", ".tgz"] ->
                                 extractTar limits contentCharge package version $ \consume ->
-                                    withInflatedChunks (GzipMembers (maxArtifactCount limits)) decoderCharge bytes (consume . sourceReader)
+                                    withInflatedChunks (GzipMembers (compressedMemberCeiling limits)) decoderCharge bytes (consume . sourceReader)
                             | ".tar.bz2" `T.isSuffixOf` filename ->
-                                extractTar limits contentCharge package version (withBzipChunks (maxArtifactCount limits) decoderCharge bytes)
+                                extractTar limits contentCharge package version (withBzipChunks (compressedMemberCeiling limits) decoderCharge bytes)
                             | ".tar.xz" `T.isSuffixOf` filename ->
                                 extractTar limits contentCharge package version (withLzmaChunks XzArchive decoderCharge [bytes])
                             | otherwise -> pure (parseRefusal "unsupported distribution archive")
@@ -74,7 +74,7 @@ emptyScan = Scan 0 0 0 Set.empty Nothing
 entryPathCost :: Limits -> Text -> Scan -> Either ParseError Int
 entryPathCost limits path scan = do
     void (checkPath path)
-    when (scanCount scan >= maxArtifactCount limits) (parseRefusal "archive entry count exceeds its bound")
+    when (scanCount scan >= archiveEntryCeiling limits) (parseRefusal "archive entry count exceeds its bound")
     when (Set.member path (scanNames scan)) (parseRefusal "duplicate archive entry")
     let charge = BS.length (TE.encodeUtf8 path) + 128
     when (charge > maxMetadataBytes limits - scanPathBytes scan) (parseRefusal "archive path inventory exceeds its bound")
@@ -161,7 +161,7 @@ zipDirectory :: Limits -> (Int -> IO ()) -> ByteString -> IO (Either ParseError 
 zipDirectory limits charge bytes = runExceptT $ do
     end <- ExceptT (pure (findZipEnd bytes))
     (directoryEnd, count, size, offset) <- ExceptT (pure (directoryBounds bytes end))
-    when (count > toInteger (maxArtifactCount limits) || size > toInteger (maxMetadataBytes limits)) (throwError (ParseError "ZIP directory exceeds its bound"))
+    when (count > toInteger (archiveEntryCeiling limits) || size > toInteger (maxMetadataBytes limits)) (throwError (ParseError "ZIP directory exceeds its bound"))
     unless (offset + size == directoryEnd) (throwError (ParseError "ZIP directory offset is inconsistent"))
     entries <- readDirectory charge 0 bytes (fromInteger count) (BS.take (fromInteger size) (BS.drop (fromInteger offset) bytes))
     let ordered = sortOn zmStart entries

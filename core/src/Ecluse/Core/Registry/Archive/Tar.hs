@@ -113,7 +113,7 @@ walkTar limits charge select tarState = do
             when (tsPending tarState) (refuse "orphan extended tar header")
             pure tarState
         else do
-            when (tsCount tarState >= maxArtifactCount limits) (refuse "archive entry count exceeds its bound")
+            when (tsCount tarState >= archiveEntryCeiling limits) (refuse "archive entry count exceeds its bound")
             entry <- checked (readHeader header)
             next <- case Tar.entryContent entry of
                 Tar.OtherEntryType code _ size | code `elem` ['x', 'g', 'L', 'K'] -> extendedEntry limits charge code size tarState{tsRawNames = False}
