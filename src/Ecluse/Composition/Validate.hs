@@ -36,7 +36,8 @@ import Ecluse.Composition.BootError (
         PublicationTargetWithoutPublish,
         PublishStaticCredentialNeedsEdge,
         RuleBlockedOnMount,
-        UploadConfigurationRequired
+        UploadConfigurationRequired,
+        UploadUrlRequired
     ),
  )
 import Ecluse.Composition.Endpoints (
@@ -73,7 +74,7 @@ import Ecluse.Config (
     storeTagName,
  )
 import Ecluse.Core.Credential (ClientCredential (ClientCredential), Secret)
-import Ecluse.Core.Ecosystem (Ecosystem (Cargo))
+import Ecluse.Core.Ecosystem (Ecosystem)
 import Ecluse.Core.Registry.Adapter (RegistryAdapter, adapterFor, adapterPublish, adapterRuleBlocks)
 import Ecluse.Core.Registry.Adapter.Capability (
     AdapterPublish (publishIdentity, publishMirrorRequirements, publishUploadEndpoint),
@@ -147,12 +148,15 @@ vetMirrorCapabilities role app = decided $ case missing of
                 <> maybe [] (publicationNeeds eco publish) (mntPublicationTarget mount)
     mirrorNeeds eco publish endpoint =
         [MirrorStateRequired eco | mirrorStateRequirement (publishMirrorRequirements publish) == DurableVersionState, isJust pipeline, isNothing (cfgMirrorState app)]
-            <> [required eco "mirrorTarget" (meTarget endpoint) "uploadUrl" | publishUploadEndpoint publish == ExplicitUploadEndpoint, mirrorWrites, isNothing (meUploadUrl endpoint)]
-            <> [required eco "mirrorTarget" (meTarget endpoint) "username" | publishIdentity publish == NamedIdentity, mirrorWrites, tgtTag (meTarget endpoint) /= TagCodeArtifact, isNothing (meUsername endpoint)]
+            <> [uploadUrlRequired eco "mirrorTarget" (meTarget endpoint) | separateUpload publish, mirrorWrites, isNothing (meUploadUrl endpoint)]
+            <> [usernameRequired eco "mirrorTarget" (meTarget endpoint) | publishIdentity publish == NamedIdentity, mirrorWrites, tgtTag (meTarget endpoint) /= TagCodeArtifact, isNothing (meUsername endpoint)]
     publicationNeeds eco publish endpoint =
-        [required eco "publicationTarget" (peTarget endpoint) "uploadUrl" | eco == Cargo, clientWrites, isNothing (peUploadUrl endpoint)]
-            <> [required eco "publicationTarget" (peTarget endpoint) "username" | publishIdentity publish == NamedIdentity, clientWrites, isJust (peToken endpoint), tgtTag (peTarget endpoint) /= TagCodeArtifact, isNothing (peUsername endpoint)]
-    required eco endpoint target key = UploadConfigurationRequired eco (endpoint <> "." <> storeTagName (tgtTag target) <> "." <> key)
+        [uploadUrlRequired eco "publicationTarget" (peTarget endpoint) | separateUpload publish, clientWrites, isNothing (peUploadUrl endpoint)]
+            <> [usernameRequired eco "publicationTarget" (peTarget endpoint) | publishIdentity publish == NamedIdentity, clientWrites, isJust (peToken endpoint), tgtTag (peTarget endpoint) /= TagCodeArtifact, isNothing (peUsername endpoint)]
+    separateUpload publish = publishUploadEndpoint publish == ExplicitUploadEndpoint
+    keyPath endpoint target key = endpoint <> "." <> storeTagName (tgtTag target) <> "." <> key
+    uploadUrlRequired eco endpoint target = UploadUrlRequired eco (keyPath endpoint target "uploadUrl")
+    usernameRequired eco endpoint target = UploadConfigurationRequired eco (keyPath endpoint target "username")
 
 -- | Accumulate every pure refusal and advisory for one role before constructing its plan.
 vetBoot :: Config -> Vet ValidatedPlan

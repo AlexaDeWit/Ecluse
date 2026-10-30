@@ -181,7 +181,7 @@ data MirrorEndpoint = MirrorEndpoint
     { meUrl :: RegistryUrl
     , meWrite :: MirrorWrite
     , meUploadUrl :: Maybe RegistryUrl
-    -- ^ Explicit native upload endpoint when it differs from the read root.
+    -- ^ Where uploads go on a protocol with a separate upload endpoint. 'meUrl' is where reads go.
     , meUsername :: Maybe Text
     -- ^ Static Basic username. A managed backend supplies its own convention.
     }
@@ -208,7 +208,7 @@ meTarget endpoint = Target (writeTag (meWrite endpoint)) (meUrl endpoint)
 data PublicationEndpoint = PublicationEndpoint
     { peTarget :: Target
     , peUploadUrl :: Maybe RegistryUrl
-    -- ^ Approved API base, separate from the read/index root.
+    -- ^ Where uploads go on a protocol with a separate upload endpoint. The target's URL is where reads go.
     , peToken :: Maybe Secret
     , peUsername :: Maybe Text
     -- ^ Username paired with the configured publication token.
@@ -570,6 +570,8 @@ data ConfigError
       format, whose per-format endpoints are separate stores. Carries its key, then the format token.
       -}
       CodeArtifactRepositoryMissing Ecosystem Text Text
+    | -- | A write target sets @uploadUrl@, but the protocol derives its write address from @url@. Carries its key.
+      UploadUrlRefused Ecosystem Text
     deriving stock (Eq, Show)
 
 -- | Render a load refusal, including the mount remedy for a misplaced shared suppression.
@@ -605,6 +607,11 @@ renderConfigError (CodeArtifactRepositoryMissing eco path format) =
         <> " is not a CodeArtifact repository endpoint for this mount: its path must be /"
         <> format
         <> "/{repository}/"
+renderConfigError (UploadUrlRefused eco path) =
+    keyRef eco path
+        <> " is set, but "
+        <> ecosystemName eco
+        <> " derives its write address from url: remove uploadUrl and keep the registry address in url"
 
 renderSharedPolicyError :: PolicyError -> Text
 renderSharedPolicyError err@(SuppressUnknownRule "deny-scripts") =
