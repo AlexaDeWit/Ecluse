@@ -630,6 +630,10 @@ The controls serve different purposes:
 | Cache budget | How much eligible metadata the selected provider retains locally |
 | Runtime heap ceiling | The heap limit applied to the process |
 
+The structural limit keys are `limits.maxVersionCount` and `limits.maxNestingDepth`. Archive,
+compression, Marshal, YAML, multipart and mirror-state decoders use fixed internal ceilings, which
+no key sets.
+
 A larger count bound lets more requests share public reads and wait for upstreams.
 Private listings still parse per-request, so more concurrency can increase their memory use and latency.
 
