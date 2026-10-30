@@ -21,7 +21,7 @@ import Network.Wai.Handler.Warp (testWithApplication)
 import Ecluse.BenchLoad.Error (benchFail)
 import Ecluse.BenchLoad.Fixture (delayUpstream, fetchChecked, httpTarget, longCacheTtl, withProxyPortsConfigured)
 import Ecluse.BenchLoad.Harness (LoadKnobs (lkUpstreamLatencyMicros), Scenario (..), Target, scenario)
-import Ecluse.BenchLoad.ProxyProcess (ProxySettings (..), mirrorStateBucket)
+import Ecluse.BenchLoad.ProxyProcess (ProxySettings (..), mirrorStateBucket, privateStubHost)
 import Ecluse.Core.Ecosystem (Ecosystem (PyPI))
 import Ecluse.Core.Mirror.State (stateTarget)
 import Ecluse.Core.Mirror.State.Internal (projectKey)
@@ -62,9 +62,9 @@ boot mode knobs use = do
             PyPI
             knobs
             ( \privatePort _ -> do
-                input <- makeReadFixtureFor (stateTarget ("https://localhost:" <> show privatePort)) 1000
+                input <- makeReadFixtureFor (stateTarget ("https://" <> privateStubHost <> ":" <> show privatePort)) 1000
                 writeIORef fixture (Just input)
-                pure (\settings -> settings{psCacheTtlSeconds = longCacheTtl, psPublicHost = Just "127.0.0.1", psMirrorStatePort = statePort <$ guard (mode /= Native)})
+                pure (\settings -> settings{psCacheTtlSeconds = longCacheTtl, psMirrorStatePort = statePort <$ guard (mode /= Native)})
             )
             (privateApp latency fixture counts)
             (publicApp latency counts)

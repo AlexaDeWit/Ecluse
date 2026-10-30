@@ -1241,6 +1241,15 @@ pipe buffers (at most 64 KiB per pipe) but not for the log's page cache. On CI t
 just built or restored the executable, so its text pages are already cached when the proxy starts
 and are not charged to it. The harness does not enforce that.
 
+The proxy dials the private and mirror target stubs at `127.0.0.1`, the address they listen on,
+and the public stub at `localhost`. Boot refuses a mirror target on the public upstream's host, so
+the two names differ. After a private miss the proxy closes that connection, so an onboarding row
+connects to the private stub again on each request. Over plain HTTP, `http-client` starts each
+further address of a name 250 ms after the one before, even when that one refused. While the
+harness named the private stubs `localhost`, which resolves to `::1` first, every onboarding request
+waited those 250 ms. An HTTPS deployment connects through `crypton-connection`, which tries the
+next address as soon as one refuses.
+
 Every load proxy runs with native metadata gzip off. The shared environment builder sets
 `ECLUSE_SERVER__METADATA_GZIP=false` for every scenario, ecosystem and pod shape, and drops an
 ambient `ECLUSE_*` value. The harness reads the resolved `server.metadataGzip` line back from the

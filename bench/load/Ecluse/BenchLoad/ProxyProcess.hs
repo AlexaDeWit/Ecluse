@@ -10,6 +10,8 @@ module Ecluse.BenchLoad.ProxyProcess (
     AdvisoryFeed (..),
     advisoryBucket,
     mirrorStateBucket,
+    publicStubHost,
+    privateStubHost,
     podShapeFromEnv,
     serveProxyFlag,
     proxyEnvironment,
@@ -145,9 +147,9 @@ data ProxySettings = ProxySettings
     , psServeMaxInFlight :: Maybe Int
     , psPublicConnections :: Maybe Int
     , psPublicHost :: Maybe Text
-    -- ^ An override for the public leg only. 'Nothing' preserves the fixture's hostname.
+    -- ^ An override for the public leg only. 'Nothing' dials 'publicStubHost'.
     , psPrivateHost :: Maybe Text
-    -- ^ An override for the private and mirror target legs. 'Nothing' preserves the fixture's hostname.
+    -- ^ An override for the private and mirror target legs. 'Nothing' dials 'privateStubHost'.
     , psPrivateConnections :: Maybe Int
     , psClock :: Maybe UTCTime
     -- ^ A fixed evaluation clock for the rules, 'Nothing' for the wall clock.
@@ -187,6 +189,20 @@ data AdvisoryFeed = AdvisoryFeed
 -- | The bucket holding the managed-read fixture's project record.
 mirrorStateBucket :: Text
 mirrorStateBucket = "ecluse-bench-mirror-state"
+
+{- | The name the proxy dials the public stub by. Boot refuses a mirror target on the public
+upstream's host, so it differs from 'privateStubHost'.
+-}
+publicStubHost :: Text
+publicStubHost = "localhost"
+
+{- | The address the private and mirror target stubs listen on, and the one the proxy dials them by.
+The proxy leaves a private miss's body unread, which closes the connection, so the next private
+read connects again. Over plain HTTP, http-client tries each further address of a name 250 ms after
+the previous one, even when that one refused, and @localhost@ resolves to @::1@ first.
+-}
+privateStubHost :: Text
+privateStubHost = "127.0.0.1"
 
 -- | The pod shape in @BENCH_LOAD_POD@, unlimited when unset.
 podShapeFromEnv :: IO PodShape
@@ -398,10 +414,8 @@ proxyEnvironment settings shape capabilities dir (port, controlPort, scrapePort)
     upstreamUrl leg p = "https://" <> upstreamHost leg <> ":" <> show p
     upstreamHost :: Text -> Text
     upstreamHost leg
-        | leg == "PUBLIC_UPSTREAM", Just host <- psPublicHost settings = host
-        | leg /= "PUBLIC_UPSTREAM", Just host <- psPrivateHost settings = host
-        | leg == "PUBLIC_UPSTREAM", isJust (psMirrorStatePort settings) = "127.0.0.1"
-        | otherwise = "localhost"
+        | leg == "PUBLIC_UPSTREAM" = fromMaybe publicStubHost (psPublicHost settings)
+        | otherwise = fromMaybe privateStubHost (psPrivateHost settings)
     fixed =
         [ ("ECLUSE_SERVER__PORT", show port)
         , ("ECLUSE_SERVER__PUBLIC_URL", "https://bench.proxy")
