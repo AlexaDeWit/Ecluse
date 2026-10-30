@@ -522,6 +522,8 @@ data Reason
       FetchesOutside Text
     | -- | 'DenyExternalDependencies' abstains: every installable dependency resolves through the registry.
       DependenciesThroughRegistry
+    | -- | 'DenyExternalDependencies' abstains: where the dependencies install from is not determined.
+      DependencySourcesUndetermined
     | -- | The version carries the yank flag.
       VersionYanked
     | -- | The version carries no yank flag.
@@ -582,6 +584,7 @@ reasonAdvisories = \case
     InstallCodeUndetermined -> []
     FetchesOutside{} -> []
     DependenciesThroughRegistry -> []
+    DependencySourcesUndetermined -> []
     VersionYanked -> []
     VersionNotYanked -> []
     VersionDeprecated -> []

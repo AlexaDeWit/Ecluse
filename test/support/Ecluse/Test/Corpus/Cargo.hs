@@ -22,7 +22,7 @@ import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 
 import Ecluse.Core.Ecosystem (Ecosystem (Cargo))
-import Ecluse.Core.Package (Artifact (..), Availability (Available, Yanked), CodeExecSignal (CodeExecUnknown), DependencySources (RegistryDependencies), HashAlg (SHA256), PackageDetails (..), PackageInfo (..), PackageName, mkHash, mkPackageName, renderPackageName)
+import Ecluse.Core.Package (Artifact (..), Availability (Available, Yanked), CodeExecSignal (CodeExecUnknown), DependencySources (DependencySourcesUnknown), HashAlg (SHA256), PackageDetails (..), PackageInfo (..), PackageName, mkHash, mkPackageName, renderPackageName)
 import Ecluse.Core.Package.Entry (EntryKey (RecordEntry))
 import Ecluse.Core.Registry.CachedDocument (CachedDoc, cargoCached)
 import Ecluse.Core.Registry.Cargo.Discovery (CargoDiscovery, renderCargoDiscovery)
@@ -100,7 +100,7 @@ projectRows location limits name rows = do
         digest <- first (const MetadataUndecodable) (mkHash SHA256 checksum)
         let url = location reported version
             artifact = Artifact key (reported <> "-" <> version <> ".crate") url [digest] Nothing Nothing
-        pure (version, PackageDetails name (mkVersion Cargo version) published CodeExecUnknown RegistryDependencies (if yanked then Yanked else Available) (artifact :| []))
+        pure (version, PackageDetails name (mkVersion Cargo version) published CodeExecUnknown DependencySourcesUnknown (if yanked then Yanked else Available) (artifact :| []))
     native fields = (,,,,) <$> fields .: "name" <*> fields .: "vers" <*> fields .: "cksum" <*> fields .:? "pubtime" <*> fields .:? "yanked" .!= False
 
 -- | Positive counts produce complete distinct releases with native dependencies and features.

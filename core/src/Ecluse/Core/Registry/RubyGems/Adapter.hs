@@ -22,7 +22,7 @@ import Ecluse.Core.Registry.RubyGems.Publish (rubyPublish)
 import Ecluse.Core.Registry.RubyGems.Request (gemPath)
 import Ecluse.Core.Registry.RubyGems.Route (rubyGemsRouteSpecs, rubyGemsRouter)
 import Ecluse.Core.Registry.RubyGems.Serving (assembleRubyGemsDocument, serialiseRubyGemsDocument)
-import Ecluse.Core.Rules.Types (RuleType (AllowScopeType, DenyIfDeprecatedType, DenyInstallTimeExecutionType))
+import Ecluse.Core.Rules.Types (RuleType (AllowScopeType, DenyExternalDependenciesType, DenyIfDeprecatedType, DenyInstallTimeExecutionType))
 import Ecluse.Core.Server.Admission.Types (ChargeFactors)
 import Ecluse.Core.Server.Path (mkFilename, unFilename)
 
@@ -34,6 +34,7 @@ rubyGemsAdapter factors =
         , adapterRuleBlocks =
             Map.fromList
                 [ (DenyInstallTimeExecutionType, "RubyGems native builds are normal installation behaviour. This rule is unsupported for the ecosystem.")
+                , (DenyExternalDependenciesType, "A RubyGems dependency names only a gem and its requirements, never a source, so this rule can never match one.")
                 , (DenyIfDeprecatedType, "RubyGems metadata supplies no supported deprecation flag.")
                 , (AllowScopeType, "RubyGems package names have no scope.")
                 ]

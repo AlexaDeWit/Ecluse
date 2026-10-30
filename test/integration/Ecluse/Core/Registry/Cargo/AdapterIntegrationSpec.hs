@@ -22,7 +22,7 @@ import Ecluse.Core.Credential (mkSecret)
 import Ecluse.Core.Ecosystem (Ecosystem (Cargo))
 import Ecluse.Core.Mirror.State (ProjectMirrorRecord, StateRead (..), StateTarget, extendProjectRecord, stateTarget)
 import Ecluse.Core.Mirror.State.Internal (StateRevision (..), retainVerifiedIdentity)
-import Ecluse.Core.Package (Artifact (..), Availability (Available), CodeExecSignal (CodeExecUnknown), DependencySources (RegistryDependencies), HashAlg (SHA256), PackageDetails (..), PackageName, mkHash, mkPackageName)
+import Ecluse.Core.Package (Artifact (..), Availability (Available), CodeExecSignal (CodeExecUnknown), DependencySources (DependencySourcesUnknown), HashAlg (SHA256), PackageDetails (..), PackageName, mkHash, mkPackageName)
 import Ecluse.Core.Package.Entry (EntryKey (RecordEntry))
 import Ecluse.Core.Registry.Adapter (RegistryAdapter, adapterFor)
 import Ecluse.Core.Registry.Cargo.Document (cargoDocument)
@@ -414,7 +414,7 @@ nativeState :: StateTarget -> Text -> IO ProjectMirrorRecord
 nativeState target version = do
     checksum <- expectRight (mkHash SHA256 (hexSha256Of archiveBytes))
     let artifact = Artifact (RecordEntry 0) ("thing-" <> version <> ".crate") ("https://static.crates.io/crates/thing/thing-" <> version <> ".crate") [checksum] Nothing Nothing
-        details = PackageDetails packageName (mkVersion Cargo version) (Just (UTCTime (fromGregorian 2020 1 1) 0)) CodeExecUnknown RegistryDependencies Available (artifact :| [])
+        details = PackageDetails packageName (mkVersion Cargo version) (Just (UTCTime (fromGregorian 2020 1 1) 0)) CodeExecUnknown DependencySourcesUnknown Available (artifact :| [])
         source = CargoMirrorRead (cargoDocument [(RecordEntry 0, Object (nativeRecord version))])
     inventory <- expectRight (restoreMirrorInventory details source)
     expected <- expectRight (extendProjectRecord defaultLimits target inventory Nothing)
