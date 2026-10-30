@@ -56,6 +56,7 @@ import Ecluse.Core.Fault (TransportFault)
 import Ecluse.Core.Package
 import Ecluse.Core.Package.Hash (sha256Hex)
 import Ecluse.Core.Package.Integrity (IntegrityResult (..), verifyIntegrity)
+import Ecluse.Core.Registry (CompanionRequirement (DeclaredCompanions, NativeCompanions))
 import Ecluse.Core.Registry.MirrorUpload
 import Ecluse.Core.Registry.MirrorUpload.Internal (restoreMirrorFragment)
 import Ecluse.Core.Registry.PyPI.Document (simpleDocument, simpleEnvelope, simpleFiles)
@@ -331,16 +332,15 @@ declaredCompanion artifact = case artCoreMetadata artifact of
 
 -- | Native source payloads can require metadata beyond artifact-advertised sidecars.
 declaredSourceCompanion :: MirrorReadData -> Artifact -> Bool
-declaredSourceCompanion source artifact = case source of
-    RubyGemsMirrorRead _ -> True
-    _ -> declaredCompanion artifact
+declaredSourceCompanion source artifact = case readDataCompanions source of
+    NativeCompanions -> True
+    DeclaredCompanions -> declaredCompanion artifact
 
 -- | The native codec checks meaning before this step binds its bytes to the declared parent.
 verifySourceCompanionBytes :: Limits -> MirrorReadData -> ExpectedMirrorFile -> ByteString -> Either MirrorStateFault VerifiedCompanionBytes
-verifySourceCompanionBytes limits source file bytes = case source of
-    RubyGemsMirrorRead _ -> do
-        unless (declaredSourceCompanion source (expectedArtifact file)) (Left (StateInvalid "native companion was not declared"))
+verifySourceCompanionBytes limits source file bytes = case readDataCompanions source of
+    NativeCompanions -> do
         when (BS.length bytes > maxMetadataBytes limits) (Left (StateInvalid "companion exceeds metadata byte bound"))
         digest <- first StateInvalid (mkHash SHA256 (sha256Hex bytes))
         pure (VerifiedCompanionBytes (expectedArtifact file) (CompanionRef digest (BS.length bytes)) bytes)
-    _ -> verifyCompanionBytes limits file bytes
+    DeclaredCompanions -> verifyCompanionBytes limits file bytes

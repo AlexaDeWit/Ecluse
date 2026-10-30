@@ -16,6 +16,9 @@ module Ecluse.Core.Registry (
     MirrorArtifact (..),
     firstHashValue,
 
+    -- * Mirror companions
+    CompanionRequirement (..),
+
     -- * Errors
     ParseError (..),
     parseRefusal,
@@ -75,6 +78,14 @@ data MirrorArtifact = MirrorArtifact
 firstHashValue :: HashAlg -> MirrorArtifact -> Maybe Text
 firstHashValue alg artifact =
     fmap hashValue (find ((== alg) . hashAlg) (maHashes artifact))
+
+-- | Which mirrored files a version needs retained metadata companions for before it is complete.
+data CompanionRequirement
+    = -- | Only files whose source metadata declares a companion.
+      DeclaredCompanions
+    | -- | Every file, through the format's native companion.
+      NativeCompanions
+    deriving stock (Eq, Show)
 
 -- | A protocol decode failure for the caller to classify.
 newtype ParseError = ParseError

@@ -11,6 +11,7 @@ import Ecluse.Core.Mirror.Documents (MirrorDocuments (..))
 import Ecluse.Core.Mirror.State (MirrorVersion, fragmentDetails, fragmentReadData, versionFragments)
 import Ecluse.Core.Package (Artifact (..), PackageDetails (pkgArtifacts))
 import Ecluse.Core.Package.Entry (EntryKey (RecordEntry))
+import Ecluse.Core.Registry (CompanionRequirement (DeclaredCompanions))
 import Ecluse.Core.Registry.CachedDocument (cargoCached, cargoPacked)
 import Ecluse.Core.Registry.Cargo.Document (cargoDocument, cargoRecords, packCargoDocument)
 import Ecluse.Core.Registry.Metadata (VersionDoc (..))
@@ -27,6 +28,7 @@ cargoMirrorDocuments =
             native <- snd cargoCached raw
             pure (fst cargoCached (cargoDocument [(rekey key, value) | (key, value) <- cargoRecords native]))
         , mdAssemble = \_ docs -> fst cargoPacked (packCargoDocument (cargoDocument (concat [cargoRecords document | doc <- docs, Just raw <- [vdRaw doc], Just document <- [snd cargoCached raw]])))
+        , mdCompanions = DeclaredCompanions
         }
 
 restoreCargoVersion :: MirrorVersion -> [Artifact] -> Maybe VersionDoc

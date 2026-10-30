@@ -64,7 +64,9 @@ data BootError
       CodeArtifactMintFailed (NonEmpty Text) Text
     | -- | A mount declares a mirror target this build cannot write for its ecosystem, so it is refused rather than booted half-wired.
       MirrorTargetWithoutPublish Ecosystem
-    | -- | A PyPI mirror role cannot retain or validate its expected inventory without durable state.
+    | -- | A mirror target's adapter prepares native companions that disagree with its durable declaration.
+      MirrorCompanionMismatch Ecosystem
+    | -- | A durable mirror role cannot retain or validate its expected inventory without durable state.
       MirrorStateRequired Ecosystem
     | -- | An active native writer lacks its endpoint or credential convention. Carries the key path.
       UploadConfigurationRequired Ecosystem Text
@@ -213,6 +215,11 @@ renderBootError = \case
             <> " is set but this build writes nothing for the "
             <> ecosystemName eco
             <> " protocol: the mirror would drain its queue with no way to publish, so the mount is refused rather than served with a mirror that fails every job."
+    MirrorCompanionMismatch eco ->
+        mountKeyRef eco "mirrorTarget"
+            <> " is set but this build's "
+            <> ecosystemName eco
+            <> " mirror writer does not prepare exactly the native metadata companions its durable state declares, so the mount is refused rather than served with a mirror that can never complete a version."
     MirrorStateRequired eco ->
         "mirrorState.url is required for mirroring on the " <> ecosystemName eco <> " mount"
     UploadConfigurationRequired eco key ->

@@ -26,7 +26,7 @@ import Ecluse.Core.Registry.RubyGems.CompactSpec (compactSpecBytes, validateComp
 import Ecluse.Core.Registry.RubyGems.Document (GemDocument (..), GemRow (..))
 import Ecluse.Core.Registry.RubyGems.Project (coordinateFilename, gemFileStem)
 import Ecluse.Core.Registry.RubyGems.Request (compactSpecPath, gemPath)
-import Ecluse.Core.Registry.RubyGems.SourceState (gemSourcePublishedAt)
+import Ecluse.Core.Registry.RubyGems.SourceState (gemSourceCompanions, gemSourcePublishedAt)
 import Ecluse.Core.Server.Path (unFilename)
 
 -- | A companion cannot supply authority or substitute another platform's specification.
@@ -56,6 +56,7 @@ rubyGemsMirrorDocuments =
         , mdAssemble = \record docs ->
             let documents = [document | doc <- docs, Just raw <- [vdRaw doc], Just document <- [snd rubyGemsCached raw]]
              in fst rubyGemsCached (GemDocument (recordPackage record) (maybe mempty gemHeader (listToMaybe documents)) (concatMap gemRows documents))
+        , mdCompanions = gemSourceCompanions
         }
 
 -- The first fragment's header and details carry the version, and its publication time covers every restored row.

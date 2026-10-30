@@ -497,9 +497,6 @@ retainPending charge policy job inventory file locations record = do
             Nothing -> throwError (Retried BeforePublish "declared companion requires durable mirror state")
             Just binding -> do
                 let native = mpMirrorCompanion (wpPublish policy)
-                case (inventoryReadData inventory, native) of
-                    (RubyGemsMirrorRead _, Nothing) -> throwError (Retried BeforePublish "native companion preparation is unavailable")
-                    _ -> pure ()
                 candidates <- for locations $ \location -> do
                     url <- case native of
                         Nothing -> pure (sidecarUrl (registryUrlText location))
