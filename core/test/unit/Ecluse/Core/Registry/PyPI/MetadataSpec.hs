@@ -46,7 +46,7 @@ import Ecluse.Test.Contract.Metadata.Projection (MetadataFraming (SingleDocument
 import Ecluse.Test.Json (encodeStrict)
 import Ecluse.Test.Package (defaultMinIntegrity, pypiVersion, requestsName, unsafeFilename)
 import Ecluse.Test.Package.Admission (admitArtifactWithEvidence)
-import Ecluse.Test.Registry.Metadata.Fetch (heldWorkspacePeak)
+import Ecluse.Test.Registry.Metadata.Fetch (heldWorkspacePayments, heldWorkspacePeak)
 import Ecluse.Test.Registry.PyPI (filesNamed, simpleFile, simpleIndex, simpleIndexWith, withFileKeys)
 import Ecluse.Test.Registry.PyPI.Metadata (projectPyPIChunks, projectPyPIIndex, projectPyPIVersion, simpleValue)
 import Ecluse.Test.Rules (admittedBy, atDefaultPrecedence, evalRules, inertRuleDeps)
@@ -99,6 +99,18 @@ entryFloorSpec = describe "the full-read entry floor" $ do
         (result, peak) <- heldWorkspacePeak adapterRead pypiBase requestsName [body]
         void result `shouldSatisfy` isRight
         peak `shouldBe` entryFloorBytes * (locations + tracks) - scaleCharge (cfFullReadPermille pypiChargeFactors) (BS.length body)
+
+    it "charges the alternate-locations and tracks items read before their array closes" $ do
+        let items count = BS.intercalate "," (replicate count "\"0\"")
+            pieces =
+                [ "{\"meta\":{\"api-version\":\"1.1\",\"tracks\":[" <> items 200 <> ","
+                , items 100 <> "],\"tracks\":[" <> items 50 <> "]},\"name\":\"requests\",\"alternate-locations\":[" <> items 300 <> ","
+                , items 50 <> "],\"meta\":{\"tracks\":[" <> items 50 <> "]},\"files\":[]}"
+                ]
+            shortfall retained parsed = entryFloorBytes * retained - scaleCharge (cfFullReadPermille pypiChargeFactors) (sum (map BS.length parsed))
+        (result, payments) <- heldWorkspacePayments adapterRead pypiBase requestsName pieces
+        void result `shouldSatisfy` isRight
+        payments `shouldBe` [shortfall 200 (take 1 pieces), shortfall 600 (take 2 pieces), shortfall 650 pieces]
   where
     adapterRead = metadataRead (adapterMetadata pypiAdapter)
     pypiBase = "https://pypi.org/simple"
