@@ -399,8 +399,10 @@ mounts:
     # enabled: true
     # The read authority. Required on a mirrored mount, so the mirror reads back.
     # Optional on a serve-only mount, where it still merges with the gated public set.
-    # A failed private read refuses the mount's reads with 503, for every name. A private
-    # 404 still lets the gated public set serve.
+    # A failed private read refuses the mount's reads for every name: 503 while the private
+    # registry is unavailable, forwarding its Retry-After, and 502 when its reply is invalid.
+    # A private 404 still lets the gated public set serve. Each cause is listed at
+    # https://ecluse-proxy.com/docs/private-reads/#private-outage
     # Must name a different repository from this mount's publicUpstream. Boot refuses
     # equal repository identities, including equivalent URL spellings.
     # Proxy reads forward the caller's credential. Dredger uses this target's own authority.
@@ -469,7 +471,8 @@ mounts:
     # Only a first-party name may be published here, and a first-party name
     # resolves from privateUpstream alone: it is never fetched from publicUpstream,
     # never merged with a public document, and never mirrored. A private 404 answers
-    # 404. A private 401/403 answers a local 403. Other private read failures answer 503.
+    # 404. A private 401/403 answers a local 403. Other private read failures answer 503
+    # or 502, as for any other name.
     # The shape is per-ecosystem. npm reads scopes. PyPI reads PEP 503 canonical
     # distribution names, and an entry ending in a separator then * is a prefix, so
     # acme-* covers acme-tools and not acmeco. A star on no separator (acme*) is
