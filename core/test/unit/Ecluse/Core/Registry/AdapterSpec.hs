@@ -17,7 +17,7 @@ import Ecluse.Core.Registry.Adapter.Capability (
 import Ecluse.Core.Registry.Cargo.Metadata (cargoChargeFactors)
 import Ecluse.Core.Registry.RubyGems.Metadata (rubyGemsChargeFactors)
 
-import Ecluse.Core.Rules.Types (RuleType (AllowScopeType, DenyExternalDependenciesType, DenyIfDeprecatedType, DenyIfYankedType, DenyInstallTimeExecutionType))
+import Ecluse.Core.Rules.Types (RuleType (AllowScopeType, DenyIfDeprecatedType, DenyIfYankedType, DenyInstallTimeExecutionType))
 
 -- | Pin ecosystem dispatch and the adapter's declared rule blocks.
 spec :: Spec
@@ -32,12 +32,11 @@ spec = describe "adapterFor (the ecosystem adapter registry)" $ do
         (adapterEcosystem <$> adapterFor Cargo) `shouldBe` Just Cargo
         (metadataChargeFactors . adapterMetadata <$> adapterFor Cargo) `shouldBe` Just cargoChargeFactors
 
-    it "blocks exactly Cargo's install, dependency, deprecation and scope types with their reasons" $
+    it "blocks exactly Cargo's install, deprecation and scope types with their reasons" $
         (adapterRuleBlocks <$> adapterFor Cargo)
             `shouldBe` Just
                 ( Map.fromList
                     [ (DenyInstallTimeExecutionType, "Cargo's sparse index does not declare build scripts or procedural macros. This rule is unsupported for the ecosystem.")
-                    , (DenyExternalDependenciesType, "The Cargo adapter does not read where a crate's dependencies install from.")
                     , (DenyIfDeprecatedType, "Cargo's sparse index supplies no deprecation flag.")
                     , (AllowScopeType, "Cargo package names have no scope.")
                     ]
@@ -51,7 +50,6 @@ spec = describe "adapterFor (the ecosystem adapter registry)" $ do
             `shouldBe` Just
                 ( Map.fromList
                     [ (DenyInstallTimeExecutionType, "Most PyPI releases offer a source distribution, which runs its own build on install, so this rule would deny nearly every release.")
-                    , (DenyExternalDependenciesType, "The PyPI adapter does not read where a release's dependencies install from.")
                     , (DenyIfDeprecatedType, "The PyPI adapter supplies no deprecation flag.")
                     , (AllowScopeType, "A PyPI project name has no scope, so this rule can never match one.")
                     ]
@@ -65,12 +63,11 @@ spec = describe "adapterFor (the ecosystem adapter registry)" $ do
         map uploadEndpointFor [Npm, PyPI, RubyGems, Cargo]
             `shouldBe` [Just ReadRootUpload, Just ExplicitUploadEndpoint, Just ReadRootUpload, Just ExplicitUploadEndpoint]
 
-    it "blocks exactly RubyGems' install, dependency, deprecation and scope types with their reasons" $
+    it "blocks exactly RubyGems' install, deprecation and scope types with their reasons" $
         (adapterRuleBlocks <$> adapterFor RubyGems)
             `shouldBe` Just
                 ( Map.fromList
                     [ (DenyInstallTimeExecutionType, "RubyGems native builds are normal installation behaviour. This rule is unsupported for the ecosystem.")
-                    , (DenyExternalDependenciesType, "A RubyGems dependency names only a gem and its requirements, never a source, so this rule can never match one.")
                     , (DenyIfDeprecatedType, "RubyGems metadata supplies no supported deprecation flag.")
                     , (AllowScopeType, "RubyGems package names have no scope.")
                     ]
