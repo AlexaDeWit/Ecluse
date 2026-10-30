@@ -1,7 +1,6 @@
 -- SPDX-FileCopyrightText: 2026 Alexandra de Wit
 --
 -- SPDX-License-Identifier: MIT
-{-# LANGUAGE ImportQualifiedPost #-}
 
 -- | RubyGems' artifact admission and native maintenance capabilities.
 module Ecluse.Core.Registry.RubyGems.AdapterSpec (spec) where
