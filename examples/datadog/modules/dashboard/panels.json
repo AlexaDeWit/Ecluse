@@ -571,15 +571,6 @@
         "alias": "Assembled",
         "aggregation": "sum",
         "modifier": "gauge"
-      },
-      {
-        "metric": "ecluse.metadata_cache.resident_bytes",
-        "alias": "Directory",
-        "aggregation": "sum",
-        "modifier": "gauge",
-        "filters": [
-          "store:directory"
-        ]
       }
     ]
   },
