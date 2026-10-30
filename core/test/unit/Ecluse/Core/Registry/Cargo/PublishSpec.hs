@@ -227,21 +227,21 @@ spec = do
         it "accepts matching complete upload metadata and archive identity" $ do
             release <- cargoPublicationFixture
             bytes <- expectRight (cargoUpload release)
-            uploadClaims defaultLimits (const (pure ())) "https://proxy.test/cargo/private" (PublishRequestBody bytes Nothing NoPublishExtras) `shouldReturn` Right ["fixture"]
+            uploadClaims defaultLimits (const (pure ())) "https://proxy.test/cargo" (PublishRequestBody bytes Nothing NoPublishExtras) `shouldReturn` Right ["fixture"]
         it "compares complete resolver facts against the retained effective manifest" $ do
             archive <- cargoResolverArchive
             for_ cargoResolverAgreements $ \metadata -> do
                 valid <- expectRight (cargoUploadWithMetadata metadata archive)
-                uploadClaims defaultLimits (const (pure ())) "https://proxy.test/cargo/private" (PublishRequestBody valid Nothing NoPublishExtras) `shouldReturn` Right ["fixture"]
+                uploadClaims defaultLimits (const (pure ())) "https://proxy.test/cargo" (PublishRequestBody valid Nothing NoPublishExtras) `shouldReturn` Right ["fixture"]
             for_ cargoResolverContradictions $ \metadata -> do
                 bytes <- expectRight (cargoUploadWithMetadata metadata archive)
                 Body.decodeUpload defaultLimits bytes `shouldSatisfy` isRight
-                uploadClaims defaultLimits (const (pure ())) "https://proxy.test/cargo/private" (PublishRequestBody bytes Nothing NoPublishExtras) >>= (`shouldSatisfy` isLeft)
+                uploadClaims defaultLimits (const (pure ())) "https://proxy.test/cargo" (PublishRequestBody bytes Nothing NoPublishExtras) >>= (`shouldSatisfy` isLeft)
         it "reserves comparison workspace after archive inspection and before accepting resolver claims" $ do
             archive <- cargoResolverArchive
             bytes <- expectRight (cargoUploadWithMetadata cargoResolverMetadata archive)
             paid <- newIORef ([] :: [Int])
-            uploadClaims defaultLimits (\cost -> modifyIORef' paid (<> [cost])) "https://proxy.test/cargo/private" (PublishRequestBody bytes Nothing NoPublishExtras) `shouldReturn` Right ["fixture"]
+            uploadClaims defaultLimits (\cost -> modifyIORef' paid (<> [cost])) "https://proxy.test/cargo" (PublishRequestBody bytes Nothing NoPublishExtras) `shouldReturn` Right ["fixture"]
             payments <- readIORef paid
             case reverse payments of
                 comparison : archiveCharge : _ -> comparison `shouldSatisfy` (> archiveCharge)
@@ -251,7 +251,7 @@ spec = do
             for_ ["artifact", "bindep_target", "lib", "public"] $ \key -> do
                 bytes <- expectRight (cargoUploadWithMetadata (cargoResolverDependencyField key (Bool True)) archive)
                 paid <- newIORef ([] :: [Int])
-                refused <- uploadClaims defaultLimits (\cost -> modifyIORef' paid (<> [cost])) "https://proxy.test/cargo/private" (PublishRequestBody bytes Nothing NoPublishExtras)
+                refused <- uploadClaims defaultLimits (\cost -> modifyIORef' paid (<> [cost])) "https://proxy.test/cargo" (PublishRequestBody bytes Nothing NoPublishExtras)
                 refused `shouldSatisfy` \case
                     Left (PublishMalformed fault) -> "Cargo upload dependency 'tool' carries an unstable" `T.isInfixOf` parseErrorMessage fault
                     _ -> False
@@ -260,7 +260,7 @@ spec = do
         it "refuses a dependency on another registry, naming it and the fix" $ do
             archive <- cargoForeignRegistryArchive
             bytes <- expectRight (cargoUploadWithMetadata cargoForeignRegistryMetadata archive)
-            uploadClaims defaultLimits (const (pure ())) "https://proxy.test/cargo/private" (PublishRequestBody bytes Nothing NoPublishExtras)
+            uploadClaims defaultLimits (const (pure ())) "https://proxy.test/cargo" (PublishRequestBody bytes Nothing NoPublishExtras)
                 `shouldReturn` Left (PublishMalformed (ParseError cargoForeignRegistryRefusal))
         it "rejects malformed members before either claims or relay can contact the destination" $
             withRoutedStub (targetReply "/registry") $ \stub -> do
@@ -271,7 +271,7 @@ spec = do
                         Object fields -> for_ [("deps", Array (fromList [Null])), ("authors", Array (fromList [Number 42]))] $ \(key, value) -> do
                             bytes <- LBS.toStrict <$> expectRight (Body.encodeUpload (Object (KeyMap.insert key value fields)) (releaseArchive release))
                             let body = PublishRequestBody bytes Nothing NoPublishExtras
-                            uploadClaims defaultLimits (const (pure ())) "https://proxy.test/cargo/private" body >>= (`shouldSatisfy` isLeft)
+                            uploadClaims defaultLimits (const (pure ())) "https://proxy.test/cargo" body >>= (`shouldSatisfy` isLeft)
                             publishRelay (cargoPublish factors) origin cargoTestName body >>= (`shouldSatisfy` isLeft)
                         _ -> expectationFailure "fixture upload metadata is not an object"
                     allCaptured stub `shouldReturn` []
@@ -280,7 +280,7 @@ spec = do
             case cargoUploadMetadata release of
                 Object fields -> for_ [("name", "another"), ("vers", "2.0.0"), ("vers", "1.0.0+other")] $ \(key, value) -> do
                     bytes <- LBS.toStrict <$> expectRight (Body.encodeUpload (Object (KeyMap.insert key (String value) fields)) (releaseArchive release))
-                    uploadClaims defaultLimits (const (pure ())) "https://proxy.test/cargo/private" (PublishRequestBody bytes Nothing NoPublishExtras) >>= (`shouldSatisfy` isLeft)
+                    uploadClaims defaultLimits (const (pure ())) "https://proxy.test/cargo" (PublishRequestBody bytes Nothing NoPublishExtras) >>= (`shouldSatisfy` isLeft)
                 _ -> expectationFailure "fixture upload metadata is not an object"
     describe "Cargo native response classification" $ do
         it "accepts native success objects and rejects errors even with a success status" $ do

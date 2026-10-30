@@ -337,11 +337,11 @@ spec = do
     describe "checkDependencyRegistries" $ do
         it "refuses a dependency of every kind from a registry other than crates.io or this proxy, naming its package" $
             for_ ["normal", "dev", "build"] $ \kind ->
-                for_ ["sparse+https://foreign.test/index/", "https://foreign.test/index", "sparse+https://proxy.test/other/", "sparse+https://proxy.test/cargo/private/extra/", "sparse+http://proxy.test/cargo/", "https://proxy.test/cargo/private"] $ \source ->
+                for_ ["sparse+https://foreign.test/index/", "https://foreign.test/index", "sparse+https://proxy.test/other/", "sparse+https://proxy.test/cargo/private/", "sparse+https://proxy.test/cargo/private/extra/", "sparse+http://proxy.test/cargo/", "https://proxy.test/cargo/private"] $ \source ->
                     checkDependencyRegistries ecluseRegistries (registryUpload kind (String source)) `shouldBe` Left (ParseError cargoForeignRegistryRefusal)
-        it "accepts crates.io in either spelling, each of this proxy's indexes, and a null or absent source" $
+        it "accepts crates.io in either spelling, this proxy's index, and a null or absent source" $
             for_ ["normal", "dev", "build"] $ \kind -> do
-                for_ [String cratesIoIndex, String "https://github.com/rust-lang/crates.io-index.git", String "sparse+https://index.crates.io/", String "sparse+https://proxy.test/cargo/private", String "sparse+https://proxy.test/cargo/", Null] $ \source ->
+                for_ [String cratesIoIndex, String "https://github.com/rust-lang/crates.io-index.git", String "sparse+https://index.crates.io/", String "sparse+https://proxy.test/cargo", String "sparse+https://proxy.test/cargo/", Null] $ \source ->
                     checkDependencyRegistries ecluseRegistries (registryUpload kind source) `shouldBe` Right ()
                 checkDependencyRegistries ecluseRegistries (object ["deps" .= [object ["name" .= ("original" :: Text), "kind" .= kind]]]) `shouldBe` Right ()
         it "refuses a source that agreement accepts because the archived manifest declares it too" $ do
@@ -361,11 +361,11 @@ spec = do
                 parseRustRelease raw `shouldBe` Left (ParseError "Cargo Rust version is invalid")
 
 selectedRegistry :: Text
-selectedRegistry = "sparse+https://proxy.test/cargo/private/"
+selectedRegistry = "sparse+https://proxy.test/cargo/"
 
--- The private publication view and the crates.io replacement above it.
+-- The one registry that replaces crates.io and receives publication.
 ecluseRegistries :: [Text]
-ecluseRegistries = [selectedRegistry, "sparse+https://proxy.test/cargo/"]
+ecluseRegistries = [selectedRegistry]
 
 registryUpload :: Text -> Value -> Value
 registryUpload kind source = object ["deps" .= [object ["name" .= ("original" :: Text), "explicit_name_in_toml" .= ("renamed" :: Text), "kind" .= kind, "registry" .= source]]]

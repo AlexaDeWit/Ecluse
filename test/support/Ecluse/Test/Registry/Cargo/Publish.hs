@@ -70,7 +70,7 @@ cargoPublicationFixture = do
     pure (minimalCargoRelease "fixture" "1.0.0"){releaseArchive = bytes, releaseChecksum = hexSha256Of bytes, releaseReadme = "owned readme"}
 
 {- | Literal resolver declarations pair native normalisation controls with an independently authored upload.
-The renamed dependency comes from Écluse's crates.io replacement, spelled without its trailing slash.
+The renamed dependency names Écluse's registry, spelled without its trailing slash.
 -}
 cargoResolverManifest :: ByteString
 cargoResolverManifest = resolverManifest "sparse+https://proxy.test/cargo"
@@ -103,7 +103,7 @@ cargoForeignRegistryRefusal = "Cargo dependency 'original' comes from a registry
 resolverManifest :: ByteString -> ByteString
 resolverManifest renamedSource =
     "[package]\nname='fixture'\nversion='1.0.0'\nrust-version='1.74'\nlinks='native_foo'\nbuild='build.rs'\n"
-        <> "[dependencies]\nlocal={version='1.2',registry-index='sparse+https://proxy.test/cargo/private/',features=['beta','alpha'],default-features=false}\n"
+        <> "[dependencies]\nlocal={version='1.2',registry-index='sparse+https://proxy.test/cargo/',features=['beta','alpha'],default-features=false}\n"
         <> "renamed={package='original',version='1.X',registry-index='"
         <> renamedSource
         <> "',optional=true}\nauto={version='0.3',optional=true}\n"

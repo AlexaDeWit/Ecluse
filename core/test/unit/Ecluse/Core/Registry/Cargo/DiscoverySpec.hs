@@ -98,11 +98,11 @@ spec = describe "Cargo discovery" $ do
         length charges `shouldSatisfy` (>= 2)
         sum charges `shouldBe` 4 * BS.length body + 128 * length charges
     it "renders only the supplied local routes" $
-        (eitherDecodeStrict (renderCargoDiscovery "https://proxy.test/cargo/crates/{crate}/{version}/{crate}-{version}.crate" (Just "https://proxy.test/cargo/private") True) :: Either String Value)
+        (eitherDecodeStrict (renderCargoDiscovery "https://proxy.test/cargo/crates/{crate}/{version}/{crate}-{version}.crate" (Just "https://proxy.test/cargo") True) :: Either String Value)
             `shouldBe` Right
                 ( object
                     [ "dl" .= ("https://proxy.test/cargo/crates/{crate}/{version}/{crate}-{version}.crate" :: Text)
-                    , "api" .= ("https://proxy.test/cargo/private" :: Text)
+                    , "api" .= ("https://proxy.test/cargo" :: Text)
                     , "auth-required" .= True
                     ]
                 )

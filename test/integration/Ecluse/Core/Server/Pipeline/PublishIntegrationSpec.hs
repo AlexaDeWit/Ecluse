@@ -644,7 +644,7 @@ cargoProxy deadlines stub = do
     budget <- newByteAdmission deadlines (128 * 1024 * 1024)
     let factors = ChargeFactors 1000 1000 1000
         adapter = cargoAdapter factors
-        deps = (inertDepsFor adapter){pdMountBaseUrl = "https://proxy.test/cargo/private"}
+        deps = (inertDepsFor adapter){pdMountBaseUrl = "https://proxy.test/cargo"}
         publication =
             (publishDepsAt (stubPort stub) Nothing budget)
                 { pubReadUrl = loopbackRegistryUrl (stubBaseUrl stub <> "/index")
@@ -653,12 +653,12 @@ cargoProxy deadlines stub = do
                 , pubAllowed = \name -> projectName "fixture" == Right name
                 , pubAdapter = cargoPublish factors
                 }
-    pure (application (mkServerConfig (maybeToList (mountBindingFor Cargo deps (Just deps) (Just publication)))) env)
+    pure (application (mkServerConfig (maybeToList (mountBindingFor Cargo deps Nothing (Just publication)))) env)
 
 cargoPut :: LByteString -> Application -> IO SResponse
 cargoPut bytes = runSession (srequest (SRequest request bytes))
   where
-    request = setPath defaultRequest{requestMethod = methodPut, requestHeaders = [(hAuthorization, "cargo-client"), (hContentType, "application/octet-stream")]} "/cargo/private/api/v1/crates/new"
+    request = setPath defaultRequest{requestMethod = methodPut, requestHeaders = [(hAuthorization, "cargo-client"), (hContentType, "application/octet-stream")]} "/cargo/api/v1/crates/new"
 
 cargoTargetReply :: Captured -> (Status, ResponseHeaders, LByteString)
 cargoTargetReply captured =
