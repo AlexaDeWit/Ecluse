@@ -2188,8 +2188,7 @@ The supported floor is 1.74. A current client alone cannot establish floor compa
 Fixtures cover dependency graphs, renamed dependencies, features, targets, Rust-version constraints, and lockfiles.
 Observe archive requests through Écluse and upstream controls that expose direct bypass.
 Checking only discovery or index bytes does not prove asset routing.
-The public replacement and private alternate are separate real registries in source-aware serving tests.
-They must not share a fabricated mixed index.
+The merged `/cargo/` registry runs the shared combined serving contract, as npm, PyPI and RubyGems do.
 
 Native reader tests cover published spelling, lookup paths, ownership collisions, raw versions, physical record keys, and independent wire oracles.
 They preserve record order, schema and additive fields, dependency source references, and omission versus null.
@@ -2197,8 +2196,8 @@ Malformed and duplicate rows require quarantine evidence on full and selected re
 Whole-read transport and resource faults remain failures.
 The shared projection contract supports `RecordStream` quarantine while npm and PyPI retain exact `SingleDocument` error assertions.
 
-Authentication cases require native `401` challenge and provider retry, real `403` refusal, anonymous compatibility, and edge-authentication precedence.
-Discovery runs after caller or service credentials exist, never at boot, and private discovery remains uncached across callers.
+Authentication cases require native `401` retry at the edge, local discovery that requires a token whenever a private upstream exists, placeholder tokens for anonymous private registries, real `403` refusal, and edge-authentication precedence.
+Upstream discovery runs after caller or service credentials exist, never at boot, and private discovery remains uncached across callers.
 Authority negatives cover public, neighbouring, read, upload, and artifact coordinates without sending credentials to refused destinations.
 Publication cases bind native metadata, body lengths, manifest, archive root, digest, and first-party authority before writes.
 They preserve distinct read and upload roots and bound charged archive/TOML work.
@@ -2207,7 +2206,7 @@ Policy cases prove that boot and `check-config` refuse active `DenyInstallTimeEx
 Mirror cases require exact source rows, SHA-256 archive proof, retry, lost replies, restart, and public outage.
 Yank and timestamp controls change target metadata and verify retained original-source facts with fresh client state.
 Missing, corrupt, and unrecorded state must not become completed managed reads during outage.
-Ordinary private reads remain independently valid through the alternate view.
+Unrecorded target rows reached through the private upstream serve as trusted private content.
 CodeArtifact maintenance fixtures prove physical deletion through deterministic control-plane boundaries, without claiming live AWS fidelity.
 
 Cargo corpus and OSV fixtures retain capture identity, hashes, acquisition records, and attribution beside their native data.

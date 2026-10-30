@@ -222,8 +222,7 @@ Keep expected bytes and reference readers independent of production parsers and 
 Retain native tests for obligations with no common meaning.
 Record streams can quarantine malformed rows with explicit invalid-entry evidence.
 That native behaviour must not weaken single-document protocols' exact error assertions.
-Source-aware serving laws must exercise actual native views, including Cargo's separate replacement and alternate registries.
-Do not invent a merged Cargo index to reuse a fixture intended for npm or PyPI.
+Source-aware serving laws must exercise the actual native registry, through its real routes.
 
 Separate pure captured rendering from runtime admission configuration.
 The benchmark-only `MetadataRendering` record exposes assembly and serialisation without supplying fabricated charge factors.

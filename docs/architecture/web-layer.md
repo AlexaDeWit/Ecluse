@@ -43,8 +43,7 @@ a client resolve metadata through the proxy and then download the bytes straight
 the gate. A mount therefore rewrites embedded artifact URLs under its own protocol-specific
 route and prefix before serving metadata.
 
-Cargo's sparse index contains no artifact URL. Local discovery supplies a checked proxy download template for each native view.
-The public view replaces crates.io. The private alternate keeps its own discovery, archives, and optional publication API under `/cargo/private/`.
+Cargo's sparse index contains no artifact URL. Local discovery under `/cargo/` supplies the proxy's download template and, when publication is configured, its one publication API.
 The [registry model](registry-model.md#cargo-integration) explains source selection and credential authority.
 
 Same-host artifacts have a second benefit. The npm client attaches credentials only to requests on
