@@ -29,7 +29,7 @@ import Ecluse.Core.Registry.RubyGems.CompactSpec (GemSpecification (specificatio
 import Ecluse.Core.Registry.RubyGems.Project (mkCoordinate, projectName, unGemPlatform)
 import Ecluse.Core.Security.Limits (Limits (..), defaultLimits)
 import Ecluse.Core.Version (renderVersion)
-import Ecluse.Test.Registry.Archive (pax, paxRecord, regular, tarBytes, tarEntries)
+import Ecluse.Test.Registry.Archive (pax, paxAt, paxRecord, regular, tarBytes, tarEntries)
 import Ecluse.Test.Registry.RubyGems.Reference (runRubyReference)
 import Ecluse.Test.Support (expectRight)
 
@@ -166,16 +166,22 @@ spec = describe "native gem validation" $ do
         rootMetadata <- fixtureMember "metadata.gz" root
         rootData <- fixtureMember "data.tar.gz" root
         rootChecksums <- fixtureMember "checksums.yaml.gz" root
+        -- RubyGems reads the raw names: the leaf's metadata.gz, and no checksums.yaml.gz to check it against.
         crafted <-
-            sequence
-                [ pax 'x' (paxRecord "path=metadata.gz\n")
-                , regular "junk1" rootMetadata
-                , pax 'x' (paxRecord "path=metadata.gz.sig\n")
-                , regular "metadata.gz" leafMetadata
-                , regular "data.tar.gz" rootData
-                , regular "checksums.yaml.gz" rootChecksums
-                ]
-        void <$> inspect defaultLimits (written crafted) `shouldReturn` Left extendedRefusal
+            written
+                <$> sequence
+                    [ paxAt "PaxHeaders/metadata" 'x' (paxRecord "path=metadata.gz\n")
+                    , regular "junk-metadata" rootMetadata
+                    , paxAt "PaxHeaders/signature" 'x' (paxRecord "path=metadata.gz.sig\n")
+                    , regular "metadata.gz" leafMetadata
+                    , regular "data.tar.gz" rootData
+                    , paxAt "PaxHeaders/checksums" 'x' (paxRecord "path=checksums.yaml.gz\n")
+                    , regular "junk-checksums" rootChecksums
+                    ]
+        runRubyReference "archive" crafted >>= \case
+            Object native -> KeyMap.lookup "name" native `shouldBe` Just (String "ecluse-fixture-leaf")
+            _ -> fail "native archive reference is not an object"
+        void <$> inspect defaultLimits crafted `shouldReturn` Left extendedRefusal
     it "binds the checked archive to an exact admitted coordinate and digest" $ do
         bytes <- readFileBS fixture
         archive <- inspect defaultLimits bytes >>= expectRight
