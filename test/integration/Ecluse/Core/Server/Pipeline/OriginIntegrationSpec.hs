@@ -136,11 +136,11 @@ privateAuthorisationSpec = describe "private authorisation refusal" $ do
 -- A merged name serves the public set only after a private 404.
 privateOutcomes :: [(Text, String, IO Upstream, Int)]
 privateOutcomes =
-    -- Only the origin's own 404 settles the question. A 5xx and an undecodable body leave it
-    -- open, so both invite a retry rather than report the name as gone.
+    -- Only the origin's own 404 settles the question. A 5xx leaves it open with a 503, and an
+    -- undecodable body is an invalid reply with a 502.
     [ ("absent", "HTTP 404", absentUpstream, 404)
     , ("unavailable", "HTTP 503", upstreamRespondingWith (responseLBS status503 [] "unavailable"), 503)
-    , ("malformed", "an undecodable body", servingUpstream "this is not json at all", 503)
+    , ("malformed", "an undecodable body", servingUpstream "this is not json at all", 502)
     ]
 
 credentialSpec :: Spec
