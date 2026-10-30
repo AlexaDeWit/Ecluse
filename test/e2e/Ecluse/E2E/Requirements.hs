@@ -207,13 +207,6 @@ obligations =
         ["read", "mirror", "publication", "client-install"]
         (map ("cargo/native/" <>) ["current-client", "floor-client", "asset-routing", "metadata-no-archives", "denial-control", "features", "targets", "lock-checksums", "msrv", "discovery-views", "private-no-public", "raw-auth", "private-auth-required", "public-token-control", "private-anonymous", "publication-framing", "foreign-registry"])
     , Obligation
-        "cargo/execution"
-        "cargo/execution"
-        "cargo/execution"
-        Supported
-        ["read", "mirror", "maintenance", "client-install"]
-        (map ("cargo/execution/" <>) ["build-script", "proc-macro", "plain-source", "exact-override", "unavailable-evidence", "corrupt-evidence", "unsupported-evidence", "default-metadata", "worker-readmission", "dredger-revocation"])
-    , Obligation
         "cargo/mirror-proof"
         "cargo/write"
         "cargo/mirror-proof"

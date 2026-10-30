@@ -46,7 +46,6 @@ profiles =
     , Profile "pypi/write-telemetry" ["pypi"] ["http", "sqs", "s3", "collector"] ["read", "mirror", "client-install", "telemetry"]
     , Profile "cargo/read" ["cargo"] ["http"] ["read", "client-install", "telemetry"]
     , Profile "cargo/write" ["cargo"] ["http", "sqs", "s3", "collector"] ["read", "mirror", "publication", "client-install", "telemetry", "advisories"]
-    , Profile "cargo/execution" ["cargo"] ["http", "codeartifact-fixture", "sqs", "s3"] ["read", "mirror", "maintenance", "client-install"]
     , cargoDredgerProfile
     , pypiDredgerProfile
     , Profile "pypi/read" ["pypi"] ["http"] ["read", "client-install"]
