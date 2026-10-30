@@ -60,8 +60,10 @@ flowchart TD
 The driver owns the exchange, both spans, the error mapping, the charge, the digest and the
 `Manifest`, so a new ecosystem writes none of them. The driver also computes the body limit and keys
 a table afresh for each read. It hands both to the ecosystem's walk, and the walk applies them. A new
-ecosystem supplies one `EcosystemRead`, as `npmRead` and `pypiRead` do, and its adapter holds that
-value in `metadataRead`.
+ecosystem supplies one `EcosystemRead`, and its adapter holds it in `metadataRead` through a
+`PrepareRead`. npm and PyPI build theirs with `prepareNpmRead` and `preparePyPIRead`. Each binds the
+selected origin's `ocChargeFullReadWorkspace`, so a full read that keeps many small entries pays the
+per-entry floor through `readFlooredWalk`.
 
 | Step | Written by |
 |---|---|
