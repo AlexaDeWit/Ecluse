@@ -68,6 +68,9 @@ spec = do
             expected <- expectRight (publicationMetadata manifest Map.empty)
             publicationMetadata annotated Map.empty `shouldBe` Right expected
     describe "publicationMetadata" $ do
+        it "keeps reconstructing a manifest whose dependency carries an unstable key, as the mirror path did" $ do
+            manifest <- expectRight (parse (basic <> "[dependencies]\nunstable={version='1',artifact='bin',lib=true,public=true,target='x86_64-unknown-linux-gnu'}\n"))
+            publicationMetadata manifest Map.empty `shouldSatisfy` isRight
         it "uses Cargo README defaults and preserves publication-only data" $ do
             manifest <- expectRight (parse (basic <> "authors=['Alice']\nlicense='MIT'\nrust-version='1.74'\n"))
             paths <- expectRight (manifestTextPaths manifest (Set.fromList ["README", "README.txt", "README.md"]))
@@ -345,6 +348,16 @@ spec = do
                 let dependency = object ["name" .= ("dependency" :: Text), "version_req" .= uploaded, "features" .= ([] :: [Text]), "optional" .= False, "default_features" .= True, "registry" .= cratesIoIndex]
                 checkUploadAgreement defaultLimits selectedRegistry manifest (object ["deps" .= [dependency], "features" .= object []]) `shouldBe` Right ()
 
+        it "refuses a manifest dependency carrying an unstable key the upload omits, in every dependency table" $
+            for_ ["artifact='bin'", "lib=true", "public=false", "target='x86_64-unknown-linux-gnu'"] $ \declaration ->
+                for_ unstableTables $ \(header, kind, target) -> do
+                    let metadata = object ["deps" .= [object ["name" .= ("unstable" :: Text), "version_req" .= ("^1" :: Text), "features" .= ([] :: [Text]), "optional" .= False, "default_features" .= True, "registry" .= cratesIoIndex, "kind" .= kind, "target" .= target]], "features" .= object []]
+                    stable <- expectRight (parse (basic <> header <> "\nunstable={version='1'}\n"))
+                    checkUploadAgreement defaultLimits selectedRegistry stable metadata `shouldBe` Right ()
+                    manifest <- expectRight (parse (basic <> header <> "\nunstable={version='1'," <> declaration <> "}\n"))
+                    checkUploadAgreement defaultLimits selectedRegistry manifest metadata
+                        `shouldBe` Left (ParseError "Cargo manifest dependency 'unstable' carries an unstable artifact, target, lib or public key")
+
     describe "checkDependencyRegistries" $ do
         it "refuses a normal or build dependency from a registry other than crates.io or this proxy, naming its package" $
             for_ foreignSources $ \source -> do
@@ -389,6 +402,10 @@ selectedRegistry = "sparse+https://proxy.test/cargo/"
 -- The one registry that replaces crates.io and receives publication.
 ecluseRegistries :: [Text]
 ecluseRegistries = [selectedRegistry]
+
+-- Each dependency table header, with the kind and platform target the upload states for it.
+unstableTables :: [(ByteString, Text, Maybe Text)]
+unstableTables = [("[dependencies]", "normal", Nothing), ("[dev-dependencies]", "dev", Nothing), ("[build-dependencies]", "build", Nothing), ("[target.'cfg(unix)'.dependencies]", "normal", Just "cfg(unix)")]
 
 -- Registries other than crates.io and this proxy's index, in sparse and git spellings.
 foreignSources :: [Text]

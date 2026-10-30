@@ -18,6 +18,8 @@ module Ecluse.Test.Registry.Cargo.Publish (
     cargoForeignDevManifest,
     cargoForeignDevMetadata,
     cargoForeignDevArchive,
+    cargoUnstableManifestArchive,
+    cargoUnstableManifestRefusal,
     cargoSourceVersion,
     observeCargoRelay,
 ) where
@@ -115,12 +117,25 @@ cargoForeignDevMetadata = resolverMetadataWith "sparse+https://proxy.test/cargo/
 cargoForeignDevArchive :: IO ByteString
 cargoForeignDevArchive = resolverArchive cargoForeignDevManifest
 
+{- | The resolver archive whose crates.io build dependency @tool@ also carries the given manifest
+declaration, such as an unstable key, which 'cargoResolverMetadata' omits.
+-}
+cargoUnstableManifestArchive :: ByteString -> IO ByteString
+cargoUnstableManifestArchive declaration = resolverArchive (resolverManifestWithTool "sparse+https://proxy.test/cargo" "helper='1.0.0+build'" ("," <> declaration))
+
+-- | The publication refusal of a manifest dependency carrying an unstable key, written out so a wording change shows in every spec.
+cargoUnstableManifestRefusal :: Text -> Text
+cargoUnstableManifestRefusal name = "Cargo manifest dependency '" <> name <> "' carries an unstable artifact, target, lib or public key"
+
 resolverManifest :: ByteString -> ByteString
 resolverManifest renamedSource = resolverManifestWith renamedSource "helper='1.0.0+build'"
 
--- The renamed and development dependencies vary. Every other declaration comes from crates.io or the publication registry.
 resolverManifestWith :: ByteString -> ByteString -> ByteString
-resolverManifestWith renamedSource helper =
+resolverManifestWith renamedSource helper = resolverManifestWithTool renamedSource helper ""
+
+-- The renamed and development dependencies and the build dependency's extra keys vary. Every other declaration comes from crates.io or the publication registry.
+resolverManifestWithTool :: ByteString -> ByteString -> ByteString -> ByteString
+resolverManifestWithTool renamedSource helper toolExtra =
     "[package]\nname='fixture'\nversion='1.0.0'\nrust-version='1.74'\nlinks='native_foo'\nbuild='build.rs'\n"
         <> "[dependencies]\nlocal={version='1.2',registry-index='sparse+https://proxy.test/cargo/',features=['beta','alpha'],default-features=false}\n"
         <> "renamed={package='original',version='1.X',registry-index='"
@@ -128,7 +143,9 @@ resolverManifestWith renamedSource helper =
         <> "',optional=true}\nauto={version='0.3',optional=true}\n"
         <> "[dev-dependencies]\n"
         <> helper
-        <> "\n[target.'cfg(all(unix,target_os = \"linux\",))'.build-dependencies]\ntool={version='>=1.2.3-alpha, <2',features=['derive']}\n"
+        <> "\n[target.'cfg(all(unix,target_os = \"linux\",))'.build-dependencies]\ntool={version='>=1.2.3-alpha, <2',features=['derive']"
+        <> toolExtra
+        <> "}\n"
         <> "[features]\ndefault=['full','auto']\nfull=['dep:renamed','renamed?/extra','local/alpha']\n"
 
 resolverMetadata :: Text -> Value
