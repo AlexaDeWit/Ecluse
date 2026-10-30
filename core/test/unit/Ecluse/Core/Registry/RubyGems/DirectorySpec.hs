@@ -14,6 +14,7 @@ import Ecluse.Core.Package.Entry (EntryKey (RecordEntry))
 import Ecluse.Core.Registry.JsonStream (StreamResult (..), readStepsWithEnd)
 import Ecluse.Core.Registry.Metadata.RecordStream (finishRecordSteps)
 import Ecluse.Core.Registry.RubyGems.Directory
+import Ecluse.Core.Registry.RubyGems.Directory.Internal (directoryNameCeiling, directoryStepsWithin)
 import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), LimitError (..), Limits (..), defaultLimits)
 import Ecluse.Core.Server.MemoryModel (decodedDocumentCharge)
 import Ecluse.Test.Registry.JsonStream (heldChunks)

@@ -334,6 +334,7 @@ library ecluse-core
     Ecluse.Core.Registry.RubyGems.Project
     Ecluse.Core.Registry.RubyGems.Document
     Ecluse.Core.Registry.RubyGems.Directory
+    Ecluse.Core.Registry.RubyGems.Directory.Internal
     Ecluse.Core.Registry.RubyGems.Credential
     Ecluse.Core.Registry.RubyGems.Adapter
     Ecluse.Core.Registry.RubyGems.Handlers.Budget
