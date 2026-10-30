@@ -5,13 +5,13 @@
 -- | Managed reads validate fresh state and restore fields only after current private identity proof.
 module Ecluse.Core.Server.MirrorViewSpec (spec) where
 
+import Control.Monad (foldM)
 import Data.Aeson (Value (Array, Bool, Object, String), eitherDecodeStrict, encode)
 import Data.Aeson.Key (Key)
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.ByteString qualified as BS
 import Data.ByteString.Internal qualified as BSI
 import Data.ByteString.Lazy qualified as LBS
-import Control.Monad (foldM)
 import Data.Map.Strict qualified as Map
 import Data.Traversable (for)
 import Test.Hspec
