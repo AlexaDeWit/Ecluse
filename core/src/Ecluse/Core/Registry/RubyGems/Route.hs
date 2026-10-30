@@ -12,7 +12,7 @@ module Ecluse.Core.Registry.RubyGems.Route (
 ) where
 
 import Data.List.NonEmpty qualified as NE
-import Network.HTTP.Types (mkStatus, status404, status405, status500)
+import Network.HTTP.Types (status403, status404, status405, status500)
 
 import Ecluse.Core.Registry.RubyGems.Handlers.CompactIndex (serveDirectory, serveInfo)
 import Ecluse.Core.Registry.RubyGems.Handlers.Coordinate (serveCompactSpec, serveGemArtifact)
@@ -118,7 +118,7 @@ artifactReplies :: TarballReplies PassthroughResponse
 artifactReplies =
     TarballReplies
         { tarballError = \status headers -> plainTextRefusal status headers . renderRefusal
-        , tarballPrivateRefused = \code headers -> plainTextRefusal (mkStatus code "") headers . renderRefusal
+        , tarballPrivateRefused = \_ -> tarballError artifactReplies status403
         , tarballStream = \status headers -> passthroughResponse status headers . PassthroughStream
         , tarballEmpty = \status headers -> passthroughResponse status headers PassthroughEmpty
         }
