@@ -310,6 +310,12 @@ Health probes, cheap local routes and other trusted private artifact hits bypass
 mirror worker runs outside the gates. A slow artifact client therefore holds no serve metadata slot while its
 download drains.
 
+First-party publication reads its upload under a separate byte-weighted gate alone, then passes
+both gates once the body is in memory. It holds them through upload inspection, target preparation
+and the relay, as a listing holds its slot through its upstream reads. A slow uploader therefore
+holds byte budget but no CPU slot, so it cannot make listings and artifact decisions shed. The
+memory gate still bounds Cargo and RubyGems archive inspection, which runs in memory.
+
 The public and private connection pools take independent settings. The private pool takes the larger
 share, because a trusted tarball hit streams outside admission, which makes its demand the
 steady-state inbound hit fan-out.

@@ -629,7 +629,8 @@ does not automatically enlarge the cache or reduce CPU concurrency.
 
 Memory admission keeps the heap's live data where the garbage collector still works normally, so
 the process neither thrashes its collector nor overflows its heap ceiling. Écluse charges each
-listing and each public artifact decision for the memory it uses, as it uses it, against one budget:
+listing, each public artifact decision and each first-party publication for the memory it uses, as
+it uses it, against one budget:
 
 | Work | What it pays |
 |---|---|
@@ -640,6 +641,7 @@ listing and each public artifact decision for the memory it uses, as it uses it,
 | An assembled hit or a `304` | Its reads, but no response charge |
 | A gzip listing response, hit or miss | 512 KiB for the deflater, then 36 KiB for each 32 KiB output buffer |
 | A request that joins another request's public fetch or render | Nothing for that fetch or render |
+| A first-party publication, once its upload is read | Its archive inspection for Cargo and RubyGems, and for Cargo a full metadata read of the target registry's `config.json` |
 
 A listing's output basis is the larger of two estimates. One starts from the largest document the
 listing merges. The other starts from the base document, whose top-level fields the response
@@ -682,6 +684,12 @@ near one request and the shared work it waits on, and a pause always leaves a re
 finishes. A listing gives up its CPU slot once its response is built, but keeps its charge while
 Écluse writes the body, so a slow client holds memory and no CPU slot. Everything a request paid
 returns when it ends. Trusted private artifact hits and artifact relay pay nothing.
+
+A first-party publication reads its whole upload against the byte capacity the memory plan
+reserves for publishing, before it enters either gate. A slow upload therefore holds no CPU slot
+and no memory charge. Once admitted, the publication keeps its CPU slot and its charge through the
+relay to the publication target. A full memory or CPU gate refuses it after the upload, with `503`
+and `Retry-After: 1`.
 
 A request that finds either waiting room full can wait in overflow outside both gates, without a
 CPU slot or memory charge. It can retry admission for 0.5 s. The next sweeper tick ends an expired
