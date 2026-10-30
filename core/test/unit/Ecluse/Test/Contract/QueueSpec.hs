@@ -7,7 +7,7 @@ module Ecluse.Test.Contract.QueueSpec (spec) where
 
 import Test.Hspec
 
-import Ecluse.Core.Queue (MirrorQueue (receive), QueueMessage (msgJob))
+import Ecluse.Core.Queue (MirrorJob (jobTraceContext), MirrorQueue (receive), QueueMessage (msgJob))
 import Ecluse.Test.Contract.Queue (QueueDriver (..), queuePayloadLaw)
 import Ecluse.Test.Queue (newTestMemoryQueue, otherJob)
 import Ecluse.Test.Support (expectRightIO)
@@ -25,4 +25,9 @@ spec = describe "queue contract negative controls" $ do
         queue <- newTestMemoryQueue
         let corrupt message = message{msgJob = otherJob}
         queuePayloadLaw QueueDriver{queueHandle = queue, awaitDelivery = map corrupt <$> expectRightIO (receive queue)}
+            `shouldThrow` anyException
+    it "rejects a driver that drops the trace carrier" $ do
+        queue <- newTestMemoryQueue
+        let untraced message = message{msgJob = (msgJob message){jobTraceContext = Nothing}}
+        queuePayloadLaw QueueDriver{queueHandle = queue, awaitDelivery = map untraced <$> expectRightIO (receive queue)}
             `shouldThrow` anyException
