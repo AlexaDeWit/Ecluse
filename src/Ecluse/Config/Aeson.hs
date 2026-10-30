@@ -159,12 +159,13 @@ queueDecoder =
         <*> optionalKey "maxMemoryDepth" parsePositiveInt
         <*> requiredKey "maxReceiveCount" parsePositiveInt
 
+-- The deprecated maxArtifactCount still parses as a positive integer, so a v0.3.3 document loads, and has no effect.
 limitsDecoder :: GroupDecoder LimitsSettings
 limitsDecoder =
     LimitsSettings
         <$> optionalKey "maxResponseBytes" parsePositiveInt
         <*> requiredKey "maxVersionCount" parsePositiveInt
-        <*> requiredKey "maxArtifactCount" parsePositiveInt
+        <* optionalKey "maxArtifactCount" parsePositiveInt
         <*> requiredKey "maxNestingDepth" parsePositiveInt
         <*> requiredKey "maxAdvisoryDatabaseBytes" parsePositiveInt
         <*> optionalKey "maxRequestBytes" parsePositiveInt
