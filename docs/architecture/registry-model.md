@@ -504,6 +504,10 @@ token and its credential presentation table do. A backend matrix therefore costs
 ecosystem plus one backend per store, never a cell per pair. npm, PyPI, Cargo, and RubyGems ship read and native publication capabilities in this build. Their stores
 are CodeArtifact, any host that speaks the protocol, and Verdaccio for development.
 
+Shared code reads what it needs from an adapter's declarations instead of branching on its
+ecosystem. Durable mirror state stores, weighs and rechecks a mount's retained read data through the
+state format its adapter declares, so a new ecosystem extends no switch in mirror state.
+
 ### Incremental npm extraction
 
 npm and PyPI reads walk the tokens of the maintained json-stream lexer (`json-stream/`) inside

@@ -147,12 +147,12 @@ Do not add a dormant codec or publish helper without an active caller.
 
 Declare `AdapterPublish.publishMirrorRequirements`, `publishUploadEndpoint` and `publishIdentity` in [Adapter.Capability](../core/src/Ecluse/Core/Registry/Adapter/Capability.hs).
 `MirrorRequirements` selects cached or charged worker reads and native or durable version state.
-Durable version state carries the format's [MirrorDocuments](../core/src/Ecluse/Core/Mirror/Documents.hs): the restore, ordering, entry rekeying and listing assembly of managed documents, and the format's companion requirement.
-Composition binds them to the mount's mirror view, which names no ecosystem.
-Mirror state applies the companion requirement of retained read data through `readDataCompanions` in [MirrorUpload](../core/src/Ecluse/Core/Registry/MirrorUpload/Internal.hs).
-Name the requirement once, beside the format's read data, and reference that value from both `readDataCompanions` and the declaration.
-The [adapter registry spec](../core/test/unit/Ecluse/Core/Registry/AdapterSpec.hs) holds the two equal for every registered durable adapter.
-Boot refuses a mirror target whose codec prepares native companions where the declaration requires none, or omits them where it requires them.
+It also carries the format's [MirrorStateFormat](../core/src/Ecluse/Core/Mirror/State/Format.hs), which every mirroring adapter declares for its `MirrorReadData` constructor.
+The format says how mirror state stores, decodes, charges and weighs the retained read data, which project fields a record keeps once, and which files need a metadata companion.
+Durable version state also carries the format's [MirrorDocuments](../core/src/Ecluse/Core/Mirror/Documents.hs): the restore, ordering, entry rekeying and listing assembly of managed documents.
+Composition binds the state format to the mount's state store, mirror view and worker, and the documents to the mirror view. Mirror state names no ecosystem.
+Pin a new format's record bytes, decode charges and weights in the [state codec spec](../core/test/unit/Ecluse/Core/Mirror/State/CodecSpec.hs).
+Boot refuses a mirror target whose codec prepares native companions where the format requires none, or omits them where it requires them.
 `UploadEndpointRequirement` declares whether both write targets upload at the read root or at a separate `uploadUrl`.
 The configuration load reads it to require `uploadUrl` or refuse it.
 `UploadIdentityRequirement` declares token-only or named identity for static credentials.
@@ -167,7 +167,7 @@ Use `relayPublishRequest` in [Publish](../core/src/Ecluse/Core/Registry/Publish/
 | Mirror input | Complete version inventory and verified file identities | Retained read data and required upload metadata |
 | Copying and retries | Worker orchestration and existing authority limits | Native target reads and upload outcomes |
 | Completion | Expected membership and complete-view checks | Document which target facts prove every file exists |
-| Restart and outage | Existing [mirror state](../core/src/Ecluse/Core/Mirror/State.hs) where required | Preserve the source fields needed for later native reads, and declare how retained documents restore |
+| Restart and outage | Existing [mirror state](../core/src/Ecluse/Core/Mirror/State.hs) where required | Preserve the source fields needed for later native reads, and declare the state format and how retained documents restore |
 | First-party publish | [Publish pipeline](../core/src/Ecluse/Core/Server/Pipeline/Publish.hs), bounded body, identity guard | Body framing, identity claims, content type, allowed methods, reply semantics |
 | Dredger | [Store maintenance interface](../core/src/Ecluse/Core/Registry/Maintenance.hs), policy, consent, deletion cap | Supported inventory and deletion operations from protocol or backend |
 | Telemetry | Existing spans and observations around the shared paths | Native outcomes through the same observations |
@@ -184,7 +184,8 @@ Cargo pairs one verified archive with its retained original index row and source
 Native target publication cannot prove those source fields. See [Cargo integration](architecture/registry-model.md#cargo-integration).
 Native archive extraction and publication formats stay separate when their meanings differ.
 [MirrorUpload.mirrorReadDocument](../core/src/Ecluse/Core/Registry/MirrorUpload/Internal.hs) reconstructs retained native source documents without encoding or reparsing.
-The [state codec](../core/src/Ecluse/Core/Mirror/State/Codec.hs) still persists and restores native payloads.
+A new format adds its `MirrorReadData` constructor there, with its pairing, restriction and validation.
+The [state codec](../core/src/Ecluse/Core/Mirror/State/Codec.hs) persists and restores native payloads through the declared state format.
 A durable-state declaration does not add another protocol's source reconstruction or completion proof.
 Neither the worker nor a completion mechanism gains Dredger's deletion authority.
 
