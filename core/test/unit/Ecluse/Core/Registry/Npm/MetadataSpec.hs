@@ -57,7 +57,7 @@ import Ecluse.Core.Registry.Metadata (
     VersionDoc (vdRaw),
     VersionRead (vrBodyBytes, vrUpstreamLatest, vrVersion),
  )
-import Ecluse.Core.Registry.Metadata.EntryFloor (entryFloorBytes, entryFloorCharge)
+import Ecluse.Core.Registry.Metadata.EntryFloor (RetainedEntries (RetainedEntries), entryFloorBytes, entryFloorCharge)
 import Ecluse.Core.Registry.Metadata.Projection (projectionResult, streamError, validateReportedName)
 import Ecluse.Core.Registry.Npm.Adapter (npmAdapter)
 import Ecluse.Core.Registry.Npm.DependencySource (installableFieldName)
@@ -125,6 +125,10 @@ entryFloorSpec = describe "the full-read entry floor" $ do
         (result, peak) <- heldWorkspacePeak adapterRead captureRegistry (unscopedNpm "thing") [body]
         void result `shouldSatisfy` isRight
         peak `shouldBe` releaseFloor * entries - scaleCharge (cfFullReadPermille npmChargeFactors) (BS.length body)
+
+    it "counts only the entries the finished document keeps, not the timestamps it drops" $ do
+        (result, _) <- heldWorkspacePeak adapterRead captureRegistry (unscopedNpm "thing") [denseBody]
+        manifestRetainedEntries <$> expectRight result `shouldReturn` RetainedEntries 0 entries
 
     it "charges no workspace when releases carry more source bytes than their entries' floor" $ do
         let release at = "\"1.0." <> at <> "\":" <> policyRelease [("readme", String (T.replicate 1024 "x"))]
