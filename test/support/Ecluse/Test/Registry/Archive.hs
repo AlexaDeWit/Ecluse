@@ -3,7 +3,7 @@
 -- SPDX-License-Identifier: MIT
 
 -- | Native tar fixtures shared across registry ecosystems.
-module Ecluse.Test.Registry.Archive (tarBytes, tarEntries, regular, pax, paxAt, paxRecord, checksumHeader) where
+module Ecluse.Test.Registry.Archive (tarBytes, tarEntries, regular, pax, paxAt, paxRecord, checksumHeader, patchFirstHeader) where
 
 import Codec.Archive.Tar qualified as Tar
 import Codec.Archive.Tar.Entry qualified as Tar
@@ -54,3 +54,9 @@ checksumHeader header = BS.take 148 changed <> checksum <> BS.drop 156 changed
     changed = BS.take 148 header <> BS.replicate 8 32 <> BS.drop 156 header
     digits = toText (showOct (BS.foldl' (\total byte -> total + fromIntegral byte) (0 :: Integer) changed) "")
     checksum = encodeUtf8 (T.replicate (6 - T.length digits) "0" <> digits) <> "\NUL "
+
+-- | Overwrite a tar stream's first header from the given byte offset, then repair its checksum.
+patchFirstHeader :: Int -> ByteString -> ByteString -> ByteString
+patchFirstHeader offset bytes archive = checksumHeader (BS.take offset header <> bytes <> BS.drop (offset + BS.length bytes) header) <> BS.drop 512 archive
+  where
+    header = BS.take 512 archive

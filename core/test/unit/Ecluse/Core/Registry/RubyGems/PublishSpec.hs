@@ -37,7 +37,7 @@ import Ecluse.Server.Admission.Support (refuseCharge)
 import Ecluse.Test.Credential (basicReadsBearerWrites)
 import Ecluse.Test.Deadline (withExchangeClient, withSweeper)
 import Ecluse.Test.Port (passthroughTracingPort)
-import Ecluse.Test.Registry.Archive (pax, paxRecord, tarEntries)
+import Ecluse.Test.Registry.Archive (patchFirstHeader, pax, paxRecord, tarEntries)
 import Ecluse.Test.Registry.Publish (anonymousPublishAt, publishOnlyFile)
 import Ecluse.Test.Registry.RubyGems.Fixtures (loadFixtureInfo)
 import Ecluse.Test.Stub (Captured (..), Stub, allCaptured, headerValue, stubBaseUrl, withRoutedStub)
@@ -102,6 +102,20 @@ spec = describe "RubyGems publication" $ do
             mirrorTo target plain `shouldReturn` Right ()
             mirrorTo target (LBS.toStrict (Tar.write (global : entries))) `shouldReturn` Left (PublishSourceUnavailable "gem envelope carries an extended or prefixed tar header")
             map capBody <$> allCaptured target `shouldReturn` [plain]
+
+    -- metadata.gz is each fixture's first outer member. Its name fills 11 bytes of the name field, and the prefix field starts at byte 345.
+    for_ [("name", 11), ("prefix", 345)] $ \(field, offset) -> do
+        it ("refuses bytes after the NUL in an outer " <> field <> " field as a malformed upload") $ do
+            archive <- readFileBS "test/fixtures/rubygems/gems/ecluse-fixture-native-1.0.0.gem"
+            let claims bytes = uploadClaims defaultLimits (const pass) "unused" (PublishRequestBody bytes Nothing NoPublishExtras)
+            claims archive `shouldReturn` Right ["ecluse-fixture-native"]
+            claims (patchFirstHeader offset "\NULx" archive) `shouldReturn` Left (PublishMalformed (ParseError "gem envelope carries an extended or prefixed tar header"))
+
+        it ("does not mirror a public gem with bytes after the NUL in an outer " <> field <> " field") $
+            withRoutedStub (const (status200, [], "written")) $ \target -> do
+                archive <- readFileBS rootArchive
+                mirrorTo target (patchFirstHeader offset "\NULx" archive) `shouldReturn` Left (PublishSourceUnavailable "gem envelope carries an extended or prefixed tar header")
+                allCaptured target `shouldReturn` []
 
     it "publishes only the admitted digest and preserves verified bytes without an OTP" $ do
         archive <- readFileBS rootArchive
