@@ -58,6 +58,7 @@ import Ecluse.Composition.Support (
     rubyGemsMirrorEnv,
     rubyInstallRefusal,
     rubyScopeRefusal,
+    rubyYankRefusal,
     staticEnvVars,
     withDredgeablePrivate,
     withObservablePrivate,
@@ -92,7 +93,7 @@ import Ecluse.Core.Registry.Adapter.Capability (AdapterPublish (publishCodec))
 import Ecluse.Core.Registry.Publish (MirrorCompanion, PublishCodec (pcMirrorCompanion))
 import Ecluse.Core.Registry.RubyGems.Mirror (rubyMirrorCompanion)
 import Ecluse.Core.Registry.Sweep.Types (minimumChunkPause)
-import Ecluse.Core.Rules.Types (PrecededRule (prRule), RuleType (AllowScopeType, DenyInstallTimeExecutionType), ruleName)
+import Ecluse.Core.Rules.Types (PrecededRule (prRule), RuleType (AllowScopeType, DenyIfYankedType, DenyInstallTimeExecutionType), ruleName)
 import Ecluse.Core.Security (mkProgressFloor, serveCapSeconds)
 import Ecluse.Core.Security.Egress (registryUrlText)
 
@@ -351,6 +352,11 @@ ruleBlocksSpec = describe "vetBoot -- ecosystem rule blocks" $ do
                 `shouldReturn` [rubyDeprecationRefusal]
             refusalsFor role (overrideEnv "ECLUSE_MOUNTS__RUBYGEMS__RULES" deprecatedRule rubyBeside)
                 `shouldReturn` [rubyDeprecationRefusal]
+        it "refuses a shared yank deny on npm and RubyGems, and a mount-specific one on RubyGems" $ do
+            refusalsFor role (overrideEnv "ECLUSE_RULES" yankedRule rubyBeside)
+                >>= (`shouldMatchList` [npmYankBlock, rubyYankRefusal])
+            refusalsFor role (overrideEnv "ECLUSE_MOUNTS__RUBYGEMS__RULES" yankedRule rubyBeside)
+                `shouldReturn` [rubyYankRefusal]
         it "clears the same-key suppression in the PyPI patch" $
             refusalsFor
                 role
@@ -387,9 +393,11 @@ ruleBlocksSpec = describe "vetBoot -- ecosystem rule blocks" $ do
     rubyBeside = overrideEnv "ECLUSE_MOUNTS__RUBYGEMS__ENABLED" "true" publicGateEnv
     installRule = "{\"custom-code\":{\"type\":\"DenyInstallTimeExecution\"}}"
     deprecatedRule = "{\"custom-deprecated\":{\"type\":\"DenyIfDeprecated\"}}"
+    yankedRule = "{\"custom-yanked\":{\"type\":\"DenyIfYanked\"}}"
     scopeRule = "{\"custom-scope\":{\"type\":\"AllowScope\",\"scope\":\"acme\"}}"
     installBlock = RuleBlockedOnMount PyPI DenyInstallTimeExecutionType "Most PyPI releases offer a source distribution, which runs its own build on install, so this rule would deny nearly every release."
     scopeBlock = RuleBlockedOnMount PyPI AllowScopeType "A PyPI project name has no scope, so this rule can never match one."
+    npmYankBlock = RuleBlockedOnMount Npm DenyIfYankedType "npm reports no yank flag. Removed releases disappear from its metadata."
 
 advisoryStoreSpec :: Spec
 advisoryStoreSpec = describe "vetBoot -- an advisory deny with no advisory store" $ do

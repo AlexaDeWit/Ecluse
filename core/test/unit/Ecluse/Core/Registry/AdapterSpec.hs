@@ -89,11 +89,12 @@ spec = describe "adapterFor (the ecosystem adapter registry)" $ do
         map uploadEndpointFor [Npm, PyPI, RubyGems, Cargo]
             `shouldBe` [Just ReadRootUpload, Just ExplicitUploadEndpoint, Just ReadRootUpload, Just ExplicitUploadEndpoint]
 
-    it "blocks exactly RubyGems' install, deprecation and scope types with their reasons" $
+    it "blocks exactly RubyGems' install, yank, deprecation and scope types with their reasons" $
         (adapterRuleBlocks <$> adapterFor RubyGems)
             `shouldBe` Just
                 ( Map.fromList
                     [ (DenyInstallTimeExecutionType, "RubyGems native builds are normal installation behaviour. This rule is unsupported for the ecosystem.")
+                    , (DenyIfYankedType, "RubyGems reports no yank flag in a gem's metadata. Yanked versions disappear from it.")
                     , (DenyIfDeprecatedType, "RubyGems metadata supplies no supported deprecation flag.")
                     , (AllowScopeType, "RubyGems package names have no scope.")
                     ]

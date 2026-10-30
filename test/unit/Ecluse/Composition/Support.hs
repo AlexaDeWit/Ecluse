@@ -25,6 +25,7 @@ module Ecluse.Composition.Support (
     rubyInstallRefusal,
     rubyScopeRefusal,
     rubyDeprecationRefusal,
+    rubyYankRefusal,
     cargoDeprecationRefusal,
     privateUpstreamUrl,
     collapsingMirrorTarget,
@@ -84,7 +85,7 @@ import Ecluse.Config (AppConfig, Config (configApp), StoreBackend (BackendRegist
 import Ecluse.Core.Credential (mkSecret)
 import Ecluse.Core.Ecosystem (Ecosystem (Cargo, Npm, RubyGems))
 import Ecluse.Core.Package (PackageName, mkPackageName, mkScope)
-import Ecluse.Core.Rules.Types (RuleType (AllowScopeType, DenyIfDeprecatedType, DenyInstallTimeExecutionType))
+import Ecluse.Core.Rules.Types (RuleType (AllowScopeType, DenyIfDeprecatedType, DenyIfYankedType, DenyInstallTimeExecutionType))
 import Ecluse.Core.Security (Limits, defaultLimits)
 import Ecluse.Core.Security.Egress (registryUrlText)
 import Ecluse.Rts (EffectiveAxis (..), EffectiveRuntimePlan (..), Provenance (FromRts))
@@ -179,6 +180,10 @@ rubyScopeRefusal = RuleBlockedOnMount RubyGems AllowScopeType "RubyGems package 
 -- | A deprecation deny refuses the Ruby mount, whose metadata carries no deprecation flag.
 rubyDeprecationRefusal :: BootError
 rubyDeprecationRefusal = RuleBlockedOnMount RubyGems DenyIfDeprecatedType "RubyGems metadata supplies no supported deprecation flag."
+
+-- | A yank deny refuses the Ruby mount, whose metadata drops a yanked version instead of flagging it.
+rubyYankRefusal :: BootError
+rubyYankRefusal = RuleBlockedOnMount RubyGems DenyIfYankedType "RubyGems reports no yank flag in a gem's metadata. Yanked versions disappear from it."
 
 -- | The private upstream the composition fixtures declare.
 privateUpstreamUrl :: (IsString s) => s
