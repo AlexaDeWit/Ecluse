@@ -6,7 +6,7 @@
 
 -- | PyPI full and selected Simple-index reads for "Ecluse.Core.Registry.Metadata.Fetch".
 module Ecluse.Core.Registry.PyPI.Metadata (
-    pypiRead,
+    pypiReadWith,
     preparePyPIRead,
     pypiMirrorRead,
     pypiChargeFactors,
@@ -47,20 +47,20 @@ import Ecluse.Core.Security (AllowedHostPorts, Limits, ecosystemArtifactAuthorit
 import Ecluse.Core.Server.Admission.Types (ChargeFactors (..))
 import Ecluse.Core.Version (Version, renderVersion)
 
--- | Full and selected reads share the Simple-index request and field policy. Full reads charge no workspace.
-pypiRead :: EcosystemRead
-pypiRead = pypiReadWith (const pass) SelectedRead (const (const Nothing))
+-- | Full and selected reads share the Simple-index request and field policy, with the full read's absolute workspace payer.
+pypiReadWith :: (Int -> IO ()) -> EcosystemRead
+pypiReadWith pay = pypiReadOf pay SelectedRead (const (const Nothing))
 
--- | 'pypiRead' with the selected origin's full-read workspace bound, which pays the per-entry floor.
+-- | 'pypiReadWith' under the selected origin's full-read workspace, which pays the per-entry floor.
 preparePyPIRead :: PrepareRead
-preparePyPIRead = PrepareRead (\origin -> pure (Right (pypiReadWith (ocChargeFullReadWorkspace origin) SelectedRead (const (const Nothing)))))
+preparePyPIRead = PrepareRead (pure . Right . pypiReadWith . ocChargeFullReadWorkspace)
 
 -- | Workers retain the supported envelope beside selected files without changing ordinary serve reads.
 pypiMirrorRead :: EcosystemRead
-pypiMirrorRead = pypiReadWith (const pass) MirrorRead (\details -> Just . mirrorDocument details)
+pypiMirrorRead = pypiReadOf (const pass) MirrorRead (\details -> Just . mirrorDocument details)
 
-pypiReadWith :: (Int -> IO ()) -> (PackageName -> Text -> PyPIRead) -> (PackageDetails -> SimpleDocument -> Maybe CachedDoc) -> EcosystemRead
-pypiReadWith pay mode retain =
+pypiReadOf :: (Int -> IO ()) -> (PackageName -> Text -> PyPIRead) -> (PackageDetails -> SimpleDocument -> Maybe CachedDoc) -> EcosystemRead
+pypiReadOf pay mode retain =
     EcosystemRead
         { erRequest = simpleIndexRequestUnder
         , erUniqueFields = fileUniqueFields
