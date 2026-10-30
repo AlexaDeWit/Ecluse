@@ -62,13 +62,14 @@ spec = describe "durable record codec" $ do
             bytes <- expectRight (encodeProjectRecord defaultLimits record)
             decode bytes `shouldReturn` Right record
 
-    it "preserves a dependency fetched from outside the registry through restart" $ do
-        original <- mirrorSample [1] False "https://first.test/" "original"
-        let details = (inventoryDetails original){pkgDependencySources = FetchesOutsideRegistry "dependency 'left-pad' in dependencies names a git source"}
-        inventory <- expectRight (restoreMirrorInventory details (inventoryReadData original))
-        record <- expectRight (extendProjectRecord defaultLimits target inventory Nothing)
-        bytes <- expectRight (encodeProjectRecord defaultLimits record)
-        decode bytes `shouldReturn` Right record
+    for_ [RegistryDependencies, FetchesOutsideRegistry "dependency 'left-pad' in dependencies names a git source", DependencySourcesUnknown] $ \dependencies ->
+        it ("preserves the dependency fact through restart: " <> show dependencies) $ do
+            original <- mirrorSample [1] False "https://first.test/" "original"
+            let details = (inventoryDetails original){pkgDependencySources = dependencies}
+            inventory <- expectRight (restoreMirrorInventory details (inventoryReadData original))
+            record <- expectRight (extendProjectRecord defaultLimits target inventory Nothing)
+            bytes <- expectRight (encodeProjectRecord defaultLimits record)
+            decode bytes `shouldReturn` Right record
 
     for_ invalidFields $ \(label, path, replacement, reason) ->
         it label $ do
