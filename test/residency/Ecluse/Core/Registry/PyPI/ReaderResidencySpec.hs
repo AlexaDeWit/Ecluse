@@ -18,7 +18,7 @@ import Ecluse.Core.Registry.PyPI.Metadata (projectPyPIStream)
 import Ecluse.Core.Registry.PyPI.Reader (fileUniqueFields, pypiWalk)
 import Ecluse.Core.Registry.PyPI.Streaming (PyPIRead (..))
 import Ecluse.Core.Registry.PyPI.StreamingProjection (collectField, emptyProjection, keepsFile)
-import Ecluse.Core.Security (Limits (maxArtifactCount), defaultLimits)
+import Ecluse.Core.Security (Limits (maxVersionCount), defaultLimits)
 import Ecluse.Test.Contract.Catalogue (caseLabel)
 import Ecluse.Test.Contract.Retention (boundedRetention)
 import Ecluse.Test.Package (unscopedPyPI)
@@ -37,8 +37,8 @@ spec = describe "pypiWalk live bytes" $ do
         selectedLevel otherReleases
     it (caseLabel "retention/pypi/full/members" "a full read holds the same bytes however often a kept file repeats a member") $
         boundedRetention allowance (heldFor FullRead defaultLimits repeatedMembers)
-    it (caseLabel "retention/pypi/full/past-limit" "a full read holds the same bytes however many files follow a tripped artifact limit") $
-        boundedRetention allowance (heldFor FullRead defaultLimits{maxArtifactCount = 2} filesPastLimit)
+    it (caseLabel "retention/pypi/full/past-limit" "a full read holds the same bytes however many files follow a tripped file limit") $
+        boundedRetention allowance (heldFor FullRead defaultLimits{maxVersionCount = 2} filesPastLimit)
 
 -- A selected read keeps its one file of the release at both sizes, and holds the same bytes.
 selectedLevel :: (Int -> ByteString) -> IO ()
@@ -58,7 +58,7 @@ thing = unscopedPyPI "thing"
 
 heldFor :: PyPIRead -> Limits -> (Int -> ByteString) -> Int -> IO Integer
 heldFor mode limits body count =
-    heldDuring (pypiWalk 64 mode (collectField limits mode) keepsFile (testTable fileUniqueFields) (emptyProjection thing)) (body count)
+    heldDuring (pypiWalk 64 mode (collectField limits) keepsFile (testTable fileUniqueFields) (emptyProjection thing)) (body count)
 
 -- Files arrays that each hold one file of the release. Only the first claims the key.
 repeatedArrays :: Int -> ByteString

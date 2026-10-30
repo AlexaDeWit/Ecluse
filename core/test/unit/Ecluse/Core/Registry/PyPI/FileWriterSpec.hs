@@ -13,10 +13,10 @@ import Test.Hspec
 import Test.Hspec.Hedgehog (hedgehog, modifyMaxSuccess)
 
 import Ecluse.Core.Package (PackageDetails (pkgArtifacts), PackageInfo (infoVersions), PackageName)
-import Ecluse.Core.Registry.Metadata (MetadataError (MetadataBoundExceeded))
+import Ecluse.Core.Registry.Metadata (MetadataError)
 import Ecluse.Core.Registry.PyPI.Document (SimpleDocument, packedSimpleDocument)
 import Ecluse.Core.Registry.PyPI.Metadata (projectPyPIPacked)
-import Ecluse.Core.Security (LimitError (TooManyArtifacts, TooManyVersions), Limits (maxArtifactCount, maxVersionCount), defaultLimits)
+import Ecluse.Core.Security (Limits (maxVersionCount), defaultLimits)
 import Ecluse.Test.Package (unscopedPyPI)
 import Ecluse.Test.Registry.JsonBytes (genChunks)
 import Ecluse.Test.Registry.JsonStream (byteChunks)
@@ -76,13 +76,13 @@ spec = describe "fileWriter" $ do
                 files <- forAll (Gen.list (Range.constant 1 6) genFile)
                 bounded <- forAll (Gen.frequency [(2, pure False), (1, pure True)])
                 let body = "{\"name\":\"thing\",\"files\":[" <> BS.intercalate "," (map renderFile files) <> "]}"
-                    limits = if bounded then defaultLimits{maxVersionCount = 1, maxArtifactCount = 1} else defaultLimits
+                    limits = if bounded then defaultLimits{maxVersionCount = 1} else defaultLimits
                 chunks <- forAll (genChunks body)
                 let packed = packedRead limits chunks
                 cover 15 "two or more files project" (projectedFiles packed >= 2)
                 cover 30 "a later file lacks a member an earlier file has" (lacksEarlierMember files)
                 cover 20 "a file repeats a member" (any repeatsMember files)
-                cover 5 "a version or artifact bound trips" (isLeft packed)
+                cover 5 "the version bound trips" (isLeft packed)
                 packed === treeRead limits body
 
     it "keeps the first repeated scalar, hash object and digest" $
@@ -109,24 +109,6 @@ spec = describe "fileWriter" $ do
 
     it "keeps canonical collisions, source order and a late reported name" $
         compareRead "{\"files\":[{\"filename\":\"thing-01.0.tar.gz\",\"url\":\"https://files.example/a.tar.gz\",\"upload-time\":\"2026-01-01T00:00:00Z\",\"yanked\":true},{\"filename\":\"Thing-1.0-py3-none-any.whl\",\"url\":\"https://files.example/b.whl\",\"yanked\":false}],\"name\":\"Thing\"}"
-
-    describe "first members in Keep mode after an artifact fault"
-        $ for_
-            [ ("the first filename stays in the existing release", "\"filename\":\"thing-1.0.tar.gz\",\"filename\":\"thing-2.0.tar.gz\"", TooManyArtifacts 2 1)
-            , ("the first filename names a new release", "\"filename\":\"thing-2.0.tar.gz\",\"filename\":\"thing-1.0.tar.gz\"", TooManyVersions 2 1)
-            , ("a later URL cannot repair the first one", "\"filename\":\"thing-2.0.tar.gz\",\"url\":null", TooManyArtifacts 2 1)
-            , ("a later hashes field cannot repair the first one", "\"filename\":\"thing-2.0.tar.gz\",\"hashes\":false,\"hashes\":null", TooManyArtifacts 2 1)
-            , ("a later hashes field cannot invalidate the first one", "\"filename\":\"thing-2.0.tar.gz\",\"hashes\":null,\"hashes\":false", TooManyVersions 2 1)
-            , ("a later digest cannot repair the first one", "\"filename\":\"thing-2.0.tar.gz\",\"hashes\":{\"custom\":null,\"custom\":\"digest\"}", TooManyArtifacts 2 1)
-            , ("a later interpreter field cannot invalidate the first one", "\"filename\":\"thing-2.0.tar.gz\",\"requires-python\":null,\"requires-python\":false", TooManyVersions 2 1)
-            , ("a later provenance field cannot invalidate the first one", "\"filename\":\"thing-2.0.tar.gz\",\"provenance\":null,\"provenance\":7", TooManyVersions 2 1)
-            ]
-        $ \(label, members, fault) -> it label $ do
-            let bounds = defaultLimits{maxVersionCount = 1, maxArtifactCount = 1}
-                name = unscopedPyPI "thing"
-                body = "{\"name\":\"thing\",\"files\":[{\"filename\":\"thing-1.0.tar.gz\",\"url\":\"https://files.example/thing-1.0.tar.gz\"},{\"filename\":\"thing-1.0-py3-none-any.whl\",\"url\":\"https://files.example/thing-1.0-py3-none-any.whl\"},{" <> members <> ",\"url\":\"https://files.example/thing-2.0.tar.gz\"}]}"
-            void (projectPyPIPackedChunks bounds name [body] >>= projectPyPIPacked bounds name)
-                `shouldBe` Left (MetadataBoundExceeded fault)
 
 fields :: [ByteString]
 fields = ["core-metadata", "hashes", "requires-python", "size", "upload-time", "yanked", "provenance"]
