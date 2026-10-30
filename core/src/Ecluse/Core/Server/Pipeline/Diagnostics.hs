@@ -159,7 +159,7 @@ warnNameMismatch subject origin reported =
     warnUpstream
         subject
         (sl "origin" (authorityLabel origin) <> sl "upstreamName" reported)
-        "dropped an upstream contribution: its packument self-reported a name for a different package"
+        "refused an upstream metadata document: its packument self-reported a name for a different package"
 
 warnUnformable :: (KatipContext m) => Subject -> Text -> UrlFormationError -> m ()
 warnUnformable subject origin urlErr =
