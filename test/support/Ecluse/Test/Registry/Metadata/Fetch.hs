@@ -31,10 +31,10 @@ import Ecluse.Core.Registry.Metadata.Fetch.Preparation (PrepareRead, prepareRead
 import Ecluse.Core.Registry.Metadata.Fetch.Types (Body (Body), EcosystemRead, ReadTerms (..))
 import Ecluse.Core.Registry.Origin (OriginClient (ocChargeFullReadWorkspace), originClient)
 import Ecluse.Core.Security (BodyLimit, LimitError, Limits (maxMetadataBytes), ProgressFloor, boundedRead, defaultLimits)
-import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Core.Version (Version)
 import Ecluse.Test.Corpus (CaptureUpstream (upstreamOrigin))
 import Ecluse.Test.Deadline (withExchangeClient)
+import Ecluse.Test.Package (unsafeRegistryUrl)
 import Ecluse.Test.Port (passthroughTracingPort)
 import Ecluse.Test.Registry.JsonStream (heldChunks, sliceChunks)
 
@@ -70,7 +70,7 @@ heldWorkspacePeak :: PrepareRead -> Text -> PackageName -> [ByteString] -> IO (E
 heldWorkspacePeak factory base name chunks = do
     peak <- newIORef 0
     withExchangeClient (newManager defaultManagerSettings) $ \client -> do
-        let origin = (originClient defaultLimits client (loopbackRegistryUrl base) Nothing){ocChargeFullReadWorkspace = modifyIORef' peak . max}
+        let origin = (originClient defaultLimits client (unsafeRegistryUrl base) Nothing){ocChargeFullReadWorkspace = modifyIORef' peak . max}
         nativeRead <- prepareRead factory origin >>= either (fail . show) pure
         result <- heldManifest nativeRead defaultLimits base name chunks
         (result,) <$> readIORef peak
