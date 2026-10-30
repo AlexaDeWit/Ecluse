@@ -623,7 +623,7 @@ The controls serve different purposes:
 | Control | What it decides |
 |---|---|
 | Metadata ingest ceiling | The maximum decompressed source body accepted from one metadata response |
-| Structural limits | Protocol-specific version and file counts, and retained structure depth |
+| Structural limits | Source entries per package, retained structure depth, and fixed decoder ceilings |
 | CPU admission | How much metadata work runs concurrently |
 | Memory admission | How much live data the metadata requests in flight hold at once |
 | Cache budget | How much eligible metadata the selected provider retains locally |
@@ -653,6 +653,12 @@ it uses it, against one budget:
 | A gzip listing response, hit or miss | 512 KiB for the deflater, then 36 KiB for each 32 KiB output buffer |
 | A request that joins another request's public fetch or render | Nothing for that fetch or render |
 | A first-party publication, once its upload is read | Its archive inspection for Cargo and RubyGems, and for Cargo a full metadata read of the target registry's `config.json` |
+
+An npm or PyPI full read also pays at least 256 bytes for each entry it retains: each npm version,
+timestamp and dist-tag, and each PyPI file and dropped version entry. After each 32 KiB it parses,
+the read raises its charge to that floor, less what its source bytes already paid. A document of
+many tiny entries pays for them as it reads. Realistic listings carry enough bytes per entry that
+the floor adds nothing.
 
 A listing's output basis is the larger of two estimates. One starts from the largest document the
 listing merges. The other starts from the base document, whose top-level fields the response
@@ -793,7 +799,7 @@ the document, so removing a document pin alone does not restore the automatic va
 |---|---|---|
 | `limits.maxResponseBytes: 12582912` | The old 12 MiB pin still refuses larger metadata after the upgrade | Remove the pin to adopt the shipped ingest ceiling, or retain it as an intentional policy |
 | A larger response pin used as a workaround | The declared ceiling still wins, including above the shipped default | Compare the effective ceiling and warning with your source sizes and process headroom |
-| Explicit `limits.maxVersionCount` or `limits.maxArtifactCount` pins | The existing count policy still applies | Remove old pins to adopt the larger defaults, or keep the intended restriction |
+| An explicit `limits.maxVersionCount` pin | The pinned count still applies | Remove an old pin to adopt the larger default, or keep the intended restriction |
 | An explicit `runtime.serveMaxInFlight` pin | The declared positive concurrency still wins, and it also sizes the memory gate's waiting room | Review it against the pod's cores and concurrent workload |
 | No explicit response or CPU pin | The new automatic controls apply | Compare boot output with `check-config` under the deployment's actual resources |
 

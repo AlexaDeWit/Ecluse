@@ -218,7 +218,7 @@ HEAD authorises and checks availability without reading or hashing an archive bo
 
 The public `/versions` directory adds a global transfer and refresh cost before per-gem acquisition.
 The public and private directories each accept at most 2,000,000 distinct gem names, and a directory past that ceiling fails its read.
-The ceiling is fixed in Écluse and independent of `limits.maxVersionCount` and `limits.maxArtifactCount`, which bound per-gem `/info` reads.
+The ceiling is fixed in Écluse and independent of `limits.maxVersionCount`, which bounds per-gem `/info` reads.
 A ceiling breach logs under the `version-count` bound with a cap of `2000000`.
 Private discovery uses current caller credentials and remains outside public shared retention.
 Private directory failure remains a failure rather than a public-only or stale conditional response.
