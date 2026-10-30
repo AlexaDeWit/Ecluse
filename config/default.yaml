@@ -487,8 +487,10 @@ mounts:
     # Both defaults refuse at admission, at precedence 300, and keep stored copies.
     # deny-scripts refuses npm install scripts. deny-external-dependencies refuses a version
     # whose dependencies, optionalDependencies or peerDependencies name a git source
-    # (git+https:, git:, github:, user/repo and the like) or a remote tarball URL, which a
-    # client would fetch from outside Écluse. It reads the specs the packument already holds.
+    # (git+https:, git:, github:, user/repo and the like), a remote tarball URL, or any other
+    # scheme such as jsr:, which a client would fetch from outside Écluse. Registry ranges and
+    # tags, npm: aliases, file:, link:, workspace: and local paths pass. It reads the specs the
+    # packument already holds.
     rules:
       deny-scripts:
         type: DenyInstallTimeExecution

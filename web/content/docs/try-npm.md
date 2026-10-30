@@ -45,7 +45,7 @@ If the client reports no matching version or a refusal, use [Investigate a faile
 
 This setup uses a seven-day minimum age. It has no advisory source, so known-malicious advisory checks and early security-fix admission are inactive.
 
-The npm defaults also deny public versions that run install scripts, and versions whose dependencies name a git source or a remote tarball URL. An older release can still be denied for these reasons.
+The npm defaults also deny public versions that run install scripts, and versions whose dependencies name a git source, a remote tarball URL or an unsupported scheme such as `jsr:`. An older release can still be denied for these reasons.
 
 For a repeatable policy check, add an exact package deny to the config, restart, and repeat the request with fresh client state. The [verification guide](@/docs/verify.md#policy) shows that check.
 

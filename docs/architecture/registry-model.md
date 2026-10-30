@@ -100,11 +100,12 @@ Content-Type, including its boundary. It does not rebuild the client's distribut
   `400` for the same reason. An unreadable body, or a missing or repeated `:action`, is also a
   `400`. The check reads the parsed document, never the attachment data.
 - **No dependency from outside Écluse.** An npm version whose installable dependencies name a git
-  source or a remote tarball URL is a `400` before any relay, because every consumer's client would
-  fetch that dependency directly, past the quarantine, the advisories and the mirror. The publish
-  refusal and the public-version rule share one classifier, so a spec a first-party release cannot
-  carry is also one a public version cannot carry. Cargo refuses a dependency on another registry
-  for the same reason.
+  source, a remote tarball URL, or any scheme Écluse does not know to resolve through the registry
+  or locally is a `400` before any relay, because a consumer's client would fetch that dependency
+  directly, past the quarantine, the advisories and the mirror. An unknown scheme fails closed, so
+  one a client adds later is refused too. The publish refusal and the public-version rule share one
+  classifier, so a spec a first-party release cannot carry is also one a public version cannot
+  carry. Cargo refuses a dependency on another registry for the same reason.
 
 - **Credential.** See [Credential flow and authority](#credential-flow-and-authority).
 - **No read-back role.** Write-only from the proxy's view. Published packages read back through

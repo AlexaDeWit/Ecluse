@@ -17,7 +17,7 @@ reference = "/docs/configuration/#rule-policy"
 | --- | --- |
 | Public version is at least seven days old | The age rule can admit it if no earlier rule decides otherwise. |
 | npm version has install-time execution | The npm admission rule denies it. This default does not remove stored copies. |
-| npm version has a dependency on a git source or a remote tarball URL | The npm admission rule denies it. This default does not remove stored copies. |
+| npm version has a dependency on a git source, a remote tarball URL or an unsupported scheme such as `jsr:` | The npm admission rule denies it. This default does not remove stored copies. |
 | No advisory source configured | The default known-malicious and remediation rules stay inactive. |
 | Advisory source configured | Known-malicious denial and qualifying remediation admission become active. |
 | No rule allows the version | Public admission is denied. |
