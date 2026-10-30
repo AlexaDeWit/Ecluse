@@ -75,7 +75,7 @@ import Ecluse.Core.Fault (
     transportFault,
     transportRetryable,
  )
-import Ecluse.Core.Package (PackageName, mkPackageName, mkScope, pkgNamespace, unScope, unscopedName)
+import Ecluse.Core.Package (PackageName, WireNameRefusal (..), mkPackageName, mkScope, pkgNamespace, unScope, unnamespacedWireName, unscopedName)
 import Ecluse.Core.Registry (ParseError)
 import Ecluse.Core.Registry.Cargo.Project qualified as Cargo
 import Ecluse.Core.Registry.Maintenance (
@@ -228,9 +228,11 @@ nativeGrammar = \case
     PyPI -> Nothing
 
 nativePackageName :: Ecosystem -> (Text -> Either ParseError PackageName) -> Maybe Text -> Text -> Either StoreFault PackageName
-nativePackageName eco parse namespace raw = do
-    unless (maybe True T.null namespace) (Left (protocolFault (show eco <> " packages cannot have a namespace")))
-    first (const (protocolFault ("CodeArtifact returned an invalid " <> show eco <> " package name"))) (parse raw)
+nativePackageName eco parse namespace raw = first refusal (unnamespacedWireName parse namespace raw)
+  where
+    refusal = \case
+        WireNamespaced -> protocolFault (show eco <> " packages cannot have a namespace")
+        WireNameUnusable _ -> protocolFault ("CodeArtifact returned an invalid " <> show eco <> " package name")
 
 -- | List one bucket page. The prefix filters the package component, never its namespace.
 listPackagesRequest :: CodeArtifactStore -> NamePrefix -> Maybe Text -> CA.ListPackages
