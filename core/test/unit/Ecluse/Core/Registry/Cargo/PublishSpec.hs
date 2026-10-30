@@ -37,7 +37,7 @@ import Ecluse.Test.Package (hexSha256Of)
 import Ecluse.Test.Port (passthroughTracingPort)
 import Ecluse.Test.Registry.Cargo.Fixtures (CargoRelease (releaseArchive, releaseChecksum), cargoCrateArchive, cargoIndexRecord, cargoUpload, cargoUploadMetadata, cargoUploadWithMetadata)
 import Ecluse.Test.Registry.Cargo.Metadata (cargoTestName)
-import Ecluse.Test.Registry.Cargo.Publish (cargoPublicationFixture, cargoResolverAgreements, cargoResolverArchive, cargoResolverContradictions, cargoResolverDependencyField, cargoResolverMetadata, cargoSourceVersion)
+import Ecluse.Test.Registry.Cargo.Publish (cargoForeignRegistryArchive, cargoForeignRegistryMetadata, cargoForeignRegistryRefusal, cargoPublicationFixture, cargoResolverAgreements, cargoResolverArchive, cargoResolverContradictions, cargoResolverDependencyField, cargoResolverMetadata, cargoSourceVersion)
 import Ecluse.Test.Registry.Cargo.Reference (UploadFrame (..), referenceUpload)
 import Ecluse.Test.Registry.Publish (publishOnlyFile)
 import Ecluse.Test.Stub (Captured (..), allCaptured, headerValue, stubBaseUrl, withRoutedStub)
@@ -257,6 +257,11 @@ spec = do
                     _ -> False
                 -- The metadata reservation is the only charge, so the archive was never inspected.
                 length <$> readIORef paid `shouldReturn` 1
+        it "refuses a dependency on another registry, naming it and the fix" $ do
+            archive <- cargoForeignRegistryArchive
+            bytes <- expectRight (cargoUploadWithMetadata cargoForeignRegistryMetadata archive)
+            uploadClaims defaultLimits (const (pure ())) "https://proxy.test/cargo/private" (PublishRequestBody bytes Nothing NoPublishExtras)
+                `shouldReturn` Left (PublishMalformed (ParseError cargoForeignRegistryRefusal))
         it "rejects malformed members before either claims or relay can contact the destination" $
             withRoutedStub (targetReply "/registry") $ \stub -> do
                 release <- cargoPublicationFixture
