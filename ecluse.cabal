@@ -1174,6 +1174,7 @@ test-suite ecluse-core-unit
   hs-source-dirs:     core/test/unit test/smoke test/residency bench
   other-modules:
     SpecHook
+    Ecluse.Core.Registry.CargoSmokeSpec
     Ecluse.Core.Registry.NpmSmokeSpec
     Ecluse.Core.Registry.PyPISmokeSpec
     Ecluse.Core.Registry.RubyGemsSmokeSpec
