@@ -234,6 +234,8 @@ Typical `warn` lines record:
 - A mirror job left to redeliver.
 - A store call Écluse is retrying.
 - A malformed advisory entry Écluse dropped, or an advisory date it had to ignore.
+- A malformed metadata entry or RubyGems directory row Écluse dropped while serving the rest. The
+  line counts the drops by kind in `droppedByKind`, for example `version-listing` for a directory row.
 - An EPSS feed that failed for an ecosystem with no active rule requiring EPSS enrichment. The line starts
   `EPSS enrichment unavailable`, and Pilot publishes that ecosystem's artifact without scores.
   An EPSS outage repeats it on every compile.
@@ -463,8 +465,9 @@ Include every proxy and mirror service for the deployment total.
 New deployments, telemetry export gaps, and retention shorter than 30 days leave an incomplete total.
 This count excludes registry traffic from other applications.
 
-Metadata reads record HTTP refusals on `ecluse.upstream.fetch.errors` with cause
-`upstream_status`, including `404`. A malformed successful response records `decode` instead.
+Metadata reads, RubyGems `/versions` directory reads included, record HTTP refusals on
+`ecluse.upstream.fetch.errors` with cause `upstream_status`, including `404`. A malformed
+successful response records `decode` instead, and a response past its bound records `other`.
 Explicit `401` and `403` refusals retain `other` and their existing warning log.
 Metadata `408`, `429`, and server errors log at `ERROR`. A genuine `404` absence logs at `DEBUG`.
 Other non-success statuses log at `WARN`. These logs carry the status and upstream authority,
