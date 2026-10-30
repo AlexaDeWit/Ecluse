@@ -20,7 +20,6 @@ import Ecluse.Core.Registry.RubyGems.Document (GemRow (..))
 import Ecluse.Core.Registry.RubyGems.Project (projectName)
 import Ecluse.Core.Registry.RubyGems.Projection (projectGemRows)
 import Ecluse.Core.Registry.RubyGems.Wire (decodeInfoRow)
-import Ecluse.Core.Security (defaultLimits)
 import Ecluse.Test.Support (expectRight)
 
 -- | Keep exact source URLs, physical positions and the blocked rule's unknown signal.
@@ -29,7 +28,7 @@ spec = describe "projectGemRows" $ do
     it "binds the artifact path beneath the selected source without inventing installation evidence" $ do
         name <- expectRight (projectName "Native_Gem")
         row <- expectRight (decodeInfoRow name (RecordEntry 4) "1.0-java |checksum:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
-        info <- expectRight (projectGemRows defaultLimits name "https://private.test/ruby" [row])
+        info <- expectRight (projectGemRows name "https://private.test/ruby" [row])
         details <- expectRight (maybeToRight ("version missing" :: Text) (Map.lookup "1.0" (infoVersions info)))
         pkgInstallCode details `shouldBe` CodeExecUnknown
         pkgPublishedAt details `shouldBe` Nothing
@@ -39,7 +38,7 @@ spec = describe "projectGemRows" $ do
         name <- expectRight (projectName "native-gem")
         rows <- forM [(2, "1.0-java"), (3, "2.0"), (4, "1.0"), (5, "1.0-x86_64-linux-musl")] $ \(position, coordinate) ->
             expectRight (decodeInfoRow name (RecordEntry position) (coordinate <> " |checksum:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"))
-        info <- expectRight (projectGemRows defaultLimits name "https://rubygems.org" rows)
+        info <- expectRight (projectGemRows name "https://rubygems.org" rows)
         details <- expectRight (maybeToRight ("version missing" :: Text) (Map.lookup "1.0" (infoVersions info)))
         map artEntryKey (toList (pkgArtifacts details)) `shouldBe` [RecordEntry 2, RecordEntry 4, RecordEntry 5]
         map artFilename (toList (pkgArtifacts details)) `shouldBe` ["native-gem-1.0-java.gem", "native-gem-1.0.gem", "native-gem-1.0-x86_64-linux-musl.gem"]
@@ -47,7 +46,7 @@ spec = describe "projectGemRows" $ do
         name <- expectRight (projectName "rack")
         row <- expectRight (decodeInfoRow name (RecordEntry 1) "1.0 |checksum:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
         let deferred = row{grPublishedAt = Just (impureThrow DeferredTimestamp)}
-        evaluate (projectGemRows defaultLimits name "https://rubygems.org" [deferred]) `shouldThrow` (== DeferredTimestamp)
+        evaluate (projectGemRows name "https://rubygems.org" [deferred]) `shouldThrow` (== DeferredTimestamp)
     it "releases native source rows while only unforced policy facts remain held" $ do
         nonce <- hashUnique <$> newUnique
         bracket (holdProjection nonce) (freeStablePtr . fst) $ \(root, inputs) -> do
@@ -59,7 +58,7 @@ spec = describe "projectGemRows" $ do
         name <- expectRight (projectName "rack")
         other <- expectRight (projectName "other")
         row <- expectRight (decodeInfoRow other (RecordEntry 1) "1.0 |checksum:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
-        projectGemRows defaultLimits name "https://rubygems.org" [row] `shouldSatisfy` isLeft
+        projectGemRows name "https://rubygems.org" [row] `shouldSatisfy` isLeft
 
 data DeferredTimestamp = DeferredTimestamp
     deriving stock (Eq, Show)
@@ -76,6 +75,6 @@ holdProjection nonce = do
     inputs <- forM rows $ \row -> do
         fields <- evaluate (grExtras row)
         mkWeakPtr fields Nothing
-    info <- expectRight (projectGemRows defaultLimits name "https://rubygems.org" rows) >>= evaluate
+    info <- expectRight (projectGemRows name "https://rubygems.org" rows) >>= evaluate
     root <- newStablePtr info
     pure (root, inputs)

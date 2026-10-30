@@ -258,7 +258,7 @@ rubyGemsRecord = do
     rows <- for (zip [0 ..] ["9.0.0", "10.0.0"]) $ \(position, version) ->
         expectRight (decodeInfoRow name (RecordEntry position) (encodeUtf8 (version <> " |checksum:" <> hexSha256Of (gemArchive version) <> ",ruby:>= 3.2,rubygems:>= 3.4,created_at:2020-01-0" <> show (position + 1 :: Int) <> "T00:00:00Z")))
     let source = GemDocument name "---\n" rows
-    projected <- expectRight (projectGemRows defaultLimits name "https://public.test" rows)
+    projected <- expectRight (projectGemRows name "https://public.test" rows)
     record <- foldM (retainGemVersion source) Nothing (Map.elems (infoVersions projected))
     maybe (fail "no RubyGems versions retained") (\complete -> pure (complete, rows)) record
   where

@@ -68,9 +68,8 @@ import Ecluse.Core.Registry.ServedDocument (RenderRefused, rebaseArtifactUrl)
 import Ecluse.Core.Registry.WireSupport (checkNameAgreement, parsePublishTime)
 import Ecluse.Core.Security (
     BodyLimit (MetadataBodyLimit),
-    LimitError (BodyTooLarge, TooDeeplyNested, TooManyArtifacts, TooManyVersions),
-    Limits (maxArtifactCount, maxMetadataBytes, maxNestingDepth, maxVersionCount),
-    checkArtifactCount,
+    LimitError (BodyTooLarge, TooDeeplyNested, TooManyVersions),
+    Limits (maxMetadataBytes, maxNestingDepth, maxVersionCount),
     checkVersionCountOf,
     defaultLimits,
  )
@@ -248,18 +247,14 @@ integratedFactsSpec = describe "production direct facts against the frozen base"
         (withoutAuthor, _) <- expectRight (directFullRead defaultLimits (unscopedNpm "thing") (bodyLimit [absent]) [absent])
         map (fieldAt "author" . invalidValue) (infoInvalidEntries withoutAuthor) `shouldBe` [Nothing]
 
-    it "counts duplicate keys before name validation and counts only retained artifacts" $ do
+    it "counts duplicate keys before name validation" $ do
         let body = "{\"name\":\"different\",\"versions\":{\"alias\":" <> policyRelease [] <> ",\"alias\":null}}"
             name = unscopedNpm "thing"
             readWith limits bytes = directFullRead limits name (bodyLimit [bytes]) [bytes]
         assertIntegrated defaultLimits{maxVersionCount = 1} body
         readWith defaultLimits{maxVersionCount = 1} body `shouldBe` Left (MetadataBoundExceeded (TooManyVersions 2 1))
-        assertIntegrated defaultLimits{maxArtifactCount = 0} body
-        readWith defaultLimits{maxArtifactCount = 0} body `shouldBe` Left (MetadataNameMismatch "different")
-        let mixed = "{\"name\":\"thing\",\"versions\":{\"bad\":null,\"alias\":" <> policyRelease [] <> "}}"
-        assertIntegrated defaultLimits{maxArtifactCount = 1} mixed
-        readWith defaultLimits{maxArtifactCount = 0} mixed `shouldBe` Left (MetadataBoundExceeded (TooManyArtifacts 1 0))
-        readWith defaultLimits{maxArtifactCount = 1} mixed `shouldSatisfy` isRight
+        assertIntegrated defaultLimits{maxVersionCount = 2} body
+        readWith defaultLimits{maxVersionCount = 2} body `shouldBe` Left (MetadataNameMismatch "different")
 
     it "preserves first versions, containers, timestamps, tags and malformed first fields" $
         for_ duplicateBodies (assertIntegrated defaultLimits)
@@ -312,7 +307,7 @@ baseFullRead :: Limits -> PackageName -> BodyLimit -> [ByteString] -> Either Met
 baseFullRead limits name bound chunks = do
     streamed <- first MetadataBoundExceeded (walkWritingChunks bound setup chunks)
     Walked table acc <- first (streamError limits) (streamValue streamed)
-    baseFinishPacked limits name pointer (docTable (tableTexts table)) acc
+    baseFinishPacked name pointer (docTable (tableTexts table)) acc
   where
     pointer = "See " <> fromRight (captureRegistry <> "/" <> renderPackageName name) (packageUrl captureRegistry name)
     setup :: ST st (Cursor -> ST st (Steps (ST st) (Walked BasePackedRead)))
@@ -361,11 +356,6 @@ projectNpmManifestSpec = describe "projectNpmManifest" $ do
                 Map.keys (infoVersions info) `shouldBe` ["3.0.1"]
                 raw `shouldSatisfy` isObject
             other -> expectationFailure ("expected a projection, got: " <> show other)
-
-    it "counts only the releases that project toward the artifact ceiling" $ do
-        let unprojected = object ["name" .= ("is-odd" :: Text), "version" .= ("2.0.0" :: Text)]
-            body = BL.toStrict (encode (object ["name" .= ("is-odd" :: Text), "versions" .= object ["1.0.0" .= versionObject "is-odd" "1.0.0", "2.0.0" .= unprojected]]))
-        projectNpmManifest (defaultLimits{maxArtifactCount = 1}) (unscopedNpm "is-odd") body `shouldSatisfy` isRight
 
     it "refuses an empty signature object beyond the retained nesting budget" $ do
         let version = withKeys [("dist", object ["tarball" .= ("https://example.test/is-odd-1.0.0.tgz" :: Text), "signatures" .= [object []]])] (versionObject "is-odd" "1.0.0")
@@ -725,15 +715,13 @@ baseProjectRelease name key projected = case projectVersionEntryResult name (mkV
 baseInvalidRelease :: Text -> Value -> Text -> BaseTypedRelease
 baseInvalidRelease key whole reason = Left $! mkInvalidEntry InvalidVersionManifest key whole reason
 data BaseNpmParts = BaseNpmParts Value (Map Text Value)
-baseFinishParts :: Limits -> PackageName -> BaseNpmProjection -> Either MetadataError (PackageInfo, BaseNpmParts)
-baseFinishParts limits requested acc = do
+baseFinishParts :: PackageName -> BaseNpmProjection -> Either MetadataError (PackageInfo, BaseNpmParts)
+baseFinishParts requested acc = do
     when (baseProjectedInvalidContainer acc) (Left MetadataUndecodable)
     reported <- validateReportedName projectName (baseProjectedName acc)
     _ <- projectionResult (checkNameAgreement requested reported ())
-    first MetadataBoundExceeded (checkArtifactCount limits artifacts)
     pure (package, BaseNpmParts (fromMaybe Null (baseProjectedName acc)) (baseProjectedBookkeeping acc))
   where
-    artifacts = Map.foldl' (\seen details -> seen + length (pkgArtifacts details)) 0 (infoVersions package)
     versions = Map.mapMaybe rightToMaybe (baseProjectedVersions acc)
     times = Map.mapMaybe rightToMaybe (baseProjectedTimes acc)
     tags = Map.mapMaybe rightToMaybe (baseProjectedTags acc)
@@ -780,9 +768,9 @@ basePackedStep writer limits name (BasePackedRead acc heldReleases) field next =
 baseRebases :: Value -> Bool
 baseRebases release = isJust (tarballUrl release >>= rebaseArtifactUrl Just)
 baseTypedMembers :: Pick
-baseTypedMembers = Only [(field, if field == "dist" then Only [(member, Whole) | member <- distFields] else Whole) | field <- versionListFields <> map installableFieldName Universe.universe]
-baseFinishPacked :: Limits -> PackageName -> Text -> DocTable -> BasePackedRead -> Either MetadataError (PackageInfo, PackedPackument)
-baseFinishPacked limits requested authorPointer table (BasePackedRead acc heldReleases) = second document <$> baseFinishParts limits requested acc
+baseTypedMembers = Only [(field, if field == "dist" then Only [(member, Whole) | member <- distFields] else Whole) | field <- versionListFields <> map installableFieldName [minBound .. maxBound]]
+baseFinishPacked :: PackageName -> Text -> DocTable -> BasePackedRead -> Either MetadataError (PackageInfo, PackedPackument)
+baseFinishPacked requested authorPointer table (BasePackedRead acc heldReleases) = second document <$> baseFinishParts requested acc
   where
     document (BaseNpmParts name time) =
         PackedPackument
