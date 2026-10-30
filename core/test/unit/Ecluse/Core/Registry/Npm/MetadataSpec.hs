@@ -43,6 +43,8 @@ import Ecluse.Core.Package (
  )
 import Ecluse.Core.Package.Entry (EntryKey (ObjectEntry))
 import Ecluse.Core.Package.Merge (MergePlan (mpSurvivors), Provenance (GatedSource, TrustedSource), mergePackuments)
+import Ecluse.Core.Registry.Adapter.Capability (AdapterMetadata (metadataRead))
+import Ecluse.Core.Registry.Adapter.Types (RegistryAdapter (adapterMetadata))
 import Ecluse.Core.Registry.CachedDocument (CachedDoc, npmCached, npmPacked)
 import Ecluse.Core.Registry.Json.Intern (InternTable, Interned (..), decodedName, internName, tableTexts)
 import Ecluse.Core.Registry.Json.Packed (DocTable, Packed, docTable, packedEncodedLength, withoutHole)
@@ -56,15 +58,19 @@ import Ecluse.Core.Registry.Metadata (
  )
 import Ecluse.Core.Registry.Metadata.EntryFloor (entryFloorBytes)
 import Ecluse.Core.Registry.Metadata.Projection (projectionResult, streamError, validateReportedName)
+import Ecluse.Core.Registry.Npm.Adapter (npmAdapter)
 import Ecluse.Core.Registry.Npm.DependencySource (installableFieldName)
 import Ecluse.Core.Registry.Npm.Document (PackedPackument (..), tarballHole, tarballUrl)
 import Ecluse.Core.Registry.Npm.Filter (assembleMergedDocument, serialiseMergedDocument)
-import Ecluse.Core.Registry.Npm.Metadata (npmChargeFactors, npmPackumentWalk, prepareNpmRead, projectNpmPacked, projectNpmStream, selectNpmVersionDoc)
+import Ecluse.Core.Registry.Npm.Metadata (npmChargeFactors, npmPackumentWalk, projectNpmPacked, projectNpmStream, selectNpmVersionDoc)
 import Ecluse.Core.Registry.Npm.Project (projectName, projectVersionEntryResult)
+import Ecluse.Core.Registry.Npm.Publish (npmPublishCodec)
 import Ecluse.Core.Registry.Npm.Reader (PackumentRead (WholePackument), npmWalk, releaseUniqueFields)
 import Ecluse.Core.Registry.Npm.Request (packageUrl)
 import Ecluse.Core.Registry.Npm.Streaming (NpmContainer (..), NpmFieldOf (..), versionListFields)
 import Ecluse.Core.Registry.Npm.Wire (distFields)
+import Ecluse.Core.Registry.Publish (PublishCodec (pcTargetRead))
+import Ecluse.Core.Registry.Request (nativePresentation)
 import Ecluse.Core.Registry.ServedDocument (RenderRefused, rebaseArtifactUrl)
 import Ecluse.Core.Registry.WireSupport (checkNameAgreement, parsePublishTime)
 import Ecluse.Core.Security (
@@ -104,22 +110,31 @@ spec = do
     entryFloorSpec
 
 -- A full read's timestamps and tags pay the entry floor that their per-byte charge leaves uncovered.
+-- Each read goes through the wiring that serve and publication use.
 entryFloorSpec :: Spec
 entryFloorSpec = describe "the full-read entry floor" $ do
     it "charges the workspace for dense timestamps and tags beyond their per-byte charge" $ do
-        let entries = 300
-            members render = BS.intercalate "," [render (show at :: ByteString) | at <- [1 .. entries :: Int]]
-            body = "{\"name\":\"thing\",\"time\":{" <> members (\at -> "\"v" <> at <> "\":\"2020-01-01T00:00:00.000Z\"") <> "},\"dist-tags\":{" <> members (\at -> "\"t" <> at <> "\":\"1.0." <> at <> "\"") <> "}}"
-        (result, peak) <- heldWorkspacePeak prepareNpmRead captureRegistry (unscopedNpm "thing") [body]
+        (result, peak) <- heldWorkspacePeak adapterRead captureRegistry (unscopedNpm "thing") [denseBody]
         void result `shouldSatisfy` isRight
-        peak `shouldBe` entryFloorBytes * 2 * entries - scaleCharge (cfFullReadPermille npmChargeFactors) (BS.length body)
+        peak `shouldBe` denseShortfall
 
     it "charges no workspace when releases carry more source bytes than their entries' floor" $ do
         let release at = "\"1.0." <> at <> "\":" <> policyRelease [("readme", String (T.replicate 512 "x"))]
             body = "{\"name\":\"thing\",\"versions\":{" <> BS.intercalate "," [release (show at) | at <- [1 .. 20 :: Int]] <> "}}"
-        (result, peak) <- heldWorkspacePeak prepareNpmRead captureRegistry (unscopedNpm "thing") [body]
+        (result, peak) <- heldWorkspacePeak adapterRead captureRegistry (unscopedNpm "thing") [body]
         void result `shouldSatisfy` isRight
         peak `shouldBe` 0
+
+    it "charges a publication target's full read the same floor" $ do
+        (result, peak) <- heldWorkspacePeak (pcTargetRead (npmPublishCodec nativePresentation)) captureRegistry (unscopedNpm "thing") [denseBody]
+        void result `shouldSatisfy` isRight
+        peak `shouldBe` denseShortfall
+  where
+    adapterRead = metadataRead (adapterMetadata npmAdapter)
+    entries = 300
+    members render = BS.intercalate "," [render (show at :: ByteString) | at <- [1 .. entries :: Int]]
+    denseBody = "{\"name\":\"thing\",\"time\":{" <> members (\at -> "\"v" <> at <> "\":\"2020-01-01T00:00:00.000Z\"") <> "},\"dist-tags\":{" <> members (\at -> "\"t" <> at <> "\":\"1.0." <> at <> "\"") <> "}}"
+    denseShortfall = entryFloorBytes * 2 * entries - scaleCharge (cfFullReadPermille npmChargeFactors) (BS.length denseBody)
 
 packedReadSpec :: Spec
 packedReadSpec = describe "packed full read" $ do
