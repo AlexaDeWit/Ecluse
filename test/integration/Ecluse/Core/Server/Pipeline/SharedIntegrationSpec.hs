@@ -187,21 +187,23 @@ boundsSpec = describe "response bounds through the request path (security.md inv
             status resp `shouldBe` 503
             servedVersions resp `shouldBe` []
 
-    it (caseLabel "integration/pipeline-faults/native-008" "503s when the only (public) packument is oversized and the private upstream is down") $ do
-        privateUp <- failingUpstream
+    it (caseLabel "integration/pipeline-faults/native-008" "503s when the only (public) packument is oversized and the private upstream has no such package") $ do
+        privateUp <- absentUpstream
         publicUp <- servingUpstream (oversizedPackument "1.0.0")
         queue <- newTestMemoryQueue
         withProxyEnvQueueDeps queue privateUp publicUp Nothing (withLimits tightLimits) $ \app _env _port -> do
             resp <- getThing Nothing app
             status resp `shouldBe` 503
+            servedVersions resp `shouldBe` []
 
     it (caseLabel "integration/pipeline-faults/native-009" "refuses a version-flood public packument fail-closed (nothing served from it)") $ do
-        privateUp <- failingUpstream
+        privateUp <- absentUpstream
         publicUp <- servingUpstream versionFloodPackument
         queue <- newTestMemoryQueue
         withProxyEnvQueueDeps queue privateUp publicUp Nothing (withLimits tightLimits) $ \app _env _port -> do
             resp <- getThing Nothing app
             status resp `shouldBe` 503
+            servedVersions resp `shouldBe` []
 
     it (caseLabel "integration/pipeline-faults/native-010" "refuses with 503 when a version-flood document arrives on the private leg") $ do
         privateUp <- servingUpstream versionFloodPackument
@@ -212,13 +214,14 @@ boundsSpec = describe "response bounds through the request path (security.md inv
             status resp `shouldBe` 503
             servedVersions resp `shouldBe` []
 
-    it (caseLabel "integration/pipeline-faults/native-011" "refuses a deeply-nested public document fail-closed (503 with the private upstream down)") $ do
-        privateUp <- failingUpstream
+    it (caseLabel "integration/pipeline-faults/native-011" "refuses a deeply-nested public document fail-closed (503 with no private package)") $ do
+        privateUp <- absentUpstream
         publicUp <- servingUpstream deeplyNestedBody
         queue <- newTestMemoryQueue
         withProxyEnvQueueDeps queue privateUp publicUp Nothing (withLimits tightLimits) $ \app _env _port -> do
             resp <- getThing Nothing app
             status resp `shouldBe` 503
+            servedVersions resp `shouldBe` []
 
     it (caseLabel "integration/pipeline-faults/native-012" "refuses with 503 when a deeply-nested document arrives on the private leg") $ do
         privateUp <- servingUpstream deeplyNestedBody
