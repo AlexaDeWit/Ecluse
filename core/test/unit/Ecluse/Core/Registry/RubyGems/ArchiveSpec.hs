@@ -29,7 +29,7 @@ import Ecluse.Core.Registry.RubyGems.CompactSpec (GemSpecification (specificatio
 import Ecluse.Core.Registry.RubyGems.Project (mkCoordinate, projectName, unGemPlatform)
 import Ecluse.Core.Security.Limits (Limits (..), defaultLimits)
 import Ecluse.Core.Version (renderVersion)
-import Ecluse.Test.Registry.Archive (tarBytes)
+import Ecluse.Test.Registry.Archive (tarBytes, tarEntries)
 import Ecluse.Test.Registry.RubyGems.Reference (runRubyReference)
 import Ecluse.Test.Support (expectRight)
 
@@ -126,7 +126,7 @@ spec = describe "native gem validation" $ do
         members <- nativeMembers bytes
         length members `shouldBe` 3
         dataGzip <- maybe (fail "native fixture has no data member") pure (lookup "data.tar.gz" members)
-        entries <- nativeEntries (GZip.decompress (BSL.fromStrict dataGzip))
+        entries <- tarEntries (GZip.decompress (BSL.fromStrict dataGzip))
         directories <- forM [1 .. 512 :: Int] $ \index -> do
             path <- expectRight (Tar.toTarPath True ("inventory-" <> show index))
             pure (Tar.simpleEntry path Tar.Directory)
@@ -161,14 +161,11 @@ inspect :: Limits -> ByteString -> IO (Either ParseError GemArchive)
 inspect limits = inspectGemArchive limits (const (pure ()))
 
 nativeMembers :: ByteString -> IO [(Text, ByteString)]
-nativeMembers bytes = nativeEntries (BSL.fromStrict bytes) >>= traverse member
+nativeMembers bytes = tarEntries (BSL.fromStrict bytes) >>= traverse member
   where
     member entry = case Tar.entryContent entry of
         Tar.NormalFile body _ -> pure (toText (Tar.entryPath entry), BSL.toStrict body)
         _ -> fail "native fixture contains a non-file envelope entry"
-
-nativeEntries :: BSL.ByteString -> IO [Tar.Entry]
-nativeEntries = Tar.foldEntries (\entry rest -> (entry :) <$> rest) (pure []) (fail . show) . Tar.read
 
 repack :: [(Text, ByteString)] -> ByteString -> IO ByteString
 repack members payload = do
