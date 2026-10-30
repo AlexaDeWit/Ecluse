@@ -202,7 +202,9 @@ track which input a survivor came from, so assembly can select its retained sour
   versions first (see [Applying verdicts](rules-engine.md#applying-verdicts-to-a-packument)). The
   result is `trusted(private) ∪ filtered(public)`.
 - **Collision: private wins, divergence is a signal.** On a shared version key the private copy
-  wins. The public copy may contradict it on a shared artifact's shared integrity algorithm: same
+  wins. An ecosystem whose versions differ only in build metadata name one release (Cargo) first drops
+  a public version that a private version claims under another spelling, so the private row wins
+  that release too. The public copy may contradict it on a shared artifact's shared integrity algorithm: same
   file, same algorithm, disagreeing digests. The merge logs a WARNING with both digests
   and increments the bounded-cardinality `ecluse.registry.merge.divergence` counter.
   Validated public entries remain evidence for this comparison even when a public rule denies
@@ -393,11 +395,10 @@ how trusted and gated provenances combine.
 
 ## Cargo integration
 
-Cargo uses one primary mount with two native views because source replacement requires identical package contents.
-The public replacement selects `ManagedMirrorAndPublic`. The private alternate selects `PrivateOnly`.
-npm and PyPI retain `MergePrivateAndPublic`.
-The alternate view binds separate request dependencies without adding another worker policy.
-Only the primary view owns managed mirror state.
+Cargo uses one mount and one native view, `/cargo/`, which replaces crates.io and selects `MergePrivateAndPublic` as npm, PyPI and RubyGems do.
+Every consumer reads only through Écluse, so the view departs by design from the Cargo book's rule that a replacement source holds no crate absent from the original.
+`Cargo.lock` therefore records private crates under the crates.io source identity.
+The mirror target stays write-only under Écluse's token, and completed copies are read through `privateUpstream`.
 The [operator protocol contract](https://ecluse-proxy.com/docs/protocol-support/#cargo) owns the routes and retained fields.
 
 ### Discovery and transport authority
@@ -408,6 +409,7 @@ Private preparation follows caller authorisation and stays uncached and uncoales
 Worker and maintenance preparation follows service credential acquisition and the applicable charge.
 Boot constructs factories without a remote discovery request.
 There is no separate private discovery cache.
+The client-facing `config.json` is local: it names Écluse's archive route and publication API, and requires authentication whenever a private upstream or the edge token is configured.
 
 Discovery describes download and optional API locations. It grants neither network nor credential authority.
 A checked coordinate binds published name, raw version, logical archive filename, and SHA-256 to an approved download template.
@@ -424,13 +426,14 @@ ASCII lowercase supplies index lookup identity. A separate key folds hyphen and 
 Keeping these keys separate prevents one alias lookup from poisoning another path's negative cache result.
 Cargo does not inherit PyPI period folding or separator collapsing.
 Raw SemVer spelling remains available, while native uniqueness excludes build metadata.
+The merge applies the same uniqueness across sources: versions that differ only in build metadata are one release, and the trusted row wins.
 
 The bounded reader frames one native row at a time and keeps its physical `RecordEntry` coordinate.
 Full and selected reads scan through EOF, so later duplicate identities can quarantine earlier records.
 Assembly emits each admitted winning-source record once, in source order, with a final LF.
 It preserves additive fields and absence versus null instead of rebuilding a reduced install document.
 Public mirror relocation translates source-local dependency references to the canonical crates.io source identity.
-The archive bytes stay unchanged. Private alternate rows retain their own native source meaning.
+The archive bytes stay unchanged.
 
 ### Why Cargo requires durable mirror state
 
@@ -440,10 +443,10 @@ One checksum-verified archive proves physical presence but cannot prove faithful
 The worker records the admitted original row, source identity, and expected archive before upload.
 Completion retains the existing conditional-write, retry, lost-response, and restart rules.
 
-The public replacement excludes unmanaged target rows from both listings and direct archives.
+A target row that reaches `/cargo/` through `privateUpstream` without a durable record is trusted private content, as on PyPI and RubyGems.
+Without new state, Écluse cannot tell such a row from a first-party crate.
 Missing, corrupt, or unrecorded history cannot become an original-source managed read during outage.
 An available admitted public source can still supply a version.
-The private alternate separately permits ordinary caller-authorised private reads.
 Retained facts reflect first admission. There is no continuous yank synchronisation or target-yank mutation.
 
 ### Bounded archive inspection and publication
@@ -458,7 +461,7 @@ Resolver disagreement can change the package description used for resolution wit
 First-party validation therefore compares upload claims, including native-library uniqueness constraints, with the retained effective manifest before target discovery.
 It also refuses the unstable dependency fields that mirroring refuses, so both paths take one stance on nightly-only resolver features.
 After agreement, every dependency must come from crates.io or Écluse, because a dependency on another registry would send every consumer's Cargo to that registry directly.
-Écluse knows its own Cargo indexes from `server.publicUrl` and the mount path, so this check needs no configuration of its own.
+Écluse knows its own Cargo index from `server.publicUrl` and the mount path, so this check needs no configuration of its own.
 Shared bounded target parsing and logical source identities account for native formatting without changing source rows or upload bytes.
 The relay preserves validated upload bytes. Mirror publication derives required upload fields from the verified effective manifest.
 

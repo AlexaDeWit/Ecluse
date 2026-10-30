@@ -92,7 +92,7 @@ Each suffix expands to integration.serving.npm, integration.serving.pypi, integr
 | --- | --- |
 | default-denial | Listing and artifact denial without allow rules, added paired coverage |
 | identity-precedence | Explicit identity permits a young release, explicit deny defeats allow on listing and artifact, added paired coverage |
-| authorised-union | npm and PyPI combine trusted-private and gated-public versions. Cargo tests managed mirrors in the public replacement and no public fallback in the private alternate. |
+| authorised-union | npm, PyPI, Cargo and RubyGems combine trusted-private and gated-public versions. |
 | quarantine-private-authority | Shared private young-release authority with old public survivor and rejected young public version. npm native latest-tag assertion remains in its existing gate case |
 | private-divergence | Shared private digest and exact bytes on same-version divergence. npm native latest-tag/divergence cases remain |
 | public-integrity | npm "filters a hashless public version out of the served listing" moves here, with PyPI counterpart |
@@ -261,7 +261,7 @@ An unheld or missing status produces diagnostic-only evidence and keeps the nati
 | SQS queue and S3 advisory transport | Supported with native lease, redelivery, and advisory transport checks. S3 advisory storage grants no package-store capability. |
 | PyPI publication and mirroring | Supported. Keep native multipart publication, every supported wheel and source distribution, retained companions, and durable complete-version evidence. |
 | Cargo sparse reads, mirroring, and publication | Cargo 1.74+ through sparse HTTPS. Keep native discovery, records, dependencies, source identity, checksums, and original-source durable state. Prove archive requests traverse Écluse with real clients. |
-| Cargo source views and authentication | Keep crates.io replacement separate from the private alternate. Preserve native credential-provider retry, private authorisation, no public fallback from private, and read/upload authority checks. |
+| Cargo merged registry and authentication | One registry replaces crates.io. Preserve native credential-provider retry on an edge `401`, local discovery and its `auth-required` rule, private authorisation, first-party private-only reads, build-metadata version identity, and read/upload authority checks. |
 | Cargo CodeArtifact maintenance | Physical deletion through deterministic native fixtures. A generic registry's yank API does not provide deletion. No live AWS fidelity claim. |
 | Hosted incremental PyPI copying | Supported under [#1639](https://github.com/AlexaDeWit/Ecluse/issues/1639). Contracts require a complete authorised served view or explicit unavailability, retry/restart, and offline completion. |
 | Filesystem or S3 package storage | Planned under [#1239](https://github.com/AlexaDeWit/Ecluse/issues/1239). Future contracts require committed completion visibility, interrupted writes, failed markers, restart, concurrent publication, and direct-read/listing invisibility. |
