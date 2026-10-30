@@ -237,7 +237,7 @@ metadataGzipSpec = describe "native metadata gzip over the live listing path" $
                     atRespond <- newIORef Nothing
                     runListing unmetered{srMemoryMeter = meter} listing deps methodGet [] (\_ -> chargedOn meter >>= writeIORef atRespond . Just)
                     sizes <- traverse readIORef [privateSent, publicSent]
-                    readIORef atGate `shouldReturn` Just (sum (map (\size -> max (scaleCharge (cfKeptPermille factors) size) (entryFloorBytes * listingEntries listing)) sizes))
+                    readIORef atGate `shouldReturn` Just (sum (map (\size -> max (scaleCharge (cfKeptPermille factors) size) (owedFloor (listingEntries listing))) sizes))
                     readIORef atRespond `shouldReturn` Just (scaleCharge (cfOutputPermille factors) (foldl' max 0 sizes))
                     chargedOn meter `shouldReturn` 0
   where
@@ -247,6 +247,10 @@ metadataGzipSpec = describe "native metadata gzip over the live listing path" $
 
 -- What the private origin answers for the listing.
 data PrivateState = PrivateServes | PrivateRefuses
+
+-- The floors a read owes for its versions or files, at the measured 1,152 bytes each, and for its other entries.
+owedFloor :: (Int, Int) -> Int
+owedFloor (releases, others) = 1152 * releases + entryFloorBytes * others
 
 chargedOn :: MemoryMeter -> IO Int
 chargedOn meter = snChargedBytes <$> meterSnapshot meter
@@ -437,15 +441,15 @@ data Listing = Listing
     -- ^ The edge token @edge-token@ in the ecosystem's own presentation.
     , listingDeps :: Int -> IO PackumentDeps
     , listingOrigin :: Application
-    , listingEntries :: Int
-    -- ^ The entries a full read of the origin's document retains, which the entry floor charges.
+    , listingEntries :: (Int, Int)
+    -- ^ The versions or files, and the other entries, a full read of the origin's document retains.
     }
 
 listings :: [Listing]
 listings =
-    [ Listing "npm" (mkPackageName Npm Nothing "leftpad") npmRouter ["leftpad"] "npm" npmCredential (hAuthorization, "Bearer edge-token") (agedDeps npmServeDeps (UTCTime (fromGregorian 2020 1 1) 0)) npmOrigin 3
+    [ Listing "npm" (mkPackageName Npm Nothing "leftpad") npmRouter ["leftpad"] "npm" npmCredential (hAuthorization, "Bearer edge-token") (agedDeps npmServeDeps (UTCTime (fromGregorian 2020 1 1) 0)) npmOrigin (1, 2)
     , -- HTTP Basic, user:edge-token.
-      Listing "PyPI" (mkPackageName PyPI Nothing "requests") pypiRouter ["simple", "requests"] "pypi" pypiCredential (hAuthorization, "Basic dXNlcjplZGdlLXRva2Vu") (agedDeps pypiServeDeps (UTCTime (fromGregorian 2026 6 20) 0)) pypiOrigin 1
+      Listing "PyPI" (mkPackageName PyPI Nothing "requests") pypiRouter ["simple", "requests"] "pypi" pypiCredential (hAuthorization, "Basic dXNlcjplZGdlLXRva2Vu") (agedDeps pypiServeDeps (UTCTime (fromGregorian 2026 6 20) 0)) pypiOrigin (1, 0)
     ]
   where
     agedDeps serveDeps now port = do

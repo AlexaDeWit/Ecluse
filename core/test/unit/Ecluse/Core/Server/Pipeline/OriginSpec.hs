@@ -87,12 +87,12 @@ import Ecluse.Core.Telemetry.Metrics qualified as Metric
 import Ecluse.Core.Telemetry.Record (MetricsPort (mpCacheRequest, mpVersionCacheRequest, mpVersionCacheResidentBytes))
 import Ecluse.Test.Deadline (withSweeper)
 import Ecluse.Test.Log (newTestLogEnv)
-import Ecluse.Test.Package (leftpadName, requestsName, sampleManifest, thingName)
+import Ecluse.Test.Package (leftpadName, npmVersion, requestsName, sampleManifest, thingName, unscopedPyPI)
 import Ecluse.Test.Port (noopMetricsPort, passthroughTracingPort)
 import Ecluse.Test.Registry.Cargo.Metadata (cargoFeatureRecord, cargoRead, cargoTestDiscovery, cargoTestName, cargoTestRecord, cargoTestVersion)
 import Ecluse.Test.Registry.Metadata.Fetch (heldBody)
-import Ecluse.Test.Registry.Npm (densePackument)
-import Ecluse.Test.Registry.PyPI (denseIndex)
+import Ecluse.Test.Registry.Npm (densePackument, minimalPackument)
+import Ecluse.Test.Registry.PyPI (denseIndex, minimalIndex)
 import Ecluse.Test.Server.Cache (cachedVersion, defaultCacheConfig, newLocalRetention, newMetadataCache)
 import Ecluse.Test.Server.Handler (testServeRuntime)
 import Ecluse.Test.Server.Mount (inertDepsFor, inertPackumentDeps, requiredAdapter, serveDepsFor, withPrivateBaseUrl)
@@ -256,12 +256,13 @@ runFullRead (prefix, router, credential) name runtime deps ticket public = do
             then fetchPublicOriginObserved (const pass) deps runtime ticket part name
             else fetchPrivateOriginObserved (const pass) deps runtime part Nothing name
 
--- A dense listing's bytes pay less than the entry floor, so its read keeps the floor once it completes.
+-- A dense or minimal-body listing's bytes pay less than its floors, so its read keeps them once it completes.
+-- Versions and files pay the release floor, and every other entry the entry floor.
 keptFloorSpec :: Spec
 keptFloorSpec = describe "full npm and PyPI read payments" $
-    for_ denseListings $ \(ecosystem, mount, name, body, entries) ->
+    for_ floorListings $ \(ecosystem, mount, name, (shape, body), (releases, others)) ->
         for_ [False, True] $ \public ->
-            it ((if public then "public " else "private ") <> show ecosystem <> " keeps the entry floor for each retained entry once a dense read completes") $ withSweeper $ \deadlines -> do
+            it ((if public then "public " else "private ") <> show ecosystem <> " keeps the entry floor for each retained entry once a " <> shape <> " read completes") $ withSweeper $ \deadlines -> do
                 adapter <- requiredAdapter ecosystem
                 withRoutedStubIO (\_ -> pure (status200, [], toLazy body)) $ \stub -> do
                     original <- testServeRuntime deadlines noopMetricsPort
@@ -269,18 +270,25 @@ keptFloorSpec = describe "full npm and PyPI read payments" $
                     let url = loopbackRegistryUrl (stubBaseUrl stub)
                         deps = serveDepsFor adapter (Just url) url NoMirrorWrite [] (pdNow inertPackumentDeps)
                         kept = scaleCharge (cfKeptPermille (metadataChargeFactors (pdMetadata deps))) (BS.length body)
+                        owed = releaseFloor * releases + entryFloorBytes * others
                     completed <- withMemoryEntry noopMetricsPort meter $ \ticket -> do
                         result <- runFullRead mount name original{srMemoryMeter = meter} deps ticket public
                         isJust (originManifest result) `shouldBe` True
-                        kept `shouldSatisfy` (< entryFloorBytes * entries)
-                        snChargedBytes <$> meterSnapshot meter `shouldReturn` entryFloorBytes * entries
+                        kept `shouldSatisfy` (< owed)
+                        snChargedBytes <$> meterSnapshot meter `shouldReturn` owed
                     completed `shouldBe` Right ()
                     snChargedBytes <$> meterSnapshot meter `shouldReturn` 0
   where
-    denseListings =
-        [ (Npm, ("npm", npmRouter, npmCredential), thingName, densePackument 300, 600)
-        , (PyPI, ("pypi", pypiRouter, pypiCredential), requestsName, denseIndex 150 400, 550)
+    floorListings =
+        [ (Npm, npmMount, thingName, ("dense", densePackument 300), (0, 600))
+        , (PyPI, pypiMount, requestsName, ("dense", denseIndex 150 400), (150, 400))
+        , (Npm, npmMount, thingName, ("minimal-body", minimalPackument 300), (300, 0))
+        , (PyPI, pypiMount, unscopedPyPI "thing", ("minimal-body", minimalIndex 300), (300, 0))
         ]
+    npmMount = ("npm", npmRouter, npmCredential)
+    pypiMount = ("pypi", pypiRouter, pypiCredential)
+    -- The floor each version or file pays, which the release floor's measurement sets.
+    releaseFloor = 1152
 
 retainedConsumerSpec :: Spec
 retainedConsumerSpec = describe "successful selected consumers" $ do

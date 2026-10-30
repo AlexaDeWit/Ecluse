@@ -46,10 +46,10 @@ import Ecluse.Core.Server.Admission.Types (ChargeFactors (cfFullReadPermille, cf
 import Ecluse.Test.Contract.Metadata.Projection (MetadataFraming (SingleDocument), ProjectionDriver (..), metadataProjectionContract)
 import Ecluse.Test.Corpus (CorpusPackage (cpPackage, cpPath), pypiCorpusPackages)
 import Ecluse.Test.Json (encodeStrict)
-import Ecluse.Test.Package (defaultMinIntegrity, pypiVersion, requestsName, unsafeFilename)
+import Ecluse.Test.Package (defaultMinIntegrity, pypiVersion, requestsName, unsafeFilename, unscopedPyPI)
 import Ecluse.Test.Package.Admission (admitArtifactWithEvidence)
 import Ecluse.Test.Registry.Metadata.Fetch (captureChunks, heldWorkspacePayments, heldWorkspacePeak)
-import Ecluse.Test.Registry.PyPI (denseIndex, filesNamed, simpleFile, simpleIndex, simpleIndexWith, withFileKeys)
+import Ecluse.Test.Registry.PyPI (denseIndex, filesNamed, minimalIndex, simpleFile, simpleIndex, simpleIndexWith, withFileKeys)
 import Ecluse.Test.Registry.PyPI.Metadata (projectPyPIChunks, projectPyPIIndex, projectPyPIVersion, simpleValue)
 import Ecluse.Test.Rules (admittedBy, atDefaultPrecedence, evalRules, inertRuleDeps)
 import Ecluse.Test.Support (expectRight)
@@ -74,14 +74,20 @@ spec = do
     releaseAgeSpec
     entryFloorSpec
 
--- Files whose names project no release, dropped version entries, and alternate-locations and tracks
--- items pay the entry floor their bytes leave uncovered, through the wiring serve and publication use.
+-- Files pay the release floor, and dropped version entries and alternate-locations and tracks items the
+-- entry floor, that their bytes leave uncovered, through the wiring serve and publication use.
 entryFloorSpec :: Spec
 entryFloorSpec = describe "the full-read entry floor" $ do
     it "charges the workspace for files that name no release and dropped versions beyond their per-byte charge" $ do
         (result, peak) <- heldWorkspacePeak adapterRead pypiBase requestsName [denseBody]
         void result `shouldSatisfy` isRight
         peak `shouldBe` denseShortfall
+
+    it "charges the workspace for minimal-body files at the release floor" $ do
+        let body = minimalIndex 300
+        (result, peak) <- heldWorkspacePeak adapterRead pypiBase (unscopedPyPI "thing") [body]
+        void result `shouldSatisfy` isRight
+        peak `shouldBe` releaseFloor * 300 - scaleCharge (cfFullReadPermille pypiChargeFactors) (BS.length body)
 
     it "charges no workspace for files whose source bytes cover the floor" $ do
         (result, peak) <- heldWorkspacePeak adapterRead pypiBase requestsName [indexOf ["requests-2.34.2.tar.gz", "requests-2.34.1.tar.gz"]]
@@ -126,7 +132,9 @@ entryFloorSpec = describe "the full-read entry floor" $ do
     files = 150
     drops = 400
     denseBody = denseIndex files drops
-    denseShortfall = entryFloorBytes * (files + drops) - scaleCharge (cfFullReadPermille pypiChargeFactors) (BS.length denseBody)
+    denseShortfall = releaseFloor * files + entryFloorBytes * drops - scaleCharge (cfFullReadPermille pypiChargeFactors) (BS.length denseBody)
+    -- The floor each file pays, which the release floor's measurement sets.
+    releaseFloor = 1152
 
 indexSpec :: Spec
 indexSpec = describe "projectPyPIIndex" $ do

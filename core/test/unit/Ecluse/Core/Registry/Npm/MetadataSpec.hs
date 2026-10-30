@@ -95,7 +95,7 @@ import Ecluse.Test.Package (unscopedNpm, validSha1, validSha512Sri)
 import Ecluse.Test.Registry.JsonBytes (damaged, genChunks, genPackumentBytes, genServablePackumentBytes)
 import Ecluse.Test.Registry.JsonStream (byteChunks, testTable, walkJsonChunks, walkWritingChunks)
 import Ecluse.Test.Registry.Metadata.Fetch (captureChunks, heldWorkspacePeak)
-import Ecluse.Test.Registry.Npm (densePackument)
+import Ecluse.Test.Registry.Npm (densePackument, minimalPackument)
 import Ecluse.Test.Registry.Npm.Metadata (npmFullTestWalk, projectNpmManifest, projectNpmVersion)
 import Ecluse.Test.Registry.Packed (walkedLength)
 import Ecluse.Test.Snapshot (digestOf, readDetails)
@@ -111,8 +111,8 @@ spec = do
     integratedFactsSpec
     entryFloorSpec
 
--- A full read's timestamps and tags pay the entry floor that their per-byte charge leaves uncovered.
--- Each read goes through the wiring that serve and publication use.
+-- A full read's versions pay the release floor, and its timestamps and tags the entry floor, that their
+-- per-byte charge leaves uncovered. Each read goes through the wiring that serve and publication use.
 entryFloorSpec :: Spec
 entryFloorSpec = describe "the full-read entry floor" $ do
     it "charges the workspace for dense timestamps and tags beyond their per-byte charge" $ do
@@ -120,8 +120,14 @@ entryFloorSpec = describe "the full-read entry floor" $ do
         void result `shouldSatisfy` isRight
         peak `shouldBe` denseShortfall
 
+    it "charges the workspace for minimal-body versions at the release floor" $ do
+        let body = minimalPackument entries
+        (result, peak) <- heldWorkspacePeak adapterRead captureRegistry (unscopedNpm "thing") [body]
+        void result `shouldSatisfy` isRight
+        peak `shouldBe` releaseFloor * entries - scaleCharge (cfFullReadPermille npmChargeFactors) (BS.length body)
+
     it "charges no workspace when releases carry more source bytes than their entries' floor" $ do
-        let release at = "\"1.0." <> at <> "\":" <> policyRelease [("readme", String (T.replicate 512 "x"))]
+        let release at = "\"1.0." <> at <> "\":" <> policyRelease [("readme", String (T.replicate 1024 "x"))]
             body = "{\"name\":\"thing\",\"versions\":{" <> BS.intercalate "," [release (show at) | at <- [1 .. 20 :: Int]] <> "}}"
         (result, peak) <- heldWorkspacePeak adapterRead captureRegistry (unscopedNpm "thing") [body]
         void result `shouldSatisfy` isRight
@@ -142,6 +148,8 @@ entryFloorSpec = describe "the full-read entry floor" $ do
     adapterRead = metadataRead (adapterMetadata npmAdapter)
     entries = 300
     denseBody = densePackument entries
+    -- The floor each version pays, which the release floor's measurement sets.
+    releaseFloor = 1152
     denseShortfall = entryFloorBytes * 2 * entries - scaleCharge (cfFullReadPermille npmChargeFactors) (BS.length denseBody)
 
 packedReadSpec :: Spec

@@ -14,6 +14,7 @@ module Ecluse.Test.Registry.PyPI (
     simpleIndex,
     simpleIndexWith,
     denseIndex,
+    minimalIndex,
     separatorHeavySdist,
     alicePair,
 ) where
@@ -85,6 +86,12 @@ denseIndex :: Int -> Int -> ByteString
 denseIndex files drops = "{\"meta\":{\"api-version\":\"1.1\"},\"name\":\"requests\",\"files\":[" <> BS.intercalate "," [file (show at) | at <- [1 .. files]] <> "],\"versions\":[" <> BS.intercalate "," (replicate drops "7") <> "]}"
   where
     file at = "{\"filename\":\"x" <> at <> "\",\"url\":\"https://files.pythonhosted.org/x" <> at <> "\"}"
+
+-- | A Simple index named @thing@ with as many files as asked, each with only a filename and URL: the smallest valid file body.
+minimalIndex :: Int -> ByteString
+minimalIndex count = "{\"meta\":{\"api-version\":\"1.1\"},\"name\":\"thing\",\"files\":[" <> BS.intercalate "," [file (show at) | at <- [1 .. count]] <> "]}"
+  where
+    file at = "{\"filename\":\"thing-0.0." <> at <> ".tar.gz\",\"url\":\"https://files.pythonhosted.org/thing-0.0." <> at <> ".tar.gz\"}"
 
 -- | A malformed sdist with distinct suffixes for allocation and scaling measurements.
 separatorHeavySdist :: Text -> Int -> Text -> Text
