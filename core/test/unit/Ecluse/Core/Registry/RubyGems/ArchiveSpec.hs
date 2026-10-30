@@ -29,7 +29,7 @@ import Ecluse.Core.Registry.RubyGems.CompactSpec (GemSpecification (specificatio
 import Ecluse.Core.Registry.RubyGems.Project (mkCoordinate, projectName, unGemPlatform)
 import Ecluse.Core.Security.Limits (Limits (..), defaultLimits)
 import Ecluse.Core.Version (renderVersion)
-import Ecluse.Test.Registry.Archive (tarBytes, tarEntries)
+import Ecluse.Test.Registry.Archive (pax, paxRecord, regular, tarBytes, tarEntries)
 import Ecluse.Test.Registry.RubyGems.Reference (runRubyReference)
 import Ecluse.Test.Support (expectRight)
 
@@ -143,6 +143,39 @@ spec = describe "native gem validation" $ do
                     gemArchiveInventory archive `shouldBe` Set.fromList (map Key.toText (KeyMap.keys regularFiles))
             _ -> fail "native archive reference lacks its physical and regular-file inventories"
         void <$> inspect defaultLimits{maxArtifactCount = memberCount - 1} changed `shouldReturn` Left (ParseError "archive entry count exceeds its bound")
+    it "accepts the gem build envelope and refuses a PAX or GNU extended header in front of it" $ do
+        bytes <- readFileBS fixture
+        void <$> inspect defaultLimits bytes `shouldReturn` Right ()
+        entries <- tarEntries (BSL.fromStrict bytes)
+        void <$> inspect defaultLimits (written entries) `shouldReturn` Right ()
+        gnu <- case entries of
+            entry : _ -> pure [Tar.longLinkEntry (Tar.entryPath entry), Tar.longSymLinkEntry "unused"]
+            [] -> fail "native fixture has no envelope entries"
+        posix <- sequence [pax 'x' (paxRecord "mtime=0\n"), pax 'g' (paxRecord "comment=opaque\n")]
+        for_ (posix <> gnu) $ \header ->
+            void <$> inspect defaultLimits (written (header : entries)) `shouldReturn` Left extendedRefusal
+    it "refuses an outer member named through a ustar prefix" $ do
+        bytes <- readFileBS fixture
+        metadataGzip <- nativeMembers bytes >>= fixtureMember "metadata.gz"
+        entries <- tarEntries (BSL.fromStrict bytes)
+        prefixed <- regular (replicate 120 'a' <> "/metadata.gz") metadataGzip
+        void <$> inspect defaultLimits (written (entries <> [prefixed])) `shouldReturn` Left extendedRefusal
+    it "refuses a PAX rename that would show RubyGems another metadata.gz" $ do
+        root <- readFileBS fixture >>= nativeMembers
+        leafMetadata <- readFileBS "test/fixtures/rubygems/gems/ecluse-fixture-leaf-1.0.0.gem" >>= nativeMembers >>= fixtureMember "metadata.gz"
+        rootMetadata <- fixtureMember "metadata.gz" root
+        rootData <- fixtureMember "data.tar.gz" root
+        rootChecksums <- fixtureMember "checksums.yaml.gz" root
+        crafted <-
+            sequence
+                [ pax 'x' (paxRecord "path=metadata.gz\n")
+                , regular "junk1" rootMetadata
+                , pax 'x' (paxRecord "path=metadata.gz.sig\n")
+                , regular "metadata.gz" leafMetadata
+                , regular "data.tar.gz" rootData
+                , regular "checksums.yaml.gz" rootChecksums
+                ]
+        void <$> inspect defaultLimits (written crafted) `shouldReturn` Left extendedRefusal
     it "binds the checked archive to an exact admitted coordinate and digest" $ do
         bytes <- readFileBS fixture
         archive <- inspect defaultLimits bytes >>= expectRight
@@ -156,6 +189,16 @@ spec = describe "native gem validation" $ do
 
 fixture :: FilePath
 fixture = "test/fixtures/rubygems/gems/ecluse-fixture-root-1.0.0.gem"
+
+-- RubyGems' reader yields extended headers as ordinary members, so the envelope refuses them and any name prefix.
+extendedRefusal :: ParseError
+extendedRefusal = ParseError "gem envelope carries an extended or prefixed tar header"
+
+written :: [Tar.Entry] -> ByteString
+written = BSL.toStrict . Tar.write
+
+fixtureMember :: Text -> [(Text, ByteString)] -> IO ByteString
+fixtureMember name members = maybe (fail ("native fixture has no " <> toString name <> " member")) pure (lookup name members)
 
 inspect :: Limits -> ByteString -> IO (Either ParseError GemArchive)
 inspect limits = inspectGemArchive limits (const (pure ()))

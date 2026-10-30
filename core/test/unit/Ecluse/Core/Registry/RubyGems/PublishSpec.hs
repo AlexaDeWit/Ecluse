@@ -5,6 +5,7 @@
 -- | Genuine publication preserves native bytes and keeps caller credentials out of read roles.
 module Ecluse.Core.Registry.RubyGems.PublishSpec (spec) where
 
+import Codec.Archive.Tar qualified as Tar
 import Data.ByteString.Lazy qualified as LBS
 import Data.List (lookup)
 import Data.Map.Strict qualified as Map
@@ -14,6 +15,7 @@ import Test.Hspec
 
 import Ecluse.Core.Credential (ClientCredential (ClientCredential), bareCredential, mkSecret)
 import Ecluse.Core.Package (PackageDetails (..), PackageInfo (..))
+import Ecluse.Core.Registry (ParseError (..), PublishBodyFault (PublishMalformed))
 import Ecluse.Core.Registry.Adapter.Capability
 import Ecluse.Core.Registry.CachedDocument (rubyGemsCached)
 import Ecluse.Core.Registry.Metadata (VersionDoc (..))
@@ -31,6 +33,7 @@ import Ecluse.Core.Server.Admission.Types (ChargeFactors (ChargeFactors))
 import Ecluse.Server.Admission.Support (refuseCharge)
 import Ecluse.Test.Deadline (withExchangeClient, withSweeper)
 import Ecluse.Test.Port (passthroughTracingPort)
+import Ecluse.Test.Registry.Archive (pax, paxRecord, tarEntries)
 import Ecluse.Test.Registry.Publish (publishOnlyFile)
 import Ecluse.Test.Registry.RubyGems.Fixtures (loadFixtureInfo)
 import Ecluse.Test.Stub (Captured (..), allCaptured, headerValue, stubBaseUrl, withRoutedStub)
@@ -70,6 +73,13 @@ spec = describe "RubyGems publication" $ do
         uploadClaims defaultLimits (const pass) "unused" body `shouldReturn` Right ["ecluse-fixture-native"]
         uploadClaims defaultLimits{maxMirrorArtifactBytes = 1} (const pass) "unused" body >>= (`shouldSatisfy` isLeft)
         uploadClaims defaultLimits (const pass) "unused" (PublishRequestBody "not a native archive" Nothing NoPublishExtras) >>= (`shouldSatisfy` isLeft)
+
+    it "refuses an extended outer header as a malformed upload" $ do
+        entries <- readFileBS "test/fixtures/rubygems/gems/ecluse-fixture-native-1.0.0.gem" >>= tarEntries . LBS.fromStrict
+        global <- pax 'g' (paxRecord "comment=opaque\n")
+        let claims written = uploadClaims defaultLimits (const pass) "unused" (PublishRequestBody (LBS.toStrict (Tar.write written)) Nothing NoPublishExtras)
+        claims entries `shouldReturn` Right ["ecluse-fixture-native"]
+        claims (global : entries) `shouldReturn` Left (PublishMalformed (ParseError "gem envelope carries an extended or prefixed tar header"))
 
     it "publishes only the admitted digest and preserves verified bytes without an OTP" $ do
         archive <- readFileBS "test/fixtures/rubygems/gems/ecluse-fixture-root-1.0.0.gem"
