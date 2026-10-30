@@ -171,9 +171,13 @@ servePrivate ctx = \case
         result <- relay ctx True (srPrivateClient (arRuntime ctx)) acceptPrivateArtifact request
         case result of
             UpstreamRelayed (_, received) -> pure received
-            UpstreamRejected status retry -> answerError ctx (if status == status404 then versionAbsent else privateReadRefusal (statusReadFailure (statusCode status) retry))
-            UpstreamTransportFailure -> answerError ctx upstreamUnavailable
+            UpstreamRejected status retry
+                | status == status404 -> answerError ctx versionAbsent
+                | otherwise -> readFailed (statusReadFailure (statusCode status) retry)
+            UpstreamTransportFailure -> readFailed (ReadUnavailable Nothing)
             UpstreamCooling retry -> answerError ctx (upstreamCooling retry)
+  where
+    readFailed = answerError ctx . privateReadRefusal (arDeps ctx) (arPackage ctx)
 
 fallback :: ArtifactRequest response -> OriginMiss -> Handler ResponseReceived
 fallback ctx miss =

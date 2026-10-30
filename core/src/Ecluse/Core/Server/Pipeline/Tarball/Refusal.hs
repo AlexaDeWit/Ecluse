@@ -97,21 +97,19 @@ versionAbsent =
 absence of a name outside first-party reaches that leg, so no public namesake replaces a private package.
 -}
 privateMissRefusal :: PackumentDeps -> PackageName -> OriginMiss -> Maybe ServeDecision
-privateMissRefusal deps name miss
-    | pdFirstParty deps name = Just (firstPartyMissRefusal miss)
-    | MissUnresolved failure <- miss = Just (privateReadRefusal failure)
-    | otherwise = Nothing
+privateMissRefusal deps name = \case
+    MissUnresolved failure -> Just (privateReadRefusal deps name failure)
+    MissAbsent
+        | pdFirstParty deps name -> Just firstPartyAbsent
+        | otherwise -> Nothing
 
--- | A failed private read: an unavailable registry @503@ with its delay, an invalid reply @502@.
-privateReadRefusal :: ReadFailure -> ServeDecision
-privateReadRefusal = readFailureRefusal upstreamUnavailableMessage
-
--- The refusal a first-party private miss renders: a settled absence @404@, else its cause's status.
-firstPartyMissRefusal :: OriginMiss -> ServeDecision
-firstPartyMissRefusal = \case
-    MissAbsent -> firstPartyAbsent
-    MissUnresolved (ReadUnavailable retry) -> firstPartyUnresolved retry
-    MissUnresolved ReadInvalid -> firstPartyInvalid
+-- | A failed private read: an unavailable registry @503@ with its delay, an invalid reply @502@. A first-party name keeps its own words.
+privateReadRefusal :: PackumentDeps -> PackageName -> ReadFailure -> ServeDecision
+privateReadRefusal deps name failure
+    | pdFirstParty deps name = case failure of
+        ReadUnavailable retry -> firstPartyUnresolved retry
+        ReadInvalid -> firstPartyInvalid
+    | otherwise = readFailureRefusal upstreamUnavailableMessage failure
 
 {- A first-party artifact the private upstream does not hold. No public artifact may stand in for
 it, and 'artifactOutcomeStatus' renders it @404@. -}
