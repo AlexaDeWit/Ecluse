@@ -9,6 +9,8 @@ module Ecluse.Test.Contract.Serving (
     ServingSession (..),
     ServingRelease (..),
     ServingResponse (..),
+    OriginFault (..),
+    ServingFaults (..),
     servingContract,
     artifactIntegrityCase,
     artifactDigestCase,
@@ -53,9 +55,26 @@ data ServingSession = ServingSession
     , requestArtifact :: Method -> [Header] -> Text -> IO ServingResponse
     }
 
+-- | How a faulted origin answers every request.
+data OriginFault
+    = -- | This HTTP status with an empty body.
+      FaultStatus Int
+    | -- | A closed connection with no HTTP response.
+      FaultClosed
+    deriving stock (Eq, Show)
+
+-- | The faults that replace a session's private and public origins.
+data ServingFaults = ServingFaults
+    { privateFault :: Maybe OriginFault
+    , publicFault :: Maybe OriginFault
+    }
+    deriving stock (Eq, Show)
+
 -- | Native fixture encoding, resource ownership, requests and digest spelling, under a mount's metadata coding.
 data ServingDriver = ServingDriver
     { withServing :: forall a. MetadataCompression -> [Rule] -> [ServingRelease] -> [ServingRelease] -> (ServingSession -> IO a) -> IO a
+    , withFaultedServing :: forall a. ServingFaults -> [Rule] -> [ServingRelease] -> [ServingRelease] -> (ServingSession -> IO a) -> IO a
+    -- ^ 'withServing' under gzip, with either origin replaced by its fault.
     , servingIdentity :: Text -> Text
     , servingDigest :: ByteString -> Text
     }
@@ -99,6 +118,31 @@ servingContract provider driver = describe "shared serving contract" $ do
             artifact <- requestArtifact session methodGet [] "1.2.3"
             responseStatus artifact `shouldBe` 200
             responseBody artifact `shouldBe` "private bytes"
+    contractExample "private-availability" "refuses on a failing private origin, and serves after a private 404 or a public outage" $ do
+        for_ [FaultStatus 500, FaultStatus 503, FaultClosed] $ \fault ->
+            faulted (ServingFaults (Just fault) Nothing) [] [old] $ \session -> do
+                response <- requestMetadata session methodGet []
+                (responseStatus response, responseVersions response) `shouldBe` (503, [])
+                artifact <- requestArtifact session methodGet [] "1.2.3"
+                responseStatus artifact `shouldBe` 503
+        faulted (ServingFaults (Just (FaultStatus 404)) Nothing) [] [old] $ \session -> do
+            response <- requestMetadata session methodGet []
+            (responseStatus response, responseVersions response) `shouldBe` (200, ["1.2.3"])
+            artifact <- requestArtifact session methodGet [] "1.2.3"
+            responseStatus artifact `shouldBe` 200
+        -- Each ecosystem's exact refusal status is pinned beside its native routes.
+        for_ [401, 403] $ \refused ->
+            faulted (ServingFaults (Just (FaultStatus refused)) Nothing) [] [old] $ \session -> do
+                response <- requestMetadata session methodGet []
+                responseStatus response `shouldSatisfy` (`elem` [401, 403])
+                responseVersions response `shouldBe` []
+                artifact <- requestArtifact session methodGet [] "1.2.3"
+                responseStatus artifact `shouldSatisfy` (`elem` [401, 403])
+        faulted (ServingFaults Nothing (Just (FaultStatus 503))) [other] [] $ \session -> do
+            response <- requestMetadata session methodGet []
+            (responseStatus response, responseVersions response) `shouldBe` (200, ["2.3.4"])
+            artifact <- requestArtifact session methodGet [] "2.3.4"
+            responseStatus artifact `shouldBe` 200
     contractExample "public-integrity" "filters a hashless public version from the listing" $
         run agePolicy [] [old, other{releaseHasIntegrity = False}] $ \session -> do
             response <- requestMetadata session methodGet []
@@ -190,6 +234,7 @@ servingContract provider driver = describe "shared serving contract" $ do
   where
     contractExample identifier description = it (caseLabel ("integration.serving." <> provider <> "." <> identifier) description)
     run = withServing driver GzipWhenAccepted
+    faulted faults = withFaultedServing driver faults agePolicy
     gzipOffer = [("Accept-Encoding", "gzip")]
     varies response = maybe False (BS.isInfixOf "Accept-Encoding") (lookup "Vary" (responseHeaders response))
     validator response = maybe (fail "no ETag on admitted metadata") pure (lookup "ETag" (responseHeaders response))

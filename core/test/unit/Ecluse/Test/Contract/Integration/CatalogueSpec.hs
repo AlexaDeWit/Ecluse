@@ -35,8 +35,8 @@ spec = do
         map groupPartition (catalogueGroups integrationCatalogue) `shouldSatisfy` all (== "integration")
     it "retains every unique integration case" $ do
         let cases = concatMap groupCases (catalogueGroups integrationCatalogue)
-        length cases `shouldBe` 463
-        length (ordNub (map caseId cases)) `shouldBe` 463
+        length cases `shouldBe` 469
+        length (ordNub (map caseId cases)) `shouldBe` 469
         for_ ["integration/origin/native-018", "integration/cargo/source-layout", "integration.serving.rubygems.artifact-integrity"] $ \identifier ->
             map caseId cases `shouldContain` [identifier]
 

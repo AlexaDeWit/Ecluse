@@ -94,6 +94,7 @@ integrationObligations =
         , "integration.serving.pypi.authorised-union"
         , "integration.serving.pypi.quarantine-private-authority"
         , "integration.serving.pypi.private-divergence"
+        , "integration.serving.pypi.private-availability"
         , "integration.serving.pypi.public-integrity"
         , "integration.serving.pypi.trusted-integrity"
         , "integration.serving.pypi.artifact-integrity"
@@ -112,7 +113,7 @@ integrationObligations =
         ["metadata-read", "artifact-read", "serving"]
         ( map
             ("integration.serving.rubygems." <>)
-            ["default-denial", "identity-precedence", "authorised-union", "quarantine-private-authority", "private-divergence", "public-integrity", "trusted-integrity", "artifact-integrity", "artifact-head", "conditional-coherence", "metadata-gzip", "metadata-gzip-validators", "metadata-gzip-refusal", "metadata-gzip-opt-out", "metadata-gzip-policy", "artifact-uncoded"]
+            ["default-denial", "identity-precedence", "authorised-union", "quarantine-private-authority", "private-divergence", "private-availability", "public-integrity", "trusted-integrity", "artifact-integrity", "artifact-head", "conditional-coherence", "metadata-gzip", "metadata-gzip-validators", "metadata-gzip-refusal", "metadata-gzip-opt-out", "metadata-gzip-policy", "artifact-uncoded"]
         )
     , required
         "integration/cargo"
@@ -150,6 +151,7 @@ integrationObligations =
         , "integration.serving.cargo.authorised-union"
         , "integration.serving.cargo.quarantine-private-authority"
         , "integration.serving.cargo.private-divergence"
+        , "integration.serving.cargo.private-availability"
         , "integration.serving.cargo.public-integrity"
         , "integration.serving.cargo.trusted-integrity"
         , "integration.serving.cargo.artifact-integrity"
@@ -287,6 +289,7 @@ integrationObligations =
         , "integration.serving.npm.authorised-union"
         , "integration.serving.npm.quarantine-private-authority"
         , "integration.serving.npm.private-divergence"
+        , "integration.serving.npm.private-availability"
         , "integration.serving.npm.public-integrity"
         , "integration.serving.npm.trusted-integrity"
         , "integration.serving.npm.artifact-integrity"
