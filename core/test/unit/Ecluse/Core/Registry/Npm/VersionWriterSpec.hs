@@ -66,6 +66,7 @@ spec = describe "VersionWriter" $ do
     typedFieldsSpec
     relevantScalarsSpec
     growthSpec
+    dependencySpec
     generatedSpec
     assemblySpec
     authorSpec
@@ -291,6 +292,34 @@ growthSpec = describe "script and table growth" $ do
         map fst (observedFacts observed) `shouldBe` ["keep"]
         map (fst . snd) (observedFacts observed) `shouldBe` [True]
         observedHooks observed `shouldBe` [Just mempty]
+
+dependencySpec :: Spec
+dependencySpec = describe "dependency spec parity" $
+    for_ dependencyReleases $ \(label, members, expected) ->
+        it ("projects " <> label <> " as the frozen base does, under shared and own keys") $
+            for_ [True, False] $ \share -> do
+                let body = packument (extended members)
+                assertParity 64 share [body]
+                assertParity 64 share (byteChunks body)
+                observed <- successful (directRead 64 share [body])
+                map (fmap pkgDependencySources . snd . snd) (observedFacts observed) `shouldBe` [Right expected]
+
+-- Each release's installable dependency maps, written as bytes so a key can repeat, and the fact it projects.
+dependencyReleases :: [(String, ByteString, DependencySources)]
+dependencyReleases =
+    [ ("a git source in each installable map", "\"peerDependencies\":{\"c\":\"github:acme/c\"},\"optionalDependencies\":{\"b\":\"git+ssh://git@github.com:acme/b.git\"},\"dependencies\":{\"a\":\"https://example.test/a.tgz\"}", outside "a" "dependencies" "a remote URL")
+    , ("the smallest name in the earliest field", "\"optionalDependencies\":{\"zeta\":\"acme/zeta\",\"beta\":\"acme/beta\",\"safe\":\"^1.0.0\"},\"peerDependencies\":{\"alpha\":\"acme/alpha\"}", outside "beta" "optionalDependencies" "a git source")
+    , ("a registry range, then a git source, under one name", "\"dependencies\":{\"left-pad\":\"^1.0.0\",\"left-pad\":\"github:acme/left-pad\"}", RegistryDependencies)
+    , ("a git source, then a registry range, under one name", "\"dependencies\":{\"left-pad\":\"github:acme/left-pad\",\"left-pad\":\"^1.0.0\"}", outside "left-pad" "dependencies" "a git source")
+    , ("a number, then a git source, under one name", "\"dependencies\":{\"left-pad\":7,\"left-pad\":\"github:acme/left-pad\"}", RegistryDependencies)
+    , ("an object, then a git source, under one name", "\"dependencies\":{\"left-pad\":{\"url\":\"github:acme/left-pad\"},\"left-pad\":\"github:acme/left-pad\"}", RegistryDependencies)
+    , ("a repeated dependencies map", "\"dependencies\":{\"a\":\"^1.0.0\"},\"dependencies\":{\"b\":\"github:acme/b\"}", RegistryDependencies)
+    , ("an escaped name and spec", "\"dependencies\":{\"l\\u0065ft-pad\":\"github:acme\\/left-pad\"}", outside "left-pad" "dependencies" "a git source")
+    , ("a git source only in devDependencies", "\"devDependencies\":{\"left-pad\":\"github:acme/left-pad\"},\"dependencies\":{\"other\":\"^1.0.0\"}", RegistryDependencies)
+    , ("dependency maps that are not objects", "\"dependencies\":\"github:acme/left-pad\",\"optionalDependencies\":[\"github:acme/left-pad\"],\"peerDependencies\":null", RegistryDependencies)
+    ]
+  where
+    outside dependency field kind = FetchesOutsideRegistry ("dependency '" <> dependency <> "' in " <> field <> " names " <> kind)
 
 generatedSpec :: Spec
 generatedSpec = modifyMaxSuccess (const 2000) $ do

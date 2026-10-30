@@ -279,6 +279,7 @@ integrationObligations =
         , "integration/npm-metadata/native-035/denied"
         , "integration/npm-metadata/native-035/allowed"
         , "integration/npm-metadata/native-035/stored"
+        , "integration/npm-metadata/native-036"
         , "integration.serving.npm.default-denial"
         , "integration.serving.npm.identity-precedence"
         , "integration.serving.npm.authorised-union"

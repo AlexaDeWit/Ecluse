@@ -40,7 +40,7 @@ import Ecluse.Config.DefaultConfig (defaultConfigBytes)
 import Ecluse.Config.Resolve (deepMerge)
 import Ecluse.Core.Ecosystem (Ecosystem (Cargo, Npm, PyPI))
 import Ecluse.Core.Osv.Schema (EpssRequirement (..))
-import Ecluse.Core.Package (DependencySources (RegistryDependencies))
+import Ecluse.Core.Package (CodeExecSignal (NoCodeOnInstall), DependencySources (FetchesOutsideRegistry, RegistryDependencies))
 import Ecluse.Core.Queue (DeliveryBudget (DeliveryBudget), defaultDeliveryBudget)
 import Ecluse.Core.Rules (prepare)
 import Ecluse.Core.Rules.Types (
@@ -53,7 +53,7 @@ import Ecluse.Core.Rules.Types (
     PrecededRule (..),
     RemainingAdvisories (..),
     Rule (AllowIfRemediatesCve, DenyIfKnownMalicious),
-    RuleEvidence (evDependencySources, evPublishedAt),
+    RuleEvidence (evDependencySources, evInstallCode, evPublishedAt),
     RuleReach (AdmissionAndRevocation, AdmissionOnly),
     defaultDifferentialLimits,
     identityEvidence,
@@ -177,6 +177,20 @@ spec = do
         it "refuses a different type under the shipped npm name" $
             loadConfig pubUrlEnv (Just "{\"mounts\":{\"npm\":{\"rules\":{\"deny-scripts\":{\"type\":\"DenyByIdentity\",\"identity\":\"thing\"}}}}}")
                 `shouldBe` Left [PolicyErrors [MalformedRule "deny-scripts" "\"type\" \"DenyByIdentity\" does not match the default rule it patches"]]
+
+        it "denies a version whose dependency names a git source on the active npm mount" $ do
+            cfg <- configFor "{\"mounts\":{\"npm\":{\"enabled\":true}}}"
+            decideOn cfg Npm (externalEvidence Npm) >>= (\decision -> blockedBy decision `shouldBe` Just "DenyExternalDependencies")
+
+        it "admits a version whose dependency names a git source with a pin above the deny's precedence" $ do
+            cfg <- configFor "{\"mounts\":{\"npm\":{\"rules\":{\"pin\":{\"type\":\"AllowByIdentity\",\"identity\":\"thing@1.0.0\",\"precedence\":301}}}}}"
+            decideOn cfg Npm (externalEvidence Npm) >>= (\decision -> admittedBy decision `shouldBe` Just "AllowByIdentity")
+
+        it "loads the dependency deny type on a PyPI mount, where it abstains on registry-only dependencies" $ do
+            cfg <- configFor "{\"rules\":{\"no-external\":{\"type\":\"DenyExternalDependencies\"}},\"mounts\":{\"pypi\":{\"enabled\":true}}}"
+            fmap (map (ruleName . prRule) . mountPolicy) (Map.lookup PyPI (configMounts cfg))
+                `shouldBe` Just ["AllowIfOlderThan", "DenyExternalDependencies"]
+            decideOn cfg PyPI (scriptEvidence PyPI) >>= (\decision -> admittedBy decision `shouldBe` Just "AllowIfOlderThan")
 
         it "disables the shipped dependency deny under the npm mount, keeping the script deny" $ do
             cfg <- configFor "{\"mounts\":{\"npm\":{\"rules\":{\"deny-external-dependencies\":{\"enabled\":false}}}}}"
@@ -577,6 +591,10 @@ scriptEvidence eco =
     withInstallScripts (identityEvidence name version){evPublishedAt = Known (Just (addUTCTime (negate (30 * nominalDay)) fixedNow)), evDependencySources = Known RegistryDependencies}
   where
     (name, version) = if eco == PyPI then (unscopedPyPI "thing", pypiVersion "1.0.0") else (thingName, v1_0_0)
+
+-- | An old version without install scripts whose dependency names a git source.
+externalEvidence :: Ecosystem -> RuleEvidence
+externalEvidence eco = (scriptEvidence eco){evInstallCode = Known NoCodeOnInstall, evDependencySources = Known (FetchesOutsideRegistry "dependency 'left-pad' in dependencies names a git source")}
 
 decideOn :: Config -> Ecosystem -> RuleEvidence -> IO Decision
 decideOn cfg eco evidence = case Map.lookup eco (configMounts cfg) of

@@ -366,6 +366,9 @@ ruleBlocksSpec = describe "vetBoot -- ecosystem rule blocks" $ do
         it "ignores a disabled PyPI mount's blocked declaration" $
             refusalsFor role (overrideEnv "ECLUSE_MOUNTS__PYPI__ENABLED" "false" (overrideEnv "ECLUSE_RULES" installRule bothMounts))
                 `shouldReturn` []
+        it "accepts a shared external-dependency deny on every ecosystem's mount" $
+            refusalsFor role (overrideEnv "ECLUSE_MOUNTS__CARGO__ENABLED" "true" (overrideEnv "ECLUSE_MOUNTS__RUBYGEMS__ENABLED" "true" (overrideEnv "ECLUSE_RULES" "{\"no-external\":{\"type\":\"DenyExternalDependencies\"}}" bothMounts)))
+                `shouldReturn` []
         it "preserves suppression of the shipped npm default" $
             refusalsFor role (overrideEnv "ECLUSE_MOUNTS__NPM__RULES" "{\"deny-scripts\":{\"enabled\":false}}" bothMounts)
                 `shouldReturn` []
