@@ -21,6 +21,7 @@ import Ecluse.Core.Snapshot (Snapshot, snapshotValue)
 -- | Native order and physical coordinates follow the winning source snapshot.
 assembleRubyGemsDocument :: Text -> Map SourceId (Snapshot CachedDoc) -> MergePlan -> Maybe CachedDoc -> CachedDoc
 assembleRubyGemsDocument _ bySource plan base = case anchor of
+    -- No anchor gives no native name or header, so serialiseRubyGemsDocument refuses this foreign sentinel.
     Nothing -> fst npmCached Null
     Just document -> fst rubyGemsCached document{gemRows = map snd (overlaySurvivors entries native plan)}
   where
