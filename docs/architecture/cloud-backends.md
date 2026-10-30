@@ -334,11 +334,10 @@ tag the mirror target declares picks the mint, see
 
 Operators store a bare secret on every ecosystem, and the declared backend decides how it travels.
 Each ecosystem's credential mapping renders the protocol's own scheme. A store can instead declare
-an abstract mechanism for each ecosystem and for each read or write: Bearer, Basic over the
-credential's username, or the raw key. The ecosystem's codec renders the declared mechanism on the
-mirror worker's target reads and writes, on a static publication token, and on the Dredger's store
-reads. CodeArtifact declares
-one row per ecosystem, following AWS's client configuration for each format. Registry and
+an abstract mechanism for each ecosystem and for each read or write: Bearer, Basic over a username,
+or the raw key. The ecosystem's codec renders the declared mechanism on the mirror worker's target
+reads and writes, on a static publication token, and on the Dredger's store reads. CodeArtifact
+declares one row per ecosystem, following AWS's client configuration for each format. Registry and
 Verdaccio stores declare nothing, so the protocol's own scheme applies to them.
 
 | Ecosystem | Protocol's own scheme | CodeArtifact reads | CodeArtifact writes |
@@ -349,7 +348,8 @@ Verdaccio stores declare nothing, so the protocol's own scheme applies to them.
 | RubyGems | Basic reads, the raw publication API key and an optional typed OTP | Basic | Bearer |
 
 The codec invents no username. Configuration supplies a generic store's username, and the
-CodeArtifact backend supplies `aws` for every Basic row. A new ecosystem adds one row to the
+CodeArtifact table carries `aws` in every Basic row. Configuration validation reads the same value,
+so a CodeArtifact target refuses any other username. A new ecosystem adds one row to the
 CodeArtifact table, and composition names no ecosystem. Caller credentials keep their native
 presentation. Hostname guessing cannot select a service credential scheme.
 
