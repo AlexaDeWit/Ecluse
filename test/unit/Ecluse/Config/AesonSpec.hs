@@ -355,18 +355,10 @@ spec = describe "decodeDocument" $ do
         fmap ((limProgressWindow &&& limMinProgressBytes) . cfgLimits) (expectAppConfig [] (Just "{\"limits\":{\"progressWindow\":0,\"minProgressBytes\":-1}}"))
             `shouldReturn` (0, -1)
 
-    describe "deprecated artifact count" $ do
-        it "loads a positive limits.maxArtifactCount through both layers with no effect on the limits" $ do
-            shipped <- cfgLimits <$> expectAppConfig [] Nothing
-            (cfgLimits <$> expectAppConfig [("ECLUSE_LIMITS__MAX_ARTIFACT_COUNT", "5")] Nothing) `shouldReturn` shipped
-            (cfgLimits <$> expectAppConfig [] (Just "{\"limits\":{\"maxArtifactCount\":5}}")) `shouldReturn` shipped
-            (cfgLimits <$> expectAppConfig [] (Just "{\"limits\":{\"maxArtifactCount\":null}}")) `shouldReturn` shipped
-
-        it "still refuses a non-positive limits.maxArtifactCount, through both layers" $ do
-            loadConfig [] (Just "{\"limits\":{\"maxArtifactCount\":0}}")
-                `shouldSatisfy` decodeErrorMentions "limits.maxArtifactCount must be a positive integer"
-            loadConfig [("ECLUSE_LIMITS__MAX_ARTIFACT_COUNT", "-1")] Nothing
-                `shouldSatisfy` decodeErrorMentions "limits.maxArtifactCount must be a positive integer"
+    it "refuses the removed limits.maxArtifactCount as an unknown key, through both layers" $
+        for_ ["5", "null"] $ \value -> do
+            loadConfig [] (Just ("{\"limits\":{\"maxArtifactCount\":" <> value <> "}}")) `shouldSatisfy` decodeErrorMentions "maxArtifactCount"
+            loadConfig [("ECLUSE_LIMITS__MAX_ARTIFACT_COUNT", "5")] Nothing `shouldSatisfy` decodeErrorMentions "maxArtifactCount"
 
     it "rejects a non-positive limits.maxAdvisoryDatabaseBytes" $
         loadConfig [] (Just "{\"limits\":{\"maxAdvisoryDatabaseBytes\":0}}")
