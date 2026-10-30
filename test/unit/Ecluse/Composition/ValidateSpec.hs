@@ -29,7 +29,8 @@ import Ecluse.Composition.BootError (
         RuleBlockedOnMount,
         StoreMaintenanceUnavailable,
         StoreTagConflict,
-        UploadConfigurationRequired
+        UploadConfigurationRequired,
+        UploadUrlRequired
     ),
     StoreMaintenanceReason (NoControlPlane, NoProtocolMaintenance, PrivateCacheUnavailable),
  )
@@ -118,7 +119,7 @@ mirrorCapabilitiesSpec = describe "role-specific mirror capabilities" $ do
             capabilityResult (BootMirrorPipeline role) app
                 `shouldBe` Left
                     [ MirrorStateRequired PyPI
-                    , UploadConfigurationRequired PyPI "mirrorTarget.registry.uploadUrl"
+                    , UploadUrlRequired PyPI "mirrorTarget.registry.uploadUrl"
                     , UploadConfigurationRequired PyPI "mirrorTarget.registry.username"
                     ]
     it "does not add mirror-state or writer dependencies to Dredger and Pilot" $ do
@@ -133,7 +134,7 @@ mirrorCapabilitiesSpec = describe "role-specific mirror capabilities" $ do
     it "requires only the native Cargo upload setting in both writer roles" $ do
         config <- expectConfig cargoMirrorEnv Nothing
         let app = withoutWriteSettings Cargo (configApp config)
-            upload = UploadConfigurationRequired Cargo "mirrorTarget.registry.uploadUrl"
+            upload = UploadUrlRequired Cargo "mirrorTarget.registry.uploadUrl"
         for_ [ServeAndMirror, MirrorOnly] $ \role -> do
             capabilityResult (BootMirrorPipeline role) app `shouldBe` Left [upload]
             capabilityResult (BootMirrorPipeline role) app{cfgMirrorState = Nothing} `shouldBe` Left [MirrorStateRequired Cargo, upload]
@@ -169,10 +170,19 @@ publicationCapabilitiesSpec = describe "PyPI publication credentials by boot rol
             it "accepts anonymous publication without a token or username" $ do
                 config <- expectConfig publicationEnv Nothing
                 publicationResult role config `shouldBe` Right [PyPI]
-    for_ [BootMirrorPipeline MirrorOnly, BootStorePruner, BootStorePreview, BootWithoutPipeline] $ \role ->
+            -- The earlier form named the upload endpoint in url, which now names the read root.
+            for_ legacyForms $ \(tag, env) ->
+                it ("refuses a " <> toString tag <> " publication target without uploadUrl") $ do
+                    config <- expectConfig env Nothing
+                    publicationResult role config `shouldBe` Left [UploadUrlRequired PyPI ("publicationTarget." <> tag <> ".uploadUrl")]
+    for_ [BootMirrorPipeline MirrorOnly, BootStorePruner, BootStorePreview, BootWithoutPipeline] $ \role -> do
         it ("does not require a publication username under " <> show role) $ do
             config <- expectConfig tokenEnv Nothing
             publicationResult role config `shouldBe` Right [PyPI]
+        it ("does not require a publication uploadUrl under " <> show role) $
+            for_ legacyForms $ \(_, env) -> do
+                config <- expectConfig env Nothing
+                publicationResult role config `shouldBe` Right [PyPI]
   where
     publicationKey = "ECLUSE_MOUNTS__PYPI__PUBLICATION_TARGET__REGISTRY__"
     publicationEnv =
@@ -185,6 +195,10 @@ publicationCapabilitiesSpec = describe "PyPI publication credentials by boot rol
         ]
             <> publicGateEnv
     tokenEnv = overrideEnv (publicationKey <> "TOKEN") "publish-write-token" publicationEnv
+    legacyForms =
+        [ ("registry", overrideEnv (publicationKey <> "URL") "https://publish.example.test/legacy/" (filter ((/= publicationKey <> "UPLOAD_URL") . fst) publicationEnv))
+        , ("codeArtifact", filter (not . isPrefixOf publicationKey . fst) publicationEnv <> [("ECLUSE_MOUNTS__PYPI__PUBLICATION_TARGET__CODE_ARTIFACT__URL", codeArtifactDomain <> "/pypi/first-party/")])
+        ]
 
 publicationResult :: BootRole -> Config -> Either [BootError] [Ecosystem]
 publicationResult role config =
@@ -196,7 +210,7 @@ cargoPublicationCapabilitiesSpec = describe "Cargo publication API by boot role"
     for_ [BootMirrorPipeline ServeAndMirror, BootMirrorPipeline ServeOnly] $ \role -> do
         it ("requires the native Cargo API root under " <> show role) $ do
             config <- expectConfig publicationEnv Nothing
-            publicationResult role config `shouldBe` Left [UploadConfigurationRequired Cargo "publicationTarget.registry.uploadUrl"]
+            publicationResult role config `shouldBe` Left [UploadUrlRequired Cargo "publicationTarget.registry.uploadUrl"]
         it ("clears a Cargo token without a username under " <> show role) $ do
             config <- expectConfig (overrideEnv (publicationKey <> "TOKEN") "publisher-token" completeEnv) Nothing
             (Map.lookup Cargo (cfgMounts (configApp config)) >>= mntPublicationTarget >>= peUsername) `shouldBe` Nothing

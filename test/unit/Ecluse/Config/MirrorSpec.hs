@@ -94,6 +94,16 @@ spec = describe "native mirror declarations" $ do
                 )
                 Nothing
                 `shouldBe` Left [ParseError "mirrorTarget.codeArtifact.uploadUrl must address /cargo/{repository}/"]
+    describe "CodeArtifact publication upload endpoints" $ do
+        for_ ["/pypi/cache/", "/pypi/cache/legacy/"] $ \path ->
+            it ("accepts the publication upload path " <> path) $ do
+                config <- expectConfig (codeArtifactPublicationUploadEnv (codeArtifactHost <> path)) Nothing
+                let target = mntPublicationTarget =<< Map.lookup PyPI (cfgMounts (configApp config))
+                fmap (fmap registryUrlText . peUploadUrl) target `shouldBe` Just (Just (toText (codeArtifactHost <> path)))
+        for_ [("repository root", "/pypi/other/"), ("repository upload path", "/pypi/other/legacy/")] $ \(identityPart, path) ->
+            it ("refuses a publication upload to another " <> identityPart) $
+                loadConfig (codeArtifactPublicationUploadEnv (codeArtifactHost <> path)) Nothing
+                    `shouldBe` Left [ParseError "CodeArtifact publication uploadUrl must address the same read repository"]
     it "refuses malformed state URLs through the existing object-store parser" $
         loadConfig (overrideEnv stateKey "https://target.example.test/state" pypiMirrorEnv) Nothing `shouldSatisfy` isLeft
     it "does not require state or upload settings for a serve-only mount" $
@@ -134,6 +144,12 @@ publicationEnv tag url =
         <> [ ("ECLUSE_MOUNTS__PYPI__ENABLED", "true")
            , (publicationPrefix tag <> "URL", url)
            ]
+
+-- The new form: url is the repository's read root, and uploadUrl is where publication posts.
+codeArtifactPublicationUploadEnv :: String -> [(String, String)]
+codeArtifactPublicationUploadEnv upload =
+    overrideEnv (publicationPrefix "CODE_ARTIFACT" <> "UPLOAD_URL") upload $
+        publicationEnv "CODE_ARTIFACT" (codeArtifactHost <> "/pypi/cache/")
 
 codeArtifactPublicationEnv :: [(String, String)]
 codeArtifactPublicationEnv =

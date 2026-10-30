@@ -133,6 +133,13 @@ renderBootErrorSpec = describe "renderBootError" $
             `shouldNotSatisfy` infixed "AWS_ENDPOINT_URL_SQS"
         renderBootError (CodeArtifactMintFailed ("ECLUSE_MOUNTS__NPM__MIRROR_TARGET" :| []) "AccessDenied") `shouldSatisfy` infixed "transient"
         renderBootError (FirstPartyMissing Npm) `shouldSatisfy` infixed "ECLUSE_MOUNTS__NPM__FIRST_PARTY"
+        -- The refusal says what each key means, so an operator whose url holds the upload endpoint sees the fix.
+        renderBootError (UploadUrlRequired PyPI "publicationTarget.registry.uploadUrl")
+            `shouldSatisfy` infixed "mounts.pypi.publicationTarget.registry.uploadUrl (ECLUSE_MOUNTS__PYPI__PUBLICATION_TARGET__REGISTRY__UPLOAD_URL) is required"
+        renderBootError (UploadUrlRequired PyPI "publicationTarget.registry.uploadUrl")
+            `shouldSatisfy` infixed "url names where Écluse reads and uploadUrl names where it writes"
+        renderBootError (UploadUrlRequired PyPI "publicationTarget.registry.uploadUrl")
+            `shouldSatisfy` infixed "move that address to uploadUrl and set url to the registry's read root"
         renderBootError (PublishStaticCredentialNeedsEdge Npm TagVerdaccio) `shouldSatisfy` infixed "ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET__VERDACCIO__TOKEN"
         renderBootError (PublicationTargetOnPublicUpstream Npm PyPI "https://store.example.test")
             `shouldSatisfy` infixed "ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET (https://store.example.test) shares a host with ECLUSE_MOUNTS__PYPI__PUBLIC_UPSTREAM"
