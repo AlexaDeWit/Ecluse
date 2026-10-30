@@ -78,6 +78,12 @@ spec = do
         it "pins the entry floor" $ do
             entryFloor denseFigures `shouldBe` 704
             toInteger entryFloorBytes `shouldBe` entryFloor denseFigures
+        it "derives the release floor from every dense and minimal-body figure" $
+            releaseFloor `shouldBe` 1152
+        it "keeps each minimal-body figure's regression limit below the release floor" $
+            for_ minimalBodyFigures $ \figures -> do
+                readPeakLimit (entryReadPeak figures) `shouldSatisfy` (< 1000 * releaseFloor)
+                heldLimit (entryHeld figures) `shouldSatisfy` (< 1000 * releaseFloor)
         it "keeps each dense figure's regression limit below the entry floor" $
             for_ denseFigures $ \figures -> do
                 readPeakLimit (entryReadPeak figures) `shouldSatisfy` (< 1000 * entryFloor denseFigures)
