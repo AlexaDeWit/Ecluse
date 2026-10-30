@@ -3,7 +3,7 @@
 -- SPDX-License-Identifier: MIT
 
 {- | Serve caller-authorised private artifacts and policy-admitted public artifacts.
-The selected view controls fallback. GET and HEAD share admission.
+A private miss falls back to the public leg except for a first-party name. GET and HEAD share admission.
 -}
 module Ecluse.Core.Server.Pipeline.Tarball (
     tarballAction,
@@ -11,7 +11,7 @@ module Ecluse.Core.Server.Pipeline.Tarball (
     headTarball,
 ) where
 
-import Network.HTTP.Types (Method, status401, status404, status500)
+import Network.HTTP.Types (Method, status401, status500)
 import Network.Wai (Request, ResponseReceived, requestHeaders)
 
 import Ecluse.Core.Credential (ClientCredential)
@@ -21,7 +21,6 @@ import Ecluse.Core.Server.Context (
     Handler,
     MountBinding (bindingPackumentDeps),
     PackumentDeps (..),
-    ReadSourceSelection (..),
     ResponseAction (RunPipeline),
     ServeRuntime (..),
     ctxMount,
@@ -112,12 +111,9 @@ tarballWith mode replies name version file request respond = do
                 , arFile = file
                 , arRespond = respond
                 }
-    if not (edgeTokenMatches (pdInboundToken deps) token)
-        then liftIO (respond (tarballError replies status401 [] (mkRefusal Nothing unauthorisedMessage)))
-        else
-            if pdReadSourceSelection deps == ManagedMirrorAndPublic && pdFirstParty deps name
-                then liftIO (respond (tarballError replies status404 [] (mkRefusal (pdHelp deps) "first-party packages require the private registry view")))
-                else serveArtifactLegs ctx token
+    if edgeTokenMatches (pdInboundToken deps) token
+        then serveArtifactLegs ctx token
+        else liftIO (respond (tarballError replies status401 [] (mkRefusal Nothing unauthorisedMessage)))
 
 -- The private leg first, then the gated public leg on a miss.
 serveArtifactLegs :: ArtifactRequest response -> Maybe ClientCredential -> Handler ResponseReceived
@@ -128,7 +124,7 @@ serveArtifactLegs ctx token =
             liftIO (mpServeDecision (srMetrics (arRuntime ctx)) decision)
             pure received
         PrivateMissed miss
-            | pdReadSourceSelection (arDeps ctx) == PrivateOnly || pdFirstParty (arDeps ctx) (arPackage ctx) -> refuseFirstParty ctx miss
+            | pdFirstParty (arDeps ctx) (arPackage ctx) -> refuseFirstParty ctx miss
             | otherwise -> servePublicArtifact ctx
 
 -- A first-party name has one authority, so its private miss ends the request here rather than

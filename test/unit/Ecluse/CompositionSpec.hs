@@ -67,7 +67,6 @@ import Ecluse.Core.Server.Context (
     MountBinding (bindingPackumentDeps, bindingPrefix, bindingPublishDeps),
     PackumentDeps (..),
     PublishDeps (..),
-    ReadSourceSelection (MergePrivateAndPublic),
     pdMirror,
     pdPrivateBaseUrl,
     pdPublicBaseUrl,
@@ -312,7 +311,6 @@ planMountsSpec = describe "resolveBootWiring (config-driven serving)" $ do
                 let deps = bindingPackumentDeps binding
                 fmap registryUrlText (pdPrivateBaseUrl deps) `shouldBe` Just "https://private.example.test/"
                 mirrorTargetText (pdMirror deps) `shouldBe` Just "https://target.example.test/"
-                pdReadSourceSelection deps `shouldBe` MergePrivateAndPublic
                 pdMountBaseUrl deps `shouldBe` "https://registry.example.test/cargo"
             other -> expectationFailure ("expected one binding, got " <> show (fmap length other))
 

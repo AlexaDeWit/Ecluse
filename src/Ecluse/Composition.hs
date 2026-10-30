@@ -85,7 +85,7 @@ import Ecluse.Core.Rules.Outage (SourceReporter (noteAdmission))
 import Ecluse.Core.Security (Limits, maxPublishRequestBytes)
 import Ecluse.Core.Security.Egress (RegistryUrl, mkRegistryUrl)
 import Ecluse.Core.Server.Admission.Bytes (ByteAdmission)
-import Ecluse.Core.Server.Context (MountBinding, PackumentDeps (..), PublishDeps (..), ReadSourceSelection (..))
+import Ecluse.Core.Server.Context (MountBinding, PackumentDeps (..), PublishDeps (..))
 import Ecluse.Core.Server.Response (HelpMessage, mkHelpMessage)
 import Ecluse.Core.Server.Upstream (MirrorServePlan (MirrorOnAdmit, NoMirrorWrite), mountUpstreams)
 import Ecluse.Core.Text (stripTrailingSlash)
@@ -234,7 +234,6 @@ packumentDepsFor ctx adapter mount mcfg = do
             , pdMetadata = adapterMetadata adapter
             , pdArtifact = adapterArtifact adapter
             , pdEgressUrl = mkRegistryUrl
-            , pdReadSourceSelection = MergePrivateAndPublic
             , pdMirrorState = Nothing
             , pdMetadataCompression = srvMetadataGzip (cfgServer app)
             }

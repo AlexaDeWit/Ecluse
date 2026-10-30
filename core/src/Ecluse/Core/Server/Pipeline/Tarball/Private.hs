@@ -3,8 +3,8 @@
 -- SPDX-License-Identifier: MIT
 {-# LANGUAGE TupleSections #-}
 
-{- | Read private archives under the caller's credential and the selected source policy.
-Access refusals stop fallback, and managed views require retained completion proof.
+{- | Read private archives under the caller's credential.
+Access refusals stop fallback, and managed mirror copies require retained completion proof.
 -}
 module Ecluse.Core.Server.Pipeline.Tarball.Private (
     PrivateLeg (..),
@@ -53,7 +53,6 @@ import Ecluse.Core.Server.Admission.Meter (MemoryTicket)
 import Ecluse.Core.Server.Context (
     Handler,
     PackumentDeps (..),
-    ReadSourceSelection (..),
     ServeRuntime (..),
     pdPrivateBase,
     pdTarballHostGate,
@@ -129,7 +128,7 @@ streamPrivateArtifact ctx token = do
 privateMetadataAdmissionRequired :: ArtifactRequest response -> Bool
 privateMetadataAdmissionRequired ctx =
     artifactPrivateAddressing (pdArtifact deps) == AdmittedIndexedArtifactLocation
-        || (isJust (pdMirrorState deps) && pdReadSourceSelection deps /= PrivateOnly && not (pdFirstParty deps (arPackage ctx)))
+        || (isJust (pdMirrorState deps) && not (pdFirstParty deps (arPackage ctx)))
   where
     deps = arDeps ctx
 
@@ -149,9 +148,7 @@ privateArtifactRequest ticket ctx token
         Just privateBase
             | not (tarballHostHonoured TrustedOrigin deps privateHostPort privateHostPort) -> pure (PrivateMissing MissAbsent)
             | otherwise -> case artifactPrivateAddressing (pdArtifact deps) of
-                ConventionalArtifactPath
-                    | pdReadSourceSelection deps == ManagedMirrorAndPublic -> pure (PrivateMissing MissAbsent)
-                    | otherwise -> pure (byConventionalPath privateBase)
+                ConventionalArtifactPath -> pure (byConventionalPath privateBase)
                 IndexedArtifactLocation -> indexed privateBase
                 AdmittedIndexedArtifactLocation -> indexed privateBase
   where
@@ -171,26 +168,19 @@ byIndexedLocation ticket ctx token privateBase privateHostPort = do
         Right (Left (MetadataAuthorisationFailure code)) -> pure (PrivateRefused code)
         _ -> case (pdMirrorState deps, ticket) of
             (Just mirror, Just admitted)
-                | pdReadSourceSelection deps /= PrivateOnly && not (pdFirstParty deps (arPackage ctx)) ->
+                | not (pdFirstParty deps (arPackage ctx)) ->
                     liftIO (validateMirrorProject mirror admitted (arPackage ctx)) >>= \case
                         Left _ -> pure PrivateUnavailable
-                        Right Nothing -> pure (unmanaged resolved)
+                        Right Nothing -> pure (ordinary resolved)
                         Right (Just (_, record)) -> case recordVersion (arVersion ctx) record of
-                            Nothing -> pure (unmanaged resolved)
+                            Nothing -> pure (ordinary resolved)
                             Just expected -> case mirrorVersionView (arVersion ctx) record (either (const Nothing) (either (const Nothing) vrVersion) resolved) of
                                 Left _ -> pure (PrivateIncomplete expected)
                                 Right _ | Map.notMember (unFilename (arFile ctx)) (versionFiles expected) -> pure (PrivateMissing MissAbsent)
                                 Right restored -> pure (maybe PrivateUnavailable (PrivateRequest True) (restored >>= requestForDetails . vdDetails))
-            _ -> pure (unmanaged resolved)
+            _ -> pure (ordinary resolved)
   where
     deps = arDeps ctx
-
-    unmanaged resolved
-        | pdReadSourceSelection deps == ManagedMirrorAndPublic = case resolved of
-            Right (Left err) -> privateMetadataFailure err
-            Left _ -> PrivateMissing MissUnresolved
-            _ -> PrivateMissing MissAbsent
-        | otherwise = ordinary resolved
 
     ordinary = \case
         Left _ -> PrivateMissing MissUnresolved
