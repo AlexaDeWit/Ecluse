@@ -23,11 +23,12 @@ import Ecluse.Core.Mirror.State (
     extendProjectRecord,
     stateTarget,
  )
+import Ecluse.Core.Mirror.State.Format (MirrorStateFormat)
 import Ecluse.Core.Mirror.State.Internal (StateRevision (StateRevision))
 import Ecluse.Core.Package (PackageName)
 import Ecluse.Core.Registry.Adapter (RegistryAdapter (adapterPublish))
 import Ecluse.Core.Registry.Adapter.Capability (AdapterPublish (publishMirrorRequirements), MirrorRequirements (mirrorStateRequirement), MirrorStateRequirement (DurableVersionState))
-import Ecluse.Core.Registry.PyPI.Mirror (pypiMirrorDocuments)
+import Ecluse.Core.Registry.PyPI.Mirror (pypiMirrorDocuments, pypiStateFormat)
 import Ecluse.Core.Server.Admission.Meter (withMemoryEntry)
 import Ecluse.Core.Server.Cache (CacheConfig (cacheMaxBytes, cacheMaxEntries))
 import Ecluse.Core.Server.Cache.Backend.Local (newLocalPool)
@@ -66,7 +67,7 @@ spec = describe "durable mirror state allocation" $ do
         inventory <- mirrorSample [1] False "https://public.test/" "original source"
         let expectedTarget = stateTarget "https://target.example.test/"
             revision = StateRevision expectedTarget mirrorPackage "revision"
-        record <- expectRight (extendProjectRecord testLimits expectedTarget inventory Nothing)
+        record <- expectRight (extendProjectRecord pypiStateFormat testLimits expectedTarget inventory Nothing)
         observedReads <- newIORef []
         let store = readOnlyStore $ \name previous -> do
                 modifyIORef' observedReads (<> [(name, previous)])
@@ -104,18 +105,18 @@ settings env = do
     plan <- expectValidated config
     pure (vpSettings plan, vpMounts plan)
 
-allocateWith :: (Text -> Text -> StateTarget -> IO MirrorState) -> AppConfig -> [VettedMount] -> IO (Map Ecosystem MirrorStateBinding)
+allocateWith :: (MirrorStateFormat -> Text -> Text -> StateTarget -> IO MirrorState) -> AppConfig -> [VettedMount] -> IO (Map Ecosystem MirrorStateBinding)
 allocateWith allocate app mounts = do
     pool <- newLocalPool (cacheMaxEntries defaultCacheConfig) (cacheMaxBytes defaultCacheConfig)
     newMirrorStatesWith allocate app mounts testLimits defaultCacheConfig pool
 
-recordingAllocator :: IORef [(Text, Text, StateTarget)] -> MirrorState -> Text -> Text -> StateTarget -> IO MirrorState
-recordingAllocator calls store bucket prefix target = do
+recordingAllocator :: IORef [(Text, Text, StateTarget)] -> MirrorState -> MirrorStateFormat -> Text -> Text -> StateTarget -> IO MirrorState
+recordingAllocator calls store _ bucket prefix target = do
     modifyIORef' calls (<> [(bucket, prefix, target)])
     pure store
 
-forbiddenAllocator :: Text -> Text -> StateTarget -> IO MirrorState
-forbiddenAllocator _ _ _ = unexpected
+forbiddenAllocator :: MirrorStateFormat -> Text -> Text -> StateTarget -> IO MirrorState
+forbiddenAllocator _ _ _ _ = unexpected
 
 readOnlyStore :: (PackageName -> Maybe StateRevision -> IO (Either MirrorStateFault StateRead)) -> MirrorState
 readOnlyStore readProject = MirrorState (const readProject) (\_ _ _ _ -> unexpected) (\_ _ -> unexpected) (\_ _ -> unexpected)

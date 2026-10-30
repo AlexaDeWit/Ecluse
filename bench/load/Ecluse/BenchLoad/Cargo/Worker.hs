@@ -19,6 +19,7 @@ import Ecluse.Core.Registry.Adapter (adapterFor)
 import Ecluse.Core.Registry.Adapter.Capability (AdapterMetadata (metadataChargeFactors))
 import Ecluse.Core.Registry.Adapter.Types (RegistryAdapter (adapterArtifact, adapterMetadata))
 import Ecluse.Core.Registry.Cargo.Metadata (prepareCargoRead)
+import Ecluse.Core.Registry.Cargo.Mirror (cargoStateFormat)
 import Ecluse.Core.Registry.Cargo.Publish (cargoPublishCodec)
 import Ecluse.Core.Registry.Metadata (versionEvaluation)
 import Ecluse.Core.Registry.Metadata.Fetch.Preparation (prepareVersion)
@@ -48,6 +49,7 @@ boot knobs use = do
                 { nwSourceApp = sourceApp latency fixture
                 , nwTargetApp = targetApp latency fixture
                 , nwStateApp = stateApp latency fixture
+                , nwStateFormat = cargoStateFormat
                 , nwPolicy = cargoPolicy adapter
                 , nwJob = MirrorJob fixturePackage fixtureVersion (Just (unsafeFilename fixtureTrigger)) Nothing
                 , nwExpectedFiles = 1
@@ -75,6 +77,7 @@ cargoPolicy adapter environment = do
             , wpEgressUrl = Right . loopbackRegistryUrl
             , wpArtifact = adapterArtifact adapter
             , wpPublish = publish
+            , wpMirrorFormat = cargoStateFormat
             , wpArtifactLimits = defaultLimits
             , wpMirrorState = Just (weMirrorState environment)
             , wpNow = pure benchNow

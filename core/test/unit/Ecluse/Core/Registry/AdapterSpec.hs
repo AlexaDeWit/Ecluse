@@ -5,30 +5,21 @@
 -- | Ecosystem dispatch and unsupported rule declarations.
 module Ecluse.Core.Registry.AdapterSpec (spec) where
 
-import Prelude hiding (universe)
-
 import Data.Map.Strict qualified as Map
-import Data.Universe.Class (Universe (universe))
 import Test.Hspec
 
 import Ecluse.Core.Ecosystem (Ecosystem (Cargo, Npm, PyPI, RubyGems))
-import Ecluse.Core.Mirror.Documents (MirrorDocuments (mdCompanions))
-import Ecluse.Core.Package (mkPackageName)
+import Ecluse.Core.Mirror.State.Format (MirrorStateFormat (msfCompanions))
 import Ecluse.Core.Registry (CompanionRequirement (DeclaredCompanions, NativeCompanions))
 import Ecluse.Core.Registry.Adapter (adapterEcosystem, adapterFor, adapterMetadata, adapterPublish, adapterRuleBlocks, uploadEndpointFor)
 import Ecluse.Core.Registry.Adapter.Capability (
     AdapterMetadata (metadataChargeFactors),
     AdapterPublish (publishMirrorRequirements),
-    MirrorRequirements (mirrorStateRequirement),
+    MirrorRequirements (mirrorStateFormat),
     UploadEndpointRequirement (ExplicitUploadEndpoint, ReadRootUpload),
     companionsAgree,
-    durableMirrorDocuments,
  )
-import Ecluse.Core.Registry.Cargo.Document (cargoDocument)
 import Ecluse.Core.Registry.Cargo.Metadata (cargoChargeFactors)
-import Ecluse.Core.Registry.MirrorUpload (MirrorReadData (CargoMirrorRead, PyPIMirrorRead, RubyGemsMirrorRead), readDataCompanions)
-import Ecluse.Core.Registry.PyPI.Document (simpleDocument)
-import Ecluse.Core.Registry.RubyGems.Document (GemDocument (GemDocument))
 import Ecluse.Core.Registry.RubyGems.Metadata (rubyGemsChargeFactors)
 
 import Ecluse.Core.Rules.Types (RuleType (AllowScopeType, DenyExternalDependenciesType, DenyIfDeprecatedType, DenyIfYankedType, DenyInstallTimeExecutionType))
@@ -80,12 +71,8 @@ spec = describe "adapterFor (the ecosystem adapter registry)" $ do
             `shouldBe` [Just True, Just True, Just True, Just True]
 
     it "requires native companions only for RubyGems' durable mirror" $
-        map (fmap mdCompanions . durableDocuments) [Npm, PyPI, Cargo, RubyGems]
-            `shouldBe` [Nothing, Just DeclaredCompanions, Just DeclaredCompanions, Just NativeCompanions]
-
-    it "declares each durable adapter's companion requirement as mirror state applies it to the format's read data" $
-        Map.fromList [(eco, mdCompanions documents) | eco <- universe, Just documents <- [durableDocuments eco]]
-            `shouldBe` Map.map readDataCompanions retainedReadData
+        map (fmap (msfCompanions . mirrorStateFormat . publishMirrorRequirements) . (adapterFor >=> adapterPublish)) [Npm, PyPI, Cargo, RubyGems]
+            `shouldBe` [Just DeclaredCompanions, Just DeclaredCompanions, Just DeclaredCompanions, Just NativeCompanions]
 
     it "declares separate read and write endpoints for exactly PyPI and Cargo" $
         map uploadEndpointFor [Npm, PyPI, RubyGems, Cargo]
@@ -102,16 +89,3 @@ spec = describe "adapterFor (the ecosystem adapter registry)" $ do
                     , (AllowScopeType, "RubyGems package names have no scope.")
                     ]
                 )
-
--- | The documents an ecosystem's registered adapter declares for durable version state.
-durableDocuments :: Ecosystem -> Maybe MirrorDocuments
-durableDocuments = adapterFor >=> adapterPublish >=> durableMirrorDocuments . mirrorStateRequirement . publishMirrorRequirements
-
--- | One read-data value per durable format. A durable adapter without one here fails the agreement case.
-retainedReadData :: Map Ecosystem MirrorReadData
-retainedReadData =
-    Map.fromList
-        [ (PyPI, PyPIMirrorRead (simpleDocument mempty []))
-        , (Cargo, CargoMirrorRead (cargoDocument []))
-        , (RubyGems, RubyGemsMirrorRead (GemDocument (mkPackageName RubyGems Nothing "thing") "" []))
-        ]

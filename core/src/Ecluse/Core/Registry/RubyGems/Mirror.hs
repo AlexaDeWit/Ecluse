@@ -6,15 +6,20 @@
 module Ecluse.Core.Registry.RubyGems.Mirror (
     rubyMirrorCompanion,
     rubyGemsMirrorDocuments,
+    rubyGemsStateFormat,
     mirrorRow,
 ) where
 
+import Data.Aeson (Value (Object))
+import Data.ByteString qualified as BS
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 
 import Ecluse.Core.Deadline (inspectionDeadline)
 import Ecluse.Core.Mirror.Documents (MirrorDocuments (..), restoreFragments)
 import Ecluse.Core.Mirror.State (MirrorVersion, recordPackage)
+import Ecluse.Core.Mirror.State.Format (MirrorStateFormat (..), noProjectEnvelope)
+import Ecluse.Core.Mirror.State.Weight (fragmentShellAllowance)
 import Ecluse.Core.Package (Artifact (..), PackageDetails (pkgArtifacts, pkgPublishedAt))
 import Ecluse.Core.Package.Entry (EntryKey (RecordEntry))
 import Ecluse.Core.Registry (ParseError (parseErrorMessage), PublishFault (PublishSourceUnavailable))
@@ -26,7 +31,8 @@ import Ecluse.Core.Registry.RubyGems.CompactSpec (compactSpecBytes, validateComp
 import Ecluse.Core.Registry.RubyGems.Document (GemDocument (..), GemRow (..))
 import Ecluse.Core.Registry.RubyGems.Project (coordinateFilename, gemFileStem)
 import Ecluse.Core.Registry.RubyGems.Request (compactSpecPath, gemPath)
-import Ecluse.Core.Registry.RubyGems.SourceState (gemSourceCompanions, gemSourcePublishedAt)
+import Ecluse.Core.Registry.RubyGems.SourceState (gemSourceCompanions, gemSourceDecodeCharge, gemSourcePublishedAt, gemSourceValue, parseGemSource)
+import Ecluse.Core.Server.Cache.VersionWeight.Fields (retainedRawWeight)
 import Ecluse.Core.Server.Path (unFilename)
 
 -- | A companion cannot supply authority or substitute another platform's specification.
@@ -56,7 +62,27 @@ rubyGemsMirrorDocuments =
         , mdAssemble = \record docs ->
             let documents = [document | doc <- docs, Just raw <- [vdRaw doc], Just document <- [snd rubyGemsCached raw]]
              in fst rubyGemsCached (GemDocument (recordPackage record) (maybe mempty gemHeader (listToMaybe documents)) (concatMap gemRows documents))
-        , mdCompanions = gemSourceCompanions
+        }
+
+-- | Each fragment keeps its rows' exact source bytes and record positions, reparsed on every decode.
+rubyGemsStateFormat :: MirrorStateFormat
+rubyGemsStateFormat =
+    MirrorStateFormat
+        { msfKind = "rubygems"
+        , msfEncodeSource = \case
+            RubyGemsMirrorRead document -> Just (gemSourceValue document)
+            _ -> Nothing
+        , msfDecodeSource = fmap RubyGemsMirrorRead . parseGemSource . Object
+        , msfDecodeCharge = gemSourceDecodeCharge
+        , msfForceSource = \case
+            RubyGemsMirrorRead document -> foldl' (\() row -> BS.length (grSource row) `seq` ()) () (gemRows document)
+            _ -> ()
+        , msfEnvelope = noProjectEnvelope "RubyGems"
+        , msfFragmentShell = const fragmentShellAllowance
+        , msfSourceWeight = \case
+            RubyGemsMirrorRead document -> retainedRawWeight (fst rubyGemsCached document)
+            _ -> 0
+        , msfCompanions = gemSourceCompanions
         }
 
 -- The first fragment's header and details carry the version, and its publication time covers every restored row.

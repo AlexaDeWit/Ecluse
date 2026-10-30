@@ -3,7 +3,7 @@
 -- SPDX-License-Identifier: MIT
 
 -- | Durable graph accounting counts aliases per occurrence and complete text backing allocations.
-module Ecluse.Core.Mirror.State.Weight (retainedRecordWeight, retainedFragmentWeight, valueBackingExcess) where
+module Ecluse.Core.Mirror.State.Weight (retainedRecordWeight, retainedFragmentWeight, fragmentShellAllowance, sourceEntriesWeight, valueBackingExcess) where
 
 import Data.Aeson (Value (..))
 import Data.Aeson.Key qualified as Key
@@ -11,55 +11,48 @@ import Data.Aeson.KeyMap qualified as KeyMap
 import Data.Map.Strict qualified as Map
 import Data.Text.Unsafe (lengthWord8)
 
-import Ecluse.Core.Ecosystem (Ecosystem (PyPI))
+import Ecluse.Core.Mirror.State.Format (MirrorStateFormat (msfFragmentShell, msfSourceWeight))
 import Ecluse.Core.Mirror.State.Internal
 import Ecluse.Core.Package
+import Ecluse.Core.Package.Entry (EntryKey)
 import Ecluse.Core.Registry (MirrorArtifact (..))
-import Ecluse.Core.Registry.CachedDocument (cargoCached, estimateValueBytes, npmCached, pypiSimpleCached, rubyGemsCached)
-import Ecluse.Core.Registry.Cargo.Document (cargoRecords)
-import Ecluse.Core.Registry.MirrorUpload (ExpectedMirrorFile, MirrorReadData (..), expectedArtifact, expectedDescriptor)
-import Ecluse.Core.Registry.PyPI.Document (simpleEnvelope, simpleFiles)
+import Ecluse.Core.Registry.CachedDocument (estimateValueBytes)
+import Ecluse.Core.Registry.MirrorUpload (ExpectedMirrorFile, expectedArtifact, expectedDescriptor)
 import Ecluse.Core.Server.Cache.VersionWeight.Fields
 import Ecluse.Core.Server.MemoryModel (expandWireBytesInteger)
 import Ecluse.Core.Server.Path (unFilename)
 import Ecluse.Core.Text (textStorageBytes)
 
 -- | The project shell covers map roots and fixed identities. Companion bodies belong to their read reservation.
-retainedRecordWeight :: ProjectMirrorRecord -> Integer
-retainedRecordWeight record =
+retainedRecordWeight :: MirrorStateFormat -> ProjectMirrorRecord -> Integer
+retainedRecordWeight format record =
     4096
         + textWeight (targetKey (recordTarget record))
         + nameWeight (recordPackage record)
         + expandWireBytesInteger (toInteger (estimateValueBytes envelope))
         + valueBackingExcess envelope
-        + sum [256 + textWeight key + versionWeight version | (key, version) <- Map.toList (recordVersions record)]
+        + sum [256 + textWeight key + versionWeight format version | (key, version) <- Map.toList (recordVersions record)]
   where
     envelope = Object (recordEnvelope record)
 
-versionWeight :: MirrorVersion -> Integer
-versionWeight version =
-    sum (map retainedFragmentWeight (toList (versionFragments version)))
+versionWeight :: MirrorStateFormat -> MirrorVersion -> Integer
+versionWeight format version =
+    sum (map (retainedFragmentWeight format) (toList (versionFragments version)))
         + sum [256 + textWeight name + hashWeight digest | (name, digest) <- Map.toList (versionVerifiedIdentities version)]
         + sum [256 + textWeight name + companionWeight companion | (name, companion) <- Map.toList (versionCompanions version)]
 
--- | PyPI's three 256-byte blocks cover identity, parsed/time/install shells, and fragment/source roots.
-retainedFragmentWeight :: StoredMirrorFragment -> Integer
-retainedFragmentWeight (StoredMirrorFragment details source expected) =
-    shell + detailsFieldsWeight details + sourceWeight source + sum (map expectedWeight (toList expected))
-  where
-    shell = case source of
-        PyPIMirrorRead _ | pkgEcosystem (pkgName details) == PyPI -> 768
-        _ -> 256 + 16 * 1024
+-- | A fragment's format declares its shell allowance and its stored source's weight.
+retainedFragmentWeight :: MirrorStateFormat -> StoredMirrorFragment -> Integer
+retainedFragmentWeight format (StoredMirrorFragment details source expected) =
+    msfFragmentShell format details + detailsFieldsWeight details + msfSourceWeight format source + sum (map expectedWeight (toList expected))
 
-sourceWeight :: MirrorReadData -> Integer
-sourceWeight = \case
-    NpmMirrorRead fields -> retainedRawWeight (fst npmCached (Object fields)) + valueBackingExcess (Object fields)
-    PyPIMirrorRead document ->
-        retainedRawWeight (fst pypiSimpleCached document)
-            + valueBackingExcess (Object (simpleEnvelope document))
-            + sum [weighEntryKey key + valueBackingExcess value | (key, value) <- simpleFiles document]
-    RubyGemsMirrorRead document -> retainedRawWeight (fst rubyGemsCached document)
-    CargoMirrorRead document -> retainedRawWeight (fst cargoCached document) + sum [weighEntryKey key + valueBackingExcess value | (key, value) <- cargoRecords document]
+-- | A fragment's shell allowance for its identity, parsed version, time and install facts, and source roots.
+fragmentShellAllowance :: Integer
+fragmentShellAllowance = 256 + 16 * 1024
+
+-- | Stored entries' coordinates and the uncounted backing of their values.
+sourceEntriesWeight :: [(EntryKey, Value)] -> Integer
+sourceEntriesWeight entries = sum [weighEntryKey key + valueBackingExcess value | (key, value) <- entries]
 
 expectedWeight :: ExpectedMirrorFile -> Integer
 expectedWeight expected =

@@ -30,6 +30,7 @@ import UnliftIO (MonadUnliftIO)
 import Ecluse.Core.Ecosystem (Ecosystem)
 import Ecluse.Core.Fault (TransportFault)
 import Ecluse.Core.Mirror.State (MirrorState, StateCharge, StateTarget)
+import Ecluse.Core.Mirror.State.Format (MirrorStateFormat)
 import Ecluse.Core.Package (PackageName, renderPackageName)
 import Ecluse.Core.Package.Integrity (MinIntegrity)
 import Ecluse.Core.Queue (MirrorJob (jobPackage, jobVersion), MirrorQueue)
@@ -84,6 +85,8 @@ data WorkerPolicy = WorkerPolicy
     -- ^ The mount ecosystem's artifact capability. A job's @GET@ rides its by-URL member.
     , wpPublish :: MirrorPublish
     -- ^ Bind inventory reads and publication to the mount's declared mirror target.
+    , wpMirrorFormat :: MirrorStateFormat
+    -- ^ How the mount's mirror records keep its adapter's read data, durable or not.
     , wpArtifactLimits :: Limits
     -- ^ Bound artifact downloads by the memory plan's mirror-artifact allocation.
     , wpMirrorState :: Maybe WorkerMirrorState

@@ -20,8 +20,9 @@ import Ecluse.Config (
  )
 import Ecluse.Core.Ecosystem (Ecosystem)
 import Ecluse.Core.Mirror.State (MirrorState, StateTarget, stateTarget)
+import Ecluse.Core.Mirror.State.Format (MirrorStateFormat)
 import Ecluse.Core.Registry.Adapter (adapterPublish)
-import Ecluse.Core.Registry.Adapter.Capability (AdapterPublish (publishMirrorRequirements), MirrorRequirements (mirrorStateRequirement), durableMirrorDocuments)
+import Ecluse.Core.Registry.Adapter.Capability (AdapterPublish (publishMirrorRequirements), MirrorRequirements (mirrorStateFormat, mirrorStateRequirement), durableMirrorDocuments)
 import Ecluse.Core.Security (Limits)
 import Ecluse.Core.Security.Egress (registryUrlText)
 import Ecluse.Core.Server.Cache (CacheConfig (cacheTtl), StoreBudget (StoreBudget))
@@ -35,21 +36,23 @@ data MirrorStateBinding = MirrorStateBinding
     , msbView :: MirrorView
     }
 
--- | Allocate only declared durable mirrors. The caller owns the shared retention pool and storage constructor.
-newMirrorStatesWith :: (Text -> Text -> StateTarget -> IO MirrorState) -> AppConfig -> [VettedMount] -> Limits -> CacheConfig -> LocalPool -> IO (Map Ecosystem MirrorStateBinding)
+-- | Allocate only declared durable mirrors, each bound to its adapter's state format. The caller owns the shared retention pool and storage constructor.
+newMirrorStatesWith :: (MirrorStateFormat -> Text -> Text -> StateTarget -> IO MirrorState) -> AppConfig -> [VettedMount] -> Limits -> CacheConfig -> LocalPool -> IO (Map Ecosystem MirrorStateBinding)
 newMirrorStatesWith allocate app mounts limits cacheConfig pool = case cfgMirrorState app of
     Nothing -> pure Map.empty
-    Just storeUrl -> fmap Map.fromList . forM configured $ \(eco, documents, mirror) -> do
+    Just storeUrl -> fmap Map.fromList . forM configured $ \(eco, requirements, documents, mirror) -> do
         let S3Store bucket prefix = advisoryStoreTarget storeUrl
             target = stateTarget (registryUrlText (meUrl mirror))
-        store <- allocate bucket (fromMaybe "" prefix) target
+            format = mirrorStateFormat requirements
+        store <- allocate format bucket (fromMaybe "" prefix) target
         retention <- newMirrorRetention pool (cacheTtl cacheConfig) (StoreBudget 0 0)
-        pure (eco, MirrorStateBinding store target (newMirrorView limits target store retention documents))
+        pure (eco, MirrorStateBinding store target (newMirrorView limits target store retention format documents))
   where
     configured =
-        [ (vmEcosystem mount, documents, mirror)
+        [ (vmEcosystem mount, requirements, documents, mirror)
         | mount <- mounts
         , Just publish <- [adapterPublish (vmAdapter mount)]
-        , Just documents <- [durableMirrorDocuments (mirrorStateRequirement (publishMirrorRequirements publish))]
+        , let requirements = publishMirrorRequirements publish
+        , Just documents <- [durableMirrorDocuments (mirrorStateRequirement requirements)]
         , Just mirror <- [mntMirrorTarget (vmConfig mount)]
         ]

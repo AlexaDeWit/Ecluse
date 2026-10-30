@@ -25,6 +25,7 @@ import UnliftIO (withRunInIO)
 import Ecluse.Core.Ecosystem (ecosystemName)
 import Ecluse.Core.Fault (tfCause)
 import Ecluse.Core.Mirror.State
+import Ecluse.Core.Mirror.State.Format (MirrorStateFormat (msfCompanions))
 import Ecluse.Core.Package (Artifact (artFilename, artHashes, artSize, artUrl), Hash, PackageDetails (pkgArtifacts, pkgVersion), PackageInfo (..), hashAlg, hashValue, pkgEcosystem, renderHashAlg, renderPackageName)
 import Ecluse.Core.Package.Admission (
     ArtifactAdmission (
@@ -180,7 +181,7 @@ mirrorUnlessPresent charge policy job = do
 completePass :: WorkerStateBudget -> WorkerPolicy -> MirrorJob -> Int -> PackageInfo -> Maybe ProjectMirrorRecord -> ExceptT JobOutcome WorkerM ()
 completePass charge policy job attempts target previous = do
     admitted <- ExceptT (reevaluatePolicy charge policy job)
-    record <- stateAction (persistInventory charge (wpArtifactLimits policy) (wpMirrorState policy) (pmvInventory (raPrepared admitted)) previous)
+    record <- stateAction (persistInventory charge (wpMirrorFormat policy) (wpArtifactLimits policy) (wpMirrorState policy) (pmvInventory (raPrepared admitted)) previous)
     copied <- copyRecorded charge policy job target admitted record
     finalTarget <- ExceptT (probeInventory charge policy job)
     latest <- readRecord charge policy job (Just copied)
@@ -508,7 +509,7 @@ retainPending charge policy job inventory file locations record = do
                 checked <- case native of
                     Nothing -> pure bytes
                     Just companion -> publishAction job (liftIO (mcValidate companion deadlines limits (wsbCompanions charge) inventory file bytes))
-                verified <- either (throwError . stateOutcome) pure (verifySourceCompanionBytes (wmsLimits binding) (inventoryReadData inventory) file checked)
+                verified <- either (throwError . stateOutcome) pure (verifySourceCompanionBytes (wmsLimits binding) (msfCompanions (wpMirrorFormat policy)) file checked)
                 stateAction (retainCompanion charge binding (jobVersion job) verified record)
         _ -> pure record
 

@@ -39,7 +39,8 @@ import Network.HTTP.Client (Request)
 import Network.HTTP.Types.Header (RequestHeaders)
 
 import Ecluse.Core.Credential (ClientCredential, Secret)
-import Ecluse.Core.Mirror.Documents (MirrorDocuments (mdCompanions))
+import Ecluse.Core.Mirror.Documents (MirrorDocuments)
+import Ecluse.Core.Mirror.State.Format (MirrorStateFormat (msfCompanions))
 import Ecluse.Core.Package (PackageName)
 import Ecluse.Core.Package.Merge (MergePlan, SourceId)
 import Ecluse.Core.Registry (
@@ -147,6 +148,8 @@ data UploadIdentityRequirement
 data MirrorRequirements = MirrorRequirements
     { mirrorWorkerRead :: WorkerMetadataRead
     -- ^ Cache and charging policy for worker metadata.
+    , mirrorStateFormat :: MirrorStateFormat
+    -- ^ How mirror state records, weighs and rechecks the format's read data.
     , mirrorStateRequirement :: MirrorStateRequirement
     -- ^ State the configured mirror requires at boot.
     }
@@ -171,11 +174,11 @@ data AdapterPublish = AdapterPublish
     -- ^ Static credential requirements for mirror and client uploads.
     }
 
--- | Whether the mirror codec prepares native companions exactly where the durable declaration requires them.
+-- | Whether the mirror codec prepares native companions exactly where the state format requires them.
 companionsAgree :: AdapterPublish -> Bool
-companionsAgree publish = isJust (pcMirrorCompanion (publishCodec publish nativePresentation)) == (required == Just NativeCompanions)
+companionsAgree publish = isJust (pcMirrorCompanion (publishCodec publish nativePresentation)) == (required == NativeCompanions)
   where
-    required = mdCompanions <$> durableMirrorDocuments (mirrorStateRequirement (publishMirrorRequirements publish))
+    required = msfCompanions (mirrorStateFormat (publishMirrorRequirements publish))
 
 -- | Store maintenance verbs for "Ecluse.Core.Registry.Maintenance.Protocol". A missing verb makes the Dredger refuse.
 data AdapterMaintenance = AdapterMaintenance
