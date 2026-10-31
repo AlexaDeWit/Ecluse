@@ -280,14 +280,16 @@ decideUnder :: AdvisoryState -> [PrecededRule] -> RuleEvidence -> IO Decision
 decideUnder advisories policy evidence =
     prepare (depsIn advisories) policy >>= \prepared -> evalRules ctx prepared evidence
 
--- One in three policies puts an admission-only deny above a deny at both phases.
+-- One in four policies puts an admission-only deny above a deny at both phases, and one in four
+-- puts an allow above every other rule, so the gate admits often enough to test the Dredger.
 genPolicy :: Gen [PrecededRule]
-genPolicy = Gen.frequency [(2, anyRules), (1, (<>) <$> shadowedDeny <*> anyRules)]
+genPolicy = Gen.frequency [(2, anyRules), (1, (<>) <$> shadowedDeny <*> anyRules), (1, (:) <$> leadingAllow <*> anyRules)]
   where
     anyRules = Gen.list (Range.constant 0 6) genPreceded
     genDeny = Gen.filter ruleDenies genRule
     genNamingDeny = Gen.frequency [(2, pure (DenyByIdentity "thing")), (1, genDeny)]
     shadowedDeny = (\above below -> [PrecededRule 9 AdmissionOnly above, PrecededRule 8 AdmissionAndRevocation below]) <$> genDeny <*> genNamingDeny
+    leadingAllow = PrecededRule 500 AdmissionAndRevocation <$> Gen.filter (not . ruleDenies) genRule
 
 -- | A configured rule with legal reach and precedence ties against other rules.
 genPreceded :: Gen PrecededRule
