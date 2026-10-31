@@ -35,7 +35,7 @@ import Ecluse.BenchLoad.CpuUse (
     proxyCpuShare,
  )
 import Ecluse.BenchLoad.Exposition (CacheOutcomes (..), GaugeSummary (..))
-import Ecluse.BenchLoad.Floors (Calibration (calFloorFraction), Enforcement (Enforced), FloorCheck (..), FloorKey, Pass (ConcurrencyOne, Loaded), PassSelection (LoadedPassOnly), checkedFloor, describeEnforcement, floorCheck, floorsPath, passKey)
+import Ecluse.BenchLoad.Floors (Calibration (calFloorFraction), Confirmation (cfCap, cfReruns), Enforcement (Enforced), FloorCheck (..), FloorKey, Pass (ConcurrencyOne, Loaded), PassSelection (LoadedPassOnly), describeEnforcement, floorCheck, floorsPath, passKey)
 import Ecluse.BenchLoad.Harness (LoadKnobs (..), LoadSummary (..), ProxyFigures (..), ScenarioReport (..), hasDiagnosticBurst, windowAttempts, windowRefusals, windowSuccesses)
 import Ecluse.BenchLoad.Latency (Percentiles (..))
 import Ecluse.BenchLoad.Normalise (
@@ -52,7 +52,7 @@ import Ecluse.BenchLoad.Pod (BurstMemory (..), CgroupReading (..), PodShape (Unl
 import Ecluse.BenchLoad.ReportLabels (admissionRow, generatorHeadroomRow, headroomHeld, headroomSaturated, latencyCell, latencyRow, loadCell, loadRow, memoryEventsRow, memoryPeakColumn, postureRow)
 import Ecluse.BenchLoad.RtsWindow (RtsSnapshot (..), RtsWindow (..), compactionThresholdCrossed, gcCpuShare, meanLiveAtMajors, perSuccess)
 import Ecluse.BenchLoad.Selection (measurementConditionVersion)
-import Ecluse.BenchLoad.Verdict (Attempts, ProxyEnding (..), attemptCount, describeEnding, passViolations)
+import Ecluse.BenchLoad.Verdict (Attempts, ProxyEnding (..), attemptCount, describeEnding, firstAttemptBreaches, overCapViolations, passViolations)
 import Ecluse.Core.Ecosystem (Ecosystem, ecosystemName)
 
 -- | What one ecosystem's section of the report is rendered from.
@@ -506,29 +506,30 @@ renderFloors calibration enforcement =
         , ""
         , "Each floor is "
             <> show (round (calFloorFraction calibration * 100) :: Int)
-            <> "% of its cell's median count over three calibration runs, rounded down. A cell without a floor checks zero successes and process failures only."
+            <> "% of its cell's median count over three calibration runs, rounded up, so a count breaches exactly when it is below that share of the median. A cell without a floor checks zero successes and process failures only."
         ]
 
 {- | Every scenario pass that breached its floor on its first attempt, with the count of each attempt
-and whether a re-run cleared the breach.
+and whether a re-run cleared the breach, and a line when the confirmation cap stopped every re-run.
 -}
 renderConfirmations :: Enforcement -> [(FloorKey, Attempts)] -> Text
 renderConfirmations enforcement passes =
     T.unlines $
         ["## Breach confirmation", ""] <> case enforcement of
-            Enforced _ reruns _ ->
-                ( "A scenario pass below its floor on its first attempt re-runs on a fresh proxy at the end of the job, "
-                    <> (if reruns == 1 then "once" else show reruns <> " times")
-                    <> ". Its breach fails the run only when every attempt is below the floor."
-                )
-                    : ""
-                    : case breachedPasses of
+            Enforced _ confirmation _ ->
+                [ "A scenario pass below its floor on its first attempt re-runs on a fresh proxy at the end of the job, "
+                    <> (if cfReruns confirmation == 1 then "once" else show (cfReruns confirmation) <> " times")
+                    <> ". Its breach fails the run only when every attempt is below the floor. A job with more than "
+                    <> show (cfCap confirmation)
+                    <> " first-attempt breaches re-runs none of them."
+                , ""
+                ]
+                    <> concat [["**" <> line <> ".**", ""] | line <- overCapViolations enforcement passes]
+                    <> case firstAttemptBreaches enforcement passes of
                         [] -> ["No scenario pass breached its floor on its first attempt."]
                         breaches -> ["| scenario | pass | floor | attempts | result |", "| --- | --- | --: | --- | --- |"] <> map breachRow breaches
             _ -> ["This run is not held to the floors, so no breach is re-run."]
   where
-    breachedPasses = [(key, attempts, least) | (key, attempts@(initial :| _)) <- passes, let check = floorCheck enforcement key, Just least <- [checkedFloor check], below least initial]
-    below least attempt = maybe False (\count -> count >= 1 && count < least) (attemptCount attempt)
     breachRow ((scenario, whichPass), attempts, least) =
         "| "
             <> T.intercalate

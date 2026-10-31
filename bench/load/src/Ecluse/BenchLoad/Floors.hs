@@ -19,6 +19,7 @@ module Ecluse.BenchLoad.Floors (
     RunnerKind (..),
     RunnerReading (..),
     CalibrationRun (..),
+    Confirmation (..),
     Calibration (..),
     Cell (..),
     floorFromMedian,
@@ -198,7 +199,16 @@ instance FromJSON CalibrationRun where
             fail "a calibration run must state its ID, its URL, its commit, and its event"
         pure run
 
--- | Where the floors were measured, how a floor follows from a median, how many re-runs confirm a breach, and the runs the floors came from.
+-- | How a held job confirms its breaches.
+data Confirmation = Confirmation
+    { cfReruns :: Int
+    -- ^ Re-runs a scenario pass below its floor gets before its breach fails the run.
+    , cfCap :: Int
+    -- ^ The most first-attempt breaches a job re-runs. Above it, the job re-runs none.
+    }
+    deriving stock (Eq, Show)
+
+-- | Where the floors were measured, how a floor follows from a median, how a breach is confirmed, and the runs the floors came from.
 data Calibration = Calibration
     { calConditions :: Text
     -- ^ The harness's measurement conditions the runs were measured under.
@@ -208,8 +218,7 @@ data Calibration = Calibration
     , calOperatingPoint :: OperatingPoint
     , calFloorFraction :: Rational
     -- ^ The fraction of a cell's median count its floor is.
-    , calConfirmationReruns :: Int
-    -- ^ Re-runs a scenario pass below its floor gets before its breach fails the run.
+    , calConfirmation :: Confirmation
     , calRuns :: [CalibrationRun]
     }
     deriving stock (Eq, Show)
@@ -223,12 +232,14 @@ instance FromJSON Calibration where
                 <*> (RunnerKind <$> o .: "runnerOs" <*> o .: "runnerArch")
                 <*> o .: "operatingPoint"
                 <*> (withScientific "a fraction" (pure . toRational) =<< o .: "floorFraction")
-                <*> o .: "confirmationReruns"
+                <*> (Confirmation <$> o .: "confirmationReruns" <*> o .: "confirmationCap")
                 <*> o .: "runs"
         when (any T.null [calConditions calibration, calRunner calibration, rkOs (calRunnerKind calibration), rkArch (calRunnerKind calibration)]) $
             fail "the calibration must state its measurement conditions and its runner's label, operating system, and architecture"
-        when (calConfirmationReruns calibration < 0) $
+        when (cfReruns (calConfirmation calibration) < 0) $
             fail "the calibration's confirmation re-runs cannot be negative"
+        when (cfCap (calConfirmation calibration) < 0) $
+            fail "the calibration's confirmation cap cannot be negative"
         unless (calFloorFraction calibration > 0 && calFloorFraction calibration <= 1) $
             fail "the calibration's floor fraction lies above 0 and at most 1"
         when (length (ordNub (map runId (calRuns calibration))) /= length (calRuns calibration)) $
@@ -245,9 +256,11 @@ data Cell
       ReportOnlyCell Text
     deriving stock (Eq, Show)
 
--- | The floor a median count gives at a floor fraction: that fraction of it, rounded down, and at least 1.
+{- | The floor a median count gives at a floor fraction: that fraction of it, rounded up, so a count breaches
+exactly when it is below that fraction of the median.
+-}
 floorFromMedian :: Rational -> Int -> Int
-floorFromMedian fraction median = max 1 (floor (fromIntegral median * fraction))
+floorFromMedian fraction median = ceiling (fromIntegral median * fraction)
 
 -- | The middle count, the lower middle of an even number.
 medianCount :: NonEmpty Int -> Int
@@ -256,6 +269,7 @@ medianCount counts@(fallback :| _) = case drop ((length counts - 1) `div` 2) (so
     [] -> fallback
 
 -- The cell's JSON form, refusing a floor its median does not give at the fraction or that names an unlisted run.
+-- A median below 1 holds no floor: a calibration never writes one, and a count of 0 fails without a floor.
 parseCell :: Rational -> Set Integer -> Value -> Parser Cell
 parseCell fraction listed = withObject "Cell" $ \o -> do
     least <- o .: "floor"
@@ -269,7 +283,7 @@ parseCell fraction listed = withObject "Cell" $ \o -> do
             | otherwise -> pure (ReportOnlyCell why)
         (Just f, Just m, Just runs, Nothing)
             | m < 1 -> fail "a floor's median is at least 1"
-            | f /= floorFromMedian fraction m -> fail ("a floor is the floor fraction of its median, rounded down and at least 1: " <> show (floorFromMedian fraction m) <> " here")
+            | f /= floorFromMedian fraction m -> fail ("a floor is the floor fraction of its median, rounded up: " <> show (floorFromMedian fraction m) <> " here")
             | length (ordNub (toList runs)) /= length runs -> fail "a floor names a run twice"
             | not (all (`Set.member` listed) runs) -> fail "a floor names a run the calibration does not list"
             | otherwise -> pure (Floored f m runs)
@@ -355,7 +369,8 @@ renderFloorsFile floors =
                     , ("patternOverrides", strings (opPatternOverrides point))
                     ]
             , "\"floorFraction\": " <> decimalText (calFloorFraction calibration)
-            , "\"confirmationReruns\": " <> show (calConfirmationReruns calibration)
+            , "\"confirmationReruns\": " <> show (cfReruns (calConfirmation calibration))
+            , "\"confirmationCap\": " <> show (cfCap (calConfirmation calibration))
             ]
             <> [runsLines]
     runsLines = case calRuns calibration of
@@ -444,8 +459,8 @@ data Unheld
 
 -- | Whether a run is held to the floors.
 data Enforcement
-    = -- | Held, under this pod shape, with this many confirmation re-runs per breach, to these cells.
-      Enforced PodShape Int (Map FloorKey Cell)
+    = -- | Held, under this pod shape, with this confirmation of its breaches, to these cells.
+      Enforced PodShape Confirmation (Map FloorKey Cell)
     | -- | Not held, for every one of these reasons.
       NotHeld (NonEmpty Unheld)
     deriving stock (Eq, Show)
@@ -453,7 +468,7 @@ data Enforcement
 -- | Decide a run's enforcement from its facts, naming every reason it is not held.
 enforce :: Floors -> RunFacts -> Enforcement
 enforce floors facts = case (Map.lookup shape (floorsByShape floors), reasons) of
-    (Just held, []) -> Enforced shape (calConfirmationReruns calibration) held
+    (Just held, []) -> Enforced shape (calConfirmation calibration) held
     (Just _, reason : more) -> NotHeld (reason :| more)
     (Nothing, more) -> NotHeld (ShapeNotCalibrated shape :| more)
   where

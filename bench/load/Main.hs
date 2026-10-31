@@ -5,7 +5,8 @@
 {- | Run the loaded and concurrency-one passes for each ecosystem fixture under one pod shape, or
 the GC-thrash probe across a series of memory limits. Each scenario runs in a child process that
 prints one JSON report and boots its own proxy process. After the last pass the driver re-runs each
-breached scenario pass, renders the Markdown artifact, then fails the run if any invariant broke.
+breached scenario pass, unless more breached than the confirmation cap, renders the Markdown artifact,
+then fails the run if any invariant broke.
 -}
 module Main (main) where
 

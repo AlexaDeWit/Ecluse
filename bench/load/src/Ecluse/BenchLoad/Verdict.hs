@@ -5,7 +5,8 @@
 
 {- | Process endings, required successes, and the confirmation of a floor breach. A breach is a
 count of at least one below its floor. It earns a re-run on a fresh proxy and fails the run only when
-every attempt breaches. Latency and memory figures stay informational.
+every attempt breaches. A job with more first-attempt breaches than its confirmation cap re-runs none,
+and each of its breaches fails the run. Latency and memory figures stay informational.
 -}
 module Ecluse.BenchLoad.Verdict (
     ProxyEnding (..),
@@ -20,6 +21,8 @@ module Ecluse.BenchLoad.Verdict (
     attemptCount,
     attemptClean,
     passViolations,
+    firstAttemptBreaches,
+    overCapViolations,
     rerunsDue,
     confirmBreaches,
     runVerdict,
@@ -30,7 +33,8 @@ import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 
 import Ecluse.BenchLoad.Floors (
-    Enforcement (Enforced, NotHeld),
+    Confirmation (cfCap, cfReruns),
+    Enforcement (Enforced),
     FloorCheck (NoFloor, Unchecked),
     FloorKey,
     Trigger,
@@ -192,16 +196,43 @@ passViolations (scenarioKey, _) check = \case
         | otherwise = []
     countOf = maybe "no report" show . attemptCount
 
--- | The scenario passes that earn one more attempt: every attempt so far breached its floor and nothing else, and re-runs remain.
+-- | Each scenario pass whose first attempt's count is at least 1 and below its floor, with the floor.
+firstAttemptBreaches :: Enforcement -> [(FloorKey, Attempts)] -> [(FloorKey, Attempts, Int)]
+firstAttemptBreaches enforcement passes =
+    [ (key, attempts, least)
+    | (key, attempts@(initial :| _)) <- passes
+    , Just least <- [checkedFloor (floorCheck enforcement key)]
+    , maybe False (\count -> count >= 1 && count < least) (attemptCount initial)
+    ]
+
+-- The count of first-attempt breaches when it exceeds the job's confirmation cap, which stops every re-run.
+breachesOverCap :: Enforcement -> [(FloorKey, Attempts)] -> Maybe Int
+breachesOverCap enforcement passes = case enforcement of
+    Enforced _ confirmation _ | breaches > cfCap confirmation -> Just breaches
+    _ -> Nothing
+  where
+    breaches = length (firstAttemptBreaches enforcement passes)
+
+-- | The verdict's line for a job whose first-attempt breaches exceed its confirmation cap.
+overCapViolations :: Enforcement -> [(FloorKey, Attempts)] -> [Text]
+overCapViolations enforcement passes = case (enforcement, breachesOverCap enforcement passes) of
+    (Enforced _ confirmation _, Just breaches) ->
+        [show breaches <> " scenario passes breached their floors on their first attempt, more than the confirmation cap of " <> show (cfCap confirmation) <> ", so none was re-run"]
+    _ -> []
+
+{- | The scenario passes that earn one more attempt: every attempt so far breached its floor and nothing
+else, and re-runs remain. None does when the first-attempt breaches exceed the confirmation cap.
+-}
 rerunsDue :: Enforcement -> [(FloorKey, Attempts)] -> [FloorKey]
 rerunsDue enforcement passes = case enforcement of
-    NotHeld _ -> []
-    Enforced _ reruns _ ->
-        [ key
-        | (key, attempts) <- passes
-        , length attempts <= reruns
-        , all (breachedOnly (floorCheck enforcement key)) attempts
-        ]
+    Enforced _ confirmation _
+        | isNothing (breachesOverCap enforcement passes) ->
+            [ key
+            | (key, attempts) <- passes
+            , length attempts <= cfReruns confirmation
+            , all (breachedOnly (floorCheck enforcement key)) attempts
+            ]
+    _ -> []
 
 -- | Re-run each pass 'rerunsDue' names, one round at a time, until none is due.
 confirmBreaches :: (Monad m) => Enforcement -> (FloorKey -> m Outcome) -> [(FloorKey, Attempts)] -> m [(FloorKey, Attempts)]
@@ -213,11 +244,12 @@ confirmBreaches enforcement rerun = go
             again <- Map.fromList <$> traverse (\key -> (key,) <$> rerun key) due
             go [(key, maybe attempts (\outcome -> attempts <> (outcome :| [])) (Map.lookup key again)) | (key, attempts) <- passes]
 
-{- | Every invariant a run broke: a scheduled run that is not held, each scenario pass over its
-attempts, and a held run's stale cells.
+{- | Every invariant a run broke: a scheduled run that is not held, first-attempt breaches over the
+confirmation cap, each scenario pass over its attempts, and a held run's stale cells.
 -}
 runVerdict :: Trigger -> Enforcement -> Set FloorKey -> [(FloorKey, Attempts)] -> [Text]
 runVerdict trigger enforcement checked passes =
     unheldViolations trigger enforcement
+        <> overCapViolations enforcement passes
         <> concatMap (\(key, attempts) -> passViolations key (floorCheck enforcement key) attempts) passes
         <> staleFloorViolations enforcement checked
