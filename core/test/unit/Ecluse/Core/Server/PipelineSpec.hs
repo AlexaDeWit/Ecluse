@@ -137,6 +137,7 @@ spec = describe "Ecluse.Core.Server.Pipeline (core handlers over a ServeRuntime)
     unconfiguredPrivateSpec
     privateAdmitsNothingSpec
     malformedListingSpec
+    emptyListingSpec
     deniedListingSpec
     integrityDenialLogSpec
 
@@ -1363,7 +1364,7 @@ invalidPublicReplies =
 privateAdmitsNothingSpec :: Spec
 privateAdmitsNothingSpec = do
     describe "an npm packument whose private document admits nothing" $
-        for_ [("every version below the trusted floor", belowFloorApp), ("no version", emptyPrivateDocument Npm)] $ \(label, privateApp) -> do
+        for_ [("every version below the trusted floor", belowFloorApp), ("no version", emptyDocument Npm)] $ \(label, privateApp) -> do
             for_ [("is unavailable", status503, 503), ("answers HTTP 400", status400, 502), ("answers HTTP 401", status401, 502), ("answers HTTP 403", status403, 502)] $ \(failure, publicStatus, expected) ->
                 it ("answers " <> show expected <> " for GET and HEAD when the private document has " <> label <> " and the public origin " <> failure) $
                     listingOver privateApp (\_ respond -> respond (responseLBS publicStatus [] "")) id expected Nothing Unavailable
@@ -1371,11 +1372,11 @@ privateAdmitsNothingSpec = do
                 denyAll <- prepare inertRuleDeps []
                 listingOver privateApp upstreamApp (\deps -> deps{pdRules = denyAll}) 404 Nothing Deny
     describe "a public reply Écluse cannot use beside a private document that admits nothing, through ecosystem routes" $
-        invalidPublicReplyRoutes (Just emptyPrivateDocument)
+        invalidPublicReplyRoutes (Just emptyDocument)
 
 -- Each ecosystem's leftpad document that names no version.
-emptyPrivateDocument :: Ecosystem -> Application
-emptyPrivateDocument = leftpadDocument $ \case
+emptyDocument :: Ecosystem -> Application
+emptyDocument = leftpadDocument $ \case
     Npm -> encode (object ["name" .= ("leftpad" :: Text), "dist-tags" .= object [], "versions" .= object []])
     PyPI -> encode (simpleIndex "leftpad" [])
     Cargo -> ""
@@ -1407,24 +1408,7 @@ leftpadDocument body ecosystem request respond
 -- sit. A valid version the gate denies beside a malformed one keeps the policy 404.
 malformedListingSpec :: Spec
 malformedListingSpec = describe "a listing whose every upstream version row is malformed" $ do
-    for_ absentNameRoutes $ \(ecosystem, router, credential, (route, path), _) ->
-        for_ placements $ \(label, private, public) -> do
-            let named = toString (ecosystemName ecosystem) <> " " <> route
-                withRows metrics action =
-                    withPrivateOrigin (($ ecosystem) <$> private) $ \privatePort ->
-                        withPublicOrigin ecosystem router credential privatePort (public ecosystem) id metrics action
-            it (named <> " answers 502 for GET and HEAD with " <> label <> ", recording an unavailable decision and its denial") $ do
-                (recording, decisions) <- recordingMetricsPort
-                (metrics, denials) <- recordingDenials recording
-                responses <- withRows metrics $ \rt binding -> traverse (\method -> captureRouted rt binding method path) [methodGet, methodHead]
-                map (statusCode . responseStatus) responses `shouldBe` [502, 502]
-                decisions `shouldReturn` [Unavailable, Unavailable]
-                denials `shouldReturn` replicate 2 (Nothing, Metric.ReasonUnavailable)
-            -- A PyPI refusal body carries only the configured help message.
-            when (ecosystem /= PyPI) $
-                it (named <> " names the malformed rows in its body with " <> label) $ do
-                    body <- withRows noopMetricsPort $ \rt binding -> captureRouted rt binding methodGet path >>= responseBytes
-                    LBS.toStrict body `shouldSatisfy` BS.isInfixOf "was malformed or unusable"
+    placedListingAnswers placements 502 [Npm, Cargo, RubyGems] "was malformed or unusable"
     it "keeps the npm packument 404 when the gate denies the valid version beside a malformed one" $ do
         denyAll <- prepare inertRuleDeps []
         listingOver notFoundOrigin (publicAppOver ["1.0.0", "2.0.0"] "1.0.0" withoutDistAt2) (\deps -> deps{pdRules = denyAll}) 404 Nothing Deny
@@ -1435,6 +1419,43 @@ malformedListingSpec = describe "a listing whose every upstream version row is m
         , ("the rows private beside a public 404", Just malformedDocument, const notFoundOrigin)
         ]
     withoutDistAt2 entry = if vsVersion entry == "2.0.0" then entry{vsExtraPairs = ["dist" .= Null]} else entry
+
+-- A listing whose upstream documents name the package but list no version answers 404, as an unheld name does.
+-- A Cargo index 404 has no body. A public outage beside an empty private document keeps its cause (privateAdmitsNothingSpec).
+emptyListingSpec :: Spec
+emptyListingSpec =
+    describe "a listing whose upstream documents list no version" $
+        placedListingAnswers
+            [ ("an empty public document and no private origin", Nothing, emptyDocument)
+            , ("an empty public document beside a private 404", Just (const notFoundOrigin), emptyDocument)
+            , ("an empty private document beside a public 404", Just emptyDocument, const notFoundOrigin)
+            , ("empty private and public documents", Just emptyDocument, emptyDocument)
+            ]
+            404
+            [Npm, RubyGems]
+            "no upstream lists a version"
+
+-- Each listing route over each placement of documents answers GET and HEAD with this status, recording an
+-- unavailable decision and its denial, and on these ecosystems a body naming this cause. A PyPI body carries only the help message.
+placedListingAnswers :: [(String, Maybe (Ecosystem -> Application), Ecosystem -> Application)] -> Int -> [Ecosystem] -> ByteString -> Spec
+placedListingAnswers placements expected named cause =
+    for_ absentNameRoutes $ \(ecosystem, router, credential, (route, path), _) ->
+        for_ placements $ \(label, private, public) -> do
+            let routed = toString (ecosystemName ecosystem) <> " " <> route
+                withDocuments metrics action =
+                    withPrivateOrigin (($ ecosystem) <$> private) $ \privatePort ->
+                        withPublicOrigin ecosystem router credential privatePort (public ecosystem) id metrics action
+            it (routed <> " answers " <> show expected <> " for GET and HEAD with " <> label <> ", recording an unavailable decision and its denial") $ do
+                (recording, decisions) <- recordingMetricsPort
+                (metrics, denials) <- recordingDenials recording
+                responses <- withDocuments metrics $ \rt binding -> traverse (\method -> captureRouted rt binding method path) [methodGet, methodHead]
+                map (statusCode . responseStatus) responses `shouldBe` [expected, expected]
+                decisions `shouldReturn` [Unavailable, Unavailable]
+                denials `shouldReturn` replicate 2 (Nothing, Metric.ReasonUnavailable)
+            when (ecosystem `elem` named) $
+                it (routed <> " names its cause in its body with " <> label) $ do
+                    body <- withDocuments noopMetricsPort $ \rt binding -> captureRouted rt binding methodGet path >>= responseBytes
+                    LBS.toStrict body `shouldSatisfy` BS.isInfixOf cause
 
 -- A public listing the gate denies in full answers 404 beside a private 404 or with no private origin. The artifact keeps its 403.
 deniedListingSpec :: Spec

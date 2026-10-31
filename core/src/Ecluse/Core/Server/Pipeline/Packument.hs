@@ -433,17 +433,19 @@ serveMergedPackument serving evalCtx record privResult pubResult
                                 liftIO (paReportRejections public >> onCheckedNoSurvivorAdmission observer)
                             | otherwise ->
                                 let refused = privateExclusions <> managedExclusions <> paVerdicts public
-                                 in noServeableVersions serving (ctxAdvisoryEtag evalCtx) refused $
-                                        collectDecisions privResult pubResult (map vvDecision refused)
+                                 in case collectDecisions privResult pubResult (map vvDecision refused) of
+                                        [] -> notFound "no upstream lists a version of the requested package"
+                                        decisions -> noServeableVersions serving (ctxAdvisoryEtag evalCtx) refused decisions
   where
     budgetRefused fault =
         noServeableVersions serving (ctxAdvisoryEtag evalCtx) [] [Reject (Rejection UpstreamInvalid ("the cumulative metadata input exceeded its bound: " <> show fault))]
     settledAbsence OriginAbsent = True
     settledAbsence OriginNotFound = True
     settledAbsence _ = False
-    -- Unless a recorded version survives in the mirror, a listing answers 404 and a coordinate lookup takes its own answer.
+    -- A listing answers 404 with this cause, and a coordinate lookup takes its own answer.
+    notFound message = maybe (liftIO (notFoundReply (servingMetrics serving) (psvReplies serving) (pdHelp deps) message)) pure (psvAbsent serving)
     unheldAnswer
-        | noRecordedCopy = Just (maybe (liftIO (unheldNameReply (servingMetrics serving) (psvReplies serving) deps)) pure (psvAbsent serving))
+        | noRecordedCopy = Just (notFound (unheldMessage deps))
         | otherwise = Nothing
     noRecordedCopy = either (const False) (\(_, managed, _) -> isNothing managed) views
     deps = psvDeps serving
@@ -678,11 +680,11 @@ collectDecisions privResult pubResult exclusions = case privateLeg <> publicDeci
     [] -> malformedEntries privResult pubResult
     decisions -> decisions
   where
-    -- A private 404 leaves the listing to the public origin. A public document the gate refused in full
-    -- settles it, and a failed public read or a public document of malformed entries refuses it by its own cause.
+    -- A private 404 leaves the listing to the public origin. A public document the gate refused in full or
+    -- that lists no version settles it, and a failed public read refuses it by its own cause.
     privateLeg = case (privResult, pubResult) of
         (OriginNotFound, OriginResolved _) | packumentStatus exclusions == PackumentDenied -> []
-        (OriginNotFound, OriginResolved manifest) | droppedEveryEntry manifest -> []
+        (OriginNotFound, OriginResolved manifest) | Map.null (infoVersions (manifestInfo manifest)) -> []
         (OriginNotFound, _) | publicReadFailed pubResult -> []
         _ -> privateDecision privResult
 
@@ -754,17 +756,20 @@ neededUpstreamUnavailableMessage = "a needed upstream was unavailable"
 upstreamInvalidDecision :: ServeDecision
 upstreamInvalidDecision = Reject (Rejection UpstreamInvalid "an upstream returned a packument for a different package")
 
--- Answer 404 for a name no configured origin holds, recorded as the artifact path records a missing version.
-unheldNameReply :: MetricsPort -> PackumentReplies response -> PackumentDeps -> IO response
-unheldNameReply metrics replies deps = do
+-- Answer 404 with this cause, recorded as the artifact path records a missing version.
+notFoundReply :: MetricsPort -> PackumentReplies response -> Maybe HelpMessage -> Text -> IO response
+notFoundReply metrics replies help message = do
     mpServeDecision metrics (serveDecisionClass decision)
     recordDenials metrics [decision]
-    pure (packumentNotFound replies [] (mkRefusal (pdHelp deps) message))
+    pure (packumentNotFound replies [] (mkRefusal help message))
   where
-    message
-        | isJust (pdPrivateBaseUrl deps) = "neither the private nor the public upstream has the requested package"
-        | otherwise = "the public upstream does not have the requested package"
     decision = rejectUnavailable WontResolve message
+
+-- Why a name no configured origin holds is absent, naming only the configured origins.
+unheldMessage :: PackumentDeps -> Text
+unheldMessage deps
+    | isJust (pdPrivateBaseUrl deps) = "neither the private nor the public upstream has the requested package"
+    | otherwise = "the public upstream does not have the requested package"
 
 -- A private origin that was not read refuses every name, so no public namesake stands in for a
 -- private package. Its cause alone sets the status, whatever the public leg did.

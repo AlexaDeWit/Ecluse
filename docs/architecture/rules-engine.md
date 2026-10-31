@@ -141,7 +141,7 @@ pipeline applies verdicts across it. For the cross-upstream merge, see
   repointing them. The rule never promotes a higher prerelease over a chosen stable `latest`.
   Repointing downward is a deliberate downgrade, so a withheld release does not silently remain
   the default install.
-- **No survivors → 503, 502, 500, 404, or 403.** If nothing survives, the status follows the most
+- **No survivors → 503, 502, 500, or 404.** If nothing survives, the status follows the most
   recoverable cause. `503` (with `Retry-After`) when any rejection was transient or a needed
   upstream was unavailable. `502` when an upstream returned a document Écluse could not use,
   including one whose every version entry was malformed.
@@ -149,7 +149,7 @@ pipeline applies verdicts across it. For the cross-upstream merge, see
   all exclusions are policy or integrity refusals, with the reasons in the body and the logs. A
   PyPI body carries only the help message, so on PyPI only the `denied` log lines carry them, with
   the deciding rule and the reason class but not the refusal text. A native coordinate keeps `403`
-  there. `403` when the upstream documents list no version entry. The HTTP status mapping belongs to the
+  there. `404` as well when the upstream documents list no version entry. The HTTP status mapping belongs to the
   [error model](web-layer.md#error-model).
 
 Because the filtered body differs from upstream's, the proxy computes its own `ETag` over it

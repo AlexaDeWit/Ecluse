@@ -366,7 +366,8 @@ wins:
   on every ecosystem, with the deciding rule and the reason class but not the refusal text. The
   serve decision and denial metrics record a denial. A private `404` beside such a public document
   is settled too, so it does not turn the answer into `503`.
-- Otherwise `403`, when the upstream documents list no version entry at all.
+- Otherwise `404`, when the upstream documents list no version entry at all, as for an npm package
+  unpublished in full, a PyPI project with no files or a gem whose every version is yanked.
 
 A listing that admits nothing answers `404` because no installable package exists under that name
 for the client, and a `403` would suggest a credential problem. The versions existed, so the
