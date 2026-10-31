@@ -29,7 +29,7 @@ import Ecluse.Core.Registry.PyPI.Credential (pypiCredential)
 import Ecluse.Core.Registry.PyPI.Metadata (pypiChargeFactors, pypiRead)
 import Ecluse.Core.Registry.PyPI.Request (simpleIndexRequest)
 import Ecluse.Core.Registry.PyPI.UploadMetadata (PyPIUploadMetadata, parseUploadMetadata, uploadFields, uploadMetadataMemoryBytes)
-import Ecluse.Core.Registry.Request (CredentialMapping, ServicePresentation, StoreOperation (StoreRead, StoreWrite), attachCredential, parseRequestEither, presentedMapping, presentedRequest)
+import Ecluse.Core.Registry.Request (ServicePresentation, StoreOperation (StoreRead, StoreWrite), attachCredential, nativePresentation, parseRequestEither, presentedMapping, presentedRequest)
 import Ecluse.Core.Security.Limits (Limits (maxMetadataBytes))
 import Ecluse.Core.Server.Admission.Types (ChargeFactors (cfFullReadPermille))
 
@@ -59,17 +59,19 @@ pypiPublishCodec presentation =
         , pcProbeRequest = \target credential name -> presentedRequest readAs credential (\anonymous -> simpleIndexRequest target anonymous name)
         , pcVersionListWalk = Nothing
         , pcPrepareTarget = \_ target -> pure (Right target)
-        , pcPublishRequest = \target credential _ -> publishRequest (presentedMapping presentation StoreWrite pypiCredential) target credential
+        , pcPublishRequest = \target credential _ -> publishRequest presentation target credential
         , pcPublishOutcome = classifyPublish
         }
   where
     readAs = presentedMapping presentation StoreRead pypiCredential
 
--- | Post to the exact configured endpoint using the supplied credential pair, rendered under @writeAs@, and verified bytes.
-publishRequest :: CredentialMapping -> Text -> Maybe ClientCredential -> MirrorUploadData PyPIUploadMetadata -> Either PublishFault Request
-publishRequest writeAs target credential upload = do
+{- | Post verified bytes to the exact configured endpoint, presenting the credential as the store
+declares for writes. Only the native Basic pair renders the credential's own username, so only it needs one.
+-}
+publishRequest :: ServicePresentation -> Text -> Maybe ClientCredential -> MirrorUploadData PyPIUploadMetadata -> Either PublishFault Request
+publishRequest presentation target credential upload = do
     for_ credential $ \presented ->
-        when (isNothing (credUsername presented)) $
+        when (presentation == nativePresentation && isNothing (credUsername presented)) $
             Left (PublishSourceUnavailable "PyPI upload requires an explicit credential username")
     base <- first (PublishFetch . FetchUrlUnformable) (parseRequestEither target)
     let filename = artFilename (expectedArtifact (uploadFile upload))
@@ -81,7 +83,7 @@ publishRequest writeAs target credential upload = do
     when (T.any (`elem` ['\r', '\n', '"', '\\']) filename) (Left (PublishSourceUnavailable "unsafe multipart filename"))
     when (BS.isInfixOf boundary bytes || any (BS.isInfixOf boundary . encodeUtf8 . snd) fields) (Left (PublishSourceUnavailable "multipart boundary collides with upload content"))
     let body = foldMap (fieldPart boundary) fields <> filePart boundary filename bytes <> byteString ("--" <> boundary <> "--\r\n")
-    pure . attachCredential writeAs credential $
+    pure . attachCredential (presentedMapping presentation StoreWrite pypiCredential) credential $
         base
             { method = "POST"
             , requestHeaders = (hContentType, "multipart/form-data; boundary=" <> boundary) : requestHeaders base
