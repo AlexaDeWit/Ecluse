@@ -78,12 +78,20 @@ pypiReads = describe "managed PyPI mirror reads" $ do
             simpleStatus response `shouldBe` status200
             responseEnvelope response `shouldBe` Right (KeyMap.insert "versions" (fromListValue [String "1"]) sourceEnvelope)
             pure (responseEnvelope response)
-        present <- testView (pure (Right (StateLoaded revision record)))
+        -- The store answers a read that names its revision as unchanged, as the production store does,
+        -- so the second read serves the record the first one retained.
+        stateReads <- newIORef []
+        present <- mirrorViewWith pypiMirrorDocuments target $ \_ held -> do
+            modifyIORef' stateReads (<> [held])
+            pure $ Right $ case held of
+                Just seen | seen == revision -> StateUnchanged revision
+                _ -> StateLoaded revision record
         withManagedProxy present False (projectWithEnvelope privateEnvelope False) (native status503 []) $ \app -> do
             replicateM_ 2 $ do
                 response <- getPath "/pypi/simple/demo/" app
                 simpleStatus response `shouldBe` status200
                 responseEnvelope response `shouldBe` control
+        readIORef stateReads `shouldReturn` [Nothing, Just revision]
 
     it (caseLabel "integration/mirror-view/native-002" "keeps the private project envelope when an unmanaged private version is present") $ do
         inventory <- mirrorSample [1, 2] False "https://public.test/" "source" >>= withMirrorEnvelope sourceEnvelope
@@ -114,11 +122,13 @@ pypiReads = describe "managed PyPI mirror reads" $ do
     it (caseLabel "integration/mirror-view/native-004" "bypasses state entirely for first-party private names") $ do
         calls <- newIORef (0 :: Int)
         view <- testView (modifyIORef' calls (+ 1) $> Left (StateInvalid "unavailable"))
-        withManagedProxy view True (native status200 [1]) (native status503 []) $ \app -> do
+        withManagedProxy view True (nativeWith True "private" status200 [1]) (native status503 []) $ \app -> do
             response <- getPath "/pypi/simple/demo/" app
             simpleStatus response `shouldBe` status200
-            artifact <- getPath artifactPath app
-            simpleStatus artifact `shouldBe` status200
+            for_ [artifactPath, artifactPath <> ".metadata"] $ \path -> do
+                served <- getPath path app
+                simpleStatus served `shouldBe` status200
+                simpleBody served `shouldBe` "private"
         readIORef calls `shouldReturn` 0
 
     it (caseLabel "integration/mirror-view/native-005" "preserves unmanaged private handling on conclusive project absence") $ do
@@ -365,14 +375,16 @@ cargoReads = describe "managed Cargo mirror reads" $
             release = Cargo.minimalCargoRelease "thing"
             original version = Cargo.cargoIndexRecord (release version)
             crateTarget = stateTarget "https://private.test/cargo"
-        record <- cargoMirrorRecord crateTarget name (Cargo.releaseArchive (release "1.9.0")) [(0, original "1.9.0"), (1, original "1.10.0")]
+        -- A backport recorded after 1.10.0. The index order differs from version-text order, its
+        -- reverse, semver order and the private origin's order.
+        record <- cargoMirrorRecord crateTarget name (Cargo.releaseArchive (release "1.9.0")) [(0, original "1.9.0"), (1, original "1.10.0"), (2, original "1.9.1")]
         view <- testViewAt cargoMirrorDocuments crateTarget (pure (Right (StateLoaded (StateRevision crateTarget name "complete") record)))
         adapter <- requiredAdapter Cargo
-        withMountProxy Cargo adapter (\deps -> deps{pdEgressUrl = Right . loopbackRegistryUrl}) view (crateIndex (map republished [original "1.10.0", original "1.9.0"])) unavailable $ \app -> do
+        withMountProxy Cargo adapter (\deps -> deps{pdEgressUrl = Right . loopbackRegistryUrl}) view (crateIndex (map republished [original "1.9.1", original "1.10.0", original "1.9.0"])) unavailable $ \app -> do
             response <- getPath "/cargo/th/in/thing" app
             simpleStatus response `shouldBe` status200
             rows <- traverse (expectRight . Reference.indexValue) (Reference.referenceIndex (toStrict (simpleBody response)))
-            map Object rows `shouldBe` [original "1.9.0", original "1.10.0"]
+            map Object rows `shouldBe` [original "1.9.0", original "1.10.0", original "1.9.1"]
   where
     republished = \case
         Object fields -> Object (KeyMap.insert "pubtime" (String "2026-10-01T00:00:00Z") fields)
