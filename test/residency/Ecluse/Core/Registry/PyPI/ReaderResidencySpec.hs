@@ -3,8 +3,9 @@
 -- SPDX-License-Identifier: MIT
 
 {- | A Simple-index walk holds nothing for what its projection drops: repeated files arrays, the
-members a file repeats, the files of other releases, and files past a tripped limit leave the live
-bytes where a few leave them.
+members a file repeats, the files of other releases, files past a tripped limit, and repeated
+@alternate-locations@ arrays, @meta@ objects and @tracks@ members leave the live bytes where a few
+leave them.
 -}
 module Ecluse.Core.Registry.PyPI.ReaderResidencySpec (spec) where
 
@@ -27,7 +28,7 @@ import Ecluse.Test.Registry.JsonStream (testTable)
 import Ecluse.Test.Registry.PyPI.Metadata (projectPyPIChunks)
 import Ecluse.Test.Support (expectRight)
 
--- | Eight times more dropped files or members may not raise the bytes a read holds.
+-- | Eight times more dropped files, members or repeated envelope items may not raise the bytes a read holds.
 spec :: Spec
 spec = describe "pypiWalk live bytes" $ do
     it (caseLabel "retention/pypi/selected/containers" "a selected read holds the same bytes however many files arrays repeat the release") $
