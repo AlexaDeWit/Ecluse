@@ -41,7 +41,7 @@ This matters on every mount that sets `privateUpstream`, because Écluse reads i
 | Private registry answer | What Écluse does |
 | --- | --- |
 | A document for the requested name | Merges it with the admitted public versions. |
-| `404` | Serves admitted public content. When the public registry also answers `404`, no registry holds the name and Écluse answers `404`. When the public registry is unavailable instead, Écluse answers `503`. A first-party name answers `404`. |
+| `404` | Serves admitted public content. When the public registry also answers `404`, no registry holds the name and Écluse answers `404`, unless your mirror state records the name: then Écluse answers `503` while a recorded version is missing. When the public registry is unavailable instead, Écluse answers `503`. A first-party name answers `404`. |
 | `401` or `403` | Refuses with the statuses the [private access policy](@/docs/configuration.md#first-party-namespaces) lists. |
 | A transport error, a timeout, a `5xx` or a `429` | Refuses with `503` for every name and serves no public content. When the private registry sent `Retry-After`, Écluse forwards it. |
 | A redirect, any other status, a document for another name, or a document Écluse cannot decode or that exceeds its bound | Refuses with `502` for every name and serves no public content. |
