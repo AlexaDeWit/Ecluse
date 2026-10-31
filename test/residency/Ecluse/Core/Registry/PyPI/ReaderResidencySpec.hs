@@ -40,6 +40,8 @@ spec = describe "pypiWalk live bytes" $ do
         boundedRetention allowance (heldFor FullRead defaultLimits repeatedMembers)
     it (caseLabel "retention/pypi/full/past-limit" "a full read holds the same bytes however many files follow a tripped file limit") $
         boundedRetention allowance (heldFor FullRead defaultLimits{maxVersionCount = 2} filesPastLimit)
+    it (caseLabel "retention/pypi/full/repeated-envelope" "a full read holds the same bytes however long a repeated tracks member, alternate-locations array or meta object") $
+        boundedRetention allowance (heldFor FullRead defaultLimits repeatedEnvelope)
 
 -- A selected read keeps its one file of the release at both sizes, and holds the same bytes.
 selectedLevel :: (Int -> ByteString) -> IO ()
@@ -77,6 +79,23 @@ repeatedMembers count =
 -- One source distribution of each of as many other releases, after one of the selected release.
 otherReleases :: Int -> ByteString
 otherReleases count = index ("\"files\":[" <> commas (file "1.0.0.tar.gz" 0 : [file ("2." <> Builder.intDec position <> ".tar.gz") position | position <- [1 .. count]]) <> "]")
+
+-- A meta object with a repeated tracks member, a repeated alternate-locations array, and a second
+-- meta object, each repeat as long as asked. The first occurrence of each claims its key empty. Each
+-- item is a distinct URL, so a repeat spans many chunks and a held one shows between them.
+repeatedEnvelope :: Int -> ByteString
+repeatedEnvelope count =
+    render
+        ( "{\"name\":\"thing\",\"meta\":{\"api-version\":\"1.1\",\"tracks\":[],\"tracks\":["
+            <> items
+            <> "]},\"alternate-locations\":[],\"alternate-locations\":["
+            <> items
+            <> "],\"meta\":{\"tracks\":["
+            <> items
+            <> "]},\"files\":[]}"
+        )
+  where
+    items = commas ["\"https://mirror.example/simple/thing/" <> Builder.intDec position <> "/\"" | position <- [1 .. count]]
 
 -- Wheels of one release under distinct build tags, each with its own requires-python value.
 filesPastLimit :: Int -> ByteString

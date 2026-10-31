@@ -46,23 +46,16 @@ data Dense = Dense
 
 -- | The read's peak and what it holds once read, against the floor and against each figure's limit.
 spec :: Spec
-spec = describe "dense listing live bytes" $
+spec = describe "dense listing live bytes" $ do
     for_ (denseListings <> minimalBodies) $ \dense ->
-        it (toString (label dense)) $ withSystemTempDirectory "ecluse-dense-listing" $ \directory -> do
-            let path = directory </> "dense.json"
-                bytes = denseDocument dense entries
+        it (toString (label dense)) $ do
+            let bytes = denseDocument dense entries
                 size = BS.length bytes
-            BS.writeFile path bytes
-            adapter <- requiredAdapter (denseEcosystem dense)
-            (result, workspace) <- heldWorkspacePeak (metadataRead (adapterMetadata adapter)) (registryOf (denseEcosystem dense)) (mkPackageName (denseEcosystem dense) Nothing "thing") [bytes]
-            kept <- manifestRetainedEntries <$> expectRight result
-            let held = denseRead dense
+                held = denseRead dense
                 total = retainedReleases held + retainedOthers held
-            measured <- measurePathInChild (Mode.ListingFor (toString (ecosystemName (denseEcosystem dense))) "thing") path
-            peaks <- singlePeaks <$> expectRight measured
+            (factors, workspace, kept, peaks) <- readListing (denseEcosystem dense) bytes
             let readRise = rise listingReadPeak peaks
                 heldRise = rise listingEntryLive peaks
-                factors = metadataChargeFactors (adapterMetadata adapter)
             report dense size total readRise heldRise
             workspace `shouldBe` max 0 (entryFloorCharge held - scaleCharge (cfFullReadPermille factors) size)
             kept `shouldBe` denseKept dense
@@ -71,6 +64,42 @@ spec = describe "dense listing live bytes" $
             figures <- maybe (fail "no dense listing figures") pure (Map.lookup (label dense) (entryFloorFigures <> releaseFloorFigures))
             (1000 * readRise) `shouldSatisfy` (<= readPeakLimit (entryReadPeak figures) * toInteger total + 1000 * tolerance)
             (1000 * heldRise) `shouldSatisfy` (<= heldLimit (entryHeld figures) * toInteger total + 1000 * tolerance)
+    -- A repeat counts toward no floor, so the read may hold none of it.
+    it "pypi/repeated-arrays keeps a repeated envelope array within the read's charge" $ do
+        let items = commas (replicate repeatedItems "0")
+            bytes =
+                render
+                    ( "{\"meta\":{\"api-version\":\"1.1\",\"tracks\":[],\"tracks\":["
+                        <> items
+                        <> "]},\"name\":\"thing\",\"alternate-locations\":[],\"alternate-locations\":["
+                        <> items
+                        <> "],\"meta\":{\"tracks\":["
+                        <> items
+                        <> "]},\"files\":["
+                        <> validFile
+                        <> "]}"
+                    )
+            size = BS.length bytes
+        (factors, workspace, kept, peaks) <- readListing PyPI bytes
+        workspace `shouldBe` 0
+        kept `shouldBe` releases 1
+        rise listingReadPeak peaks `shouldSatisfy` (<= toInteger (max (scaleCharge (cfFullReadPermille factors) size) (entryFloorCharge (releases 1))))
+
+-- The production read's charge factors, the workspace it paid and the entries it keeps, and a child's peaks reading the same bytes.
+readListing :: Ecosystem -> ByteString -> IO (ChargeFactors, Int, RetainedEntries, ListingPeaks)
+readListing ecosystem bytes = withSystemTempDirectory "ecluse-dense-listing" $ \directory -> do
+    let path = directory </> "dense.json"
+    BS.writeFile path bytes
+    adapter <- requiredAdapter ecosystem
+    (result, workspace) <- heldWorkspacePeak (metadataRead (adapterMetadata adapter)) (registryOf ecosystem) (mkPackageName ecosystem Nothing "thing") [bytes]
+    kept <- manifestRetainedEntries <$> expectRight result
+    measured <- measurePathInChild (Mode.ListingFor (toString (ecosystemName ecosystem)) "thing") path
+    peaks <- singlePeaks <$> expectRight measured
+    pure (metadataChargeFactors (adapterMetadata adapter), workspace, kept, peaks)
+
+-- Items in each repeated array: held whole, they would outweigh the per-byte charge several times over.
+repeatedItems :: Int
+repeatedItems = 30000
 
 -- Enough entries that the read's fixed costs add under a byte to each.
 entries :: Int
@@ -103,7 +132,10 @@ denseListings =
                 <> "}}"
             )
     index members = render ("{\"meta\":{\"api-version\":\"1.1\"},\"name\":\"thing\"," <> members <> "}")
-    validFile = "{\"filename\":\"thing-1.0.0.tar.gz\",\"url\":\"https://files.pythonhosted.org/thing-1.0.0.tar.gz\"}"
+
+-- One PyPI file that names a release, so a listing renders.
+validFile :: Builder.Builder
+validFile = "{\"filename\":\"thing-1.0.0.tar.gz\",\"url\":\"https://files.pythonhosted.org/thing-1.0.0.tar.gz\"}"
 
 -- Versions and files with the smallest valid body, which hold more for each entry than any dense form.
 minimalBodies :: [Dense]

@@ -116,7 +116,7 @@ entryFloorSpec = describe "the full-read entry floor" $ do
         void result `shouldSatisfy` isRight
         peak `shouldBe` entryFloorBytes * (locations + tracks) - scaleCharge (cfFullReadPermille pypiChargeFactors) (BS.length body)
 
-    it "charges the alternate-locations and tracks items read before their array closes" $ do
+    it "charges the alternate-locations and tracks items read before their array closes, and nothing for a repeat" $ do
         let items count = BS.intercalate "," (replicate count "\"0\"")
             pieces =
                 [ "{\"meta\":{\"api-version\":\"1.1\",\"tracks\":[" <> items 200 <> ","

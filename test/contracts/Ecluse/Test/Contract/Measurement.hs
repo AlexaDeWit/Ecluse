@@ -46,6 +46,7 @@ measurementCatalogue registrations =
                 , "retention/pypi/selected/other-releases"
                 , "retention/pypi/full/members"
                 , "retention/pypi/full/past-limit"
+                , "retention/pypi/full/repeated-envelope"
                 ]
             , required
                 "retention/cargo"
