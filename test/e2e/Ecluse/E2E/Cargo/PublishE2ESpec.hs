@@ -36,9 +36,8 @@ cargoPublishName, cargoRetainedName :: Text
 cargoPublishName = "ecluse-e2e-build"
 cargoRetainedName = "ecluse-e2e-macro"
 
-{- | Undeclared, and held by the public index at 1.0.0 only: Cargo's duplicate check passes and the upload reaches Écluse.
-The sparse index answers a name in no index 404, which Cargo also reads as a new crate.
--}
+-- Undeclared, and held by the public index at 1.0.0 only: Cargo's duplicate check passes and the upload
+-- reaches Écluse. The sparse index answers a name in no index 404, which Cargo also reads as a new crate.
 cargoRefusedName, cargoRefusedVersion :: Text
 cargoRefusedName = "ecluse-e2e-extra"
 cargoRefusedVersion = "1.0.1"
@@ -88,7 +87,6 @@ publicationDriver observed registry name =
   where
     proxy = observedProxy observed
 
--- | The guard itself answers the upload: one 403 that names the guard, and no write at the target.
 refusedDriver :: ObservedNativeProxy -> CargoRegistry -> PublicationDriver
 refusedDriver observed registry =
     (publicationDriver observed registry cargoRefusedName)
@@ -130,7 +128,6 @@ yankDriver observed registry =
 cargoPublishFixture :: E2E -> CargoToolchain -> Text -> IO ClientResult
 cargoPublishFixture proxy toolchain name = cargoPublishAt proxy toolchain name cargoVersion
 
--- | Publish one owned fixture's sources under the given native version.
 cargoPublishAt :: E2E -> CargoToolchain -> Text -> Text -> IO ClientResult
 cargoPublishAt proxy toolchain name version = do
     spec <- maybe (fail "owned Cargo publication fixture is absent") pure (find (\crate -> crateName crate == name && crateVersion crate == cargoVersion) cargoCrates)
