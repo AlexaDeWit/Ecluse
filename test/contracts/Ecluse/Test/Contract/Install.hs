@@ -15,6 +15,7 @@ module Ecluse.Test.Contract.Install (
     InstallationDriver (..),
     UpstreamRead (..),
     CodedArtifact (..),
+    ArtifactProbe (..),
     installationContract,
     codedArtifactCase,
     RefusalDriver (..),
@@ -27,6 +28,7 @@ module Ecluse.Test.Contract.Install (
     clientReport,
 ) where
 
+import Data.ByteString.Lazy qualified as LBS
 import Data.List (lookup)
 import Data.Map.Strict qualified as Map
 import Ecluse.Test.InstalledTree (InstalledTree, TreeEntry (TreeFile))
@@ -34,7 +36,7 @@ import System.Exit (ExitCode (ExitSuccess))
 import Test.Hspec (Expectation, SpecWith, expectationFailure, it, shouldBe, shouldMatchList, shouldNotBe, shouldSatisfy)
 
 import Ecluse.Test.Contract.Catalogue (caseLabel)
-import Ecluse.Test.Contract.Serving (ServingResponse (responseHeaders), artifactDigestCase, artifactHeadCase)
+import Ecluse.Test.Contract.Serving (ServingResponse (responseBody, responseHeaders), artifactDigestCase, artifactHeadLengthCase)
 
 -- | The outcome of one client invocation: what ran, its exit code, and its captured output.
 data ClientResult = ClientResult
@@ -57,7 +59,7 @@ data InstallationDriver observation = InstallationDriver
     , installationDenied :: InstallDriver (observation, InstalledTree)
     , installationArtifact :: IO (Text, ServingResponse)
     , installationDigest :: ByteString -> Text
-    , installationHead :: IO ServingResponse
+    , installationHead :: IO ArtifactProbe
     , installationCodedArtifact :: IO CodedArtifact
     }
 
@@ -69,6 +71,12 @@ data UpstreamRead = UpstreamRead
     -- ^ The response's @Content-Encoding@.
     }
     deriving stock (Eq, Show)
+
+-- | One artifact HEAD through the proxy, with the methods of the public upstream's reads of that artifact meanwhile.
+data ArtifactProbe = ArtifactProbe
+    { probeResponse :: ServingResponse
+    , probeUpstreamMethods :: [Text]
+    }
 
 {- | One artifact read through the proxy by a client that accepts gzip, from a public upstream that
 gzips any response a request permits.
@@ -94,8 +102,12 @@ installationContract prefix = do
     it (label "artifact-integrity" "serves bytes matching the digest advertised in metadata") $ \driver -> do
         (digest, response) <- installationArtifact driver
         artifactDigestCase (installationDigest driver) digest response
-    it (label "artifact-head" "advertises an admitted artifact without transferring its body") $
-        installationHead >=> artifactHeadCase
+    it (label "artifact-head" "advertises an admitted artifact without transferring its body") $ \driver -> do
+        probe <- installationHead driver
+        (_, artifact) <- installationArtifact driver
+        artifactHeadLengthCase (toInteger (LBS.length (responseBody artifact))) (probeResponse probe)
+        -- The proxy probes the upstream with HEAD too, so the artifact's bytes never travel.
+        probeUpstreamMethods probe `shouldSatisfy` (\methods -> not (null methods) && all (== "HEAD") methods)
     it (label "artifact-identity-coding" "fetches the artifact in identity coding from an upstream that gzips on request") $ \driver ->
         installationCodedArtifact driver >>= codedArtifactCase (installationDigest driver)
   where
