@@ -1670,6 +1670,7 @@ test-suite ecluse-unit
     Ecluse.BenchReport.AgainstMain.BenchSpec
     Ecluse.BenchReport.AgainstMain.LoadSpec
     Ecluse.BenchReport.AgainstMainSpec
+    Ecluse.BenchReport.CalibrationSpec
     Ecluse.BenchReport.MarkdownSpec
     Ecluse.BenchReport.PerformanceReceiptSpec
     Ecluse.BenchReport.PerformanceCommandSpec
@@ -2662,6 +2663,7 @@ library ecluse-bench-report
     Ecluse.BenchReport.AgainstMain.Acceptance
     Ecluse.BenchReport.AgainstMain.Bench
     Ecluse.BenchReport.AgainstMain.Load
+    Ecluse.BenchReport.Calibration
     Ecluse.BenchReport.Markdown
     Ecluse.BenchReport.Performance
     Ecluse.BenchReport.PerformanceCommand

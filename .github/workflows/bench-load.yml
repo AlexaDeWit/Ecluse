@@ -44,6 +44,9 @@ on:
       upstream-latency-ms:
         description: "Fixed upstream latency in ms for every ecosystem (blank: 20, the calibrated value). Any other value is not held to the floors."
         required: false
+      calibration-slot:
+        description: "A calibration dispatch's slot, such as 1, 2 or 3, so dispatches at one ref and pod shape run side by side instead of replacing each other (blank: none)"
+        required: false
       sweep:
         description: "A committed capability sweep to run in place of the pod shapes (bench/load/sweeps)"
         type: choice
@@ -58,9 +61,10 @@ on:
     - cron: "17 4 * * *"
 
 # One run per ref and pod-shape choice, or per ref, sweep, and selection of its jobs, so a sweep
-# never waits behind, or replaces, a pod-shape run. Never cancel a scheduled or dispatched run mid-flight.
+# never waits behind, or replaces, a pod-shape run. A calibration slot gives each calibration dispatch
+# a group of its own. Never cancel a scheduled or dispatched run mid-flight.
 concurrency:
-  group: bench-load-${{ github.ref }}-${{ (inputs.sweep == '' || inputs.sweep == 'none') && (inputs.pod-shape || 'all') || format('sweep-{0}-{1}', inputs.sweep, inputs.sweep-select) }}
+  group: bench-load-${{ github.ref }}-${{ (inputs.sweep == '' || inputs.sweep == 'none') && (inputs.pod-shape || 'all') || format('sweep-{0}-{1}', inputs.sweep, inputs.sweep-select) }}${{ inputs.calibration-slot && format('-calibration-{0}', inputs.calibration-slot) || '' }}
   cancel-in-progress: false
 
 # Artifact upload uses the run's runtime token, not the GITHUB_TOKEN. The baseline fetch
