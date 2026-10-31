@@ -5,8 +5,6 @@
 -- | Worker publication and queue disposition against real SQS and loopback HTTP.
 module Ecluse.Core.Worker.LoopIntegrationSpec (spec) where
 
-import Data.Aeson (Value, object, (.=))
-import Data.ByteString.Lazy qualified as LBS
 import Data.Map.Strict qualified as Map
 import Ecluse.Core.Deadline (Deadlines)
 import Ecluse.Test.Contract.Catalogue (caseLabel)
@@ -36,6 +34,7 @@ import Ecluse.Integration.WorkerLoop (
     mirrorPoliciesAt,
     mirrorPoliciesUnderAt,
     newQueueEnv,
+    npmAttachment,
     observeAcknowledgement,
     observeDeadLetter,
     publishedAtLeast,
@@ -48,7 +47,7 @@ import Ecluse.Runtime.Env (envWorkerHeartbeat, lastPoll)
 import Ecluse.Service (runWorker)
 import Ecluse.Test.Deadline (withSweeper)
 import Ecluse.Test.Json (fieldAt, textAtPath)
-import Ecluse.Test.Package (base64Of, sriSha512Of, unsafeFilename, unsafeHash)
+import Ecluse.Test.Package (sriSha512Of, unsafeFilename, unsafeHash)
 import Ecluse.Test.Poll (runUntil)
 import Ecluse.Test.Rules (admitRule, denyRule)
 import Ecluse.Test.Stub (allCaptured, stubBaseUrl, withStub)
@@ -74,7 +73,7 @@ spec pool =
                         length published `shouldBe` 1
                         -- The one publication carries the verified bytes under the verified digest.
                         documents <- sentDocuments
-                        map (fieldAt "_attachments") documents `shouldBe` [Just verifiedAttachment]
+                        map (fieldAt "_attachments") documents `shouldBe` [Just (npmAttachment "left-pad-1.3.0.tgz" tarballBytes)]
                         map (textAtPath ["versions", "1.3.0", "dist", "integrity"]) documents `shouldBe` [Just trueSri]
                         -- The worker acked the job, so it does not redeliver.
                         leftover <- expectRightIO (receive queue)
@@ -255,18 +254,6 @@ trueSri = sriSha512Of (toStrict tarballBytes)
 -- digest the served bytes cannot satisfy, distinct from a malformed digest.
 mismatchSri :: Text
 mismatchSri = sriSha512Of "completely-different-bytes"
-
--- The npm attachment that carries exactly the served bytes.
-verifiedAttachment :: Value
-verifiedAttachment =
-    object
-        [ "left-pad-1.3.0.tgz"
-            .= object
-                [ "content_type" .= ("application/octet-stream" :: Text)
-                , "data" .= base64Of (toStrict tarballBytes)
-                , "length" .= LBS.length tarballBytes
-                ]
-        ]
 
 -- Policies whose re-admitted artifact carries the served bytes' true digest, so
 -- verification passes and the pipeline publishes at that mirror target.
