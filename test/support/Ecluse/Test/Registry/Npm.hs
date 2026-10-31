@@ -13,6 +13,7 @@ module Ecluse.Test.Registry.Npm (
     packumentValue,
     densePackument,
     minimalPackument,
+    timedPackument,
     listingValue,
     publishedDaysAgo,
     documentName,
@@ -241,9 +242,16 @@ densePackument entries = "{\"name\":\"thing\",\"time\":{" <> members (\at -> "\"
 
 -- | A packument named @thing@ with as many versions as asked, each with only its tarball: the smallest valid release body.
 minimalPackument :: Int -> ByteString
-minimalPackument count = "{\"name\":\"thing\",\"versions\":{" <> BS.intercalate "," [release (show at) | at <- [1 .. count]] <> "}}"
+minimalPackument count = timedPackument count []
+
+-- | 'minimalPackument' with a @time@ object of the given members, each key and value as written.
+timedPackument :: Int -> [(ByteString, ByteString)] -> ByteString
+timedPackument count times = "{\"name\":\"thing\",\"versions\":{" <> BS.intercalate "," [release (show at) | at <- [1 .. count]] <> "}" <> time <> "}"
   where
     release at = "\"0.0." <> at <> "\":{\"dist\":{\"tarball\":\"https://registry.npmjs.org/thing/-/thing-0.0." <> at <> ".tgz\"}}"
+    time
+        | null times = ""
+        | otherwise = ",\"time\":{" <> BS.intercalate "," [key <> ":" <> value | (key, value) <- times] <> "}"
 
 {- | An npm @\/-\/all@ listing body: one empty entry per package name. The registry's own
 @_updated@ bookkeeping key is a site-specific extra, so a case that exercises it adds it.
