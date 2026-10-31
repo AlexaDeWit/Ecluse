@@ -1132,6 +1132,7 @@ library ecluse-runtime-test-support
     Ecluse.Runtime.Test.Cve
     Ecluse.Runtime.Test.PackageStore.FixedPages
     Ecluse.Runtime.Test.S3
+    Ecluse.Runtime.Test.Server
     Ecluse.Runtime.Test.Support
     Ecluse.Runtime.Test.Telemetry
 
@@ -1158,6 +1159,7 @@ library ecluse-runtime-test-support
     , katip             ^>=0.8.8
     , text              ^>=2.1
     , time              ^>=1.12
+    , unix              ^>=2.8
     , unliftio          ^>=0.2.25
     , wai               ^>=3.2
     , warp              ^>=3.4
