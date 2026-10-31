@@ -2,15 +2,20 @@
 --
 -- SPDX-License-Identifier: MIT
 
--- | Independent Compact Index observations retain physical rows and opaque native fields.
+-- | Independent Compact Index and gem archive observations, sharing no production parser.
 module Ecluse.Test.Registry.RubyGems.Reference (
     RubyInfoRow (..),
     referenceInfo,
+    referenceGemIdentity,
     runRubyReference,
 ) where
 
+import Codec.Archive.Tar qualified as Tar
+import Codec.Compression.Zlib.Internal qualified as Zlib
 import Data.Aeson (Value, eitherDecodeStrict)
 import Data.ByteString qualified as BS
+import Data.ByteString.Lazy qualified as LBS
+import Data.List (lookup)
 import Data.Text qualified as T
 import Data.Text.Encoding qualified as Text
 import System.Directory (findExecutable)
@@ -18,6 +23,8 @@ import System.Exit (ExitCode (ExitSuccess))
 import System.IO (hClose)
 import System.Process (readProcessWithExitCode)
 import UnliftIO.Temporary (withSystemTempFile)
+
+import Ecluse.Test.Package (hexSha256Of)
 
 -- | Raw versions and platforms remain distinct from comparison keys.
 data RubyInfoRow = RubyInfoRow
@@ -57,6 +64,35 @@ referenceInfo bytes = do
             | not (T.null key), not (T.null remainder) -> Right (key, T.drop (T.length delimiter) remainder)
         _ -> Left "Compact Index field is incomplete"
     nonemptyParts delimiter = filter (not . T.null) . T.splitOn delimiter
+
+-- | The name, version and platform a gem's metadata declares, once its members match their SHA-256 entries.
+referenceGemIdentity :: ByteString -> Either Text (Text, Text, Text)
+referenceGemIdentity bytes = do
+    members <- Tar.foldEntries member (Right []) (Left . show) (Tar.read (LBS.fromStrict bytes))
+    unless (map fst members == ["metadata.gz", "data.tar.gz", "checksums.yaml.gz"]) (Left "gem archive members differ from the native layout")
+    let content name = maybeToRight "gem archive lacks a native member" (LBS.toStrict <$> lookup name members)
+    metadata <- content "metadata.gz"
+    payload <- content "data.tar.gz"
+    checksums <- content "checksums.yaml.gz" >>= gunzipText
+    let declared = takeWhile ("  " `T.isPrefixOf`) (drop 1 (dropWhile (/= "SHA256:") (T.lines checksums)))
+    unless (sort declared == sort ["  metadata.gz: " <> hexSha256Of metadata, "  data.tar.gz: " <> hexSha256Of payload]) (Left "gem archive members differ from their SHA-256 entries")
+    specification <- T.lines <$> gunzipText metadata
+    let scalar key = maybeToRight ("gem metadata lacks " <> key) (listToMaybe (mapMaybe (T.stripPrefix (key <> ": ")) specification))
+    version <- case dropWhile (/= "version: !ruby/object:Gem::Version") specification of
+        _ : nested : _ -> maybeToRight "gem metadata lacks its version number" (T.stripPrefix "  version: " nested)
+        _ -> Left "gem metadata lacks a version"
+    (,version,) <$> scalar "name" <*> scalar "platform"
+  where
+    member entry rest = case Tar.entryContent entry of
+        Tar.NormalFile body _ -> ((Tar.entryPath entry, body) :) <$> rest
+        _ -> Left "gem archive has a member that is not a regular file"
+
+gunzipText :: ByteString -> Either Text Text
+gunzipText compressed = do
+    chunks <- Zlib.foldDecompressStreamWithInput (\chunk rest -> (chunk :) <$> rest) trailing (Left . show) (Zlib.decompressST Zlib.gzipFormat Zlib.defaultDecompressParams) (LBS.fromStrict compressed)
+    first show (Text.decodeUtf8' (BS.concat chunks))
+  where
+    trailing rest = if LBS.null rest then Right [] else Left "gzip member has trailing bytes"
 
 -- | Ruby's native decoder observes exact bytes and fails when the required tool or decoding is unavailable.
 runRubyReference :: Text -> ByteString -> IO Value

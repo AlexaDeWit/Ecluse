@@ -1098,9 +1098,11 @@ library ecluse-test-contracts
       Ecluse.Test.Contract.PackageStore.Provider
       Ecluse.Test.Contract.PackageStore.PyPI
       Ecluse.Test.Contract.PackageStore.Cargo
+      Ecluse.Test.Contract.PackageStore.RubyGems
     other-modules:
       Ecluse.Test.Contract.PackageStore.PyPI.Fixtures
       Ecluse.Test.Contract.PackageStore.Cargo.Fixtures
+      Ecluse.Test.Contract.PackageStore.RubyGems.Fixtures
 
   build-depends:
     , ecluse:ecluse-core

@@ -7,6 +7,7 @@ module Ecluse.Runtime.Test.PackageStore (
     codeArtifactDriver,
     codeArtifactPyPIDriver,
     codeArtifactCargoDriver,
+    codeArtifactRubyGemsDriver,
     codeArtifactCatalogue,
     codeArtifactSuiteGroups,
     validateCodeArtifact,
@@ -17,10 +18,12 @@ import Amazonka.CodeArtifact.Lens qualified as CAL
 import Lens.Micro ((?~), (^.))
 
 import Data.Text qualified as T
-import Ecluse.Core.Ecosystem (Ecosystem (Cargo, Npm, PyPI))
+import Ecluse.Core.Ecosystem (Ecosystem (Cargo, Npm, PyPI, RubyGems))
 import Ecluse.Core.Registry.Maintenance (StoreFault, StoreMaintenance, StoreManifestRead, protocolFault)
 import Ecluse.Core.Registry.Maintenance.NameSpace (mkNameAlphabet)
 import Ecluse.Core.Registry.Origin (OriginClient)
+import Ecluse.Core.Registry.Request (declaredPresentation)
+import Ecluse.Runtime.Credential.CodeArtifact.Presentation (codeArtifactAuthMechanism)
 import Ecluse.Runtime.Maintenance.CodeArtifact.Decide (CodeArtifactStore (..), codeArtifactFormat)
 import Ecluse.Runtime.Maintenance.CodeArtifact.Internal (ControlPlane (..), maintenanceFor)
 import Ecluse.Runtime.Maintenance.CodeArtifact.Read (ReadPlane (..))
@@ -32,20 +35,29 @@ import Ecluse.Test.Contract.PackageStore.Cargo (cargoStoreDriver, readCargoStore
 import Ecluse.Test.Contract.PackageStore.Protocol (npmStoreDriver, readStoreManifestOver)
 import Ecluse.Test.Contract.PackageStore.Provider (StoreBoundary (..))
 import Ecluse.Test.Contract.PackageStore.PyPI (pypiStoreDriver, readPyPIStoreManifestOver)
+import Ecluse.Test.Contract.PackageStore.RubyGems (readRubyGemsStoreManifestOver, rubyGemsStoreDriver)
 import Ecluse.Test.Contract.Runner (DeclaredGroup (..))
 import Ecluse.Test.Contract.Types (Catalogue (..), Group (..))
 
 -- | This proves Écluse's adapter behaviour, not remote AWS retention, IAM, or service fidelity.
 codeArtifactDriver :: FullPackageStoreDriver
-codeArtifactDriver = npmStoreDriver "codeartifact" (codeArtifactMaintenance Npm CA.PackageFormat_Npm readStoreManifestOver)
+codeArtifactDriver = npmStoreDriver "codeartifact" (codeArtifactMaintenance Npm CA.PackageFormat_Npm "contract-package" readStoreManifestOver)
 
 -- | PyPI executes every law with six distinct distributions across two releases.
 codeArtifactPyPIDriver :: FullPackageStoreDriver
-codeArtifactPyPIDriver = pypiStoreDriver "codeartifact-pypi" (codeArtifactMaintenance PyPI CA.PackageFormat_Pypi readPyPIStoreManifestOver)
+codeArtifactPyPIDriver = pypiStoreDriver "codeartifact-pypi" (codeArtifactMaintenance PyPI CA.PackageFormat_Pypi "contract-package" readPyPIStoreManifestOver)
 
 -- | Native Cargo executes every law through prepared authenticated metadata and physical deletion.
 codeArtifactCargoDriver :: FullPackageStoreDriver
-codeArtifactCargoDriver = cargoStoreDriver "codeartifact-cargo" (codeArtifactMaintenance Cargo (CA.PackageFormat' "cargo") readCargoStoreManifestOver)
+codeArtifactCargoDriver = cargoStoreDriver "codeartifact-cargo" (codeArtifactMaintenance Cargo (CA.PackageFormat' "cargo") "contract-package" readCargoStoreManifestOver)
+
+-- | Native RubyGems reads with CodeArtifact's Basic pair and publishes with its Bearer token, as production composes them.
+codeArtifactRubyGemsDriver :: FullPackageStoreDriver
+codeArtifactRubyGemsDriver =
+    rubyGemsStoreDriver
+        "codeartifact-rubygems"
+        (declaredPresentation (codeArtifactAuthMechanism RubyGems))
+        (codeArtifactMaintenance RubyGems (CA.PackageFormat' "ruby") "ecluse-fixture-root" readRubyGemsStoreManifestOver)
 
 -- | All native profiles belong to the same backend and fixed conformance job.
 codeArtifactCatalogue :: Catalogue
@@ -54,6 +66,7 @@ codeArtifactCatalogue =
         [ packageStoreCatalogueFor "npm" "codeartifact" "package-store-codeartifact" "codeartifact"
         , packageStoreCatalogueFor "pypi" "codeartifact" "package-store-codeartifact" "codeartifact-pypi"
         , packageStoreCatalogueFor "cargo" "codeartifact" "package-store-codeartifact" "codeartifact-cargo"
+        , packageStoreCatalogueFor "rubygems" "codeartifact" "package-store-codeartifact" "codeartifact-rubygems"
         ]
 
 -- | Preserve each concrete registration while assigning the existing backend job.
@@ -62,11 +75,12 @@ codeArtifactSuiteGroups = map (\declaration -> declaration{declaredGroup = (decl
 
 -- | Independent completion claims require every format, regardless of actual registrations.
 validateCodeArtifact :: IO ()
-validateCodeArtifact = for_ ["codeartifact", "codeartifact-pypi", "codeartifact-cargo"] $ \subject ->
+validateCodeArtifact = for_ ["codeartifact", "codeartifact-pypi", "codeartifact-cargo", "codeartifact-rubygems"] $ \subject ->
     either (failRunner . T.unlines) (const (pure ())) (validateCompletion (packageStoreCompletion subject) [codeArtifactCatalogue])
 
-codeArtifactMaintenance :: Ecosystem -> CA.PackageFormat -> (OriginClient -> StoreManifestRead) -> OriginClient -> StoreBoundary -> IO StoreMaintenance
-codeArtifactMaintenance ecosystem expectedFormat readManifest origin boundary = do
+-- The control-plane double answers only for its own independently declared package and format.
+codeArtifactMaintenance :: Ecosystem -> CA.PackageFormat -> Text -> (OriginClient -> StoreManifestRead) -> OriginClient -> StoreBoundary -> IO StoreMaintenance
+codeArtifactMaintenance ecosystem expectedFormat expectedPackage readManifest origin boundary = do
     format <- maybe (fail "ecosystem has no CodeArtifact format") pure (codeArtifactFormat ecosystem)
     let store =
             CodeArtifactStore
@@ -76,10 +90,10 @@ codeArtifactMaintenance ecosystem expectedFormat readManifest origin boundary = 
                 , casRepository = "contract-store"
                 , casFormat = format
                 }
-    pure (maintenanceFor (mkNameAlphabet "c") (readManifest origin) store (controlPlane expectedFormat boundary))
+    pure (maintenanceFor (mkNameAlphabet "c") (readManifest origin) store (controlPlane expectedFormat expectedPackage boundary))
 
-controlPlane :: CA.PackageFormat -> StoreBoundary -> ControlPlane
-controlPlane expectedFormat boundary =
+controlPlane :: CA.PackageFormat -> Text -> StoreBoundary -> ControlPlane
+controlPlane expectedFormat expectedPackage boundary =
     ControlPlane
         { cpRead =
             ReadPlane
@@ -93,12 +107,12 @@ controlPlane expectedFormat boundary =
                         pure $
                             CA.newListPackagesResponse 200
                                 & CAL.listPackagesResponse_packages
-                                ?~ [CA.newPackageSummary & CAL.packageSummary_package ?~ "contract-package" | not (null releases)]
+                                ?~ [CA.newPackageSummary & CAL.packageSummary_package ?~ expectedPackage | not (null releases)]
                 , rpListVersions = \request -> do
                     releases <- sbReleases boundary
                     pure $ do
                         checkRepository (request ^. CAL.listPackageVersions_domain) (request ^. CAL.listPackageVersions_domainOwner) (request ^. CAL.listPackageVersions_repository)
-                        checkPackage expectedFormat (request ^. CAL.listPackageVersions_package) (request ^. CAL.listPackageVersions_namespace) (request ^. CAL.listPackageVersions_format)
+                        checkPackage expectedFormat expectedPackage (request ^. CAL.listPackageVersions_package) (request ^. CAL.listPackageVersions_namespace) (request ^. CAL.listPackageVersions_format)
                         unless (isNothing (request ^. CAL.listPackageVersions_nextToken)) (Left (protocolFault "unexpected version pagination token"))
                         pure $
                             CA.newListPackageVersionsResponse 200
@@ -113,7 +127,7 @@ controlPlane expectedFormat boundary =
             let versions = request ^. CAL.deletePackageVersions_versions
                 valid = do
                     checkRepository (request ^. CAL.deletePackageVersions_domain) (request ^. CAL.deletePackageVersions_domainOwner) (request ^. CAL.deletePackageVersions_repository)
-                    checkPackage expectedFormat (request ^. CAL.deletePackageVersions_package) (request ^. CAL.deletePackageVersions_namespace) (request ^. CAL.deletePackageVersions_format)
+                    checkPackage expectedFormat expectedPackage (request ^. CAL.deletePackageVersions_package) (request ^. CAL.deletePackageVersions_namespace) (request ^. CAL.deletePackageVersions_format)
                     when blocked (Left (protocolFault "injected delete transport failure"))
             case valid of
                 Left fault -> pure (Left fault)
@@ -134,8 +148,8 @@ checkRepository domain owner repository =
         (domain == "contract-domain" && owner == Just "123456789012" && repository == "contract-store")
         (Left (protocolFault "control-plane request addressed the wrong repository"))
 
-checkPackage :: CA.PackageFormat -> Text -> Maybe Text -> CA.PackageFormat -> Either StoreFault ()
-checkPackage expectedFormat package namespace format =
+checkPackage :: CA.PackageFormat -> Text -> Text -> Maybe Text -> CA.PackageFormat -> Either StoreFault ()
+checkPackage expectedFormat expectedPackage package namespace format =
     unless
-        (package == "contract-package" && isNothing namespace && format == expectedFormat)
+        (package == expectedPackage && isNothing namespace && format == expectedFormat)
         (Left (protocolFault "control-plane request addressed the wrong package or format"))
