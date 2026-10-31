@@ -304,7 +304,7 @@ npmPackumentContract =
                 ( chooseContract
                     (jsonContract status403 "Private access was refused, or no version survived policy and admission." npmErrorCodec)
                     ( chooseContract
-                        (jsonContract status404 "A first-party name the private upstream does not have. It is never fetched from the public upstream." npmErrorCodec)
+                        (jsonContract status404 "A name neither the private nor the public upstream has, or a first-party name the private upstream does not have, which is never fetched from the public upstream." npmErrorCodec)
                         ( chooseContract
                             (jsonContract status406 "The request's `Accept-Encoding` excludes both gzip and identity coding." npmErrorCodec)
                             ( chooseContract
