@@ -240,7 +240,7 @@ densePackument entries = "{\"name\":\"thing\",\"time\":{" <> members (\at -> "\"
   where
     members render = BS.intercalate "," [render (show at) | at <- [1 .. entries]]
 
--- | A packument named @thing@ with as many versions as asked, each with only its tarball: the smallest valid release body.
+-- | A packument named @thing@ with as many versions as asked, each with only its name, version and tarball: the smallest release the read serves.
 minimalPackument :: Int -> ByteString
 minimalPackument count = timedPackument count []
 
@@ -248,7 +248,7 @@ minimalPackument count = timedPackument count []
 timedPackument :: Int -> [(ByteString, ByteString)] -> ByteString
 timedPackument count times = "{\"name\":\"thing\",\"versions\":{" <> BS.intercalate "," [release (show at) | at <- [1 .. count]] <> "}" <> time <> "}"
   where
-    release at = "\"0.0." <> at <> "\":{\"dist\":{\"tarball\":\"https://registry.npmjs.org/thing/-/thing-0.0." <> at <> ".tgz\"}}"
+    release at = "\"0.0." <> at <> "\":{\"name\":\"thing\",\"version\":\"0.0." <> at <> "\",\"dist\":{\"tarball\":\"https://registry.npmjs.org/thing/-/thing-0.0." <> at <> ".tgz\"}}"
     time
         | null times = ""
         | otherwise = ",\"time\":{" <> BS.intercalate "," [key <> ":" <> value | (key, value) <- times] <> "}"
