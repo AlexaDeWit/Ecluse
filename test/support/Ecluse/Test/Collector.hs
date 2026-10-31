@@ -10,6 +10,7 @@ module Ecluse.Test.Collector (
     exportedSpans,
     PrintedSpan (..),
     printedSpans,
+    datadogIds,
     spanCarries,
     spanFor,
     linkedMirrorTraces,
@@ -21,6 +22,7 @@ import Data.Char (isHexDigit)
 import Data.List (lookup)
 import Data.Set qualified as Set
 import Data.Text qualified as T
+import Numeric (readHex)
 
 -- | Flow-style YAML for the @env:@ provider, which needs no file or shell in the collector image.
 collectorConfig :: [Text] -> Text
@@ -124,6 +126,16 @@ printedSpans = spansIn . lines
         let (key, printed) = T.breakOn ": " entry
         value <- T.stripPrefix ": " printed
         pure (key, attributeValue value)
+
+{- | A printed span's IDs as Datadog logs them: the low 64 bits of the trace ID and the span ID,
+each as an unsigned decimal.
+-}
+datadogIds :: PrintedSpan -> Maybe (Text, Text)
+datadogIds printed = (,) <$> (decimal . T.takeEnd 16 =<< psTraceId printed) <*> (decimal =<< psSpanId printed)
+  where
+    decimal hex = case readHex (toString hex) of
+        [(value, "")] -> Just (show (value :: Word64))
+        _ -> Nothing
 
 attributeValue :: Text -> AttributeValue
 attributeValue printed =
