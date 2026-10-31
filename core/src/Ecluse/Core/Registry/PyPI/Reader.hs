@@ -33,7 +33,7 @@ fileUniqueFields = ["filename", "url", "hashes", "upload-time", "provenance", "c
 -- | Walk an index into trees, retaining the first occurrence and the selected-file skip policy.
 pypiWalk :: Int -> PyPIRead -> (s -> PyPIField -> Either LimitError s) -> (s -> Bool) -> (s -> Text -> Bool) -> InternTable -> s -> Cursor -> Step s
 {-# INLINE pypiWalk #-}
-pypiWalk depth mode step keeps claimed table0 = walkIndex depth mode (pureStep step) claimed (\_ acc -> Finished acc) treeFile table0
+pypiWalk depth mode step keeps claims table0 = walkIndex depth mode (pureStep step) claims (\_ acc -> Finished acc) treeFile table0
   where
     fileShape = ObjectOr Null (fileMembers depth (prepareMembers table0))
     treeFile table acc position element rest next =
@@ -43,17 +43,17 @@ pypiWalk depth mode step keeps claimed table0 = walkIndex depth mode (pureStep s
 -- | Walk a full index with typed reduction beside packing, returning the read's final table.
 pypiFullWalk :: FileWriter st -> Int -> FieldStep s PyPIField (ST st (Steps (ST st) (Walked s))) -> (s -> Bool) -> (s -> Text -> Bool) -> (s -> Int -> FileValue -> (Either LimitError s -> ST st (Steps (ST st) (Walked s))) -> ST st (Steps (ST st) (Walked s))) -> InternTable -> s -> Cursor -> ST st (Steps (ST st) (Walked s))
 {-# INLINE pypiFullWalk #-}
-pypiFullWalk writer depth step keeps claimed fileStep table0 = walkIndex depth FullRead step claimed (\table acc -> pure (Finished (Walked table acc))) packedFile table0
+pypiFullWalk writer depth step keeps claims fileStep table0 = walkIndex depth FullRead step claims (\table acc -> pure (Finished (Walked table acc))) packedFile table0
   where
     fileShape = ObjectOr Null (fileMembers depth (prepareMembers table0))
     packedFile table acc position element rest next =
         readShape writer fileShape (if keeps acc then Share else Keep) table element rest $ \payload held after ->
             fileStep acc position payload (either Walk.refuse (\kept -> next kept held after))
 
--- An envelope key the consumer has @claimed@ holds an earlier occurrence, so a repeat is read and dropped.
+-- An envelope key the consumer @claims@ holds an earlier occurrence, so a repeat is read and dropped.
 walkIndex :: (Walk r) => Int -> PyPIRead -> FieldStep s PyPIField r -> (s -> Text -> Bool) -> (InternTable -> s -> r) -> (InternTable -> s -> Int -> Element -> Cursor -> (s -> InternTable -> Cursor -> r) -> r) -> InternTable -> s -> Cursor -> r
 {-# INLINE walkIndex #-}
-walkIndex depth mode step claimed finishRead readIndexFile table0 initial = start
+walkIndex depth mode step claims finishRead readIndexFile table0 initial = start
   where
     start tokens
         | depth <= 0 = withElement tokens tooDeep
@@ -69,13 +69,13 @@ walkIndex depth mode step claimed finishRead readIndexFile table0 initial = star
         "name" -> envelope "name" (Scalar (depth - 1))
         "meta" -> withElement after $ \element afterKey -> case element of
             ObjectBegin
-                | depth > 1, claimed acc "meta" -> eachMember (metaMember False table) (\(Fields held _) -> continue (Walked table held)) (Fields acc mempty) afterKey
+                | depth > 1, claims acc "meta" -> eachMember (metaMember False table) (\(Fields held _) -> continue (Walked table held)) (Fields acc mempty) afterKey
                 | depth > 1 -> eachMember (metaMember True table) (\(Fields held members) -> keep "meta" held (Object members)) (Fields acc mempty) afterKey
             _ -> envelopeValue "meta" (ObjectWith (depth - 1) metaFields (Scalar (depth - 1))) element afterKey
         "project-status" | full -> envelope "project-status" (ObjectWith (depth - 1) statusFields (Scalar (depth - 1)))
         "alternate-locations" | full -> withElement after $ \element afterKey -> case element of
             ArrayBegin
-                | depth > 1, claimed acc "alternate-locations" -> dropItems (depth - 2) table afterKey (continue walked)
+                | depth > 1, claims acc "alternate-locations" -> dropItems (depth - 2) table afterKey (continue walked)
                 | depth > 1 -> envelopeItems "alternate-locations" (depth - 2) table acc afterKey (keep "alternate-locations")
             _ -> envelopeValue "alternate-locations" (ArrayWith (depth - 1) (Scalar (depth - 2)) (Scalar (depth - 1))) element afterKey
         "files" -> shaped FilesShape files walked after continue
