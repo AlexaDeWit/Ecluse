@@ -21,6 +21,11 @@ spec = do
     it "rejects an artifact HEAD with no positive representation size" $
         for_ [[], [("Content-Length", "0")], [("Content-Length", "invalid")]] $ \headers ->
             artifactHeadCase (headResponse "" headers) `shouldThrow` anyException
+    it "accepts an artifact HEAD that advertises the artifact's exact length" $
+        artifactHeadLengthCase 12 (headResponse "" [("Content-Length", "12")])
+    it "rejects an artifact HEAD that advertises another positive length" $
+        for_ ["1", "13"] $ \advertised ->
+            artifactHeadLengthCase 12 (headResponse "" [("Content-Length", advertised)]) `shouldThrow` anyException
     it (caseLabel "core.contract.serving.valid-observations" "accepts matching independently observed bytes and advertised digest") $
         artifactIntegrityCase (observedDriver id id)
     it (caseLabel "core.contract.serving.corrupt-bytes" "rejects changed artifact bytes even when the status is successful") $
