@@ -2,9 +2,10 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | Dense npm and PyPI listings, many retained entries in few bytes, each read in a fresh child
-process. Their bytes pay almost nothing, so the floors alone cover what the read holds, and the floors
-for the entries the finished document keeps cover what it holds once read.
+{- | Dense npm and PyPI listings, and versions and files with minimal bodies, each read in a fresh
+child process. Their bytes pay less than their floors, so the floors cover what the read holds, and
+the floors for the entries the finished document keeps cover what it holds once read. A PyPI index
+of repeated envelope arrays, which count toward no floor, peaks within its per-byte charge.
 -}
 module Ecluse.Core.Registry.Metadata.EntryFloorResidencySpec (spec) where
 
@@ -44,7 +45,9 @@ data Dense = Dense
     , denseKept :: RetainedEntries
     }
 
--- | The read's peak and what it holds once read, against the floor and against each figure's limit.
+{- | Each listing's peak and held bytes against its floors and figure limits, and the repeated arrays'
+peak against the per-byte full-read charge.
+-}
 spec :: Spec
 spec = describe "dense listing live bytes" $ do
     for_ (denseListings <> minimalBodies) $ \dense ->
