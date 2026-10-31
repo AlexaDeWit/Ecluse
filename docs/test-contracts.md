@@ -182,6 +182,9 @@ separate concerns tracked by #1349, #1182, and #1329.
 ## Smoke and measurement
 
 The smoke and reader-retention suites run the shared `Contract.RegistrySmoke` and `Contract.Retention` laws under the case IDs below.
+`Ecluse.Test.Contract.Measurement` lists those IDs as independent obligations.
+Each suite checks its own labelled cases against them when it starts, as the load harness does with `checkFixtureCoverage`: the smoke suite in its `SpecHook`, the residency suite in its `Main`.
+A missing, duplicate, unknown or malformed case stops the suite before any live fetch or heap probe.
 Genuine unlabelled native smoke examples remain outside these laws.
 The live version-ordering smoke fetches the `smokeNames` packages in `bench/corpus/pins.json`, which list npm, PyPI, RubyGems and Cargo names.
 

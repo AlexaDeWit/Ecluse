@@ -1067,6 +1067,7 @@ library ecluse-test-contracts
     Ecluse.Test.Contract.Publication
     Ecluse.Test.Contract.Telemetry
     Ecluse.Test.Contract.Maintenance
+    Ecluse.Test.Contract.Measurement
     Ecluse.Test.Contract.Metadata.Projection
     Ecluse.Test.Contract.Manifest
     Ecluse.Test.Contract.Phase
@@ -2017,6 +2018,7 @@ test-suite ecluse-smoke
     Ecluse.Core.Security.HostSmokeSpec
     Ecluse.Core.VersionSmokeSpec
     Ecluse.PilotSmokeSpec
+    SpecHook
 
   build-tool-depends: hspec-discover:hspec-discover ^>=2.11
   build-depends:

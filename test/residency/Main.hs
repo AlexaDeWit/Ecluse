@@ -10,6 +10,7 @@ module Main (main) where
 import Data.Aeson (encode)
 import Data.ByteString.Lazy qualified as LBS
 import Data.JsonStream.LexerResidencySpec qualified as LexerResidencySpec
+import Ecluse.Core.Ecosystem (Ecosystem (Cargo, Npm, PyPI, RubyGems))
 import Ecluse.Core.Mirror.State.WeightResidencySpec qualified as StateWeightResidencySpec
 import Ecluse.Core.Registry.Cargo.ReaderResidencySpec qualified as CargoReaderResidencySpec
 import Ecluse.Core.Registry.JsonStreamResidencySpec qualified as JsonStreamResidencySpec
@@ -29,9 +30,11 @@ import Ecluse.Core.Server.MirrorViewResidencySpec qualified as MirrorViewResiden
 import Ecluse.Core.Server.Pipeline.PackumentResidencySpec qualified as PackumentResidencySpec
 import Ecluse.Core.Server.Pipeline.TarballResidencySpec qualified as TarballResidencySpec
 import Ecluse.Core.Server.Response.SummaryResidencySpec qualified as SummaryResidencySpec
+import Ecluse.Test.Contract.Measurement (checkRetentionCases)
 import System.Environment qualified as Environment
 import Test.Hspec (hspec)
 
+-- | A probe flag runs one measurement child. Otherwise the retention cases must meet their obligations before Hspec starts.
 main :: IO ()
 main =
     Environment.getArgs >>= \case
@@ -40,25 +43,32 @@ main =
         ["--gzip-probe", mode, path] -> MetadataGzipResidencySpec.probeMain mode path
         ["--mirror-read-probe", phase, directory] -> MirrorViewResidencySpec.probeMain phase directory
         arguments | Just (mode, path) <- Mode.parseProbeMode arguments -> runProbe mode path
-        _ -> hspec $ do
-            CalibrationResidencySpec.spec
-            ProbeModeResidencySpec.spec
-            StateWeightResidencySpec.spec
-            ArchiveResidencySpec.spec
-            MetadataGzipResidencySpec.spec
-            MirrorViewResidencySpec.spec
-            LexerResidencySpec.spec
-            JsonStreamResidencySpec.spec
-            SummaryResidencySpec.spec
-            MetadataResidencySpec.spec
-            NpmReaderResidencySpec.spec
-            PyPIReaderResidencySpec.spec
-            CargoReaderResidencySpec.spec
-            RubyGemsReaderResidencySpec.spec
-            RubyGemsServingResidencySpec.spec
-            TarballResidencySpec.spec
-            PackumentResidencySpec.spec
-            MemoryModelResidencySpec.spec
+        _ -> do
+            checkRetentionCases
+                [ (Npm, NpmReaderResidencySpec.spec)
+                , (PyPI, PyPIReaderResidencySpec.spec)
+                , (Cargo, CargoReaderResidencySpec.spec)
+                , (RubyGems, RubyGemsReaderResidencySpec.spec)
+                ]
+            hspec $ do
+                CalibrationResidencySpec.spec
+                ProbeModeResidencySpec.spec
+                StateWeightResidencySpec.spec
+                ArchiveResidencySpec.spec
+                MetadataGzipResidencySpec.spec
+                MirrorViewResidencySpec.spec
+                LexerResidencySpec.spec
+                JsonStreamResidencySpec.spec
+                SummaryResidencySpec.spec
+                MetadataResidencySpec.spec
+                NpmReaderResidencySpec.spec
+                PyPIReaderResidencySpec.spec
+                CargoReaderResidencySpec.spec
+                RubyGemsReaderResidencySpec.spec
+                RubyGemsServingResidencySpec.spec
+                TarballResidencySpec.spec
+                PackumentResidencySpec.spec
+                MemoryModelResidencySpec.spec
 
 runProbe :: Mode.ProbeMode -> FilePath -> IO ()
 runProbe mode path = case mode of
