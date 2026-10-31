@@ -1582,7 +1582,7 @@ test-suite ecluse-unit
   ghc-options:        -Wno-missing-export-lists -threaded -rtsopts
   type:               exitcode-stdio-1.0
   main-is:            Spec.hs
-  hs-source-dirs:     test/unit bench/load
+  hs-source-dirs:     test/unit
   other-modules:
     Ecluse.Test.ContainersSpec
     Ecluse.Test.ExpositionSpec
@@ -1590,92 +1590,6 @@ test-suite ecluse-unit
     Ecluse.Report.BenchLabelsSpec
     Ecluse.AcceptanceSpec
     Ecluse.Acceptance.EvidenceSpec
-    Ecluse.BenchLoad.Advisories
-    Ecluse.BenchLoad.AdvisoryStore
-    Ecluse.BenchLoad.Contract.Driver
-    Ecluse.BenchLoad.Contract.DriverSpec
-    Ecluse.BenchLoad.Stress
-    Ecluse.BenchLoad.AdvisoriesSpec
-    Ecluse.BenchLoad.AdvisoryStoreSpec
-    Ecluse.BenchLoad.ContractSpec
-    Ecluse.BenchLoad.BootLinesSpec
-    Ecluse.BenchLoad.CpuUseSpec
-    Ecluse.BenchLoad.EvidenceSpec
-    Ecluse.BenchLoad.ExpositionSpec
-    Ecluse.BenchLoad.FloorsSpec
-    Ecluse.BenchLoad.LatencySpec
-    Ecluse.BenchLoad.NpmArtifactSpec
-    Ecluse.BenchLoad.NpmSpec
-    Ecluse.BenchLoad.Fixture
-    Ecluse.BenchLoad.Listing
-    Ecluse.BenchLoad.ListingSpec
-    Ecluse.BenchLoad.FixtureSpec
-    Ecluse.BenchLoad.Npm
-    Ecluse.BenchLoad.Worker
-    Ecluse.BenchLoad.PyPI.Worker
-    Ecluse.BenchLoad.Cargo
-    Ecluse.BenchLoad.CargoSpec
-    Ecluse.BenchLoad.RubyGems
-    Ecluse.BenchLoad.RubyGems.Directory
-    Ecluse.BenchLoad.RubyGems.Worker
-    Ecluse.BenchLoad.RubyGems.WorkerFixture
-    Ecluse.BenchLoad.RubyGems.WorkerFixtureSpec
-    Ecluse.BenchLoad.RubyGemsSpec
-    Ecluse.BenchLoad.RubyGems.DirectorySpec
-    Ecluse.BenchLoad.OhaSpec
-    Ecluse.BenchLoad.Cargo.Worker
-    Ecluse.BenchLoad.Cargo.WorkerFixture
-    Ecluse.BenchLoad.Cargo.WorkerFixtureSpec
-    Ecluse.BenchLoad.ObjectStore
-    Ecluse.BenchLoad.ObjectStoreSpec
-    Ecluse.BenchLoad.WorkerState
-    Ecluse.BenchLoad.PyPI.WorkerFixture
-    Ecluse.BenchLoad.PyPI.WorkerFixtureSpec
-    Ecluse.BenchLoad.PatternScenario
-    Ecluse.BenchLoad.PrivateCopy
-    Ecluse.BenchLoad.PrivateCopySpec
-    Ecluse.BenchLoad.PyPI
-    Ecluse.BenchLoad.ManagedMirror
-    Ecluse.BenchLoad.PyPISpec
-    Ecluse.BenchLoad.NormaliseSpec
-    Ecluse.BenchLoad.PodSpec
-    Ecluse.BenchLoad.ProfileSpec
-    Ecluse.BenchLoad.Placement
-    Ecluse.BenchLoad.PlacementSpec
-    Ecluse.BenchLoad.ProxyProcess
-    Ecluse.BenchLoad.ProxyProcessSpec
-    Ecluse.BenchLoad.RtsProbe
-    Ecluse.BenchLoad.RtsProbeSpec
-    Ecluse.BenchLoad.RtsWindowSpec
-    Ecluse.BenchLoad.Scenarios
-    Ecluse.BenchLoad.ScenariosSpec
-    Ecluse.BenchLoad.SelectionSpec
-    Ecluse.BenchLoad.SlowReader
-    Ecluse.BenchLoad.SlowReaderSpec
-    Ecluse.BenchLoad.Support
-    Ecluse.BenchLoad.SweepSpec
-    Ecluse.BenchLoad.Error
-    Ecluse.BenchLoad.Harness
-    Ecluse.BenchLoad.HarnessSpec
-    Ecluse.BenchLoad.Oha
-    Ecluse.BenchLoad.Replay
-    Ecluse.BenchLoad.ReplaySpec
-    Ecluse.BenchLoad.Report
-    Ecluse.BenchLoad.ReportSpec
-    Ecluse.BenchLoad.PatternsSpec
-    Ecluse.BenchLoad.PatternReportSpec
-    Ecluse.BenchLoad.VerdictSpec
-    Ecluse.BenchReport.AgainstMain.AcceptanceSpec
-    Ecluse.BenchReport.AgainstMain.BenchSpec
-    Ecluse.BenchReport.AgainstMain.LoadSpec
-    Ecluse.BenchReport.AgainstMainSpec
-    Ecluse.BenchReport.CalibrationSpec
-    Ecluse.BenchReport.MarkdownSpec
-    Ecluse.BenchReport.PerformanceReceiptSpec
-    Ecluse.BenchReport.PerformanceCommandSpec
-    Ecluse.BenchReport.PerformanceSpec
-    Ecluse.BenchReport.SweepSpec
-    Ecluse.BenchReportSpec
     EcluseSpec
     Ecluse.BootSpec
     Ecluse.CLISpec
@@ -1748,7 +1662,6 @@ test-suite ecluse-unit
     , amazonka-s3 ^>=2.0
     , ecluse
     , ecluse:ecluse-acceptance
-    , ecluse:ecluse-bench-load
     , ecluse:ecluse-bench-report
     , optparse-applicative
     , ecluse:ecluse-core
