@@ -9,6 +9,7 @@ import Data.Aeson (withObject, (.:))
 import Data.Aeson.Types (parseEither)
 import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as LBS
+import Data.List (lookup)
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import System.Directory (createDirectoryIfMissing)
@@ -43,26 +44,7 @@ rubyNativeContract = DeclaredGroup (fixtureMetadata rubyNativeFixture) $ \record
                 for_ [400, 401, 503] $ \status -> compactRequiredCase client True status plane
         it (label "minimum-cache" "revalidates private visibility and checksums with retained Bundler 2.6.9 caches") (retainedCacheCase minimumBundler)
         it (label "current-cache" "revalidates private visibility and checksums with retained Bundler 4.0.23 caches") (retainedCacheCase currentBundler)
-        it (label "compact-replacement" "returns complete personalised discovery and info bodies for Range requests") $ \plane ->
-            withObservedNativeProxy defaultE2EConfig plane $ \observed -> do
-                let proxy = observedProxy observed
-                for_ ["/rubygems/versions", "/rubygems/info/ecluse-fixture-root"] $ \path -> do
-                    ordinary <- proxyRequest "GET" [] "" proxy path
-                    responseStatus ordinary `shouldBe` 200
-                    replacement <- proxyRequest "GET" [("Range", "bytes=7-"), ("If-Range", "\"old-client-view\"")] "" proxy path
-                    responseStatus replacement `shouldBe` 200
-                    responseBody replacement `shouldBe` responseBody ordinary
-                (_, directory) <- proxyGet proxy "/rubygems/versions"
-                let rows = filter (T.isPrefixOf "ecluse-fixture-root ") (T.lines (decodeUtf8 (LBS.toStrict directory)))
-                rows `shouldSatisfy` (not . null)
-                rows `shouldSatisfy` all (T.isSuffixOf " ")
-                (_, info) <- proxyGet proxy "/rubygems/info/ecluse-fixture-root"
-                native <- either (fail . toString) pure (referenceInfo (LBS.toStrict info))
-                native `shouldSatisfy` (not . null)
-                releases <- filter ((== rubyRoot) . releaseName) <$> loadRubyReleases
-                for_ native $ \row -> do
-                    release <- rubyRelease releases rubyRoot (rowVersion row) (rowPlatform row)
-                    rowFields row `shouldSatisfy` elem ("checksum", releaseChecksum release)
+        it (label "compact-replacement" "returns complete personalised discovery and info bodies for Range requests") compactReplacementCase
         it (label "platforms" "retains the Ruby, Java, Linux musl and Darwin variants in a native lockfile") $ \plane -> for_ [minimumBundler, currentBundler] $ \client ->
             withObservedNativeProxy defaultE2EConfig plane $ \observed -> rubyConsumer (observedProxy observed) client $ \project -> do
                 releases <- filter ((== "ecluse-fixture-platform") . releaseName) <$> loadRubyReleases
@@ -309,6 +291,39 @@ retainedCacheCase client plane = withRubyRegistry $ \registry -> do
                 void (rubyUpdate project >>= shouldFail)
                 setRubyRegistryFault registry "rubygems-private" RubyRegistryHealthy
                 void (rubyUpdate project >>= shouldSucceed)
+
+-- A bare Range, Bundler's Range with a stale If-None-Match, and a matching If-Range each still receive the whole body.
+compactReplacementCase :: GlobalDataPlane -> IO ()
+compactReplacementCase plane = withRubyRegistry $ \registry -> do
+    -- rubygems.org hints each row with its info body's MD5, which no longer describes Écluse's rewritten body.
+    setRubyRegistryFault registry "rubygems-upstream" RubyRegistryInfoHints
+    withStubFault plane (RubyGemsBackend (rubyRegistryPort registry) False) $
+        withObservedNativeProxy defaultE2EConfig plane $ \observed -> do
+            let proxy = observedProxy observed
+            for_ ["/rubygems/versions", "/rubygems/info/ecluse-fixture-root"] $ \path -> do
+                ordinary <- proxyRequest "GET" [] "" proxy path
+                responseStatus ordinary `shouldBe` 200
+                tag <- maybe (fail "the Compact Index response emitted no ETag") pure (lookup "ETag" (responseHeaders ordinary))
+                for_ [[], [("If-None-Match", "\"stale-client-view\"")], [("If-Range", tag)]] $ \validators -> do
+                    replacement <- proxyRequest "GET" (("Range", "bytes=7-") : validators) "" proxy path
+                    responseStatus replacement `shouldBe` 200
+                    responseBody replacement `shouldBe` responseBody ordinary
+            upstream <- rubyRegistryDirectory registry "rubygems-upstream"
+            rootRows upstream `shouldSatisfy` (not . null)
+            rootRows upstream `shouldSatisfy` all ((== 32) . T.length . T.takeWhileEnd (/= ' '))
+            (_, directory) <- proxyGet proxy "/rubygems/versions"
+            let rows = rootRows (decodeUtf8 (LBS.toStrict directory))
+            rows `shouldSatisfy` (not . null)
+            rows `shouldSatisfy` all (T.isSuffixOf " ")
+            (_, info) <- proxyGet proxy "/rubygems/info/ecluse-fixture-root"
+            native <- either (fail . toString) pure (referenceInfo (LBS.toStrict info))
+            native `shouldSatisfy` (not . null)
+            releases <- filter ((== rubyRoot) . releaseName) <$> loadRubyReleases
+            for_ native $ \row -> do
+                release <- rubyRelease releases rubyRoot (rowVersion row) (rowPlatform row)
+                rowFields row `shouldSatisfy` elem ("checksum", releaseChecksum release)
+  where
+    rootRows = filter (T.isPrefixOf "ecluse-fixture-root ") . T.lines
 
 compactRequiredCase :: BundlerClient -> Bool -> Int -> GlobalDataPlane -> IO ()
 compactRequiredCase client failInfo status plane = withRubyRegistry $ \registry -> do
