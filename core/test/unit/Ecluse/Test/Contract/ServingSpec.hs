@@ -26,6 +26,11 @@ spec = do
     it "rejects an artifact HEAD that advertises another positive length" $
         for_ ["1", "13"] $ \advertised ->
             artifactHeadLengthCase 12 (headResponse "" [("Content-Length", advertised)]) `shouldThrow` anyException
+    it "accepts an artifact HEAD the upstream saw only as HEAD" $
+        artifactHeadUpstreamCase [Network.HTTP.Types.methodHead, Network.HTTP.Types.methodHead]
+    it "rejects an artifact HEAD the upstream saw as GET, or never saw" $
+        for_ [[Network.HTTP.Types.methodGet], [Network.HTTP.Types.methodHead, Network.HTTP.Types.methodGet], []] $ \methods ->
+            artifactHeadUpstreamCase methods `shouldThrow` anyException
     it (caseLabel "core.contract.serving.valid-observations" "accepts matching independently observed bytes and advertised digest") $
         artifactIntegrityCase (observedDriver id id)
     it (caseLabel "core.contract.serving.corrupt-bytes" "rejects changed artifact bytes even when the status is successful") $
@@ -56,6 +61,7 @@ observedDriver changeDigest changeBytes =
             ServingSession
                 { requestMetadata = \_ _ -> pure response
                 , requestArtifact = \_ _ _ -> pure response{responseBody = changeBytes (responseBody response)}
+                , artifactUpstreamMethods = pure []
                 }
 
 headResponse :: LByteString -> [Network.HTTP.Types.Header] -> ServingResponse
