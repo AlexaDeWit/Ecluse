@@ -56,6 +56,12 @@ spec = do
         it "refuses other than three distinct runs" $
             for_ [[observed 11 [1, 1], observed 12 [1, 1]], [observed 11 [1, 1], observed 11 [1, 1], observed 12 [1, 1]], [observed n [1, 1] | n <- [11 .. 14]]] $ \runs ->
                 calibrate uncalibrated runs Nothing `shouldSatisfy` isLeft
+        it "refuses runs that measured different commits, naming each run's commit" $
+            calibrate uncalibrated [observed 11 [2000, 1000], observed 12 [2200, 1100], observedAt "def" "workflow_dispatch" 13 [1900, 900]] Nothing
+                `shouldBe` Left ["the runs measured different commits: run 11 at abc, run 12 at abc, run 13 at def"]
+        it "refuses a run that was not a workflow dispatch, naming its event" $
+            calibrate uncalibrated [observed 11 [2000, 1000], observedAt "abc" "schedule" 12 [2200, 1100], observed 13 [1900, 900]] Nothing
+                `shouldBe` Left ["run 12 was triggered by schedule, not workflow_dispatch"]
         it "refuses a scenario the floors do not name" $
             calibrate uncalibrated [observed n [1, 1] | n <- [11 .. 13]] (Just ["npm/merge-colder"]) `shouldBe` Left ["no scenario in the floors is named npm/merge-colder"]
         it "names every run that was not held, missed a pod shape or a pass, or whose first attempt did not run clean" $ do
@@ -123,11 +129,15 @@ cellsOf = Map.findWithDefault mempty twoCores . floorsByShape
 withCell :: FloorKey -> Cell -> Floors -> Floors
 withCell key cell floors = floors{floorsByShape = Map.adjust (Map.insert key cell) twoCores (floorsByShape floors)}
 
--- A held run under 2cpu-1gib with clean first attempts at these merge-cold counts, loaded then concurrency one, and a herd.
+-- A run dispatched at commit abc, held under 2cpu-1gib with clean first attempts at these merge-cold counts, loaded then concurrency one, and a herd.
 observed :: Integer -> [Int] -> RunObservations
-observed runNumber counts =
+observed = observedAt "abc" "workflow_dispatch"
+
+-- The same run at this commit, triggered by this event.
+observedAt :: Text -> Text -> Integer -> [Int] -> RunObservations
+observedAt commit event runNumber counts =
     RunObservations
-        (CalibrationRun runNumber ("https://example.test/runs/" <> show runNumber) "abc" "workflow_dispatch")
+        (CalibrationRun runNumber ("https://example.test/runs/" <> show runNumber) commit event)
         (Map.fromList [(twoCores, (True, Map.fromList (zip [mergeCold, mergeColdOne] [FirstAttempt (Just count) True | count <- counts] <> [(herd, FirstAttempt (Just 3) True)]))), (Unlimited, (True, mempty))])
 
 -- A held run under 2cpu-1gib with a clean first attempt at PyPI's index-cold.
