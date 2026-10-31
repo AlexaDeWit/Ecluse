@@ -430,8 +430,9 @@ serveMergedPackument serving evalCtx record privResult pubResult
                             , null (infoInvalidEntries (manifestInfo manifest)) ->
                                 liftIO (paReportRejections public >> onCheckedNoSurvivorAdmission observer)
                             | otherwise ->
-                                noServeableVersions serving (ctxAdvisoryEtag evalCtx) (paVerdicts public) $
-                                    collectDecisions privResult pubResult (privateExclusions <> managedExclusions <> paExclusions public)
+                                let refused = privateExclusions <> managedExclusions <> paVerdicts public
+                                 in noServeableVersions serving (ctxAdvisoryEtag evalCtx) refused $
+                                        collectDecisions privResult pubResult (map vvDecision refused)
   where
     budgetRefused fault = pure (packumentBadGateway (psvReplies serving) [] (mkRefusal (pdHelp deps) ("the cumulative metadata input exceeded its bound: " <> show fault)))
     settledAbsence OriginAbsent = True
@@ -469,7 +470,7 @@ mirrorUnavailableWithRetry serving retry = do
     liftIO (mpServeDecision (servingMetrics serving) Metric.Unavailable)
     pure (packumentUnavailable (psvReplies serving) (retryAfterHeaders retry) (mkRefusal (pdHelp (psvDeps serving)) "managed mirror view is unavailable"))
 
-admitTrusted :: MinTrustedIntegrity -> Maybe Manifest -> (Maybe Contribution, [ServeDecision])
+admitTrusted :: MinTrustedIntegrity -> Maybe Manifest -> (Maybe Contribution, [VersionVerdict])
 admitTrusted minTrusted = \case
     Nothing -> (Nothing, [])
     Just manifest ->
@@ -481,8 +482,8 @@ admitTrusted minTrusted = \case
 
 data PublicAdmission = PublicAdmission
     { paContribution :: Maybe Contribution
-    , paExclusions :: [ServeDecision]
-    , paVerdicts :: [VersionVerdict]
+    , -- Every integrity refusal, and the rule verdicts when no version survives.
+      paVerdicts :: [VersionVerdict]
     , paBlockedPending :: Set Text
     , -- Only named denials release a missing recorded version from coverage.
       paDeniedEvidence :: Map Text PackageDetails
@@ -492,7 +493,7 @@ data PublicAdmission = PublicAdmission
 
 gatePublic :: Maybe (EvalContext -> PackageDetails -> Rejection -> IO ()) -> TracingPort -> MetricsPort -> PackumentDeps -> PackageName -> EvalContext -> Map Text PackageDetails -> Set Text -> Maybe Manifest -> IO PublicAdmission
 gatePublic rejected tracing metrics deps name ctx trustedVersions pendingVersions = \case
-    Nothing -> pure (PublicAdmission Nothing [] [] Set.empty Map.empty pass)
+    Nothing -> pure (PublicAdmission Nothing [] Set.empty Map.empty pass)
     Just manifest -> spanPackumentGate tracing name $ do
         let (admissible, integrityRefusals) = admitByIntegrity (pdMinIntegrity deps) integrityBelowFloor integrityMissing (manifestInfo manifest)
         (decisions, seconds) <- timedSeconds (decideVersions deps ctx admissible)
@@ -509,14 +510,11 @@ gatePublic rejected tracing metrics deps name ctx trustedVersions pendingVersion
                         Reject rejection -> report ctx details rejection
         pure $
             if Set.null (fpSurvivors plan)
-                then
-                    let verdicts = projectDecisions admissible (fpDecisions plan)
-                     in PublicAdmission Nothing (map vvDecision verdicts <> integrityRefusals) verdicts blockedPending deniedEvidence reportRejections
+                then PublicAdmission Nothing (projectDecisions admissible (fpDecisions plan) <> integrityRefusals) blockedPending deniedEvidence reportRejections
                 else
                     PublicAdmission
                         (Just (Contribution GatedSource (restrictToSurvivors (fpSurvivors plan) admissible) (manifestRaw manifest) (manifestDigest manifest) (manifestBodyBytes manifest)))
                         integrityRefusals
-                        []
                         blockedPending
                         deniedEvidence
                         reportRejections

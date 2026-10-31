@@ -69,7 +69,7 @@ import Ecluse.Core.Rules.Types (
  )
 import Ecluse.Core.Server.Pipeline.Internal (
     DenialAudit (..),
-    VersionVerdict (VersionVerdict),
+    VersionVerdict (..),
     admitByIntegrity,
     denialAuditPayload,
     denialLabels,
@@ -311,8 +311,13 @@ spec = do
             -- versions drop out of the served listing.
             Map.keys (infoVersions admissible) `shouldBe` ["1.5.0"]
             -- Two below-floor (SHA-1) versions, then two missing-integrity (no digest)
-            -- versions: the bucket order the fold must hold, not the key order.
-            refusals `shouldBe` [belowFloorMarker, belowFloorMarker, missingMarker, missingMarker]
+            -- versions, each named: the bucket order the fold must hold, not the key order.
+            refusals
+                `shouldBe` [ VersionVerdict "1.0.0" belowFloorMarker
+                           , VersionVerdict "2.0.0" belowFloorMarker
+                           , VersionVerdict "0.9.0" missingMarker
+                           , VersionVerdict "2.5.0" missingMarker
+                           ]
 
     describe "admitByIntegrity and the download gate's floor" $
         modifyMaxSuccess (const 500) $
@@ -329,7 +334,7 @@ spec = do
                     cover 20 "one file a version, the npm shape" (infoName info == leftpadName)
                     cover 20 "several files in a version, the PyPI shape" (infoName info == requestsName)
                     infoVersions admissible === Map.intersectionWith (\details kept -> details{pkgArtifacts = kept}) (infoVersions info) listed
-                    refusals === (belowFloorMarker <$ Map.elems weak) <> (missingMarker <$ Map.elems digestless)
+                    refusals === [VersionVerdict version belowFloorMarker | version <- Map.keys weak] <> [VersionVerdict version missingMarker | version <- Map.keys digestless]
                     infoDistTags admissible === Map.filter ((`Map.member` listed) . renderVersion) (infoDistTags info)
 
     describe "admitByIntegrity against the full rebuild" $
@@ -343,9 +348,9 @@ spec = do
                     cover 30 "every file clears the floor" whole
                     cover 20 "a file or a version drops" (not whole)
                     cover 5 "a dist-tag pruned from a whole listing" (whole && infoDistTags kept /= infoDistTags info)
-                    cover 5 "a version refused below the floor" (belowFloorMarker `elem` refused)
-                    cover 5 "a version refused with no digest" (missingMarker `elem` refused)
-                    cover 2 "both refusal kinds in one listing" (belowFloorMarker `elem` refused && missingMarker `elem` refused)
+                    cover 5 "a version refused below the floor" (belowFloorMarker `elem` map vvDecision refused)
+                    cover 5 "a version refused with no digest" (missingMarker `elem` map vvDecision refused)
+                    cover 2 "both refusal kinds in one listing" (belowFloorMarker `elem` map vvDecision refused && missingMarker `elem` map vvDecision refused)
                     cover 20 "the trusted floor" (isRight chosen)
                     actual === expected
 
@@ -416,11 +421,11 @@ genIntegrityInfo = do
             }
 
 -- | The function under test and the reference, both over one listing and floor.
-bothAdmissions :: (IntegrityFloor floor) => PackageInfo -> floor -> ((PackageInfo, [ServeDecision]), (PackageInfo, [ServeDecision]))
+bothAdmissions :: (IntegrityFloor floor) => PackageInfo -> floor -> ((PackageInfo, [VersionVerdict]), (PackageInfo, [VersionVerdict]))
 bothAdmissions info flr = (admitByIntegrity flr belowFloorMarker missingMarker info, referenceAdmit flr belowFloorMarker missingMarker info)
 
 -- | admitByIntegrity's body before it returned an all-clear listing whole, kept as the reference.
-referenceAdmit :: (IntegrityFloor floor) => floor -> ServeDecision -> ServeDecision -> PackageInfo -> (PackageInfo, [ServeDecision])
+referenceAdmit :: (IntegrityFloor floor) => floor -> ServeDecision -> ServeDecision -> PackageInfo -> (PackageInfo, [VersionVerdict])
 referenceAdmit floorSpec belowFloorRefusal missingRefusal info =
     ( info
         { infoVersions = admissible
@@ -433,11 +438,11 @@ referenceAdmit floorSpec belowFloorRefusal missingRefusal info =
     admitArtifacts details =
         (\survivors -> details{pkgArtifacts = survivors}) <$> partitionByFloor floorSpec artHashes (pkgArtifacts details)
     admissible = Map.mapMaybe rightToMaybe partitioned
-    (below, missing) = Map.foldr bucket ([], []) partitioned
-    bucket (Left BelowFloor) (b, m) = (belowFloorRefusal : b, m)
-    bucket (Left NoIntegrity) (b, m) = (b, missingRefusal : m)
-    bucket (Left MeetsFloor) acc = acc
-    bucket (Right _) acc = acc
+    (below, missing) = Map.foldrWithKey bucket ([], []) partitioned
+    bucket version (Left BelowFloor) (b, m) = (VersionVerdict version belowFloorRefusal : b, m)
+    bucket version (Left NoIntegrity) (b, m) = (b, VersionVerdict version missingRefusal : m)
+    bucket _ (Left MeetsFloor) acc = acc
+    bucket _ (Right _) acc = acc
 
 -- | Every floor each smart constructor accepts, public on the left and trusted on the right.
 genFloor :: Gen (Either MinIntegrity MinTrustedIntegrity)

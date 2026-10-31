@@ -86,7 +86,10 @@ pipelineModule = "Ecluse.Server.Pipeline"
 pipelineInternalModule :: Text
 pipelineInternalModule = "Ecluse.Server.Pipeline.Internal"
 
--- | Keep each version's files whose strongest digest meets the floor, so a version drops only when none survives, as at the download gate.
+{- | Keep each version's files whose strongest digest meets the floor, so a version drops only when
+none survives, as at the download gate. Each dropped version keeps its refusal beside its version, so
+its audit line can name it.
+-}
 admitByIntegrity ::
     (IntegrityFloor floor) =>
     floor ->
@@ -95,7 +98,7 @@ admitByIntegrity ::
     -- The refusal for a version with no digest ('NoIntegrity'). Each gate passes its own wording.
     ServeDecision ->
     PackageInfo ->
-    (PackageInfo, [ServeDecision])
+    (PackageInfo, [VersionVerdict])
 admitByIntegrity floorSpec belowFloorRefusal missingRefusal info
     -- A listing whose every file clears the floor keeps every version whole, so skip the rebuild.
     | all (all fileMeetsFloor . pkgArtifacts) (infoVersions info) = (withVersions (infoVersions info), [])
@@ -118,17 +121,17 @@ admitByIntegrity floorSpec belowFloorRefusal missingRefusal info
     admissible :: Map Text PackageDetails
     admissible = Map.mapMaybe rightToMaybe partitioned
 
-    -- 'Map.foldr' visits keys in ascending order and each arm prepends, so the below-floor
+    -- 'Map.foldrWithKey' visits keys in ascending order and each arm prepends, so the below-floor
     -- refusals precede the missing-integrity ones, each in key order.
-    refusals :: [ServeDecision]
+    refusals :: [VersionVerdict]
     refusals = below <> missing
       where
-        (below, missing) = Map.foldr bucket ([], []) partitioned
-        bucket (Left BelowFloor) (b, m) = (belowFloorRefusal : b, m)
-        bucket (Left NoIntegrity) (b, m) = (b, missingRefusal : m)
+        (below, missing) = Map.foldrWithKey bucket ([], []) partitioned
+        bucket version (Left BelowFloor) (b, m) = (VersionVerdict version belowFloorRefusal : b, m)
+        bucket version (Left NoIntegrity) (b, m) = (b, VersionVerdict version missingRefusal : m)
         -- 'partitionByFloor' never reports 'MeetsFloor' as a refusal, and a 'Right' is a survivor.
-        bucket (Left MeetsFloor) acc = acc
-        bucket (Right _) acc = acc
+        bucket _ (Left MeetsFloor) acc = acc
+        bucket _ (Right _) acc = acc
 
 -- | The bounded @ecluse.serve.decision@ value of a no-survivors packument: a refusal is a denial, the rest unavailable.
 packumentServeDecision :: [ServeDecision] -> Metric.Decision

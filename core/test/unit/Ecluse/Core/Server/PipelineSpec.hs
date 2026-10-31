@@ -86,7 +86,7 @@ import Ecluse.Core.Telemetry.Upstream qualified as PublicRead
 import Ecluse.Core.Version (Version)
 import Ecluse.Test.Cve (fakeCveLookup)
 import Ecluse.Test.Deadline (withSweeper)
-import Ecluse.Test.Log (captureJsonLog, newTestLogEnv)
+import Ecluse.Test.Log (captureJsonLog, lineField, lineMessage, newTestLogEnv)
 import Ecluse.Test.Maintenance (
     FakeStore (fakeMaintenance, readFakeContents, writeFakeContents),
     FakeStoreConfig (fakeClass, fakeConsent, fakeFacts, fakeManifests),
@@ -136,6 +136,7 @@ spec = describe "Ecluse.Core.Server.Pipeline (core handlers over a ServeRuntime)
     unconfiguredPrivateSpec
     privateAdmitsNothingSpec
     deniedListingSpec
+    integrityDenialLogSpec
 
     for_ [(status200, Admit), (status304, Admit), (status401, Deny), (status403, Deny)] $ \(upstreamStatus, expected) ->
         it ("records private artifact HTTP " <> show (statusCode upstreamStatus) <> " as " <> show expected <> " for GET and HEAD") $
@@ -1327,7 +1328,7 @@ invalidPublicReplies =
 -- reached the gate, so it refuses the listing as an outage, and a public document the gate refuses in full answers 404.
 privateAdmitsNothingSpec :: Spec
 privateAdmitsNothingSpec = describe "an npm packument whose private document admits nothing" $
-    for_ [("every version below the trusted floor", belowFloorPrivateApp), ("no version", emptyPrivateApp)] $ \(label, privateApp) -> do
+    for_ [("every version below the trusted floor", belowFloorApp), ("no version", emptyPrivateApp)] $ \(label, privateApp) -> do
         for_ [("is unavailable", status503, 503), ("answers HTTP 400", status400, 502)] $ \(failure, publicStatus, expected) ->
             it ("answers " <> show expected <> " for GET and HEAD when the private document has " <> label <> " and the public origin " <> failure) $
                 listingOver privateApp (\_ respond -> respond (responseLBS publicStatus [] "")) id expected Nothing Unavailable
@@ -1335,7 +1336,6 @@ privateAdmitsNothingSpec = describe "an npm packument whose private document adm
             denyAll <- prepare inertRuleDeps []
             listingOver privateApp upstreamApp (\deps -> deps{pdRules = denyAll}) 404 Nothing Deny
   where
-    belowFloorPrivateApp = publicAppOver ["1.0.0"] "1.0.0" (\v -> v{vsIntegrity = Nothing, vsShasum = Just (hexSha1Of artifactBytes)})
     emptyPrivateApp _ respond = respond (responseLBS status200 [(hContentType, "application/json")] (encode (object ["name" .= ("leftpad" :: Text), "dist-tags" .= object [], "versions" .= object []])))
 
 -- A public listing the gate denies in full answers 404 beside a private 404 or with no private origin. The artifact keeps its 403.
@@ -1364,6 +1364,30 @@ deniedListingSpec = describe "a public listing the gate denies in full" $
             withDenied $ \rt binding _ _ -> do
                 responses <- traverse (\method -> captureRouted rt binding method ["leftpad", "-", "leftpad-1.0.0.tgz"]) [methodGet, methodHead]
                 map (statusCode . responseStatus) responses `shouldBe` [403, 403]
+
+-- An integrity refusal that empties a listing writes the denied line a policy denial writes, naming its version.
+integrityDenialLogSpec :: Spec
+integrityDenialLogSpec = describe "the denied lines of an npm listing an integrity floor empties"
+    $ for_
+        [ ("the public version below the public floor, with no private origin", Nothing, belowFloorApp)
+        , ("the private version below the trusted floor, beside a public 404", Just belowFloorApp, \_ respond -> respond (responseLBS status404 [] ""))
+        ]
+    $ \(label, private, public) ->
+        it ("names " <> label) $ withSweeper $ \deadlines -> do
+            rt <- testServeRuntime deadlines noopMetricsPort
+            testWithApplication (pure public) $ \publicPort ->
+                testWithApplication (pure (fromMaybe public private)) $ \privatePort -> do
+                    base <- depsFor publicPort
+                    let deps = withPrivateBaseUrl (loopbackRegistryUrl ("http://localhost:" <> show privatePort) <$ private) base
+                    (response, logged) <- captureJsonLog $ \logEnv ->
+                        captureServeWithLog logEnv npmPackumentContract rt (mountWith deps) (servePackument npmPackumentReplies leftpadName defaultRequest)
+                    statusCode (responseStatus response) `shouldBe` 404
+                    [(lineField ["data", "version"] line, lineField ["data", "reason_class"] line) | line <- lines logged, lineMessage line == Just "denied"]
+                        `shouldBe` [(Just "1.0.0", Just "ReasonMissingIntegrity")]
+
+-- An origin serving leftpad 1.0.0 with only a SHA-1 digest, below the public and the default trusted floor.
+belowFloorApp :: Application
+belowFloorApp = publicAppOver ["1.0.0"] "1.0.0" (\v -> v{vsIntegrity = Nothing, vsShasum = Just (hexSha1Of artifactBytes)})
 
 -- A request through the binding's own router, carrying the method so a HEAD takes the bodiless contract.
 captureRouted :: ServeRuntime -> MountBinding -> Method -> [Text] -> IO Response

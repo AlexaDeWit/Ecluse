@@ -359,16 +359,19 @@ wins:
   document admits nothing.
 - Otherwise `500` if none is retryable but an exclusion is a permanent inability.
 - Otherwise `404` if every exclusion is a policy or integrity refusal. The body names the
-  refusals, and the serve decision and denial metrics record a denial. A private `404` beside
+  refusals on npm, Cargo and RubyGems. A PyPI body carries only the operator's help message, so
+  there the reasons are in the logs only: each refused version gets a `denied` line at debug level
+  on every ecosystem. The serve decision and denial metrics record a denial. A private `404` beside
   such a public document is settled too, so it does not turn the answer into `503`.
 - Otherwise `403`, when nothing was excluded and no version reached the gate.
 
 A listing that admits nothing answers `404` because no installable package exists under that name
-for the client, and a `403` would suggest a credential problem. The versions existed, so the body
-keeps the deciding rules, and an artifact request for one of them still answers `403`. The
-RubyGems compact specification and archive routes resolve their coordinate through the listing,
-and keep that `403` as well. A name no configured upstream holds is a separate miss, decided
-before any merge (see [settled absence](registry-model.md#packument-merge-across-upstreams)).
+for the client, and a `403` would suggest a credential problem. The versions existed, so the
+response keeps the deciding rules, in the body or, on PyPI, in the logs, and an artifact request
+for one of them still answers `403`. The RubyGems compact specification and archive routes resolve
+their coordinate through the listing, and keep that `403` as well. A name no configured upstream
+holds is a separate miss, decided before any merge (see
+[settled absence](registry-model.md#packument-merge-across-upstreams)).
 (`packumentStatus` in `Ecluse.Core.Server.Response` is the counterpart of `artifactStatus`.)
 
 The serve-outcome model decides the status, not the body shape: an ecosystem's route contract
