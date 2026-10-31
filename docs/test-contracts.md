@@ -96,7 +96,7 @@ Each suffix expands to integration.serving.npm, integration.serving.pypi, integr
 | quarantine-private-authority | Shared private young-release authority with old public survivor and rejected young public version. npm native latest-tag assertion remains in its existing gate case |
 | private-divergence | Shared private digest and exact bytes on same-version divergence. npm native latest-tag/divergence cases remain |
 | private-availability | An unavailable private origin (HTTP 429, 500 or 503, a closed connection) refuses listing and artifact with 503, and an invalid private reply (HTTP 302 or 400) refuses them with 502. A private 404 serves the gated public release, a private 401 or 403 refuses, and a public 503 serves the private release alone. A private 404 beside a public 404 answers listing and artifact with 404, and beside a public 503 with 503. New in every provider |
-| public-integrity | npm "filters a hashless public version out of the served listing" moves here, with PyPI counterpart. A SHA-512 public floor then filters every SHA-256 fixture release from the listing and refuses its artifact with 403, so the floor itself runs for Cargo and RubyGems, whose parsers refuse a hashless row |
+| public-integrity | npm "filters a hashless public version out of the served listing" moves here, with PyPI counterpart. A SHA-512 public floor then filters the SHA-256 public release from the listing and refuses its artifact with 403, while the SHA-256 trusted-private release stays listed under the default trusted floor, so the floor itself runs for Cargo and RubyGems, whose parsers refuse a hashless row |
 | trusted-integrity | npm "drops a hashless trusted-private version from the listing by default" moves here, with PyPI counterpart. A SHA-512 trusted floor then drops a SHA-256 private release that the default floor lists, so the floor itself runs for Cargo and RubyGems, whose parsers refuse a hashless row |
 | artifact-integrity | PyPI exact distribution bytes and advertised sha256 checks move here, with npm counterpart. Require fixture bytes, advertised digest and digest of actual response bytes |
 | artifact-head | Successful artifact HEAD returns 200, an empty body and a Content-Length equal to the artifact's length, and the origins receive the artifact request only as HEAD. The PyPI instance is new. |
@@ -186,7 +186,7 @@ The npm and PyPI integrity controls alter successful production reads to change 
 A PyPI control also removes distribution files.
 Each control requires an assertion failure and proves that the altered read ran.
 
-`Ecluse.Test.Contract.QueueSpec` runs the same `queuePayloadLaw` with the real memory driver, an empty-delivery driver, a corrupted-payload driver and a driver that drops the trace carrier. Wrong drivers must fail.
+`Ecluse.Test.Contract.QueueSpec` runs the same `queuePayloadLaw` with the real memory driver, an empty-delivery driver, a corrupted-payload driver, a driver that drops the trace carrier and a driver that drops the package scope. Wrong drivers must fail.
 
 Ecluse.Test.Poll.runUntil replaces discarded timeout/poll results in Integration.WorkerLoop. It throws TestContractEscape on progress timeout or early normal worker exit, propagates worker errors, and cancels the worker after progress. Ecluse.Test.PollSpec covers all four outcomes including cleanup.
 
