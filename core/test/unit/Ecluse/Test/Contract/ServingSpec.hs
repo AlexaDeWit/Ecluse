@@ -36,15 +36,13 @@ spec = do
 observedDriver :: (Text -> Text) -> (LByteString -> LByteString) -> ServingDriver
 observedDriver changeDigest changeBytes =
     ServingDriver
-        { withServing = \_ _ _ releases action -> observed releases action
-        , withFaultedServing = \_ _ _ releases action -> observed releases action
-        , withPublicFloor = \_ _ _ releases action -> observed releases action
+        { withOrigins = \_ _ releases use -> use (const (observed releases))
         , servingIdentity = ("thing@" <>)
         , servingDigest = decodeUtf8
         }
   where
-    observed :: [ServingRelease] -> (ServingSession -> IO a) -> IO a
-    observed releases action = do
+    observed :: [ServingRelease] -> IO ServingSession
+    observed releases = do
         release <- maybe (fail "contract supplied no public fixture") pure (listToMaybe releases)
         let response =
                 ServingResponse
@@ -54,7 +52,7 @@ observedDriver changeDigest changeBytes =
                     , responseVersions = [releaseVersion release]
                     , responseDigests = Map.singleton (releaseVersion release) [changeDigest (decodeUtf8 (releaseBytes release))]
                     }
-        action
+        pure
             ServingSession
                 { requestMetadata = \_ _ -> pure response
                 , requestArtifact = \_ _ _ -> pure response{responseBody = changeBytes (responseBody response)}
