@@ -567,8 +567,8 @@ decides a version the limited rule would have left undecided.
 
 When Écluse denies a request, because no allow rule matched or a deny rule fired:
 
-- The agnostic serve layer decides the HTTP status: 403 for policy denials. See
-  [Web layer → Error model](web-layer.md#error-model).
+- The agnostic serve layer decides the HTTP status: 403 for a denied artifact, and 404 for a
+  listing that admitted nothing. See [Web layer → Error model](web-layer.md#error-model).
 - The response body shape is the ecosystem's. The route contract supplies the typed response
   constructor and codec, so the agnostic pipeline holds no body shape of its own. For npm the
   codec ([`Ecluse.Core.Registry.Npm.Serve`](../../core/src/Ecluse/Core/Registry/Npm/Serve.hs))
@@ -578,7 +578,7 @@ When Écluse denies a request, because no allow rule matched or a deny rule fire
     "error": "BlockedByDefault: no allow rule matched (rejection entries: 42) Contact #platform-eng for assistance."
   }
   ```
-- npm metadata with no surviving version and a `403` groups typed causes by deciding rule or
+- npm metadata with no surviving version and a `404` groups typed causes by deciding rule or
   integrity category. Each group gives a short explanation and a count of rejection entries.
   Different source contributions can reject the same version, so counts are not unique versions.
   The summary discards the mapping from each version to its full reason. Existing audit records

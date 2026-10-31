@@ -90,12 +90,12 @@ Each suffix expands to integration.serving.npm, integration.serving.pypi, integr
 
 | Case suffix | Assertions and original home |
 | --- | --- |
-| default-denial | Listing and artifact denial without allow rules, added paired coverage |
+| default-denial | Listing and artifact denial without allow rules, added paired coverage. The listing answers 404 for GET and HEAD and the artifact 403, beside a private origin that holds nothing, one that answers 404, and none |
 | identity-precedence | Explicit identity permits a young release, explicit deny defeats allow on listing and artifact, added paired coverage |
 | authorised-union | npm, PyPI, Cargo and RubyGems combine trusted-private and gated-public versions. |
 | quarantine-private-authority | Shared private young-release authority with old public survivor and rejected young public version. npm native latest-tag assertion remains in its existing gate case |
 | private-divergence | Shared private digest and exact bytes on same-version divergence. npm native latest-tag/divergence cases remain |
-| private-availability | An unavailable private origin (HTTP 429, 500 or 503, a closed connection) refuses listing and artifact with 503, and an invalid private reply (HTTP 302 or 400) refuses them with 502. A private 404 serves the gated public release, a private 401 or 403 refuses, and a public 503 serves the private release alone. A private 404 beside a public 404 answers listing and artifact with 404, and beside a public 503 with 503. New in every provider |
+| private-availability | An unavailable private origin (HTTP 429, 500 or 503, a closed connection) refuses listing and artifact with 503, and an invalid private reply (HTTP 302 or 400) refuses them with 502. A private 404 serves the gated public release, a private 401 or 403 refuses, and a public 503 serves the private release alone. A private 404 beside a public 404 answers listing and artifact with 404, and beside a public 503 with 503. With no private origin configured, a public 404 answers listing and artifact with 404. New in every provider |
 | public-integrity | npm "filters a hashless public version out of the served listing" moves here, with PyPI counterpart |
 | trusted-integrity | npm "drops a hashless trusted-private version from the listing by default" moves here, with PyPI counterpart |
 | artifact-integrity | PyPI exact distribution bytes and advertised sha256 checks move here, with npm counterpart. Require fixture bytes, advertised digest and digest of actual response bytes |
@@ -105,7 +105,7 @@ Each suffix expands to integration.serving.npm, integration.serving.pypi, integr
 | metadata-gzip-validators | The gzip ETag is weak and differs from the identity ETag. A gzip HEAD states the gzip GET's length and ETag with no body. Only the selected coding's ETag answers 304, on GET and HEAD |
 | metadata-gzip-refusal | A request that refuses both gzip and identity gets 406 with `Vary: Accept-Encoding` |
 | metadata-gzip-opt-out | With native gzip off, gzip-accepting and `*;q=0` requests get the identity response unchanged, with no `Vary` |
-| metadata-gzip-policy | A gzip validator from an admitting policy gets 403, not 304, once policy denies the release |
+| metadata-gzip-policy | A gzip validator from an admitting policy gets 404, not 304, once policy denies the release |
 | artifact-uncoded | Artifact GET and HEAD under `Accept-Encoding: gzip` match the plain requests in status, headers and bytes, with no Content-Encoding |
 
 Seven native duplicate example bodies are removed. Sixty-eight shared serving examples run.
