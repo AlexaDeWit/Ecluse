@@ -96,25 +96,21 @@ metadataFailureSpec = describe "logMetadataFailure" $ do
         runJsonLogAt InfoS (logMetadataFailure (unscopedNpm "mix") upstream MetadataAbsent)
             `shouldReturn` ""
 
-    for_ [(MetadataAbsent, 404, "Debug"), (MetadataHttpFailure 404 Nothing, 404, "Debug"), (MetadataHttpFailure 301 Nothing, 301, "Warning"), (MetadataHttpFailure 400 Nothing, 400, "Warning"), (MetadataHttpFailure 408 Nothing, 408, "Error"), (MetadataHttpFailure 429 Nothing, 429, "Error"), (MetadataHttpFailure 500 Nothing, 500, "Error"), (MetadataHttpFailure 503 Nothing, 503, "Error")] $ \(failure, code, severity) ->
+    for_ [(MetadataAbsent, 404, "Debug"), (MetadataHttpFailure 404 Nothing, 404, "Debug"), (MetadataHttpFailure 301 Nothing, 301, "Warning"), (MetadataHttpFailure 400 Nothing, 400, "Warning"), (MetadataAuthorisationFailure 401, 401, "Warning"), (MetadataAuthorisationFailure 403, 403, "Warning"), (MetadataHttpFailure 408 Nothing, 408, "Error"), (MetadataHttpFailure 429 Nothing, 429, "Error"), (MetadataHttpFailure 500 Nothing, 500, "Error"), (MetadataHttpFailure 503 Nothing, 503, "Error")] $ \(failure, code, severity) ->
         it ("logs " <> show failure <> " as " <> toString severity <> " without credentials") $ do
             logged <- runJsonLog (logMetadataFailure (unscopedNpm "mix") "https://deploy:hunter2@registry.npmjs.org/path?sig=abc" failure)
             logged `shouldSatisfy` T.isInfixOf ("\"sev\":\"" <> severity <> "\"")
             logged `shouldSatisfy` T.isInfixOf ("\"status\":" <> show (code :: Int))
+            logged `shouldSatisfy` T.isInfixOf "\"module\":\"Ecluse.Server.Pipeline\""
             logged `shouldSatisfy` T.isInfixOf "\"package\":\"mix\""
             logged `shouldSatisfy` T.isInfixOf "\"upstream\":\"registry.npmjs.org:443\""
             let message = case failure of
                     MetadataAbsent -> "the upstream has no metadata for the requested package"
+                    MetadataAuthorisationFailure _ -> "the upstream refused metadata access"
                     _ -> "the upstream refused the metadata read"
             logged `shouldSatisfy` T.isInfixOf message
             for_ ["hunter2", "deploy", "sig=abc", "/path"] $ \secret ->
                 logged `shouldSatisfy` (not . T.isInfixOf secret)
-
-    for_ [401, 403] $ \code ->
-        it ("keeps access refusal HTTP " <> show code <> " at Warning") $ do
-            logged <- runJsonLog (logMetadataFailure (unscopedNpm "mix") upstream (MetadataAuthorisationFailure code))
-            logged `shouldSatisfy` T.isInfixOf "\"sev\":\"Warning\""
-            logged `shouldSatisfy` T.isInfixOf "the upstream refused metadata access"
 
 invalidEntriesSpec :: Spec
 invalidEntriesSpec = describe "logInvalidEntries" $ do
@@ -181,6 +177,13 @@ directoryFailureSpec = describe "logDirectoryFailure" $ do
         logged `shouldSatisfy` T.isInfixOf "\"module\":\"Ecluse.Server.Pipeline\""
         logged `shouldSatisfy` T.isInfixOf "\"upstream\":\"index.rubygems.org:443\""
         logged `shouldSatisfy` T.isInfixOf "\"status\":503"
+        logged `shouldSatisfy` (not . T.isInfixOf "\"package\"")
+    it "logs a directory access refusal with its module, upstream and status and no package field" $ do
+        logged <- runJsonLog (logDirectoryFailure "https://index.rubygems.org" (MetadataAuthorisationFailure 403))
+        logged `shouldSatisfy` T.isInfixOf "\"sev\":\"Warning\""
+        logged `shouldSatisfy` T.isInfixOf "\"module\":\"Ecluse.Server.Pipeline\""
+        logged `shouldSatisfy` T.isInfixOf "\"upstream\":\"index.rubygems.org:443\""
+        logged `shouldSatisfy` T.isInfixOf "\"status\":403"
         logged `shouldSatisfy` (not . T.isInfixOf "\"package\"")
 
 upstream :: Text
