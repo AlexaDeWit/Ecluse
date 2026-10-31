@@ -97,7 +97,7 @@ Each suffix expands to integration.serving.npm, integration.serving.pypi, integr
 | private-divergence | Shared private digest and exact bytes on same-version divergence. npm native latest-tag/divergence cases remain |
 | private-availability | An unavailable private origin (HTTP 429, 500 or 503, a closed connection) refuses listing and artifact with 503, and an invalid private reply (HTTP 302 or 400) refuses them with 502. A private 404 serves the gated public release, a private 401 or 403 refuses, and a public 503 serves the private release alone. New in every provider |
 | public-integrity | npm "filters a hashless public version out of the served listing" moves here, with PyPI counterpart. A SHA-512 public floor then filters every SHA-256 fixture release from the listing and refuses its artifact with 403, so the floor itself runs for Cargo and RubyGems, whose parsers refuse a hashless row |
-| trusted-integrity | npm "drops a hashless trusted-private version from the listing by default" moves here, with PyPI counterpart |
+| trusted-integrity | npm "drops a hashless trusted-private version from the listing by default" moves here, with PyPI counterpart. A SHA-512 trusted floor then drops a SHA-256 private release that the default floor lists, so the floor itself runs for Cargo and RubyGems, whose parsers refuse a hashless row |
 | artifact-integrity | PyPI exact distribution bytes and advertised sha256 checks move here, with npm counterpart. Require fixture bytes, advertised digest and digest of actual response bytes |
 | artifact-head | Successful artifact HEAD returns 200, an empty body and a positive Content-Length for both npm and PyPI. The PyPI instance is new. |
 | conditional-coherence | npm 200 HEAD and matching conditional HEAD examples move here. Require GET 200, HEAD 200, empty HEAD body, matching nonempty ETag, exact Content-Length, GET and HEAD 304 with empty bodies |
@@ -105,7 +105,7 @@ Each suffix expands to integration.serving.npm, integration.serving.pypi, integr
 | metadata-gzip-validators | The gzip ETag is weak and differs from the identity ETag. A gzip HEAD states the gzip GET's length and ETag with no body. Only the selected coding's ETag answers 304, on GET and HEAD |
 | metadata-gzip-refusal | A request that refuses both gzip and identity gets 406 with `Vary: Accept-Encoding` |
 | metadata-gzip-opt-out | With native gzip off, gzip-accepting and `*;q=0` requests get the identity response unchanged, with no `Vary` |
-| metadata-gzip-policy | A gzip validator from an admitting policy gets 404, not 304, once policy denies the release |
+| metadata-gzip-policy | Proxies over one pair of origins replay a gzip validator issued under an admitting policy. The same policy answers 304, a policy that denies every release answers 403, and a policy that denies one release answers 200 with the remaining listing under a new validator |
 | artifact-uncoded | Artifact GET and HEAD under `Accept-Encoding: gzip` match the plain requests in status, headers and bytes, with no Content-Encoding |
 
 Seven native duplicate example bodies are removed. Sixty-eight shared serving examples run.
