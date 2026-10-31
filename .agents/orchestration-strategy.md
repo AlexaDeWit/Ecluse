@@ -434,11 +434,10 @@ A PR reaches the architect only when **all** hold:
       not flip ready until the team lead reads both perf suites against main's latest artifacts:
       a Work-per-request benchmarks run dispatched with `gh workflow run bench.yml --ref <branch>`,
       and a load run dispatched with `gh workflow run bench-load.yml --ref <branch> -f profile=full -f pod-shape=all`.
-      The load dispatch runs at the default knobs. At or below the latency ceiling, it is held to
-      the success floors
-      ([`docs/testing.md`, Success floors](../docs/testing.md#success-floors)) and goes red below
-      one. The floors are loose minimums, so the comparison with main stays a manual artifact
-      read. Allocations per request are the signal. Normalise by successes when shedding
+      The load dispatch runs at the default knobs, so it is held to the success floors
+      ([`docs/testing.md`, Success floors](../docs/testing.md#success-floors)) and goes red when a
+      pass and its re-run fall below one. The floors sit far below the calibration median, so the
+      comparison with main stays a manual artifact read. Allocations per request are the signal. Normalise by successes when shedding
       dominates. Wall time is runner noise.
 - [ ] Foreseeable branches tested by intent. `codecov/patch` (≥ 85% on changed lines) prompts a
       unit or integration test. It is not a gate.

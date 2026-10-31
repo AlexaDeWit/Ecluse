@@ -183,7 +183,7 @@ rolloutOps =
         , withServingRole = \plane queue policy ->
             Native.withSweepProxy
                 plane
-                (servingEnvironment policy)
+                (servingEnvironment policy <> [("ECLUSE_MOUNTS__CARGO__PRIVATE_UPSTREAM__CODE_ARTIFACT__URL", Native.repositoryUrl "mirror")])
                 (Just queue)
                 ["proxy", "--no-worker"]
         , withWorkerRole = withObservedWorker

@@ -14,6 +14,7 @@ import Data.Text qualified as T
 import Ecluse.Core.Deadline (Deadlines)
 import Ecluse.Core.Mirror.State
 import Ecluse.Core.Mirror.State.Codec (chargedDecodeProjectRecord, chargedEncodeProjectRecord)
+import Ecluse.Core.Mirror.State.Format (MirrorStateFormat)
 import Ecluse.Core.Mirror.State.Internal (StateRevision (..), VerifiedCompanionBytes (..), projectKey)
 import Ecluse.Core.Package (PackageName)
 import Ecluse.Core.Registry.Exchange (newSingleAttemptManager)
@@ -22,18 +23,18 @@ import Ecluse.Runtime.Aws.Env (AwsEndpoint)
 import Ecluse.Runtime.Aws.S3 (buildS3Env)
 import Ecluse.Runtime.Mirror.State.S3.Internal
 
--- | The composition root supplies a validated explicit bucket and prefix, independent of advisory storage.
-newS3MirrorState :: Maybe AwsEndpoint -> Deadlines -> Limits -> Text -> Text -> StateTarget -> IO MirrorState
-newS3MirrorState endpoint deadlines limits bucket prefix target = buildS3Env endpoint >>= mirrorStateForEnv deadlines limits bucket prefix target
+-- | The composition root supplies a validated explicit bucket and prefix, independent of advisory storage, and the mount's state format.
+newS3MirrorState :: Maybe AwsEndpoint -> Deadlines -> Limits -> MirrorStateFormat -> Text -> Text -> StateTarget -> IO MirrorState
+newS3MirrorState endpoint deadlines limits format bucket prefix target = buildS3Env endpoint >>= mirrorStateForEnv deadlines limits format bucket prefix target
 
 -- | Bind one configured namespace to this env. Reads keep its manager's resend on a stale pooled connection, and writes go once.
-mirrorStateForEnv :: Deadlines -> Limits -> Text -> Text -> StateTarget -> AWS.Env -> IO MirrorState
-mirrorStateForEnv deadlines limits bucket prefix target env =
-    newSingleAttemptManager <&> \writes -> stateOver deadlines limits bucket prefix target env env{AWS.manager = writes}
+mirrorStateForEnv :: Deadlines -> Limits -> MirrorStateFormat -> Text -> Text -> StateTarget -> AWS.Env -> IO MirrorState
+mirrorStateForEnv deadlines limits format bucket prefix target env =
+    newSingleAttemptManager <&> \writes -> stateOver deadlines limits format bucket prefix target env env{AWS.manager = writes}
 
 -- Reads and writes share the endpoint and credentials, and differ only in their manager.
-stateOver :: Deadlines -> Limits -> Text -> Text -> StateTarget -> AWS.Env -> AWS.Env -> MirrorState
-stateOver deadlines limits bucket prefix target readEnv writeEnv =
+stateOver :: Deadlines -> Limits -> MirrorStateFormat -> Text -> Text -> StateTarget -> AWS.Env -> AWS.Env -> MirrorState
+stateOver deadlines limits format bucket prefix target readEnv writeEnv =
     MirrorState
         { msReadProject = readProject
         , msWriteProject = writeProject
@@ -51,13 +52,13 @@ stateOver deadlines limits bucket prefix target readEnv writeEnv =
                 Left fault -> pure (Left (objectFault fault))
                 Right ObjectAbsent -> pure (Right StateAbsent)
                 Right (ObjectUnchanged etag) -> pure (Right (StateUnchanged (StateRevision target name etag)))
-                Right (ObjectLoaded etag bytes) -> fmap (StateLoaded (StateRevision target name etag)) <$> chargedDecodeProjectRecord charge limits target name bytes
+                Right (ObjectLoaded etag bytes) -> fmap (StateLoaded (StateRevision target name etag)) <$> chargedDecodeProjectRecord format charge limits target name bytes
     writeProject charge name revision record
         | recordTarget record /= target || recordPackage record /= name = pure (Left StateIdentityMismatch)
         | otherwise = case revisionBytes target name revision of
             Left fault -> pure (Left fault)
             Right expected ->
-                chargedEncodeProjectRecord charge limits record >>= \case
+                chargedEncodeProjectRecord format charge limits record >>= \case
                     Left fault -> pure (Left fault)
                     Right bytes ->
                         fmap (first objectFault) (writeObject charge deadlines writeEnv limits bucket (key name) expected bytes)

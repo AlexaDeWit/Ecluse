@@ -19,6 +19,7 @@ import Ecluse.Core.Mirror.State.Codec (chargedDecodeProjectRecord)
 import Ecluse.Core.Mirror.State.Internal (projectKey)
 import Ecluse.Core.Package (mkPackageName)
 import Ecluse.Core.Package.Hash (sha256Hex)
+import Ecluse.Core.Registry.RubyGems.Mirror (rubyGemsStateFormat)
 import Ecluse.Core.Security (defaultLimits)
 import Ecluse.E2E.Fixtures.Contracts (ConcreteFixture (..))
 import Ecluse.E2E.Fixtures.RubyGems
@@ -201,7 +202,7 @@ faultCase fault plane = withPlatform plane $ \registry releases config -> do
     withStubFault plane (RubyGemsBackend (rubyRegistryPort registry) True) $
         withObservedNativeProxy config{ecArgs = ["proxy", "--no-worker"]} plane $ \observed -> do
             let expected = case fault of
-                    PrivateAuthorisation -> 401
+                    PrivateAuthorisation -> 403
                     _ -> 503
                 path = case fault of
                     MissingArchive -> rubyArchiveRoute release
@@ -230,7 +231,7 @@ pendingSourceState release bytes = do
     restored `shouldBe` original
     changed `shouldSatisfy` (/= original)
     let encoded = encodeStrict changed
-    void (chargedDecodeProjectRecord (const pass) defaultLimits (stateTarget (stubUrl RubyGemsMirror)) (mkPackageName RubyGems Nothing (releaseName release)) encoded >>= expectRight)
+    void (chargedDecodeProjectRecord rubyGemsStateFormat (const pass) defaultLimits (stateTarget (stubUrl RubyGemsMirror)) (mkPackageName RubyGems Nothing (releaseName release)) encoded >>= expectRight)
     pure encoded
 
 deleteCompactState :: GlobalDataPlane -> RubyRelease -> IO ()

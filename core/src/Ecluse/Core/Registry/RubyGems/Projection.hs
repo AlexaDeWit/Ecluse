@@ -9,7 +9,7 @@ import Control.Monad (foldM)
 import Data.List.NonEmpty qualified as NE
 import Data.Map.Strict qualified as Map
 
-import Ecluse.Core.Package (Artifact (..), Availability (Available), CodeExecSignal (CodeExecUnknown), PackageDetails (..), PackageInfo (..), PackageName, renderPackageName)
+import Ecluse.Core.Package (Artifact (..), Availability (Available), CodeExecSignal (CodeExecUnknown), DependencySources (DependencySourcesUnknown), PackageDetails (..), PackageInfo (..), PackageName, renderPackageName)
 import Ecluse.Core.Package.Entry (distinctKeys)
 import Ecluse.Core.Registry.Metadata (MetadataError (MetadataBoundExceeded, MetadataNameMismatch, MetadataUndecodable))
 import Ecluse.Core.Registry.RubyGems.Document (GemRow (..))
@@ -37,7 +37,7 @@ projectGemRows limits name base rows = do
         unless (coordinateName coordinate == name) (Left (MetadataNameMismatch (renderPackageName (coordinateName coordinate))))
         url <- first (const MetadataUndecodable) (gemArtifactUrl base coordinate)
         let !artifact = Artifact{artEntryKey = grEntryKey row, artFilename = unFilename (coordinateFilename coordinate), artUrl = url, artHashes = strictElements [grChecksum row], artCoreMetadata = Nothing, artSize = Nothing}
-            fresh = PackageDetails{pkgName = name, pkgVersion = version, pkgPublishedAt = grPublishedAt row, pkgInstallCode = CodeExecUnknown, pkgAvailability = Available, pkgArtifacts = artifact :| []}
+            fresh = PackageDetails{pkgName = name, pkgVersion = version, pkgPublishedAt = grPublishedAt row, pkgInstallCode = CodeExecUnknown, pkgDependencySources = DependencySourcesUnknown, pkgAvailability = Available, pkgArtifacts = artifact :| []}
             merge previous = previous{pkgPublishedAt = newestUpload (grPublishedAt row) (pkgPublishedAt previous), pkgArtifacts = artifact :| toList (pkgArtifacts previous)}
         pure (Map.alter (Just . maybe fresh merge) (renderVersion version) versions)
 

@@ -214,10 +214,17 @@ tracingPortOf telemetry =
         , spanPackumentGate = \n action -> withRunInIO $ \runInIO ->
             withPackageSpan telemetry Internal "ecluse.packument.gate" n (runInIO action)
         , spanMetadataFetch = \n action -> withRunInIO $ \runInIO ->
-            withPackageSpan telemetry Client "ecluse.metadata.fetch" n (runInIO action)
+            withPackageSpan telemetry Client metadataFetchSpan n (runInIO action)
         , spanMetadataDecode = \n action -> withRunInIO $ \runInIO ->
-            withPackageSpan telemetry Internal "ecluse.metadata.decode" n (runInIO action)
+            withPackageSpan telemetry Internal metadataDecodeSpan n (runInIO action)
+        , spanDirectoryFetch = withDomainSpan telemetry Client [] metadataFetchSpan . const
+        , spanDirectoryDecode = withDomainSpan telemetry Internal [] metadataDecodeSpan . const
         }
+
+-- One name per metadata leg, whether the read is one package's or a registry-wide directory's.
+metadataFetchSpan, metadataDecodeSpan :: Text
+metadataFetchSpan = "ecluse.metadata.fetch"
+metadataDecodeSpan = "ecluse.metadata.decode"
 
 -- | Project 'withMirrorJobSpan' onto the core 'WorkerTracingPort' that "Ecluse.Core.Worker" uses.
 workerTracingPortOf :: Telemetry -> WorkerTracingPort

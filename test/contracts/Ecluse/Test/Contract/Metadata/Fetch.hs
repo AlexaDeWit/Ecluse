@@ -171,7 +171,7 @@ requestSpec eco = describe "the request" $ do
             origin <- stubConfig deadlines loopbackRegistryUrl stub
             let factory = PrepareRead (fmap (fmap unseal) . prepareRead (rdPrepareRead eco))
             outcome <- prepareManifest factory passthroughTracingPort origin (thing eco)
-            void outcome `shouldBe` Left (MetadataHttpFailure 302)
+            void outcome `shouldBe` Left (MetadataHttpFailure 302 Nothing)
             map capPath <$> allCaptured stub `shouldReturn` (["/config.json" | isJust (rdDiscovery eco)] <> ["/"])
   where
     unseal nativeRead = nativeRead{erRequest = unsealedRequest}
@@ -308,7 +308,7 @@ statusOutcomes =
     [(code, Right ()) | code <- [200, 201, 299]]
         <> [(code, Left (MetadataAuthorisationFailure code)) | code <- [401, 403]]
         <> [(404, Left MetadataAbsent)]
-        <> [(code, Left (MetadataHttpFailure code)) | code <- [301, 304, 400, 408, 410, 429, 500, 503, 599]]
+        <> [(code, Left (MetadataHttpFailure code Nothing)) | code <- [301, 304, 400, 408, 410, 429, 500, 503, 599]]
 
 fetchCase :: ReadFixture -> Text -> Text -> IO () -> Spec
 fetchCase eco identifier description = it (caseLabel ("core.metadata.fetch." <> T.toLower (show (rdEcosystem eco)) <> "." <> identifier) description)

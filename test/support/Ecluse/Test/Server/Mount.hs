@@ -6,6 +6,7 @@
 Inert fixtures use closed loopback ports so accidental data-plane calls cannot reach upstreams.
 -}
 module Ecluse.Test.Server.Mount (
+    requiredAdapter,
     serveDepsFor,
     inertDepsFor,
     npmServeDeps,
@@ -18,6 +19,8 @@ module Ecluse.Test.Server.Mount (
 
 import Data.Time (UTCTime (UTCTime), fromGregorian)
 
+import Ecluse.Core.Ecosystem (Ecosystem, ecosystemName)
+import Ecluse.Core.Registry.Adapter (adapterFor)
 import Ecluse.Core.Registry.Adapter.Capability (AdapterArtifact (artifactHosts))
 import Ecluse.Core.Registry.Adapter.Types (RegistryAdapter (adapterArtifact, adapterMetadata))
 import Ecluse.Core.Registry.Npm.Adapter (npmAdapter)
@@ -26,10 +29,14 @@ import Ecluse.Core.Rules (PreparedRule)
 import Ecluse.Core.Security (defaultLimits)
 import Ecluse.Core.Security.Egress (RegistryUrl, mkRegistryUrl)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
-import Ecluse.Core.Server.Context (PackumentDeps (..), ReadSourceSelection (MergePrivateAndPublic), pdMirror, pdPrivateBaseUrl, pdPublicBaseUrl)
+import Ecluse.Core.Server.Context (PackumentDeps (..), pdMirror, pdPrivateBaseUrl, pdPublicBaseUrl)
 import Ecluse.Core.Server.Encoding (MetadataCompression (GzipWhenAccepted))
 import Ecluse.Core.Server.Upstream (MirrorServePlan (MirrorOnAdmit), mountUpstreams)
 import Ecluse.Test.Package (defaultMinIntegrity, defaultMinTrustedIntegrity)
+
+-- | The adapter the production build registers for @eco@. A fixture fails when there is none.
+requiredAdapter :: Ecosystem -> IO RegistryAdapter
+requiredAdapter eco = maybe (fail (toString (ecosystemName eco) <> " has no production adapter registration")) pure (adapterFor eco)
 
 -- | A mount's serve dependencies over @adapter@, with the shipped defaults beside its parameters.
 serveDepsFor :: RegistryAdapter -> Maybe RegistryUrl -> RegistryUrl -> MirrorServePlan -> [PreparedRule] -> IO UTCTime -> PackumentDeps
@@ -37,8 +44,6 @@ serveDepsFor adapter privateBaseUrl publicBaseUrl mirror rules clock =
     PackumentDeps
         { pdUpstreams = mountUpstreams (artifactHosts (adapterArtifact adapter)) privateBaseUrl publicBaseUrl mirror
         , pdFirstParty = const False
-        , pdReadSourceSelection = MergePrivateAndPublic
-        , pdInstallEvidence = Nothing
         , pdMountBaseUrl = "https://proxy.test"
         , pdRules = rules
         , pdAdditionalBlockedRanges = []

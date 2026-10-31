@@ -165,3 +165,16 @@ delimiter inside a part after a bare CR or LF, or with a padded delimiter line. 
 parsers end a part at either. The rule relies on a store that parses the file name as the wheel
 and sdist specifications define, and multipart as RFC 2046 defines. Such a store writes the
 project the guard authorised, whether it keys the write off the `name` field or off the file name.
+
+The RubyGems guard reads the gem name from `metadata.gz` in the outer gem tar and relays the
+original bytes. RubyGems' `Gem::Package::TarReader` reads each member's ustar name, joined to any
+ustar prefix, and yields PAX and GNU extended headers as ordinary entries. A guard that applied
+those headers could authorise one `metadata.gz` while a store that reads gems with
+`Gem::Package` registers another. So the guard refuses an outer tar that carries a PAX (`x`, `g`)
+or GNU (`L`, `K`) extended header
+([protocol contract](https://ecluse-proxy.com/docs/protocol-support/#rubygems)). It also refuses a
+member name split by a ustar prefix, so a store reads the same name whether or not it joins the
+prefix. It refuses a name or prefix field that holds bytes after its first NUL as well. The guard
+ends each field at that NUL, while `Gem::Package` strips only trailing NULs and spaces, so the two
+would read different names. The rule relies on a store that reads the ustar name field as the
+format defines. Such a store registers the name the guard authorised.

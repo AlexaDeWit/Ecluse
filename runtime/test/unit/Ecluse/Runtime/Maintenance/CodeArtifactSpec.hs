@@ -55,7 +55,6 @@ import Ecluse.Core.Registry.Maintenance.Upstream (
 import Ecluse.Core.Registry.Sweep.Outcome (CycleHalt (HaltDeletionCap, HaltStoreFault))
 import Ecluse.Core.Registry.Sweep.Package (sweepPackageGroup)
 import Ecluse.Core.Registry.Sweep.Types (SweepMount (smStore), SweepPacing (swpDeletionCap), SweepState (stIssued), newSweepState)
-import Ecluse.Core.Rules.Install (unavailableInstallArtifactRead)
 import Ecluse.Core.Telemetry.Metrics (SweepResult (SweepDeleted, SweepExamined, SweepKept))
 import Ecluse.Core.Version (Version, mkVersion, renderVersion)
 import Ecluse.Runtime.Maintenance.CodeArtifact.Decide.Internal (
@@ -155,7 +154,7 @@ factCases store = describe "the CodeArtifact handle's standing facts" $ do
 
     it "enumerates over a read plane alone, which carries no call that changes the repository" $ do
         answer <- answersFrom [packagesPage Nothing ["lodash"]]
-        let observed = observationFor testAlphabet unwiredRead unavailableInstallArtifactRead store inertReader{rpListPackages = const answer}
+        let observed = observationFor testAlphabet unwiredRead store inertReader{rpListPackages = const answer}
         outcome <- withBucket "" (collectPages . obListPackagesIn observed)
         fmap (map renderPackageName) outcome `shouldBe` Right ["lodash"]
 
@@ -213,7 +212,7 @@ enumerationCases store = describe "the handle's paged enumerations" $ do
         tokens <- newIORef []
         answer <- answersFrom [versionsPage (Just "v2") ["1.0.0"], versionsPage (Just "v3") ["1.1.0"], versionsPage Nothing ["1.2.0"]]
         let versionReader = inertReader{rpListVersions = \request -> record tokens (request ^. CAL.listPackageVersions_nextToken) >> answer}
-            observation = boundedObservationFor 1 (mkNameAlphabet "abc") (\_ -> fail "inventory does not read metadata") unavailableInstallArtifactRead store versionReader
+            observation = boundedObservationFor 1 (mkNameAlphabet "abc") (\_ -> fail "inventory does not read metadata") store versionReader
         result <- obEnumerateVersions observation lodashName
         result `shouldSatisfy` isLeft
         readIORef tokens `shouldReturn` [Nothing, Just "v2"]
@@ -374,7 +373,7 @@ classificationCases :: CodeArtifactStore -> Spec
 classificationCases store = describe "the handle's store classification" $ do
     it "permits refill only through the separate cache capability" $ do
         let plane = reading inertReader{rpDescribeRepository = \_ -> pure (Right (describing routedDescription))}
-            cache = cacheMaintenanceFor 100 testAlphabet unwiredRead unavailableInstallArtifactRead store plane
+            cache = cacheMaintenanceFor 100 testAlphabet unwiredRead store plane
         classifyStore cache `shouldReturn` Right StoreDestroyable
         classifyStore (handleOver store plane) >>= (`shouldSatisfy` either (const False) (preservedNaming "shared"))
 
@@ -435,7 +434,7 @@ upstreamCases store = describe "the handle's private upstream probe" $ do
     it "offers the probe on the whole handle and on the observing calls alike" $ do
         let plane = reading inertReader{rpDescribeUpstream = \_ -> pure (Right (describing CA.newRepositoryDescription))}
         probeUpstream (handleOver store plane) `shouldReturn` Safe
-        obProbeUpstream (observationFor testAlphabet unwiredRead unavailableInstallArtifactRead store (cpRead plane)) `shouldReturn` Safe
+        obProbeUpstream (observationFor testAlphabet unwiredRead store (cpRead plane)) `shouldReturn` Safe
 
 -- Probe over describes seeded per repository. A repository absent here is one the store answered nothing for.
 probeOver :: CodeArtifactStore -> [(Text, CA.RepositoryDescription)] -> IO UpstreamSafety
@@ -682,7 +681,7 @@ testAlphabet :: NameAlphabet
 testAlphabet = mkNameAlphabet "al"
 
 handleOver :: CodeArtifactStore -> ControlPlane -> StoreMaintenance
-handleOver = maintenanceFor testAlphabet unwiredRead unavailableInstallArtifactRead
+handleOver = maintenanceFor testAlphabet unwiredRead
 
 {- The manifest read is the composition root's, not this leaf's, so these cases hand it one that
 reports being unwired rather than one that reaches a store. -}

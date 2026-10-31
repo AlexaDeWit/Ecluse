@@ -32,6 +32,7 @@ module Ecluse.Core.Package (
 
     -- * Normalised signals
     CodeExecSignal (..),
+    DependencySources (..),
     Availability (..),
 
     -- * Artifacts
@@ -205,10 +206,18 @@ data CodeExecSignal
       NoCodeOnInstall
     | -- | Determined: installation runs code. The text says how, for the audit trail.
       RunsCodeOnInstall Text
-    | {- | Not yet determined (e.g. nothing has fetched the RubyGems gemspec yet).
-      Pure rules abstain, and the effectful tier may resolve it.
-      -}
+    | -- | Not determined from registry metadata. Rules that read it abstain.
       CodeExecUnknown
+    deriving stock (Eq, Show)
+
+-- | Whether installing a version fetches a dependency from somewhere other than the registry.
+data DependencySources
+    = -- | Every installable dependency resolves through the registry.
+      RegistryDependencies
+    | -- | A dependency installs from elsewhere, such as a git repository. The text names it, for the audit trail.
+      FetchesOutsideRegistry Text
+    | -- | Not determined: the adapter does not read dependency sources. Pure rules abstain.
+      DependencySourcesUnknown
     deriving stock (Eq, Show)
 
 {- | Whether a version is offered, advisory-deprecated, or withdrawn. The registry's notice text
@@ -262,6 +271,8 @@ data PackageDetails = PackageDetails
     -}
     , pkgInstallCode :: CodeExecSignal
     -- ^ Whether installing the version executes code.
+    , pkgDependencySources :: DependencySources
+    -- ^ Whether installing the version fetches a dependency from outside the registry.
     , pkgAvailability :: Availability
     -- ^ Whether the version is offered, deprecated, or withdrawn.
     , pkgArtifacts :: NonEmpty Artifact

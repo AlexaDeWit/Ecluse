@@ -17,6 +17,7 @@ module Ecluse.Core.Security.Limits (
     boundedRead,
     checkVersionCountOf,
     checkArtifactCount,
+    withinCeiling,
 
     -- * Upstream progress
     ProgressFloor,
@@ -123,7 +124,7 @@ Adapters check version counts before applying it.
 checkArtifactCount :: Limits -> Int -> Either LimitError ()
 checkArtifactCount limits = withinCeiling TooManyArtifacts (maxArtifactCount limits)
 
--- The breach names the count seen, then the ceiling.
+-- | Refuse a count over its ceiling. The breach names the count seen, then the ceiling.
 withinCeiling :: (Int -> Int -> LimitError) -> Int -> Int -> Either LimitError ()
 withinCeiling breach cap count
     | count > cap = Left (breach count cap)

@@ -23,7 +23,7 @@ import Ecluse.Core.Server.Cache.VersionWeight (weighVersion)
 
 -- | Missing capabilities remain uncached. They never fall back to another storage provider.
 data CacheProvider = CacheProvider
-    { cpDirectory :: Maybe (RetentionBackend Text (GemDirectory, Int))
+    { cpDirectory :: Maybe (RetentionBackend CacheKey (GemDirectory, Int))
     , cpFull :: Maybe (RetentionBackend CacheKey CacheEntry)
     -- ^ Full metadata is absent for local storage, regardless of the supplied operations.
     , cpVersion :: Maybe (RetentionBackend CacheKey VersionRead)
@@ -32,7 +32,7 @@ data CacheProvider = CacheProvider
     }
 
 -- | Public discovery shares the local pool without using a package identity.
-providerDirectory :: CacheProvider -> Maybe (RetentionBackend Text (GemDirectory, Int))
+providerDirectory :: CacheProvider -> Maybe (RetentionBackend CacheKey (GemDirectory, Int))
 providerDirectory = cpDirectory
 
 -- | Full retention from the selected provider, absent for local storage.
@@ -50,7 +50,7 @@ providerAssembled = cpAssembled
 -- | Classify every operation together. Local storage cannot opt into full retention.
 cacheProvider ::
     BackendStorage ->
-    Maybe (RetentionOperations Text (GemDirectory, Int)) ->
+    Maybe (RetentionOperations CacheKey (GemDirectory, Int)) ->
     Maybe (RetentionOperations CacheKey CacheEntry) ->
     Maybe (RetentionOperations CacheKey VersionRead) ->
     Maybe (RetentionOperations CacheKey ByteString) ->

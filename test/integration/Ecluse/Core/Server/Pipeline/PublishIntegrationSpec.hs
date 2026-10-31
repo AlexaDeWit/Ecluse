@@ -48,6 +48,7 @@ import Ecluse.Core.Registry.Npm.Publish qualified as NpmPublish
 import Ecluse.Core.Registry.PyPI.Adapter (pypiAdapter, pypiPublish)
 import Ecluse.Core.Registry.PyPI.Project (canonicalName)
 import Ecluse.Core.Registry.PyPI.Publish.Multipart (pypiFileUploadOnly)
+import Ecluse.Core.Registry.Request (nativePresentation)
 import Ecluse.Core.Security (defaultLimits, maxMetadataBytes, maxPublishRequestBytes)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Core.Server.Admission.Bytes (ByteAdmission, newByteAdmission, newByteAdmissionTuned)
@@ -59,8 +60,8 @@ import Ecluse.Service (mountBindingFor)
 import Ecluse.Test.Contract.Catalogue (caseLabel)
 import Ecluse.Test.Deadline (withSweeper)
 import Ecluse.Test.Registry.Cargo.Fixtures (CargoRelease (releaseArchive), cargoUpload, cargoUploadMetadata, cargoUploadWithMetadata)
-import Ecluse.Test.Registry.Cargo.Publish (cargoPublicationFixture, cargoResolverAgreements, cargoResolverArchive, cargoResolverContradictions)
-import Ecluse.Test.Registry.Npm.Publish (npmDeprecateDocument, npmMisfiledVersion, npmReleaseDocument, npmRepeatedAttachments, npmTaggedRelease)
+import Ecluse.Test.Registry.Cargo.Publish (cargoForeignDevArchive, cargoForeignDevMetadata, cargoForeignRegistryArchive, cargoForeignRegistryMetadata, cargoForeignRegistryRefusal, cargoPublicationFixture, cargoResolverAgreements, cargoResolverArchive, cargoResolverContradictions, cargoResolverDependencyField, cargoResolverMetadata, cargoUnstableManifestArchive, cargoUnstableManifestRefusal)
+import Ecluse.Test.Registry.Npm.Publish (npmDependentRelease, npmDeprecateDocument, npmExternalDependencyRefusal, npmMisfiledVersion, npmReleaseDocument, npmRepeatedAttachments, npmTaggedRelease)
 import Ecluse.Test.Server.Mount (inertDepsFor, inertPackumentDeps)
 import Ecluse.Test.Stub (Captured (capBody, capHeaders, capMethod, capPath), Stub, allCaptured, headerValue, stubBaseUrl, stubPort, withRoutedStub, withStubHeaders)
 import Ecluse.Test.Support (expectRight)
@@ -81,6 +82,7 @@ publishDepsAt targetPort staticToken bodyBudget =
         , pubTargetUrl = loopbackRegistryUrl ("http://127.0.0.1:" <> show targetPort)
         , pubAllowed = NpmPublish.npmPublishAllowed [mkScope "acme"]
         , pubStaticCredential = bareCredential <$> staticToken
+        , pubStaticPresentation = nativePresentation
         , pubMaxRequestBytes = 26214400
         , pubInboundToken = Nothing
         , pubLimits = defaultLimits{maxPublishRequestBytes = 26214400}
@@ -93,7 +95,7 @@ publishDepsAt targetPort staticToken bodyBudget =
 proxyOver :: Deadlines -> Maybe PublishDeps -> IO Application
 proxyOver deadlines publishDeps = do
     env <- newTestEnv deadlines
-    let cfg = mkServerConfig (maybeToList (mountBindingFor Npm inertPackumentDeps Nothing publishDeps))
+    let cfg = mkServerConfig (maybeToList (mountBindingFor Npm inertPackumentDeps publishDeps))
     pure (application cfg env)
 
 proxyWith :: Deadlines -> Maybe (ByteAdmission -> PublishDeps) -> IO Application
@@ -356,11 +358,35 @@ npmPublishSpec = describe "first-party npm publication relay" $ do
             status resp `shouldBe` 400
             targetSaw target `shouldReturn` []
 
+    it (caseLabel "integration/publication/native-025" "refuses an npm release whose dependency names a git source with 400 naming the dependency before any relay") $
+        withTarget 201 "{\"success\":true}" $ \targetPort target -> withSweeper $ \deadlines -> do
+            app <- proxyWith deadlines (Just (publishDepsAt targetPort Nothing))
+            resp <- putPublish "/npm/@acme/widget" (Just "publisher-token") (npmDependentRelease ["dependencies" .= Aeson.object ["left-pad" .= ("github:acme/left-pad" :: Text)]]) app
+            status resp `shouldBe` 400
+            Aeson.decode (simpleBody resp) `shouldBe` Just (Aeson.object ["error" .= npmExternalDependencyRefusal "left-pad" "dependencies" "a git source"])
+            targetSaw target `shouldReturn` []
+
+    it (caseLabel "integration/publication/native-026" "refuses an npm release whose optional dependency names a remote URL with 400 before any relay") $
+        withTarget 201 "{\"success\":true}" $ \targetPort target -> withSweeper $ \deadlines -> do
+            app <- proxyWith deadlines (Just (publishDepsAt targetPort Nothing))
+            resp <- putPublish "/npm/@acme/widget" (Just "publisher-token") (npmDependentRelease ["optionalDependencies" .= Aeson.object ["left-pad" .= ("https://example.test/left-pad-1.0.0.tgz" :: Text)]]) app
+            status resp `shouldBe` 400
+            Aeson.decode (simpleBody resp) `shouldBe` Just (Aeson.object ["error" .= npmExternalDependencyRefusal "left-pad" "optionalDependencies" "a remote URL"])
+            targetSaw target `shouldReturn` []
+
+    it (caseLabel "integration/publication/native-027" "relays an npm release whose git source sits only in devDependencies") $
+        withTarget 201 "{\"success\":true}" $ \targetPort target -> withSweeper $ \deadlines -> do
+            app <- proxyWith deadlines (Just (publishDepsAt targetPort Nothing))
+            let body = npmDependentRelease ["devDependencies" .= Aeson.object ["left-pad" .= ("github:acme/left-pad" :: Text)]]
+            resp <- putPublish "/npm/@acme/widget" (Just "publisher-token") body app
+            status resp `shouldBe` 201
+            targetSaw target `shouldReturn` [(Just "Bearer publisher-token", LBS.toStrict body)]
+
 pypiProxy :: Deadlines -> Maybe (ByteAdmission -> PublishDeps) -> IO Application
 pypiProxy deadlines build = do
     env <- newTestEnv deadlines
     deps <- traverse (\mk -> mk <$> newByteAdmission deadlines (128 * 1024 * 1024)) build
-    pure (application (mkServerConfig (maybeToList (mountBindingFor PyPI (inertDepsFor pypiAdapter) Nothing deps))) env)
+    pure (application (mkServerConfig (maybeToList (mountBindingFor PyPI (inertDepsFor pypiAdapter) deps))) env)
 
 pypiDeps :: Int -> ByteAdmission -> PublishDeps
 pypiDeps port budget =
@@ -614,6 +640,45 @@ cargoPublishSpec = describe "first-party Cargo publication relay" $ do
             lookup "WWW-Authenticate" (simpleHeaders reply) `shouldBe` Just "Cargo"
             captures <- allCaptured stub
             map capPath captures `shouldBe` ["/index/config.json", "/registry/api/v1/crates/new"]
+    it (caseLabel "integration/publication/cargo-005" "refuses unstable dependency fields with 400 before any upstream request") $ do
+        archive <- cargoResolverArchive
+        withRoutedStub cargoTargetReply $ \stub -> withSweeper $ \deadlines -> do
+            app <- cargoProxy deadlines stub
+            for_ ["artifact", "bindep_target", "lib", "public"] $ \key -> do
+                bytes <- expectRight (cargoUploadWithMetadata (cargoResolverDependencyField key (Aeson.Bool True)) archive)
+                reply <- cargoPut (fromStrict bytes) app
+                status reply `shouldBe` 400
+                decodeUtf8 (simpleBody reply) `shouldSatisfy` T.isInfixOf "Cargo upload dependency 'tool' carries an unstable artifact, bindep_target, lib or public field"
+            allCaptured stub `shouldReturn` []
+    it (caseLabel "integration/publication/cargo-006" "refuses a dependency on another registry with 400 naming it and the fix before any upstream request") $ do
+        archive <- cargoForeignRegistryArchive
+        bytes <- expectRight (cargoUploadWithMetadata cargoForeignRegistryMetadata archive)
+        withRoutedStub cargoTargetReply $ \stub -> withSweeper $ \deadlines -> do
+            app <- cargoProxy deadlines stub
+            reply <- cargoPut (fromStrict bytes) app
+            status reply `shouldBe` 400
+            decodeUtf8 (simpleBody reply) `shouldBe` cargoForeignRegistryRefusal
+            allCaptured stub `shouldReturn` []
+    it (caseLabel "integration/publication/cargo-007" "relays a crate whose only dependency on another registry is a dev-dependency") $ do
+        archive <- cargoForeignDevArchive
+        bytes <- expectRight (cargoUploadWithMetadata cargoForeignDevMetadata archive)
+        withRoutedStub cargoTargetReply $ \stub -> withSweeper $ \deadlines -> do
+            app <- cargoProxy deadlines stub
+            reply <- cargoPut (fromStrict bytes) app
+            status reply `shouldBe` 200
+            captures <- allCaptured stub
+            map capPath captures `shouldBe` ["/index/config.json", "/registry/api/v1/crates/new"]
+            map capBody (filter ((== "PUT") . capMethod) captures) `shouldBe` [bytes]
+    it (caseLabel "integration/publication/cargo-008" "refuses an archived manifest dependency carrying an unstable key with 400 before any upstream request") $
+        withRoutedStub cargoTargetReply $ \stub -> withSweeper $ \deadlines -> do
+            app <- cargoProxy deadlines stub
+            for_ ["artifact='bin'", "lib=true", "public=true", "target='x86_64-unknown-linux-gnu'"] $ \declaration -> do
+                archive <- cargoUnstableManifestArchive declaration
+                bytes <- expectRight (cargoUploadWithMetadata cargoResolverMetadata archive)
+                reply <- cargoPut (fromStrict bytes) app
+                status reply `shouldBe` 400
+                decodeUtf8 (simpleBody reply) `shouldBe` cargoUnstableManifestRefusal "tool"
+            allCaptured stub `shouldReturn` []
   where
     uploadRefusal captured
         | capMethod captured == "PUT" = (mkStatus 401 "Unauthorized", [], "native upload denied")
@@ -625,7 +690,7 @@ cargoProxy deadlines stub = do
     budget <- newByteAdmission deadlines (128 * 1024 * 1024)
     let factors = ChargeFactors 1000 1000 1000
         adapter = cargoAdapter factors
-        deps = (inertDepsFor adapter){pdMountBaseUrl = "https://proxy.test/cargo/private"}
+        deps = (inertDepsFor adapter){pdMountBaseUrl = "https://proxy.test/cargo"}
         publication =
             (publishDepsAt (stubPort stub) Nothing budget)
                 { pubReadUrl = loopbackRegistryUrl (stubBaseUrl stub <> "/index")
@@ -634,12 +699,12 @@ cargoProxy deadlines stub = do
                 , pubAllowed = \name -> projectName "fixture" == Right name
                 , pubAdapter = cargoPublish factors
                 }
-    pure (application (mkServerConfig (maybeToList (mountBindingFor Cargo deps (Just deps) (Just publication)))) env)
+    pure (application (mkServerConfig (maybeToList (mountBindingFor Cargo deps (Just publication)))) env)
 
 cargoPut :: LByteString -> Application -> IO SResponse
 cargoPut bytes = runSession (srequest (SRequest request bytes))
   where
-    request = setPath defaultRequest{requestMethod = methodPut, requestHeaders = [(hAuthorization, "cargo-client"), (hContentType, "application/octet-stream")]} "/cargo/private/api/v1/crates/new"
+    request = setPath defaultRequest{requestMethod = methodPut, requestHeaders = [(hAuthorization, "cargo-client"), (hContentType, "application/octet-stream")]} "/cargo/api/v1/crates/new"
 
 cargoTargetReply :: Captured -> (Status, ResponseHeaders, LByteString)
 cargoTargetReply captured =

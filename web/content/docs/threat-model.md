@@ -42,19 +42,20 @@ Related threats: [registry collapse](#threat-10), [substitution across origins](
 
 A listing combines the caller's authorised private view with admitted public files. First-party names use the private origin alone.
 Response reuse cannot skip the private origin's authorisation.
+A failed private read refuses the request, so a public namesake never replaces a private package during an outage.
 
 {{ diagram(name="metadata-admission", alt="The client requests a listing. The proxy reads the private endpoint with caller credentials, public metadata anonymously, and advisory artifacts independently. It applies admission before merging and encoding.") }}
 
-Related threats: [resource exhaustion](#threat-2), [private cache disclosure](#threat-9), [rejected files returning during assembly](#threat-116), and [compressed response lengths](#threat-119).
+Related threats: [resource exhaustion](#threat-2), [private cache disclosure](#threat-9), [rejected files returning during assembly](#threat-116), [compressed response lengths](#threat-119), and [private-namespace shadowing during an outage](#threat-123).
 
 ## Artifact downloads
 
-The download path prefers private content. Public fallback needs current admission and a permitted artifact location.
+The download path prefers private content. Public fallback needs current admission and a permitted artifact location, and never follows a failed private read.
 An explicit private authentication refusal stops the request. First-party names never fall back to public.
 
 {{ diagram(name="artifact-downloads", alt="The client downloads through the proxy. The proxy prefers the authorised private source, gates a public fallback, and queues an admitted public artifact GET when mirroring is configured.") }}
 
-Related threats: [caller credential disclosure](#threat-4), [SSRF](#threat-5), and [first-party dependency confusion](#threat-103).
+Related threats: [caller credential disclosure](#threat-4), [SSRF](#threat-5), [first-party dependency confusion](#threat-103), and [private-namespace shadowing during an outage](#threat-123).
 [How it works](@/docs/how-it-works.md#a-request-step-by-step) explains the npm and PyPI differences.
 
 ## First-party publication

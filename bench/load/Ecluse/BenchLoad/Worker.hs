@@ -25,6 +25,7 @@ import Ecluse.BenchLoad.Error (benchFail)
 import Ecluse.BenchLoad.Harness (Driver (DriveInProcess), LoadKnobs (lkDurationSeconds), Target (Target))
 import Ecluse.Core.Ecosystem (ecosystemName)
 import Ecluse.Core.Mirror.State
+import Ecluse.Core.Mirror.State.Format (MirrorStateFormat)
 import Ecluse.Core.Package (infoVersions, pkgArtifacts, pkgEcosystem)
 import Ecluse.Core.Queue (MirrorJob (..), MirrorQueue (..), QueueMessage)
 import Ecluse.Core.Queue.Memory (defaultMemoryQueueConfig, newBoundedInMemoryQueue)
@@ -58,6 +59,7 @@ data NativeWorker = NativeWorker
     { nwSourceApp :: Application
     , nwTargetApp :: Application
     , nwStateApp :: Application
+    , nwStateFormat :: MirrorStateFormat
     , nwPolicy :: WorkerEnvironment -> IO WorkerPolicy
     , nwJob :: MirrorJob
     , nwExpectedFiles :: Int
@@ -92,7 +94,7 @@ bootNativeWorker knobs native use =
                 let endpoint = AWS.overrideService (\service -> AWS.setEndpoint False "127.0.0.1" statePort service{AWS.s3AddressingStyle = AWS.S3AddressingStylePath}) env
                     target = stateTarget (localhost targetPort)
                 withExchangeClient (newManager defaultManagerSettings) $ \client -> do
-                    store <- mirrorStateForEnv (ecDeadlines client) defaultLimits "worker-load" "state" target (AWS.once endpoint{AWS.retryCheck = \_ _ -> False})
+                    store <- mirrorStateForEnv (ecDeadlines client) defaultLimits (nwStateFormat native) "worker-load" "state" target (AWS.once endpoint{AWS.retryCheck = \_ _ -> False})
                     publicControl <- newPublicControl (\_ _ _ -> pass) (\_ _ -> pass)
                     meter <- testMemoryMeter
                     rules <- Rules.prepare inertRuleDeps [atDefaultPrecedence (AllowIfOlderThan (7 * nominalDay))]
@@ -177,10 +179,10 @@ completion native store publish = do
     target <- mpProbeInventory publish (const pass) (jobPackage job) >>= expectRight
     pure (checkMirrorCompletion version (concatMap (toList . pkgArtifacts) (Map.elems (infoVersions target))))
 
--- Fixture budgets retain independent charge regions without a shared evidence-flight ledger.
+-- Fixture budgets retain independent charge regions.
 withinWorkerBudget :: MemoryMeter -> (WorkerStateBudget -> IO a) -> IO (Maybe a)
 withinWorkerBudget meter action = fmap rightToMaybe . withMemoryEntry noopMetricsPort meter $ \ticket -> do
-    budget <- WorkerStateBudget <$> region ticket <*> region ticket <*> region ticket <*> region ticket <*> region ticket <*> region ticket <*> region ticket <*> pure Nothing
+    budget <- WorkerStateBudget <$> region ticket <*> region ticket <*> region ticket <*> region ticket <*> region ticket <*> region ticket <*> region ticket
     action budget
   where
     region = newChargeRegion . charge

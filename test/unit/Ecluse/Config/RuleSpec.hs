@@ -325,6 +325,10 @@ rulePolicySpec = describe "rulePolicySpec" $ do
                 `shouldBe` Left
                     [MalformedRule "r" "\"AllowIfRemediatesCve\" does not read \"scope\", \"minEpss\""]
 
+        it "refuses a parameter on DenyExternalDependencies, which reads none" $
+            resolveJson "{\"rules\":{\"deps\":{\"type\":\"DenyExternalDependencies\",\"identity\":\"left-pad\"}}}"
+                `shouldBe` straySays "deps" "DenyExternalDependencies" "identity"
+
         it "reports the stray even when a required parameter is also missing" $
             resolveJson "{\"rules\":{\"deny-cve\":{\"type\":\"DenyIfCve\",\"ageSeconds\":1}}}"
                 `shouldBe` straySays "deny-cve" "DenyIfCve" "ageSeconds"
@@ -409,7 +413,7 @@ appliesToSpec = describe "appliesTo, the phases a rule applies at" $ do
 
         it "admits admission alone on each deny type, and refuses it on each allow type" $ do
             let limited ty = [resolveJsonOver emptyPolicy (limitedToAdmission body) | (known, body) <- knownRuleAdds, known == ty]
-                denies = ["DenyIfKnownMalicious", "DenyIfYanked", "DenyIfDeprecated", "DenyByIdentity", "DenyInstallTimeExecution", "DenyIfCve", "DenyIfEpss"]
+                denies = ["DenyIfKnownMalicious", "DenyIfYanked", "DenyIfDeprecated", "DenyByIdentity", "DenyInstallTimeExecution", "DenyExternalDependencies", "DenyIfCve", "DenyIfEpss"]
                 allows = ["AllowByIdentity", "AllowScope", "AllowIfOlderThan", "AllowIfRemediatesCve"]
             (denies <> allows) `shouldMatchList` knownRuleTypes
             for_ denies $ \ty -> map (fmap (map ruleReach)) (limited ty) `shouldBe` [Right [AdmissionOnly]]
@@ -687,5 +691,6 @@ knownRuleAdds =
     , ("DenyIfYanked", "{\"rules\":{\"r\":{\"type\":\"DenyIfYanked\"}}}")
     , ("DenyIfDeprecated", "{\"rules\":{\"r\":{\"type\":\"DenyIfDeprecated\"}}}")
     , ("DenyInstallTimeExecution", "{\"rules\":{\"r\":{\"type\":\"DenyInstallTimeExecution\"}}}")
+    , ("DenyExternalDependencies", "{\"rules\":{\"r\":{\"type\":\"DenyExternalDependencies\"}}}")
     , ("DenyByIdentity", "{\"rules\":{\"r\":{\"type\":\"DenyByIdentity\",\"identity\":\"left-pad\"}}}")
     ]

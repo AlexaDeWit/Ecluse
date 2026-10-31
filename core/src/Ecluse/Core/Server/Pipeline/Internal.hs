@@ -10,7 +10,8 @@ The @module@ field on every line emitted here is 'pipelineInternalModule', a fix
 filter key rather than the source module path.
 -}
 module Ecluse.Core.Server.Pipeline.Internal (
-    -- * The operator log-filter key
+    -- * The operator log-filter keys
+    pipelineModule,
     pipelineInternalModule,
 
     -- * Integrity-floor admission (pure)
@@ -65,7 +66,7 @@ import Ecluse.Core.Rules.Types (
     reasonAdvisories,
  )
 import Ecluse.Core.Server.Response (
-    PackumentStatus (PackumentBadGateway, PackumentForbidden, PackumentOk, PackumentServerError, PackumentUnavailable),
+    PackumentStatus (PackumentBadGateway, PackumentDenied, PackumentForbidden, PackumentOk, PackumentServerError, PackumentUnavailable),
     RejectReason (BelowIntegrityFloor, ByPolicy, MissingIntegrity, Unavailable, UpstreamInvalid),
     Rejection (Rejection),
     RuleName (RuleName),
@@ -76,6 +77,10 @@ import Ecluse.Core.Server.Response (
 import Ecluse.Core.Telemetry.Metrics qualified as Metric
 import Ecluse.Core.Telemetry.Record (MetricsPort, mpRuleDenial, mpRuleEffectfulFailure)
 import Ecluse.Core.Version (renderVersion)
+
+-- | The @module@ field of the pipeline's own lines, and of any line a request logs whose site names none.
+pipelineModule :: Text
+pipelineModule = "Ecluse.Server.Pipeline"
 
 -- | The @module@ field every line in this family carries, held stable so an operator's saved filter keeps matching.
 pipelineInternalModule :: Text
@@ -125,7 +130,7 @@ admitByIntegrity floorSpec belowFloorRefusal missingRefusal info
         bucket (Left MeetsFloor) acc = acc
         bucket (Right _) acc = acc
 
--- | The bounded @ecluse.serve.decision@ value of a no-survivors packument: forbidden is a denial, the rest unavailable.
+-- | The bounded @ecluse.serve.decision@ value of a no-survivors packument: a refusal is a denial, the rest unavailable.
 packumentServeDecision :: [ServeDecision] -> Metric.Decision
 packumentServeDecision = statusServeDecision . packumentStatus
 
@@ -133,6 +138,7 @@ packumentServeDecision = statusServeDecision . packumentStatus
 statusServeDecision :: PackumentStatus -> Metric.Decision
 statusServeDecision = \case
     PackumentOk -> Metric.Admit
+    PackumentDenied -> Metric.Deny
     PackumentForbidden -> Metric.Deny
     PackumentUnavailable _ -> Metric.Unavailable
     PackumentBadGateway -> Metric.Unavailable

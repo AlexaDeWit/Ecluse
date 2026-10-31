@@ -188,7 +188,7 @@ plannedPruner role builds =
                 logEnv
                 passthroughTracingPort
                 deadlines
-                (\_ _ _ _ -> Nothing)
+                (\_ _ _ -> Nothing)
                 (\_ _ _ -> pure noMirrorQueue)
                 (\_ _ -> pure (Right noCredentialProviders))
                 builds
@@ -238,7 +238,7 @@ withDredgerAges use = withRoleTelemetry $ \logEnv telemetry meterEnv -> do
                 logEnv
                 passthroughTracingPort
                 deadlines
-                (\_ _ _ _ -> Nothing)
+                (\_ _ _ -> Nothing)
                 (\_ _ _ -> pure noMirrorQueue)
                 (\_ _ -> pure (Right noCredentialProviders))
                 StoreBuilds

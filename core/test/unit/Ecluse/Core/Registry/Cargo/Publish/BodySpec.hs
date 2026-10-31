@@ -116,6 +116,17 @@ spec = describe "Cargo upload framing" $ do
                     let metadata = Object (KeyMap.insert "deps" (toJSON [Object (KeyMap.insert key value uploadDependency)]) fields)
                     decodeUpload defaultLimits (cargoUploadFrame (LBS.toStrict (encode metadata)) <> cargoUploadFrame (releaseArchive release)) `shouldSatisfy` isLeft
             _ -> expectationFailure "fixture metadata is not an object"
+    it "refuses the unstable dependency fields that mirroring refuses, whatever their value" $ do
+        release <- cargoPublicationFixture
+        case cargoUploadMetadata release of
+            Object fields -> do
+                let decodeWith dependency = decodeUpload defaultLimits (cargoUploadFrame (LBS.toStrict (encode (Object (KeyMap.insert "deps" (toJSON [Object dependency]) fields)))) <> cargoUploadFrame (releaseArchive release))
+                for_ ["artifact", "bindep_target", "lib", "public"] $ \key ->
+                    for_ [Null, Bool False, Bool True, String "bin", toJSON ["bin" :: Text]] $ \value ->
+                        decodeWith (KeyMap.insert key value uploadDependency)
+                            `shouldSatisfy` either (T.isInfixOf "Cargo upload dependency 'dependency' carries an unstable artifact, bindep_target, lib or public field" . parseErrorMessage) (const False)
+                decodeWith (KeyMap.insert "future_field" (Bool True) uploadDependency) `shouldSatisfy` isRight
+            _ -> expectationFailure "fixture metadata is not an object"
     it "preserves omitted and nullable optional fields and unrestricted author text" $ do
         release <- cargoPublicationFixture
         case cargoUploadMetadata release of

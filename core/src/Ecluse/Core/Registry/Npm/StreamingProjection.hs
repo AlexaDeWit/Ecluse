@@ -37,6 +37,7 @@ import Data.Aeson.Types (parseEither)
 import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import Data.Time (UTCTime)
+import Data.Universe.Class qualified as Universe
 
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Package (InvalidEntry, InvalidEntryKind (..), PackageDetails (..), PackageInfo (..), PackageName, mkInvalidEntry)
@@ -44,6 +45,7 @@ import Ecluse.Core.Registry.Json.Packed (DocTable, Packed)
 import Ecluse.Core.Registry.Json.Writer (Pick (..), decodePicked, decodeWhole, replacedMember)
 import Ecluse.Core.Registry.Metadata (MetadataError (..))
 import Ecluse.Core.Registry.Metadata.Projection (validateNameAgreement)
+import Ecluse.Core.Registry.Npm.DependencySource (installableFieldName)
 import Ecluse.Core.Registry.Npm.Document (PackedPackument (..), tarballHole, tarballUrl)
 import Ecluse.Core.Registry.Npm.Project (projectName, projectVersionEntryResult, projectVersionManifest)
 import Ecluse.Core.Registry.Npm.Streaming (NpmContainer (..), NpmFieldOf (..), versionListFields)
@@ -255,9 +257,9 @@ packedStep writer limits name (PackedRead acc served) field next = case field of
         Object fields -> Object (maybe (KeyMap.delete "author") (KeyMap.insert "author") original fields)
         other -> other
 
--- Keep the diagnostic field selection to preserve decoder refusal priority.
+-- Keep the diagnostic field selection to preserve decoder refusal priority. Dependency maps never refuse.
 typedMembers :: Pick
-typedMembers = Only [(field, if field == "dist" then Only [(member, Whole) | member <- distFields] else Whole) | field <- versionListFields]
+typedMembers = Only [(field, if field == "dist" then Only [(member, Whole) | member <- distFields] else Whole) | field <- versionListFields <> map installableFieldName Universe.universe]
 
 -- | Bind the reported name, and serve each kept release packed over the read's sealed table.
 finishPacked :: Limits -> PackageName -> Text -> DocTable -> PackedRead -> Either MetadataError (PackageInfo, PackedPackument)

@@ -10,7 +10,6 @@ module Ecluse.E2E.Harness.Sweep (
     identityRules,
     admissionOnlyEntry,
     advisoryRules,
-    minAgeRule,
     permissiveRules,
     denyingRules,
     renderRules,

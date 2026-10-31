@@ -28,7 +28,8 @@ import Ecluse.Core.Osv.Types (UpperBound (FixedBefore))
 import Ecluse.Core.Package (
     Availability (Available, Deprecated, Yanked),
     CodeExecSignal (CodeExecUnknown, NoCodeOnInstall, RunsCodeOnInstall),
-    PackageDetails (pkgAvailability, pkgInstallCode, pkgPublishedAt),
+    DependencySources (DependencySourcesUnknown, FetchesOutsideRegistry, RegistryDependencies),
+    PackageDetails (pkgAvailability, pkgDependencySources, pkgInstallCode, pkgPublishedAt),
     mkScope,
     pkgEcosystem,
  )
@@ -47,7 +48,7 @@ import Ecluse.Core.Rules.Types (
     Reason (..),
     RemainingAdvisories (AbstainOnRemaining),
     Rule (..),
-    RuleEvidence (evAvailability, evInstallCode, evName, evPublishedAt, evVersion),
+    RuleEvidence (evAvailability, evDependencySources, evInstallCode, evName, evPublishedAt, evVersion),
     RuleReach (AdmissionAndRevocation, AdmissionOnly),
     ScoreComparison (ScoreComparison),
     ScoreReading (Scored, Unscored),
@@ -105,6 +106,7 @@ vocabularySpec = describe "RuleType" $ do
             , (Types.DenyIfYankedType, "DenyIfYanked", DenyIfYanked)
             , (Types.DenyIfDeprecatedType, "DenyIfDeprecated", DenyIfDeprecated)
             , (Types.DenyInstallTimeExecutionType, "DenyInstallTimeExecution", DenyInstallTimeExecution)
+            , (Types.DenyExternalDependenciesType, "DenyExternalDependencies", DenyExternalDependencies)
             , (Types.DenyByIdentityType, "DenyByIdentity", DenyByIdentity "thing")
             ]
     it "covers the typed universe and the wire table exactly" $ do
@@ -128,6 +130,7 @@ completeSpec = describe "completeEvidence" $ do
                     { pkgPublishedAt = Just published
                     , pkgAvailability = Deprecated
                     , pkgInstallCode = RunsCodeOnInstall "postinstall hook"
+                    , pkgDependencySources = FetchesOutsideRegistry "dependency 'left-pad' in dependencies names a git source"
                     }
             evidence = completeEvidence details
         evName evidence `shouldBe` unscopedNpm "left-pad"
@@ -135,6 +138,7 @@ completeSpec = describe "completeEvidence" $ do
         evPublishedAt evidence `shouldBe` Known (Just published)
         evAvailability evidence `shouldBe` Known Deprecated
         evInstallCode evidence `shouldBe` Known (RunsCodeOnInstall "postinstall hook")
+        evDependencySources evidence `shouldBe` Known (FetchesOutsideRegistry "dependency 'left-pad' in dependencies names a git source")
 
     it "keeps an absent publish time as a reading, not as an absent reading" $
         evPublishedAt (completeEvidence (sampleDetails (unscopedNpm "left-pad") v1_0_0))
@@ -152,6 +156,7 @@ identitySpec = describe "identityEvidence" $ do
         evPublishedAt evidence `shouldBe` Unread
         evAvailability evidence `shouldBe` Unread
         evInstallCode evidence `shouldBe` Unread
+        evDependencySources evidence `shouldBe` Unread
 
 -- A rule reads these two cases differently: it abstains on the first and refuses on the second,
 -- so nothing may collapse them.
@@ -162,6 +167,7 @@ distinctionSpec = describe "a determined absence against an unread fact" $
             unread = identityEvidence (unscopedNpm "left-pad") v1_0_0
         evPublishedAt read' `shouldNotBe` evPublishedAt unread
         evInstallCode read' `shouldNotBe` evInstallCode unread
+        evDependencySources read' `shouldNotBe` evDependencySources unread
 
 ruleDeniesSpec :: Spec
 ruleDeniesSpec = describe "ruleDenies" $
@@ -194,6 +200,7 @@ advisoryPredicates =
     , (DenyIfYanked, (False, False, False))
     , (DenyIfDeprecated, (False, False, False))
     , (DenyInstallTimeExecution, (False, False, False))
+    , (DenyExternalDependencies, (False, False, False))
     , (DenyByIdentity "thing", (False, False, False))
     ]
 
@@ -241,7 +248,7 @@ revocationSpec = describe "revocationRules" $ do
                 H.cover 3 "a deny limited to admission blocks at the gate, and the Dredger keeps the version" (blocks gate && not (blocks dredger))
                 H.cover 4 "a deny at both phases blocks for the Dredger" (blocks dredger)
                 H.cover 10 "an allow admits at the gate" (isApproved gate)
-                H.cover 15 "the evidence is identity alone, as an unread manifest leaves it" (evPublishedAt evidence == Unread && evInstallCode evidence == Unread && evAvailability evidence == Unread)
+                H.cover 15 "the evidence is identity alone, as an unread manifest leaves it" (evPublishedAt evidence == Unread && evInstallCode evidence == Unread && evAvailability evidence == Unread && evDependencySources evidence == Unread)
                 H.cover 20 "the version is a PyPI release" (pkgEcosystem (evName evidence) == PyPI)
                 H.cover 2 "the gate cannot decide and the Dredger blocks" (isUndecidable gate && blocks dredger)
                 H.cover 30 "two rules tie on precedence" (length (ordNub (map rulePrecedence policy)) < length policy)
@@ -273,14 +280,16 @@ decideUnder :: AdvisoryState -> [PrecededRule] -> RuleEvidence -> IO Decision
 decideUnder advisories policy evidence =
     prepare (depsIn advisories) policy >>= \prepared -> evalRules ctx prepared evidence
 
--- One in three policies puts an admission-only deny above a deny at both phases.
+-- One in four policies puts an admission-only deny above a deny at both phases, and one in four
+-- puts an allow above every other rule, so the gate admits often enough to test the Dredger.
 genPolicy :: Gen [PrecededRule]
-genPolicy = Gen.frequency [(2, anyRules), (1, (<>) <$> shadowedDeny <*> anyRules)]
+genPolicy = Gen.frequency [(2, anyRules), (1, (<>) <$> shadowedDeny <*> anyRules), (1, (:) <$> leadingAllow <*> anyRules)]
   where
     anyRules = Gen.list (Range.constant 0 6) genPreceded
     genDeny = Gen.filter ruleDenies genRule
     genNamingDeny = Gen.frequency [(2, pure (DenyByIdentity "thing")), (1, genDeny)]
     shadowedDeny = (\above below -> [PrecededRule 9 AdmissionOnly above, PrecededRule 8 AdmissionAndRevocation below]) <$> genDeny <*> genNamingDeny
+    leadingAllow = PrecededRule 500 AdmissionAndRevocation <$> Gen.filter (not . ruleDenies) genRule
 
 -- | A configured rule with legal reach and precedence ties against other rules.
 genPreceded :: Gen PrecededRule
@@ -301,6 +310,7 @@ genRule =
         , pure DenyIfYanked
         , pure DenyIfDeprecated
         , pure DenyInstallTimeExecution
+        , pure DenyExternalDependencies
         , DenyByIdentity <$> genIdentity
         , DenyIfCve <$> (DenyIfCveParams <$> Gen.element [0, 7, 10] <*> genAlignment)
         , DenyIfKnownMalicious <$> genAlignment
@@ -320,6 +330,7 @@ generated rule = case rule of
     DenyIfYanked -> rule
     DenyIfDeprecated -> rule
     DenyInstallTimeExecution -> rule
+    DenyExternalDependencies -> rule
     DenyByIdentity{} -> rule
     DenyIfCve{} -> rule
     DenyIfKnownMalicious{} -> rule
@@ -330,11 +341,12 @@ genEvidence :: Gen RuleEvidence
 genEvidence = do
     name <- Gen.element [unscopedNpm "thing", scopedNpm "acme" "thing", unscopedPyPI "thing"]
     version <- mkVersion (pkgEcosystem name) <$> Gen.element ["1.0.0", "2.0.0"]
-    (publishedAt, installCode, availability) <- Gen.frequency [(1, pure (Unread, Unread, Unread)), (3, (,,) <$> genPublishedAt <*> genInstallCode <*> Gen.element [Unread, Known Available, Known Deprecated, Known Yanked])]
-    pure (identityEvidence name version){evPublishedAt = publishedAt, evInstallCode = installCode, evAvailability = availability}
+    (publishedAt, installCode, availability, dependencies) <- Gen.frequency [(1, pure (Unread, Unread, Unread, Unread)), (3, (,,,) <$> genPublishedAt <*> genInstallCode <*> Gen.element [Unread, Known Available, Known Deprecated, Known Yanked] <*> genDependencies)]
+    pure (identityEvidence name version){evPublishedAt = publishedAt, evInstallCode = installCode, evAvailability = availability, evDependencySources = dependencies}
   where
     genPublishedAt = Gen.element [Unread, Known Nothing, Known (Just (daysAgo 30)), Known (Just (daysAgo 1))]
     genInstallCode = Gen.element [Unread, Known NoCodeOnInstall, Known (RunsCodeOnInstall "postinstall hook"), Known CodeExecUnknown]
+    genDependencies = Gen.element [Unread, Known RegistryDependencies, Known DependencySourcesUnknown, Known (FetchesOutsideRegistry "dependency 'left-pad' in dependencies names a git source")]
     daysAgo days = addUTCTime (negate (days * nominalDay)) now
 
 laterAdvisory :: TestContractEscape

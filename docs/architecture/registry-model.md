@@ -16,8 +16,8 @@ shared registry is a supported reduced topology, subject to each role's endpoint
 
 | Role | Purpose |
 |------|---------|
-| **Private upstream** | The authoritative, already-vetted source, read as trusted. A tarball is a conventional stable read at `{base}/{pkg}/-/{file}`. Écluse trusts a packument's versions and merges them with the gated public set. Optional on a serve-only mount. |
-| **Public upstream** | The source of versions not yet in the private upstream. The rules gate everything here. It is the tarball fallback on a private miss, and Écluse fetches it alongside the private upstream for a packument. The only required role: a pure public gate serves from it alone. |
+| **Private upstream** | The authoritative, already-vetted source, read as trusted. A tarball is a conventional stable read at `{base}/{pkg}/-/{file}`. Écluse trusts a packument's versions and merges them with the gated public set. Its availability bounds the mount's: a failed private read refuses the request. Optional on a serve-only mount. |
+| **Public upstream** | The source of versions not yet in the private upstream. The rules gate everything here. It is the tarball fallback on a private `404`, and Écluse fetches it alongside the private upstream for a packument. The only required role: a pure public gate serves from it alone. |
 | **Mirror target** | Where the worker writes approved public packages once they pass the rules. Declaring one is what makes a mount mirror. Best a distinct store unioned into the private read path. |
 | **Publication target** | Where Écluse writes client-published first-party packages (`npm publish`). Distinct from the mirror target: client-driven first-party content, not proxy-driven approved-public content. See [Publishing first-party packages](#publishing-first-party-packages-the-publication-target). |
 
@@ -99,6 +99,13 @@ Content-Type, including its boundary. It does not rebuild the client's distribut
   guard checked. A version document whose `version` field is missing or differs from its key is a
   `400` for the same reason. An unreadable body, or a missing or repeated `:action`, is also a
   `400`. The check reads the parsed document, never the attachment data.
+- **No dependency from outside Écluse.** An npm version whose installable dependencies name a git
+  source, a remote tarball URL, or any scheme Écluse does not know to resolve through the registry
+  or locally is a `400` before any relay, because a consumer's client would fetch that dependency
+  directly, past the quarantine, the advisories and the mirror. An unknown scheme fails closed, so
+  one a client adds later is refused too. The publish refusal and the public-version rule share one
+  classifier, so a spec a first-party release cannot carry is also one a public version cannot
+  carry. Cargo refuses a dependency on another registry for the same reason.
 
 - **Credential.** See [Credential flow and authority](#credential-flow-and-authority).
 - **No read-back role.** Write-only from the proxy's view. Published packages read back through
@@ -142,13 +149,15 @@ client's credential and disables redirect-following, so the leg never follows a 
 ([Security posture](security.md#trust-assumptions--credential-posture)).
 A `2xx` streams and a conditional `304` passes through. An explicit private `401` or `403`
 refuses the read, because public bytes can differ from a private patch under the same identity.
-Other unsuccessful statuses retain the private-miss policy. The leg applies **no
+A private `404` is a private miss. Any other failure refuses the read for every name, with the
+status [its cause sets](#private-availability). The leg applies **no
 serve-time integrity floor**: it fast-tracks a lockfile-pinned version from a trusted registry.
 The client and the mirror worker still verify those bytes, so the leg gives up the proactive
 refuse-weak-integrity stance, not tamper-evidence. The packument route's listing-side trusted
 floor ([Integrity floors](security.md#integrity-floors)) stays in force. A private upstream that serves
 tarballs off-convention (a separate files host, or a presigned CDN URL the `/-/` path cannot
-rebuild) becomes a private miss.
+rebuild) is a private miss only when its `/-/` path answers `404`. A redirect from that path to
+such a host refuses the read, as above.
 
 The **public leg** honours the `dist.tarball` the gated version declares and fetches exactly that
 URL, not a reconstructed `/-/` path. The proxy can then front a registry that serves bytes from a
@@ -173,7 +182,7 @@ The companion URL appends `.metadata` to the path before any query or fragment.
 Both private and public selection apply their own parent integrity floor and origin-sensitive authority check.
 The metadata path does not evaluate rules, read advisories or enqueue a mirror.
 Private index reads authorise each caller again, and only the private authority receives that caller's credential.
-A private refusal stops fallback, and first-party names never fall back to public metadata.
+A private refusal or a failed private read stops fallback, and first-party names never fall back to public metadata.
 A surviving private version owns its companion requests, including a missing declaration, missing parent or failed companion fetch.
 Public fallback remains available when no private version survives the listing's location and integrity checks.
 Selection releases metadata admission before the bounded relay streams the companion.
@@ -202,7 +211,9 @@ track which input a survivor came from, so assembly can select its retained sour
   versions first (see [Applying verdicts](rules-engine.md#applying-verdicts-to-a-packument)). The
   result is `trusted(private) ∪ filtered(public)`.
 - **Collision: private wins, divergence is a signal.** On a shared version key the private copy
-  wins. The public copy may contradict it on a shared artifact's shared integrity algorithm: same
+  wins. Where versions that differ only in build metadata name one release (Cargo), the merged index
+  first drops a public version that a private version claims under another spelling, so the private
+  row wins that release too. The public copy may contradict it on a shared artifact's shared integrity algorithm: same
   file, same algorithm, disagreeing digests. The merge logs a WARNING with both digests
   and increments the bounded-cardinality `ecluse.registry.merge.divergence` counter.
   Validated public entries remain evidence for this comparison even when a public rule denies
@@ -233,10 +244,34 @@ track which input a survivor came from, so assembly can select its retained sour
 - **Private access authority.** An explicit private `401` or `403` refuses the request even when
   public metadata succeeds. The refusal precedes merge and conditional response selection.
   See the [operator policy](../../web/content/docs/configuration.md#first-party-namespaces).
-- **Partial availability.** For other failures, if one upstream fails while another succeeds, the merge serves the
-  best-effort union with a degraded signal (readiness stays
+- <a id="private-availability"></a>**Private availability.** A failed private read refuses the
+  request for every name, on listings, metadata and artifacts alike. A private `404` still lets the
+  gated public set serve. Otherwise a private package whose name is not declared first-party would
+  be replaced by its public namesake once that version passed the rules, and builds would switch
+  packages silently. First-party declarations cannot close that gap, because most registries give no
+  reliable mechanism to establish a complete first-party naming system, and a missed name fails
+  silently. The mount's availability therefore follows the private upstream's. The cause sets the
+  status, and no public outcome changes it:
+  - `503` when the private registry is unavailable: a transport error, a timeout, a `5xx` or a
+    `429`. The refusal forwards the private registry's `Retry-After`, so a client that honours it
+    waits as that registry asked.
+  - `502` when its reply is invalid or unusable: an unfollowed redirect, another unexpected status,
+    a document for another name, or a document that does not decode or exceeds its bound. The
+    private registry answered, so retrying the same request is unlikely to help.
+- **Settled absence.** When the private and the public upstream both answer `404`, no upstream
+  holds the name, and every ecosystem answers `404` for its metadata and artifacts. A mount with no
+  private upstream settles the name on the public `404` alone. A name the mirror state records
+  answers `404` on its listing too once no recorded version survives in the mirror, for example
+  after a takedown and a Dredger deletion of the stored copies. Its artifact requests keep the
+  managed path. A public outage beside a private `404` leaves the question open, so that request
+  answers `503`. A private `404` beside a public document whose every version the gate refuses is
+  settled as well: the listing answers `404` with the refusals
+  ([Error model](web-layer.md#error-model)).
+- **Public availability.** If the public upstream fails while the private one succeeds, the merge
+  serves the private-only union with a degraded signal (readiness stays
   [lenient about public reachability](web-layer.md#meta-routes-ping-health-and-search)). Only when
-  nothing resolves does the request error.
+  nothing resolves does the request error. A mount with no private upstream has no other source,
+  so an unavailable public upstream refuses its listings with `503`, as a private outage does.
 
 A packument request filters but never mirrors. See
 [Applying verdicts to a packument](rules-engine.md#applying-verdicts-to-a-packument).
@@ -249,13 +284,14 @@ The proxy knows the requested name from the route, so an upstream's self-reporte
 is a cross-check, never the served authority. The served `name` is always a value an upstream
 genuinely reported, and validation guarantees it equals the route name. An origin whose
 `name` agrees merges normally. The proxy treats an origin whose `name` disagrees as untrusted for
-this request: it drops the origin and logs the drop. An absent or undecodable name is instead an
-undecodable-packument degrade. A single misreporting upstream drops out while any other valid
-origin still serves `200`. The request is `502 Bad Gateway` (`PackumentBadGateway`, see
-[Error model](web-layer.md#error-model)) only when no origin yields a valid packument *because the
-responding origins mismatched*. That is distinct from a genuine absence. This forecloses
-cache-poisoning: a misreporting upstream cannot shadow a real package or win the union with a
-divergent `name`.
+this request and logs it. A public origin drops out, and the private set still serves `200`. A
+private origin refuses the request with `502 Bad Gateway`, as any invalid private reply does
+([Private availability](#private-availability)), so a public namesake never stands in for it. An
+absent or undecodable name makes the packument undecodable, with the same split. The request is
+`502` (`PackumentBadGateway`, see [Error model](web-layer.md#error-model)) when no origin yields a
+valid packument *because the responding origins mismatched*. That is distinct from a genuine
+absence. This forecloses cache-poisoning: a misreporting upstream cannot shadow a real package or
+win the union with a divergent `name`.
 
 ### Decision surface vs served surface
 
@@ -363,7 +399,8 @@ consumes. Adapters map their protocols into this shared model. Four principles g
   determine. Boot checks each active mount's resolved policy and accumulates every blocked entry
   beside independent refusals. The engine still evaluates only core evidence.
 - **Signal availability is explicit.** A signal the adapter has not determined, or cannot
-  determine cheaply, has its own representation (`CodeExecUnknown`, `Nothing`).
+  determine cheaply, has its own representation (`CodeExecUnknown`, `DependencySourcesUnknown`,
+  `Nothing`).
   A pure rule then yields no decision rather than guessing, and an effectful rule can resolve it
   later.
 - **The policy model holds the facts that rules and admission need.** Installation fields
@@ -378,10 +415,11 @@ consumes. Adapters map their protocols into this shared model. Four principles g
 |---|---|---|
 | **Identity** | `PackageName`: an ecosystem tag, an optional namespace (npm scope), a normalised `canonical` key, and a `display` form. Equality and ordering use `(ecosystem, namespace, canonical)` only, never the display or base forms. | npm is case-sensitive with scopes, PyPI normalises (PEP 503), RubyGems is verbatim. `Flask` and `flask` are one PyPI package but two npm ones, so the ecosystem tag is part of identity. Matching uses the canonical key while rendering stays faithful. |
 | **Version** | In [`Ecluse.Core.Version`](../../core/src/Ecluse/Core/Version.hs): opaque, holding the raw text plus a `Maybe VersionKey` parsed at construction. `parseVersionKey :: Ecosystem -> Text -> Either VersionError VersionKey` is the only way to a key, and `compareVersions` works only on keys, so non-canonical text never reaches the comparator. Unparseable means no key, so ordering rules abstain and the proxy still serves the version. `Version` carries no derived `Ord`. | Lexicographic ordering is wrong for every grammar (`"10.0.0" < "9.0.0"`), and the proxy must keep serving a version even when the parser can't order it. |
-| **Install-time code execution** | `CodeExecSignal = NoCodeOnInstall \| RunsCodeOnInstall reason \| CodeExecUnknown`. | Unifies npm install scripts, PyPI sdist builds, and RubyGems native extensions. RubyGems retains `CodeExecUnknown` and blocks the unsupported execution-denial rule at boot. |
-| **Availability** | `Availability = Available \| Deprecated \| Yanked`, a flag with no text. | npm deprecates and RubyGems yanks whole versions. PyPI yanks individual files, so a release reads as `Yanked` only when every file of it is. |
+| **Install-time code execution** | `CodeExecSignal = NoCodeOnInstall \| RunsCodeOnInstall reason \| CodeExecUnknown`. | Unifies npm install scripts, PyPI sdist builds, and RubyGems native extensions. Cargo and RubyGems retain `CodeExecUnknown` and block the unsupported execution-denial rule at boot. |
+| **Availability** | `Availability = Available \| Deprecated \| Yanked`, a flag with no text. | npm deprecates whole versions. npm and RubyGems drop a removed or yanked version from their metadata instead of flagging it, so both block the yank deny at boot. PyPI yanks individual files, so a release reads as `Yanked` only when every file of it is. |
 | **Artifacts** | A version owns `NonEmpty Artifact`. Each carries its entry key, file name, location, algorithm-tagged `Hash`es, and size. | npm has one tarball, PyPI an sdist plus many wheels, and RubyGems one gem per platform. |
-| **Dependencies** | Retained for installation, outside the typed policy model. | Each dependency receives its own verdict when the client fetches it. npm retains supported dependency relationships in its installation representation, without adding them to the rules vocabulary. |
+| **Dependency sources** | `DependencySources = RegistryDependencies \| FetchesOutsideRegistry reason \| DependencySourcesUnknown`. | A git or URL dependency installs straight from its source and never receives a verdict of its own, so the deny judges the version that names it. npm reads `dependencies`, `optionalDependencies` and `peerDependencies` in both read forms. Cargo reads each index row's normal and build dependency registries. PyPI and RubyGems retain `DependencySourcesUnknown` and block the dependency deny at boot. |
+| **Dependencies** | The relationships themselves are retained for installation, outside the typed policy model. | Each dependency receives its own verdict when the client fetches it. npm retains supported dependency relationships in its installation representation. Only where a dependency installs from enters the rules vocabulary, as its dependency sources. |
 
 The types live in [`Ecluse.Core.Package`](../../core/src/Ecluse/Core/Package.hs),
 [`Ecluse.Core.Version`](../../core/src/Ecluse/Core/Version.hs), and
@@ -393,11 +431,10 @@ how trusted and gated provenances combine.
 
 ## Cargo integration
 
-Cargo uses one primary mount with two native views because source replacement requires identical package contents.
-The public replacement selects `ManagedMirrorAndPublic`. The private alternate selects `PrivateOnly`.
-npm and PyPI retain `MergePrivateAndPublic`.
-The alternate view binds separate request dependencies without adding another worker policy.
-Only the primary view owns managed mirror state.
+Cargo uses one mount and one native view, `/cargo/`, which replaces crates.io and merges caller-authorised private crates with admitted public crates, as npm, PyPI and RubyGems do.
+Every consumer reads only through Écluse, so the view departs by design from the Cargo book's rule that a replacement source holds no crate absent from the original.
+`Cargo.lock` therefore records private crates under the crates.io source identity.
+The mirror target stays write-only under Écluse's token, and completed copies are read through `privateUpstream`.
 The [operator protocol contract](https://ecluse-proxy.com/docs/protocol-support/#cargo) owns the routes and retained fields.
 
 ### Discovery and transport authority
@@ -408,6 +445,7 @@ Private preparation follows caller authorisation and stays uncached and uncoales
 Worker and maintenance preparation follows service credential acquisition and the applicable charge.
 Boot constructs factories without a remote discovery request.
 There is no separate private discovery cache.
+The client-facing `config.json` is local: it names Écluse's archive route and publication API, and requires authentication whenever a private upstream or the edge token is configured.
 
 Discovery describes download and optional API locations. It grants neither network nor credential authority.
 A checked coordinate binds published name, raw version, logical archive filename, and SHA-256 to an approved download template.
@@ -424,13 +462,14 @@ ASCII lowercase supplies index lookup identity. A separate key folds hyphen and 
 Keeping these keys separate prevents one alias lookup from poisoning another path's negative cache result.
 Cargo does not inherit PyPI period folding or separator collapsing.
 Raw SemVer spelling remains available, while native uniqueness excludes build metadata.
+The index merge applies the same uniqueness across sources: rows that differ only in build metadata are one release, and the trusted row wins.
 
 The bounded reader frames one native row at a time and keeps its physical `RecordEntry` coordinate.
 Full and selected reads scan through EOF, so later duplicate identities can quarantine earlier records.
 Assembly emits each admitted winning-source record once, in source order, with a final LF.
 It preserves additive fields and absence versus null instead of rebuilding a reduced install document.
 Public mirror relocation translates source-local dependency references to the canonical crates.io source identity.
-The archive bytes stay unchanged. Private alternate rows retain their own native source meaning.
+The archive bytes stay unchanged.
 
 ### Why Cargo requires durable mirror state
 
@@ -440,25 +479,27 @@ One checksum-verified archive proves physical presence but cannot prove faithful
 The worker records the admitted original row, source identity, and expected archive before upload.
 Completion retains the existing conditional-write, retry, lost-response, and restart rules.
 
-The public replacement excludes unmanaged target rows from both listings and direct archives.
+A target row that reaches `/cargo/` through `privateUpstream` without a durable record is trusted private content, as on PyPI and RubyGems.
+Without new state, Écluse cannot tell such a row from a first-party crate.
 Missing, corrupt, or unrecorded history cannot become an original-source managed read during outage.
 An available admitted public source can still supply a version.
-The private alternate separately permits ordinary caller-authorised private reads.
 Retained facts reflect first admission. There is no continuous yank synchronisation or target-yank mutation.
 
-### Bounded native evidence and publication
+### Bounded archive inspection and publication
 
-The default Cargo age and advisory path performs no archive evidence read.
-Ordered execution denial resolves evidence lazily when that rule is reached.
-The subject binds immutable identity, checksum, approved address, role, deadline, and cumulative work bounds.
-Higher-ranked decisions perform no evidence request. Required unavailable facts produce structured inability.
-Private maintenance evidence uses the authenticated store reader and stays outside shared anonymous retention.
+The sparse index declares no build script or procedural macro, and archive inspection for each evaluated version costs too much on the serve path.
+The adapter blocks `DenyInstallTimeExecution` through its typed rule capability, so no policy decision reads an archive.
 
 Archive inspection verifies complete bounded compressed bytes and the effective TOML manifest without executing code.
 Publication can make one further local pass over those same bytes for selected text.
 Both passes charge their work.
 Resolver disagreement can change the package description used for resolution without changing archive bytes.
 First-party validation therefore compares upload claims, including native-library uniqueness constraints, with the retained effective manifest before target discovery.
+It also refuses the unstable dependency fields that mirroring refuses, so both paths take one stance on nightly-only resolver features.
+It refuses their manifest keys in the archived dependency tables too, since the upload cannot carry them, so the index row and the archive never describe different dependencies.
+After agreement, every normal and build dependency must come from crates.io or Écluse, because a dependency on another registry would send every consumer's Cargo to that registry directly.
+A development dependency is exempt, as npm's `devDependencies` are, because no consumer resolves it.
+Écluse knows its own Cargo index from `server.publicUrl` and the mount path, so this check needs no configuration of its own.
 Shared bounded target parsing and logical source identities account for native formatting without changing source rows or upload bytes.
 The relay preserves validated upload bytes. Mirror publication derives required upload fields from the verified effective manifest.
 
@@ -469,11 +510,20 @@ protocol adapter, and its store contributes the backend the mount's private pack
 [Cloud backends](cloud-backends.md#cloud-backends) covers the two store kinds and what each one
 supplies.
 
-The two sides share only the vocabulary above: `Ecosystem`, `PackageName`, and `Version`. Neither
-imports the other, and a store that needs an ecosystem fact reads it off the `Ecosystem` value, as
-the CodeArtifact format token does. A backend matrix therefore costs one adapter per ecosystem plus
-one backend per store, never a cell per pair. npm, PyPI, Cargo, and RubyGems ship read and native publication capabilities in this build. Their stores
+The two sides share only the vocabulary above: `Ecosystem`, `PackageName`, and `Version`, plus the
+abstract mechanism a store declares for a service credential. Neither imports the other, and a store
+that needs an ecosystem fact reads it off the `Ecosystem` value, as the CodeArtifact format token
+and its credential presentation table do. Every credential Écluse owns renders through that table,
+the Dredger's store reads included. A Basic row carries the store's own username. A backend matrix
+therefore costs one adapter per ecosystem plus one backend per store, never a cell per pair. npm,
+PyPI, Cargo, and RubyGems ship read and native publication capabilities in this build. Their stores
 are CodeArtifact, any host that speaks the protocol, and Verdaccio for development.
+
+Shared code reads what it needs from an adapter's declarations instead of branching on its
+ecosystem. Durable mirror state stores, weighs and rechecks a mount's retained read data through the
+state format its adapter declares, so a new ecosystem extends no switch in mirror state. The
+adapter's first-party declaration reads a mount's `firstParty` entries and decides which names they
+own, so the configuration format stays the same while the parser names no ecosystem.
 
 ### Incremental npm extraction
 
@@ -531,9 +581,11 @@ retained-live measurements remain distinct from the cached accounting estimate.
 
 ## RubyGems integration
 
-RubyGems uses `MergePrivateAndPublic` with global Compact Index discovery and per-gem metadata acquisition.
+RubyGems merges caller-authorised private gems with admitted public gems. It discovers gems through the global Compact Index and acquires metadata per gem.
 The public directory shares bounded retention. Caller-authorised private discovery remains fresh and separate from public retention.
-Per-gem `/info/<gem>` rows follow the shared source selection, admission and mirror restoration paths.
+Discovery bounds gem names with a fixed ceiling rather than the per-package count limits, so lowering those limits for npm or PyPI cannot break RubyGems discovery.
+The public directory follows public availability, except that a bound breach refuses the request as an exceeded input bound does.
+Per-gem `/info/<gem>` rows follow the shared merge, admission and mirror restoration paths.
 Unknown transformed info-file MD5 values use explicit blank hints in the supported clients.
 This keeps detailed metadata acquisition on demand without publishing a false checksum.
 Selected compact specifications and archives use exact native coordinates.
@@ -545,7 +597,9 @@ Full reads count distinct raw versions, while selected reads count all nonblank 
 Artifact counts include every nonblank row before projection.
 
 RubyGems supplies no supported deprecation flag or scope. Native builds are normal installation behaviour.
-The adapter blocks `DenyIfDeprecated`, `AllowScope`, and `DenyInstallTimeExecution` through typed rule capabilities.
+Compact Index `/info` omits a yanked version instead of flagging it, so public reads and the mirror worker never see a yanked gem.
+The global `/versions` removal marker is the only yank fact, and no serve, mirror or Dredger path reads it.
+The adapter blocks `DenyIfYanked`, `DenyIfDeprecated`, `AllowScope`, `DenyInstallTimeExecution`, and `DenyExternalDependencies` through typed rule capabilities.
 No policy-only archive fetch or execution-evidence cache follows from unknown installation metadata.
 Bounded archive interpretation remains necessary for publication and mirroring.
 

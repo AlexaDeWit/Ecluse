@@ -18,7 +18,7 @@ import Ecluse.Test.Support (expectRight)
 spec :: Spec
 spec = do
     describe "renderGem" $
-        for_ [("1.19.0", "1.19"), ("2.0.a.0", "2.a"), ("1.0.0-1", "1.pre.1"), ("0.0.0", "0"), ("0.a", "a")] $ \(raw, expected) ->
+        for_ renderings $ \(raw, expected) ->
             it ("renders " <> toString raw <> " as " <> toString expected) $ do
                 renderVersionKey <$> parseVersionKey RubyGems raw `shouldBe` Right expected
                 parseVersionKey RubyGems expected `shouldBe` parseVersionKey RubyGems raw
@@ -27,10 +27,19 @@ spec = do
             let !token = VNum 1
             tokensBox <- Heap.asBox <$> evaluate (token : impureThrow DeferredTokenTail)
             settledPart 64 TokenList tokensBox `shouldReturn` False
-        for_ ["12.34.56", "1.2.0.rc.3", "2.0.a.0", "0.0.0", "1.0.0-1"] $ \raw ->
+        for_ ["12.34.56", "1.2.0.rc.3", "2.0.a.0", "0.0.0", "1.0.0-1", "1.a.0.b", "1.0.a.0.b"] $ \raw ->
             it ("constructs the complete canonical token spine and scalar values for " <> toString raw) $ do
                 keyBox <- Heap.asBox <$> (expectRight (parseVersionKey RubyGems raw) >>= evaluate)
                 settledPart 64 NativeKey keyBox `shouldReturn` True
+
+{- Raw spellings and their canonical renderings. Gem::Version drops the first run of zeros that starts
+a dotted segment and directly precedes a letter. A key that keeps a zero before a letter spells its
+first letter after an added zero, which parsing drops again. -}
+renderings :: [(Text, Text)]
+renderings =
+    [("1.19.0", "1.19"), ("2.0.a.0", "2.a"), ("1.0.0-1", "1.pre.1"), ("0.0.0", "0"), ("0.a", "a")]
+        <> [("1.a.0.b", "1.a.b"), ("1.a.0b", "1.a.b"), ("1.2.pre.0.rc", "1.2.pre.rc"), ("1.2.0.10.a", "1.2.0.10.a")]
+        <> [("1.0.a.0.b", "1.0.a.0.b"), ("1.a0b", "1.0.a.0.b"), ("0.a0a", "0.a.0.a")]
 
 data DeferredTokenTail = DeferredTokenTail
     deriving stock (Eq, Show)

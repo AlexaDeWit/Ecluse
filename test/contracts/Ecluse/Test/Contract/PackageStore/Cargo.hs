@@ -26,6 +26,7 @@ import Ecluse.Core.Registry.Metadata.Fetch.Preparation (prepareManifest, prepare
 import Ecluse.Core.Registry.MirrorUpload (ExpectedMirrorFile, expectedArtifact, expectedTargetMatchesWith, inventoryFiles, verifyMirrorBytes)
 import Ecluse.Core.Registry.Origin (OriginClient (..), ocBaseUrl, originClient)
 import Ecluse.Core.Registry.Publish (MirrorPublish (..), MirrorTransport (..), PreparedMirrorVersion, PublishPlan (..), newMirrorPublish, pmvInventory, pmvPrepareUpload, publishPrepared)
+import Ecluse.Core.Registry.Request (nativePresentation)
 import Ecluse.Core.Security (BodyLimit (MirrorArtifactBodyLimit), defaultLimits)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Core.Server.Admission.Types (ChargeFactors (ChargeFactors))
@@ -68,7 +69,7 @@ withCargoSession maintenance use = do
     build boundary base exchanges = do
         let origin = originClient defaultLimits exchanges (loopbackRegistryUrl (base <> "/registry/index")) (Just credential)
             source = originClient defaultLimits exchanges (loopbackRegistryUrl (base <> "/source")) Nothing
-            publisher = newMirrorPublish (MirrorTransport exchanges (pure (Just credential)) defaultLimits passthroughTracingPort) (ocBaseUrl origin) (loopbackRegistryUrl (base <> "/registry")) (cargoPublishCodec (ChargeFactors 1000 1000 1000))
+            publisher = newMirrorPublish (MirrorTransport exchanges (pure (Just credential)) defaultLimits passthroughTracingPort) (ocBaseUrl origin) (loopbackRegistryUrl (base <> "/registry")) (cargoPublishCodec (ChargeFactors 1000 1000 1000) nativePresentation)
         store <- maintenance origin boundary
         pure (storeOperations packageName cargoTestVersion (readRelease origin) (writeRelease source publisher) store)
 

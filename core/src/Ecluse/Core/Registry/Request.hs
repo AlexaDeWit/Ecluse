@@ -2,8 +2,9 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | Shared HTTP requests with typed URL failures and ecosystem-specific credential presentation.
-Requests parsed here refuse redirects, including after credentials attach.
+{- | Shared HTTP requests with typed URL failures, ecosystem-specific credential presentation, and
+the mechanisms a store can declare for service credentials. Requests parsed here refuse redirects,
+including after credentials attach.
 -}
 module Ecluse.Core.Registry.Request (
     -- * Request finalisation
@@ -17,6 +18,17 @@ module Ecluse.Core.Registry.Request (
     attachCredential,
     authorizationUnder,
     bareAuthorization,
+
+    -- * Service credential presentation
+    AuthMechanism (..),
+    renderAuthMechanism,
+    StoreOperation (..),
+    ServicePresentation,
+    nativePresentation,
+    declaredPresentation,
+    sendsCredentialUsername,
+    presentedMapping,
+    presentedRequest,
 
     -- * Request building
     metadataGet,
@@ -34,6 +46,7 @@ module Ecluse.Core.Registry.Request (
     requestAt,
 ) where
 
+import Data.ByteArray.Encoding (Base (Base64), convertToBase)
 import Data.ByteString qualified as BS
 import Data.Char (isHexDigit)
 import Data.Text qualified as T
@@ -50,7 +63,7 @@ import Network.HTTP.Types.Header (
 import Text.Show (showsPrec)
 
 import Ecluse.Core.BuildIdentity (identifyRequest)
-import Ecluse.Core.Credential (ClientCredential, bareCredential, mkSecret)
+import Ecluse.Core.Credential (ClientCredential (credSecret), bareCredential, mkSecret, unSecret)
 import Ecluse.Core.Registry (UrlFormationError (EmptyBaseUrl, UnparseableUrl))
 import Ecluse.Core.Security.Egress (RegistryUrl, registryUrlText)
 import Ecluse.Core.Text (isAsciiAlphaNum, joinUrlPath)
@@ -127,6 +140,68 @@ bareAuthorization headers = case [value | (name, value) <- headers, name == hAut
     _ -> Nothing
   where
     fieldByte byte = byte == 0x09 || (byte >= 0x20 && byte <= 0x7E)
+
+-- | How a secret travels on @Authorization@, named without reference to an ecosystem or a store.
+data AuthMechanism
+    = -- | @Bearer@ followed by the secret.
+      AuthBearer
+    | -- | HTTP Basic over this username and the secret.
+      AuthBasic Text
+    | -- | The secret alone, with no scheme.
+      AuthRawKey
+    deriving stock (Eq, Show)
+
+-- | The @Authorization@ value a credential renders to under a mechanism.
+renderAuthMechanism :: AuthMechanism -> ClientCredential -> ByteString
+renderAuthMechanism mechanism credential = case mechanism of
+    AuthBearer -> "Bearer " <> encodeUtf8 secret
+    AuthBasic username -> "Basic " <> convertToBase Base64 (encodeUtf8 (username <> ":" <> secret) :: ByteString)
+    AuthRawKey -> encodeUtf8 secret
+  where
+    secret = unSecret (credSecret credential)
+
+-- | The half of a store's protocol a service credential is presented to.
+data StoreOperation = StoreRead | StoreWrite
+    deriving stock (Eq, Show)
+
+{- | How a store asks for a service credential on reads and on writes. An operation it declares
+nothing for keeps the ecosystem's own credential mapping.
+-}
+data ServicePresentation = ServicePresentation (Maybe AuthMechanism) (Maybe AuthMechanism)
+    deriving stock (Eq, Show)
+
+-- | A store that declares nothing: every operation keeps the ecosystem's own presentation.
+nativePresentation :: ServicePresentation
+nativePresentation = ServicePresentation Nothing Nothing
+
+-- | A store that declares its mechanism for each operation.
+declaredPresentation :: (StoreOperation -> AuthMechanism) -> ServicePresentation
+declaredPresentation mechanism = ServicePresentation (Just (mechanism StoreRead)) (Just (mechanism StoreWrite))
+
+{- | The mapping a service credential renders through for one operation: the declared mechanism on
+@Authorization@, or the ecosystem's mapping unchanged. Recovery stays the ecosystem's own.
+-}
+presentedMapping :: ServicePresentation -> StoreOperation -> CredentialMapping -> CredentialMapping
+presentedMapping presentation operation native = case declaredMechanism presentation operation of
+    Nothing -> native
+    Just mechanism -> native{credentialHeader = hAuthorization, credentialRender = renderAuthMechanism mechanism}
+
+{- | Whether an operation sends the credential's own username. Only the ecosystem's own mapping can:
+a declared mechanism sends the secret alone or the store's own Basic username.
+-}
+sendsCredentialUsername :: ServicePresentation -> StoreOperation -> Bool
+sendsCredentialUsername presentation = isNothing . declaredMechanism presentation
+
+declaredMechanism :: ServicePresentation -> StoreOperation -> Maybe AuthMechanism
+declaredMechanism (ServicePresentation onRead onWrite) = \case
+    StoreRead -> onRead
+    StoreWrite -> onWrite
+
+{- | Form a request anonymously, then attach the credential under @mapping@. The builder must use its
+credential only to attach it, as every native request builder here does.
+-}
+presentedRequest :: CredentialMapping -> Maybe ClientCredential -> (Maybe ClientCredential -> Either e Request) -> Either e Request
+presentedRequest mapping credential build = attachCredential mapping credential <$> build Nothing
 
 -- | Negotiate compressed metadata under the ecosystem's media type and credential presentation.
 metadataGet :: CredentialMapping -> Maybe ClientCredential -> ByteString -> Request -> Request

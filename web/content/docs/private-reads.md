@@ -17,9 +17,7 @@ reference = "/docs/how-it-works/#a-request-step-by-step"
 
 A conventional private npm artifact hit bypasses that metadata path and relies on the client's integrity verification.
 
-Cargo's private alternate reads arbitrary caller-authorised private packages, without public fallback.
-Its crates.io replacement admits only public source content and valid completed managed mirrors.
-An unmanaged private copy cannot enter that replacement view.
+Cargo reads private crates through `privateUpstream` like every other ecosystem. A crate there without a mirror record is trusted private content.
 
 Changing a public admission rule does not immediately block an existing private copy. See [Admission, revocation, and retained copies](@/docs/revocation.md).
 
@@ -31,11 +29,28 @@ The caller's credential authorises private reads and, by default, publication. T
 
 A worker token does not give the caller private access. An explicit private authentication refusal stops the request rather than falling back to a public source.
 
-Cargo and RubyGems keep their native refusal statuses, which the [private access policy](@/docs/configuration.md#first-party-namespaces) lists.
-Cargo's private discovery follows edge authentication and the current caller's authority. It stays uncached across callers.
-The [Cargo protocol reference](@/docs/protocol-support.md#cargo) describes discovery failure during a trusted-registry outage.
+Cargo keeps its native refusal statuses, which the [private access policy](@/docs/configuration.md#first-party-namespaces) lists.
+Cargo's discovery document is answered locally after edge authentication, so it never carries a private registry's answer.
 
 When `server.authToken` is set, the shared edge token also travels to the private registry. That mode cannot preserve a different registry identity for each caller.
+
+## A failing private registry stops the mount {#private-outage}
+
+This matters on every mount that sets `privateUpstream`, because Écluse reads it on each listing and download. The private registry's answer decides what the client receives.
+
+| Private registry answer | What Écluse does |
+| --- | --- |
+| A document for the requested name | Merges it with the admitted public versions. |
+| `404` | Serves admitted public content. When the public registry also answers `404`, no registry holds the name and Écluse answers `404`. A name your mirror state records gets the same `404` for its listing, because the private registry then holds none of its stored copies. When no public version passes your rules, the listing answers `404` with the deciding rules, as on a mount without a private registry. When the public registry is unavailable instead, Écluse answers `503`. A first-party name answers `404`. |
+| `401` or `403` | Refuses with the statuses the [private access policy](@/docs/configuration.md#first-party-namespaces) lists. |
+| A transport error, a timeout, a `5xx` or a `429` | Refuses with `503` for every name and serves no public content. When the private registry sent `Retry-After`, Écluse forwards it. |
+| A redirect, any other status, a document for another name, or a document Écluse cannot decode or that exceeds its bound | Refuses with `502` for every name and serves no public content. |
+
+Écluse does not follow a redirect from the private registry. These statuses apply to listings, metadata and artifacts on every ecosystem, and a first-party name keeps its own wording. RubyGems discovery reads the private `/versions` directory as a whole, and the [protocol reference](@/docs/protocol-support.md#rubygems) describes how a failure there refuses discovery.
+
+A private package whose name you have not declared first-party can share its name with a public package. If Écluse served public content while the private read failed, the public package would replace the private one as soon as its version passed your rules, and builds would switch packages without notice. Declaring every private name cannot close that gap reliably, because most registries give no complete list of first-party names.
+
+So the mount's availability follows the private registry's. A private outage stops every build through the mount, including builds that need only public packages. A public outage with a healthy private registry still serves the private versions. Écluse logs each failed private metadata read with its cause.
 
 ## First-party names stay private {#names}
 

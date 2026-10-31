@@ -24,6 +24,7 @@ import Ecluse.Core.Package (
     Artifact (..),
     Availability (Available, Yanked),
     CodeExecSignal (CodeExecUnknown, NoCodeOnInstall, RunsCodeOnInstall),
+    DependencySources (DependencySourcesUnknown),
     Hash,
     HashAlg (SHA256),
     InvalidEntry (invalidKey, invalidKind, invalidValue),
@@ -720,6 +721,7 @@ referenceDetails name entries =
             if any ((== Sdist) . fcKind . snd) entries
                 then RunsCodeOnInstall "offers a source distribution, which runs its own build"
                 else NoCodeOnInstall
+        , pkgDependencySources = DependencySourcesUnknown
         , pkgAvailability = if all ((== FileWithdrawn) . ifYanked) files then Yanked else Available
         , pkgArtifacts = strictElements (fmap referenceArtifact files)
         }

@@ -91,7 +91,12 @@ non-empty `_attachments` object, and only `dist-tags` that name that version. Th
 `npm deprecate` or `npm star` sends gets this `501`. `npm deprecate` sends back Écluse's served
 document, and a store such as Verdaccio applies it over its own. The route returns `400` for a body
 that cannot be read, is not a JSON object, or repeats a key, and for a version filed under a key
-that differs from its own `version` field. The PyPI upload route returns `501` for an `:action`
+that differs from its own `version` field. It also returns `400`, naming the dependency and its
+field, for a version whose `dependencies`, `optionalDependencies` or `peerDependencies` name a git
+source, a remote tarball URL or an unsupported scheme such as `jsr:`, the specs
+`deny-external-dependencies` denies on public versions. `devDependencies`, registry ranges and tags,
+`npm:` aliases, and `file:`, `link:`, `workspace:` and local path specs publish. Publish the
+dependency to a registry Écluse serves, then depend on that version. The PyPI upload route returns `501` for an `:action`
 other than `file_upload`. It returns `400` for an upload without exactly one `version` field and
 one `content` file part. It also returns `400` when the `content` file name does not name the
 declared project and `version` as a build tool spells them. A source distribution must be named
@@ -146,7 +151,7 @@ the format to `console` for local development instead. Each JSON line carries th
 | `message` | The message text. | |
 | `service`, `env`, `version` | The resolved identity. | |
 | `dd` | `trace_id` and `span_id`. | Present only while a span is in scope. |
-| `data` | The emitting call's own fields. | |
+| `data` | The emitting call's own fields. | Every line a request logs carries a `module` filter key: the log site's own key, or `Ecluse.Server.Pipeline` when the site names none. The line for a fault that escapes to the server, after a response began or in the listener's own connection handling, carries `Ecluse.Runtime.Server`. |
 | `katip` | The `katip` emitter fields. | These include the emitting process's hostname (`katip.host`), so a collector's own host attribution governs the line's `host`. |
 
 Four of those names matter to Datadog specifically: `timestamp`, `status`, `message`, and
@@ -234,6 +239,8 @@ Typical `warn` lines record:
 - A mirror job left to redeliver.
 - A store call Écluse is retrying.
 - A malformed advisory entry Écluse dropped, or an advisory date it had to ignore.
+- A malformed metadata entry or public RubyGems directory row Écluse dropped while serving the rest.
+  The line counts the drops by kind in `droppedByKind`, for example `version-listing` for a directory row.
 - An EPSS feed that failed for an ecosystem with no active rule requiring EPSS enrichment. The line starts
   `EPSS enrichment unavailable`, and Pilot publishes that ecosystem's artifact without scores.
   An EPSS outage repeats it on every compile.
@@ -463,12 +470,14 @@ Include every proxy and mirror service for the deployment total.
 New deployments, telemetry export gaps, and retention shorter than 30 days leave an incomplete total.
 This count excludes registry traffic from other applications.
 
-Metadata reads record HTTP refusals on `ecluse.upstream.fetch.errors` with cause
-`upstream_status`, including `404`. A malformed successful response records `decode` instead.
-Explicit `401` and `403` refusals retain `other` and their existing warning log.
+Metadata reads, public RubyGems `/versions` directory reads included, record HTTP refusals on
+`ecluse.upstream.fetch.errors` with cause `upstream_status`, including `404`. A malformed
+successful response records `decode` instead, and a response past its bound records `other`.
+Explicit `401` and `403` refusals retain `other` and log at `WARN`.
 Metadata `408`, `429`, and server errors log at `ERROR`. A genuine `404` absence logs at `DEBUG`.
-Other non-success statuses log at `WARN`. These logs carry the status and upstream authority,
-without the upstream body, credentials, or URL query.
+A RubyGems `/versions` `404` is a fault rather than an absence and logs at `WARN`, as do other
+non-success statuses. These logs carry the status and upstream authority, without the upstream
+body, credentials, or URL query.
 
 Telemetry stays off until you ask for it. Set `ECLUSE_OBSERVABILITY__TELEMETRY=on`, then give the
 instance its identity: `DD_*` (`DD_SERVICE`, `DD_ENV`, `DD_VERSION`, `DD_AGENT_HOST`) for
@@ -529,10 +538,10 @@ The request counters use `result=hit|miss|collapsed`:
 
 | Metric | What it counts |
 |---|---|
-| `ecluse.metadata_cache.requests` | Full-document store requests |
+| `ecluse.metadata_cache.requests` | Full-document store requests, and public RubyGems directory requests with `store=directory` |
 | `ecluse.metadata_cache.version.requests` | Selected-version store requests |
 | `ecluse.metadata_cache.assembled.requests` | Assembled-response store requests |
-| `ecluse.metadata_cache.refused` | Capacity refusals and backend failures, by `store=full|version|assembled` |
+| `ecluse.metadata_cache.refused` | Capacity refusals and backend failures, by `store=full|version|assembled|directory` |
 
 A `hit` uses a retained value. A `miss` leads a fetch or render. A `collapsed` request joins
 an existing leader and shares its result, including a failure. A follower that retries after
@@ -548,11 +557,14 @@ through the generic cache.
 
 The `ecluse.metadata_cache.resident_bytes`, `ecluse.metadata_cache.version.resident_bytes`,
 and `ecluse.metadata_cache.assembled.resident_bytes` gauges report accounted bytes after insertion,
-eviction, and expiry removal. `ecluse.metadata_cache.entries` reports the full store's entry count.
+eviction, and expiry removal. `ecluse.metadata_cache.resident_bytes` with `store=directory` reports
+the directory store. Points without a `store` label belong to the full store, so filter out
+`store=directory` when you sum full-store requests or bytes.
+`ecluse.metadata_cache.entries` reports the full store's entry count.
 The shipped local backend never retains full metadata. Full-store entries and resident bytes stay
 zero, and local full reads report misses or collapsed active work without capacity refusals.
 Selected-version, assembled, and public RubyGems directory stores share `cache.ttl`, one byte bound
-and one entry bound, with no reserved shares. No gauge reports the directory store's bytes.
+and one entry bound, with no reserved shares.
 A full listing followed by a selected-version read can fetch upstream twice, because no store keeps
 the full document. No external cache service is required.
 Boot and `check-config` output report these local capabilities. `cache.maxBytes` applies only to
@@ -629,7 +641,8 @@ does not automatically enlarge the cache or reduce CPU concurrency.
 
 Memory admission keeps the heap's live data where the garbage collector still works normally, so
 the process neither thrashes its collector nor overflows its heap ceiling. Écluse charges each
-listing and each public artifact decision for the memory it uses, as it uses it, against one budget:
+listing, each public artifact decision and each first-party publication for the memory it uses, as
+it uses it, against one budget:
 
 | Work | What it pays |
 |---|---|
@@ -641,6 +654,7 @@ listing and each public artifact decision for the memory it uses, as it uses it,
 | An assembled hit or a `304` | Its reads, but no response charge. A RubyGems `/info` or `/versions` `304` also pays its serialisation or merge charge |
 | A gzip listing response, hit or miss | 512 KiB for the deflater, then 36 KiB for each 32 KiB output buffer |
 | A request that joins another request's public fetch or render | Nothing for that fetch or render |
+| A first-party publication, once its upload is read | Its archive inspection for Cargo and RubyGems, and for Cargo a full metadata read of the target registry's `config.json` |
 
 A listing's output basis is the larger of two estimates. One starts from the largest document the
 listing merges. The other starts from the base document, whose top-level fields the response
@@ -683,6 +697,12 @@ near one request and the shared work it waits on, and a pause always leaves a re
 finishes. A listing gives up its CPU slot once its response is built, but keeps its charge while
 Écluse writes the body, so a slow client holds memory and no CPU slot. Everything a request paid
 returns when it ends. Trusted private artifact hits and artifact relay pay nothing.
+
+A first-party publication reads its whole upload against the byte capacity the memory plan
+reserves for publishing, before it enters either gate. A slow upload therefore holds no CPU slot
+and no memory charge. Once admitted, the publication keeps its CPU slot and its charge through the
+relay to the publication target. A full memory or CPU gate refuses it after the upload, with `503`
+and `Retry-After: 1`.
 
 A request that finds either waiting room full can wait in overflow outside both gates, without a
 CPU slot or memory charge. It can retry admission for 0.5 s. The next sweeper tick ends an expired
@@ -925,7 +945,7 @@ These counts reflect shipped request paths checked on 2026-10-18, and the Cargo 
 
 A successful admitted artifact GET can enqueue a separate mirror job. A companion request does not enqueue one. PyPI, Cargo, and RubyGems workers always read their own public document, because they need publication and source fields. PyPI workers copy the whole supported version, including its wheels, source distributions, and declared companions. RubyGems workers copy every platform gem of the version, each with its original compact specification. Completion passes and queue retries add requests.
 
-First-party names never fall back to public registries. A private authorisation refusal also stops public fallback.
+First-party names never fall back to public registries. A private authorisation refusal or a failed private read also stops public fallback.
 
 ### Cache and mirror effects
 

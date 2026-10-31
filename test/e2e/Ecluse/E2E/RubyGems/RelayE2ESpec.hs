@@ -36,8 +36,8 @@ rubyRelayContract :: DeclaredGroup
 rubyRelayContract = DeclaredGroup metadata $ \recorder ->
     around (timedFixture recorder (withFixture fixture)) $ do
         it (label "initial-digest" "refuses mismatched bytes during an initial install without a lockfile or mirror") initialDigest
-        for_ [("private-401", 401), ("private-403", 403), ("private-digest", 200)] $ \(name, status) ->
-            it (label name "preserves a private refusal without reading the public artifact") (privateFailure status)
+        for_ [("private-401", 401, 403), ("private-403", 403, 403), ("private-digest", 200, 200)] $ \(name, upstream, expected) ->
+            it (label name "preserves a private refusal without reading the public artifact") (privateFailure upstream expected)
         it (label "private-miss" "uses the public source facts after a genuine private artifact miss") privateMiss
         it (label "known-length" "serves an exact-bound native archive with its declared length") (exactBound False)
         it (label "chunked" "serves the same exact-bound archive from independently flushed chunks") (exactBound True)
@@ -130,18 +130,19 @@ initialDigest plane = for_ [minimumBundler, currentBundler] $ \client -> withRel
         proxyGet (observedProxy observed) (rubyArchiveRoute release) `shouldReturn` (200, LBS.fromStrict changed)
     rubyRegistryFiles registry "rubygems-mirror" `shouldReturn` []
 
-privateFailure :: Int -> GlobalDataPlane -> IO ()
-privateFailure expected plane = withRelay plane $ \registry release -> do
+-- A private 401 or 403 answers a local 403. A private digest mismatch reaches Bundler.
+privateFailure :: Int -> Int -> GlobalDataPlane -> IO ()
+privateFailure upstream expected plane = withRelay plane $ \registry release -> do
     withObservedNativeProxy serveOnly plane $ \observed -> do
         good <- proxyGet (observedProxy observed) (rubyArchiveRoute release)
         good `shouldBe` (200, LBS.fromStrict (releaseArchive release))
     seedRubyRegistry registry "rubygems-private" [release]
     let config = serveOnly{ecExtraEnv = [("ECLUSE_MOUNTS__RUBYGEMS__PRIVATE_UPSTREAM__REGISTRY__URL", stubUrl RubyGemsPrivate)]}
         changed = releaseArchive release <> "changed"
-    setReply registry "rubygems-private" release (nativeReply expected False changed)
+    setReply registry "rubygems-private" release (nativeReply upstream False changed)
     withObservedNativeProxy config plane $ \observed -> do
         before <- length <$> requests registry
-        if expected == 200
+        if upstream == 200
             then for_ [minimumBundler, currentBundler] $ \client -> rubyConsumer (observedProxy observed) client $ \project -> do
                 rubyDependency project rubyLeaf ("= " <> rubyVersion)
                 rubyLockfile project `shouldReturn` Nothing
@@ -152,7 +153,7 @@ privateFailure expected plane = withRelay plane $ \registry release -> do
                 Map.keys tree `shouldSatisfy` (not . any (T.isSuffixOf "ecluse_fixture_leaf.rb" . toText))
             else proxyRequest "GET" [] "" (observedProxy observed) (rubyArchiveRoute release) >>= rejected expected
         actual <- artifactRequests before registry release
-        map (\(host, method, _) -> (host, method)) actual `shouldBe` replicate (if expected == 200 then 2 else 1) ("rubygems-private", "GET")
+        map (\(host, method, _) -> (host, method)) actual `shouldBe` replicate (if upstream == 200 then 2 else 1) ("rubygems-private", "GET")
 
 exactBound :: Bool -> GlobalDataPlane -> IO ()
 exactBound chunked plane = withRelay plane $ \registry release -> do
@@ -274,7 +275,7 @@ headPrivateAuth plane = withRelay plane $ \registry release -> do
         setReply registry "rubygems-private" release (nativeReply 401 False marker)
         before <- length <$> requests registry
         response <- proxyRequest "HEAD" [("If-None-Match", tag)] "" (observedProxy observed) (rubyArchiveRoute release)
-        responseStatus response `shouldBe` 401
+        responseStatus response `shouldBe` 403
         responseBody response `shouldBe` ""
         actual <- artifactRequests before registry release
         map (\(host, method, _) -> (host, method)) actual `shouldBe` [("rubygems-private", "HEAD")]

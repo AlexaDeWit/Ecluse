@@ -379,13 +379,15 @@ so one caller's read never answers another's.
 
 A `publish` forwards the publisher's own token the same way. You can instead set a static
 publication token under the publication target's tag
-(`ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET__CODE_ARTIFACT__TOKEN`). Écluse then authenticates the
+(`ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET__CODE_ARTIFACT__TOKEN`). Store the bare secret: the
+target's declared backend decides how Écluse presents it, as it does for the mirror worker's token
+([protocol support](@/docs/protocol-support.md)). Écluse then authenticates the
 edge token and replaces it with the static publication token on every publish, so the publication
 target never receives the edge token. Every holder of the edge token can then send any upload the
 relay forwards, within the configured first-party scopes and what the static token permits, so
 this is not the preferred deployment. The relay forwards an npm document with exactly one
 version filed under its own `version` field, a non-empty `_attachments` object, every tag on that
-version, and no repeated key. It forwards a PyPI upload with one `:action=file_upload` part and a
+version, no repeated key, and no installable dependency on a git source, a remote tarball URL or an unsupported scheme. It forwards a PyPI upload with one `:action=file_upload` part and a
 `content` file name that names the declared project and version. The
 boot refuses a static publication token without `ECLUSE_SERVER__AUTH_TOKEN`
 (`PublishStaticCredentialNeedsEdge`), because an open edge would let any client publish under it.
@@ -400,22 +402,22 @@ and
 
 ### What a client configures
 
-Écluse serves one endpoint per mount, and installs and publishes both go to it. Cargo is the
-exception: its mount serves a crates.io replacement view and a private alternate view, and
-publication goes to the private view ([Connect Cargo](@/docs/connect.md#cargo)). With the recommended
+Écluse serves one endpoint per mount, and installs and publishes both go to it. With the recommended
 open edge, the client supplies a credential the private registry accepts, keyed to the proxy's URL
 in whatever per-registry auth configuration that client keeps. Écluse forwards it to the private
 upstream, which authorises the caller. So what someone reaches through the proxy is what your
 registry already grants them. Public installs without credentials still work unless a private
-upstream explicitly refuses access. The private set is what the credential unlocks.
+upstream explicitly refuses access or fails. The private set is what the credential unlocks.
 
-Public success does not prove the private credential worked. For npm and PyPI, an explicit private
-`401` or `403` stops metadata and artifact reads with a local `403`, including HEAD and conditional
-requests. Cargo and RubyGems keep their native refusal statuses. In every ecosystem, public content
+Public success does not prove the private credential worked. For npm, PyPI and RubyGems, an explicit
+private `401` or `403` stops metadata and artifact reads with a local `403`, including HEAD and
+conditional requests. Cargo keeps its native refusal statuses. In every ecosystem, public content
 cannot replace the private copy after that refusal. A genuine private `404` still permits public
-fallback for a name outside your first-party namespaces where the view allows it, and first-party
-names stay private-only. A backend that masks a refusal as `404` does not prove authentication
-succeeded. The [private access policy](@/docs/configuration.md#first-party-namespaces) gives each
+fallback for a name outside your first-party namespaces, and first-party names stay private-only.
+Any other private read failure refuses the request with `503` or `502`, so the mount's availability
+follows the private registry's ([a failing private registry](@/docs/private-reads.md#private-outage)).
+A backend that masks a refusal as `404` does not prove authentication succeeded. The
+[private access policy](@/docs/configuration.md#first-party-namespaces) gives each
 ecosystem's statuses.
 
 Two rules hold whatever ecosystem the client speaks:
@@ -426,9 +428,7 @@ Two rules hold whatever ecosystem the client speaks:
 - **Bind no name to a registry outside Écluse.** A client pointed at Écluse needs no per-scope or
   per-package override that points elsewhere, because its Écluse endpoints already cover every
   name. An override takes its names around the gate, and in some clients it decides where a publish
-  goes as well ([Keeping publishes on the proxy](#keeping-publishes-on-the-proxy)). Cargo's
-  private dependencies name the `/cargo/private/` alternate registry, which is still Écluse
-  ([Cargo views](@/docs/protocol-support.md#cargo)).
+  goes as well ([Keeping publishes on the proxy](#keeping-publishes-on-the-proxy)).
 
 For an npm-protocol client those two rules are a default registry line and a URL-keyed token line.
 The recipes here assume the open edge that the
@@ -467,8 +467,7 @@ Either one routes traffic around the proxy, which is what the two rules above ex
 
 ### Keeping publishes on the proxy
 
-Écluse accepts a publish on the same mount endpoint it serves installs from, or on Cargo's private
-alternate view. With the recommended open edge, it relays the publish to the publication target
+Écluse accepts a publish on the same mount endpoint it serves installs from. With the recommended open edge, it relays the publish to the publication target
 under the publisher's own credential. Two failures can take a publish off that path, and they are
 not alike.
 
@@ -481,7 +480,8 @@ destination from some other part of its configuration sends it straight to that 
 proxy sees nothing to refuse. Name-to-registry bindings are the usual cause, because in some
 clients such a binding outranks the per-package publish setting as well as the install route. Keep
 bindings to registries outside Écluse off a client pointed at Écluse, and let its Écluse endpoints
-carry both directions.
+carry both directions. Cargo's own hint after a refused publish, `--registry crates-io`, is one such
+route. [Connect Cargo](@/docs/connect.md#cargo) closes it with `publish = ["ecluse"]`.
 
 ## Metadata compression
 

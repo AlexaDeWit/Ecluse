@@ -13,6 +13,7 @@ module Ecluse.Core.Registry.RubyGems.Archive (
     gemArchiveInventory,
     gemArchiveSha256,
     checkGemArchive,
+    checkRawEnvelope,
 ) where
 
 import Conduit
@@ -30,7 +31,7 @@ import Ecluse.Core.Package (PackageName)
 import Ecluse.Core.Package.Hash (HashAlg (SHA512), computeDigest, hexDigestText, sha256Hex)
 import Ecluse.Core.Registry (ParseError (..), parseRefusal)
 import Ecluse.Core.Registry.Archive.Inflate (InflateFormat (GzipMembers), inflateBounded, withInflatedChunks)
-import Ecluse.Core.Registry.Archive.Tar (TarMember (..), TarScan, scanTar, sourceReader, tarContents, tarMembers)
+import Ecluse.Core.Registry.Archive.Tar (TarMember (..), TarScan, scanTar, sourceReader, tarContents, tarMembers, tarRawNames)
 import Ecluse.Core.Registry.RubyGems.Archive.Metadata
 import Ecluse.Core.Registry.RubyGems.Archive.Yaml
 import Ecluse.Core.Registry.RubyGems.CompactSpec (GemSpecification (..), specificationCoordinate)
@@ -44,6 +45,7 @@ data GemArchive = GemArchive
     , gemArchiveMetadata :: GemMetadata
     , gemArchiveInventory :: Set Text
     , gemArchiveSha256 :: Text
+    , gemArchiveRawNames :: !Bool
     }
     deriving stock (Eq)
 
@@ -55,7 +57,7 @@ inspectGemArchive :: Limits -> (Int -> IO ()) -> ByteString -> IO (Either ParseE
 inspectGemArchive limits charge bytes
     | BS.length bytes > maxMirrorArtifactBytes limits = pure (parseRefusal "gem archive exceeds its byte bound")
     | otherwise = runExceptT $ do
-        (metadataGzip, dataGzip, checksumsGzip) <- ExceptT (envelopeMembers limits charge bytes)
+        (!rawNames, (metadataGzip, dataGzip, checksumsGzip)) <- ExceptT (envelopeMembers limits charge bytes)
         let pay extra = charge (BS.length bytes + BS.length metadataGzip + BS.length dataGzip + BS.length checksumsGzip + extra)
         (raw, sums) <- ExceptT (inflateMembers limits pay metadataGzip checksumsGzip)
         let nativePay extra = pay (128 * (BS.length raw + BS.length sums) + extra)
@@ -63,11 +65,11 @@ inspectGemArchive limits charge bytes
         inventory <- ExceptT (dataInventory limits nativePay (BS.length raw + BS.length sums) dataGzip)
         unless (inventory == Set.fromList (metadataFiles metadata)) (throwError (ParseError "gem data inventory disagrees with metadata files"))
         digest <- evaluate (sha256Hex bytes)
-        evaluate (GemArchive bytes metadata inventory digest)
+        evaluate (GemArchive bytes metadata inventory digest rawNames)
 
--- The outer tar's metadata, data and checksum members, each still compressed.
-envelopeMembers :: Limits -> (Int -> IO ()) -> ByteString -> IO (Either ParseError (ByteString, ByteString, ByteString))
-envelopeMembers limits charge bytes = (>>= envelope) <$> scanTar limits{maxMetadataBytes = maxMirrorArtifactBytes limits} charge (\parts -> Right (parts `elem` [["metadata.gz"], ["data.tar.gz"], ["checksums.yaml.gz"]])) (\consume -> consume (yield bytes))
+-- Whether every outer member kept its raw name, then the metadata, data and checksum members, each still compressed.
+envelopeMembers :: Limits -> (Int -> IO ()) -> ByteString -> IO (Either ParseError (Bool, (ByteString, ByteString, ByteString)))
+envelopeMembers limits charge bytes = (>>= \scan -> (tarRawNames scan,) <$> envelope scan) <$> scanTar limits{maxMetadataBytes = maxMirrorArtifactBytes limits} charge (\parts -> Right (parts `elem` [["metadata.gz"], ["data.tar.gz"], ["checksums.yaml.gz"]])) (\consume -> consume (yield bytes))
 
 envelope :: TarScan -> Either ParseError (ByteString, ByteString, ByteString)
 envelope scan = do
@@ -135,4 +137,12 @@ checkGemArchive coordinate checksum archive = do
     actual <- specificationCoordinate (gemArchiveSpecification archive)
     unless (actual == coordinate) (parseRefusal "gem archive identity disagrees with its admitted coordinate")
     unless (T.toLower checksum == gemArchiveSha256 archive) (parseRefusal "gem archive disagrees with its admitted SHA-256")
+    pure archive
+
+{- | Refuse an outer tar that names any member through an extended header, a ustar prefix, or bytes after a NUL.
+RubyGems' reader yields extended headers as members and keeps those bytes, so a Ruby store could register another gem.
+-}
+checkRawEnvelope :: GemArchive -> Either ParseError GemArchive
+checkRawEnvelope archive = do
+    unless (gemArchiveRawNames archive) (parseRefusal "gem envelope carries an extended or prefixed tar header")
     pure archive

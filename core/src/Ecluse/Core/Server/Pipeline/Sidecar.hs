@@ -14,7 +14,7 @@ import Data.ByteString qualified as BS
 import Data.ByteString.Builder (byteString)
 import Data.Map.Strict qualified as Map
 import Network.HTTP.Client qualified as HTTP
-import Network.HTTP.Types (Method, Status, hContentLength, status200, status304, status401, status403, status404, status500)
+import Network.HTTP.Types (Method, Status, hContentLength, status200, status304, status401, status403, status404, status500, statusCode)
 import Network.Wai (Request, ResponseReceived, requestHeaders)
 import UnliftIO (tryAny)
 
@@ -26,18 +26,18 @@ import Ecluse.Core.Package.Integrity (IntegrityFloor, partitionByFloor)
 import Ecluse.Core.Registry (FetchFault (FetchCooldown))
 import Ecluse.Core.Registry.Adapter.Capability (AdapterArtifact (artifactByUrl))
 import Ecluse.Core.Registry.Exchange.Types (ExchangeClient)
-import Ecluse.Core.Registry.Metadata (MetadataClient (fetchVersionMetadata), MetadataError (MetadataFetch), VersionDoc (vdDetails), VersionRead (vrVersion))
+import Ecluse.Core.Registry.Metadata (MetadataClient (fetchVersionMetadata), MetadataError (MetadataFetch, MetadataNameMismatch), VersionDoc (vdDetails), VersionRead (vrVersion))
 import Ecluse.Core.Registry.Request (sidecarUrl)
 import Ecluse.Core.Security (HostPort, Limits (progressFloor), Origin (..), hostPortAddress, thgPrivateHostPort, thgPublicHostPort)
 import Ecluse.Core.Server.Admission.Meter (MemoryTicket)
 import Ecluse.Core.Server.Conditional (Conditional (..), etagHeader, evaluateETag, forwardValidators, mkStrongETag)
 import Ecluse.Core.Server.Context (Handler, MountBinding (bindingPackumentDeps), PackumentDeps (..), ResponseAction (RunPipeline), ServeRuntime (..), ctxMount, ctxRuntime, pdPrivateBase, pdTarballHostGate, tarballHostHonoured)
-import Ecluse.Core.Server.MirrorView (mirrorVersionView, publicMirrorCoverage, readMirrorCompanion, validateMirrorProject)
+import Ecluse.Core.Server.MirrorView (mirrorVersionView, mirrorViewDocuments, publicMirrorCoverage, readMirrorCompanion, validateMirrorProject)
 import Ecluse.Core.Server.Path (Filename, unFilename)
-import Ecluse.Core.Server.Pipeline.Origin (OriginMiss (..), withPrivateMetadataClient, withPublicMetadata)
+import Ecluse.Core.Server.Pipeline.Origin (OriginMiss (..), ReadFailure (ReadUnavailable), statusReadFailure, withPrivateMetadataClient, withPublicMetadata)
 import Ecluse.Core.Server.Pipeline.Shared
-import Ecluse.Core.Server.Pipeline.Tarball.Private (privateMetadataMiss)
-import Ecluse.Core.Server.Pipeline.Tarball.Refusal (artifactError, firstPartyMissRefusal, upstreamUnavailable, versionAbsent)
+import Ecluse.Core.Server.Pipeline.Tarball.Private (privateMetadataMiss, privateReadFailure)
+import Ecluse.Core.Server.Pipeline.Tarball.Refusal (artifactError, privateMissRefusal, privateReadRefusal, upstreamUnavailable, versionAbsent)
 import Ecluse.Core.Server.Pipeline.Tarball.Relay (ArtifactServe (..), acceptPrivateArtifact, privateArtifactResponder, relayPublicResult, relayUnjudged, relayUpstreamResult, withMethod, withValidators)
 import Ecluse.Core.Server.Pipeline.Tarball.Types (ArtifactRequest (..), TarballReplies (..), relayResponder)
 import Ecluse.Core.Server.Response (ServeDecision, mkRefusal)
@@ -84,6 +84,7 @@ privateSelection ctx token ticket = case pdPrivateBase deps of
         result <- tryAny (withPrivateMetadataClient (arRuntime ctx) deps (Just ticket) base token (\client -> fetchVersionMetadata client (arPackage ctx) (arVersion ctx)))
         case result of
             Right (Left err) | isNothing (privateMetadataMiss err) -> pure Refused
+            _ | Just failure <- privateReadFailure result -> pure (Missing (MissUnresolved failure))
             _ -> case pdMirrorState deps of
                 Just mirror
                     | not (pdFirstParty deps (arPackage ctx)) ->
@@ -92,7 +93,7 @@ privateSelection ctx token ticket = case pdPrivateBase deps of
                             Right Nothing -> pure (ordinary result)
                             Right (Just (_, record)) -> case recordVersion (arVersion ctx) record of
                                 Nothing -> pure (ordinary result)
-                                Just expected -> case mirrorVersionView (arVersion ctx) record (either (const Nothing) (either (const Nothing) vrVersion) result) of
+                                Just expected -> case mirrorVersionView (mirrorViewDocuments mirror) (arVersion ctx) record (either (const Nothing) (either (const Nothing) vrVersion) result) of
                                     Left _ -> pure (Incomplete expected)
                                     Right _ | Map.notMember (unFilename (arFile ctx)) (versionFiles expected) -> pure NewPublicFile
                                     Right restored -> case restored >>= selectSidecar (pdMinTrustedIntegrity deps) (tarballHostHonoured TrustedOrigin deps privateHost . hostPortAddress . artUrl) (unFilename (arFile ctx)) . vdDetails of
@@ -104,7 +105,7 @@ privateSelection ctx token ticket = case pdPrivateBase deps of
     privateHost = thgPrivateHostPort (pdTarballHostGate deps)
 
     ordinary = \case
-        Left _ -> Missing MissUnresolved
+        Left _ -> Missing (MissUnresolved (ReadUnavailable Nothing))
         Right (Left err) -> maybe Refused Missing (privateMetadataMiss err)
         Right (Right readVersion) -> case vrVersion readVersion of
             Nothing -> Missing MissAbsent
@@ -118,13 +119,19 @@ publicSelection :: ArtifactRequest response -> MemoryTicket -> Handler Selection
 publicSelection ctx ticket = do
     result <- tryAny (withPublicMetadata (arRuntime ctx) deps ticket (arPackage ctx) (arVersion ctx) liftIO)
     pure $ case result of
-        Left _ -> Missing MissUnresolved
+        Left _ -> Missing (MissUnresolved (ReadUnavailable Nothing))
         Right (Left (MetadataFetch (FetchCooldown retry))) -> Cooling retry
-        Right (Left err) -> Missing (fromMaybe MissUnresolved (privateMetadataMiss err))
+        Right (Left err) -> Missing (publicMetadataMiss err)
         Right (Right readVersion) -> selectRequest ctx UntrustedOrigin (pdMinIntegrity deps) publicHost Nothing readVersion
   where
     deps = arDeps ctx
     publicHost = thgPublicHostPort (pdTarballHostGate deps)
+
+-- A public origin that names another package drops out, so its mismatch reads as an absence.
+publicMetadataMiss :: MetadataError -> OriginMiss
+publicMetadataMiss = \case
+    MetadataNameMismatch _ -> MissAbsent
+    err -> fromMaybe (MissUnresolved (ReadUnavailable Nothing)) (privateMetadataMiss err)
 
 selectRequest :: (IntegrityFloor floor) => ArtifactRequest response -> Origin -> floor -> Maybe HostPort -> Maybe ClientCredential -> VersionRead -> Selection
 selectRequest ctx origin floorSpec authority token readVersion =
@@ -164,14 +171,17 @@ servePrivate ctx = \case
         result <- relay ctx True (srPrivateClient (arRuntime ctx)) acceptPrivateArtifact request
         case result of
             UpstreamRelayed (_, received) -> pure received
-            UpstreamRejected status -> answerError ctx (if status == status404 then versionAbsent else upstreamUnavailable)
-            UpstreamTransportFailure -> answerError ctx upstreamUnavailable
+            UpstreamRejected status retry
+                | status == status404 -> answerError ctx versionAbsent
+                | otherwise -> readFailed (statusReadFailure (statusCode status) retry)
+            UpstreamTransportFailure -> readFailed (ReadUnavailable Nothing)
             UpstreamCooling retry -> answerError ctx (upstreamCooling retry)
+  where
+    readFailed = answerError ctx . privateReadRefusal (arDeps ctx) (arPackage ctx)
 
 fallback :: ArtifactRequest response -> OriginMiss -> Handler ResponseReceived
-fallback ctx miss
-    | pdFirstParty (arDeps ctx) (arPackage ctx) = answerError ctx (firstPartyMissRefusal miss)
-    | otherwise = admittedRead ctx (publicSelection ctx) (servePublic ctx)
+fallback ctx miss =
+    maybe (admittedRead ctx (publicSelection ctx) (servePublic ctx)) (answerError ctx) (privateMissRefusal (arDeps ctx) (arPackage ctx) miss)
 
 servePublic :: ArtifactRequest response -> Selection -> Handler ResponseReceived
 servePublic ctx = \case
@@ -183,7 +193,7 @@ servePublic ctx = \case
     CompanionAbsent -> answerError ctx versionAbsent
     Refused -> answerError ctx upstreamUnavailable
     Missing MissAbsent -> answerError ctx versionAbsent
-    Missing MissUnresolved -> answerError ctx upstreamUnavailable
+    Missing (MissUnresolved _) -> answerError ctx upstreamUnavailable
     Selected request ->
         relay ctx False (srPublicClient (arRuntime ctx)) (const True) request >>= \case
             UpstreamRelayed (_, received) -> pure received
@@ -236,7 +246,7 @@ publicSelectionCovered ctx expected ticket = do
                 else pure Unavailable
         Right (Left (MetadataFetch (FetchCooldown retry))) -> pure (Cooling retry)
         Right (Right _) | isNothing expected -> pure (Missing MissAbsent)
-        Right (Left err) | isNothing expected -> pure (Missing (fromMaybe MissUnresolved (privateMetadataMiss err)))
+        Right (Left err) | isNothing expected -> pure (Missing (publicMetadataMiss err))
         _ -> pure Unavailable
   where
     deps = arDeps ctx

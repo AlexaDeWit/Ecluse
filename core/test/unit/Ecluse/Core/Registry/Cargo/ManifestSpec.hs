@@ -18,7 +18,7 @@ import Ecluse.Core.Registry (ParseError (..))
 import Ecluse.Core.Registry.Cargo.Manifest
 import Ecluse.Core.Security.Limits (Limits (..), defaultLimits)
 import Ecluse.Core.Version.Cargo (renderCargo)
-import Ecluse.Test.Registry.Cargo.Publish (cargoResolverAgreements, cargoResolverContradictions, cargoResolverManifest, cargoResolverMetadata)
+import Ecluse.Test.Registry.Cargo.Publish (cargoForeignDevManifest, cargoForeignDevMetadata, cargoForeignRegistryManifest, cargoForeignRegistryMetadata, cargoForeignRegistryRefusal, cargoResolverAgreements, cargoResolverContradictions, cargoResolverManifest, cargoResolverMetadata)
 import Ecluse.Test.Support (expectRight)
 
 spec :: Spec
@@ -67,37 +67,10 @@ spec = do
             annotated <- expectRight (parse (basic <> "[[package.metadata.notes]]\ntext='retained only in the manifest'\n"))
             expected <- expectRight (publicationMetadata manifest Map.empty)
             publicationMetadata annotated Map.empty `shouldBe` Right expected
-    describe "manifestExecution" $ do
-        it "uses the complete inventory for default build.rs detection" $ do
-            manifest <- expectRight (parse basic)
-            manifestExecution manifest Set.empty `shouldBe` Right False
-            manifestExecution manifest (Set.singleton "build.rs") `shouldBe` Right True
-        it "honours explicit disabling even with a root build script" $ do
-            manifest <- expectRight (parse (basic <> "build=false\n"))
-            manifestExecution manifest (Set.singleton "build.rs") `shouldBe` Right False
-        it "requires every declared build script to name a regular archive member" $ do
-            manifest <- expectRight (parse (basic <> "build='scripts/custom.rs'\n"))
-            manifestExecution manifest Set.empty `shouldBe` Left (ParseError "Cargo build declaration names an absent regular file")
-            manifestExecution manifest (Set.singleton "scripts/custom.rs") `shouldBe` Right True
-            auto <- expectRight (parse (basic <> "build=true\n"))
-            manifestExecution auto Set.empty `shouldBe` Left (ParseError "Cargo build declaration names an absent regular file")
-            manifestExecution auto (Set.singleton "build.rs") `shouldBe` Right True
-        it "normalises local script references without allowing an archive escape" $ do
-            manifest <- expectRight (parse (basic <> "build='./scripts/../build.rs'\n"))
-            manifestExecution manifest (Set.singleton "build.rs") `shouldBe` Right True
-        it "keeps unsupported build lists and escaping paths unknown" $
-            for_ [("build=['a.rs','b.rs']\n", "unsupported Cargo build declaration"), ("build='../build.rs'\n", "tar link escapes its archive")] $ \(declaration, reason) -> do
-                manifest <- expectRight (parse (basic <> declaration))
-                manifestExecution manifest Set.empty `shouldBe` Left (ParseError reason)
-        it "recognises each native procedural macro spelling and crate type form" $
-            for_ ["proc-macro=true", "proc_macro=true", "crate-type=['proc-macro']", "crate_type=['proc-macro']"] $ \declaration -> do
-                manifest <- expectRight (parse (basic <> "[lib]\n" <> declaration <> "\n"))
-                manifestExecution manifest Set.empty `shouldBe` Right True
-        it "rejects ambiguous or unsupported native library declarations" $
-            for_ [("proc-macro=true\nproc_macro=false", "ambiguous Cargo manifest spelling aliases"), ("proc-macro='false'", "Cargo manifest field is not a boolean"), ("crate-type=['unknown']", "unsupported Cargo library crate type")] $ \(declaration, reason) -> do
-                manifest <- expectRight (parse (basic <> "[lib]\n" <> declaration <> "\n"))
-                manifestExecution manifest Set.empty `shouldBe` Left (ParseError reason)
     describe "publicationMetadata" $ do
+        it "keeps reconstructing a manifest whose dependency carries an unstable key, as the mirror path did" $ do
+            manifest <- expectRight (parse (basic <> "[dependencies]\nunstable={version='1',artifact='bin',lib=true,public=true,target='x86_64-unknown-linux-gnu'}\n"))
+            publicationMetadata manifest Map.empty `shouldSatisfy` isRight
         it "uses Cargo README defaults and preserves publication-only data" $ do
             manifest <- expectRight (parse (basic <> "authors=['Alice']\nlicense='MIT'\nrust-version='1.74'\n"))
             paths <- expectRight (manifestTextPaths manifest (Set.fromList ["README", "README.txt", "README.md"]))
@@ -375,6 +348,46 @@ spec = do
                 let dependency = object ["name" .= ("dependency" :: Text), "version_req" .= uploaded, "features" .= ([] :: [Text]), "optional" .= False, "default_features" .= True, "registry" .= cratesIoIndex]
                 checkUploadAgreement defaultLimits selectedRegistry manifest (object ["deps" .= [dependency], "features" .= object []]) `shouldBe` Right ()
 
+        it "refuses a manifest dependency carrying an unstable key the upload omits, in every dependency table" $
+            for_ ["artifact='bin'", "lib=true", "public=false", "target='x86_64-unknown-linux-gnu'"] $ \declaration ->
+                for_ unstableTables $ \(header, kind, target) -> do
+                    let metadata = object ["deps" .= [object ["name" .= ("unstable" :: Text), "version_req" .= ("^1" :: Text), "features" .= ([] :: [Text]), "optional" .= False, "default_features" .= True, "registry" .= cratesIoIndex, "kind" .= kind, "target" .= target]], "features" .= object []]
+                    stable <- expectRight (parse (basic <> header <> "\nunstable={version='1'}\n"))
+                    checkUploadAgreement defaultLimits selectedRegistry stable metadata `shouldBe` Right ()
+                    manifest <- expectRight (parse (basic <> header <> "\nunstable={version='1'," <> declaration <> "}\n"))
+                    checkUploadAgreement defaultLimits selectedRegistry manifest metadata
+                        `shouldBe` Left (ParseError "Cargo manifest dependency 'unstable' carries an unstable artifact, target, lib or public key")
+
+    describe "checkDependencyRegistries" $ do
+        it "refuses a normal or build dependency from a registry other than crates.io or this proxy, naming its package" $
+            for_ foreignSources $ \source -> do
+                for_ ["normal", "build"] $ \kind ->
+                    checkDependencyRegistries ecluseRegistries (registryUpload kind (String source)) `shouldBe` Left (ParseError cargoForeignRegistryRefusal)
+                checkDependencyRegistries ecluseRegistries (object ["deps" .= [object ["name" .= ("original" :: Text), "kind" .= Null, "registry" .= source]]]) `shouldBe` Left (ParseError cargoForeignRegistryRefusal)
+                checkDependencyRegistries ecluseRegistries (object ["deps" .= [object ["name" .= ("original" :: Text), "registry" .= source]]]) `shouldBe` Left (ParseError cargoForeignRegistryRefusal)
+        it "accepts a dev-dependency from any registry, which no consumer resolves" $
+            for_ foreignSources $ \source ->
+                checkDependencyRegistries ecluseRegistries (registryUpload "dev" (String source)) `shouldBe` Right ()
+        it "refuses a foreign normal dependency beside a foreign dev-dependency" $
+            checkDependencyRegistries ecluseRegistries (object ["deps" .= [object ["name" .= ("helper" :: Text), "kind" .= ("dev" :: Text), "registry" .= foreignIndex], object ["name" .= ("original" :: Text), "kind" .= ("normal" :: Text), "registry" .= foreignIndex]]])
+                `shouldBe` Left (ParseError cargoForeignRegistryRefusal)
+        it "accepts crates.io in either spelling, this proxy's index, and a null or absent source" $
+            for_ ["normal", "dev", "build"] $ \kind -> do
+                for_ [String cratesIoIndex, String "https://github.com/rust-lang/crates.io-index.git", String "sparse+https://index.crates.io/", String "sparse+https://proxy.test/cargo", String "sparse+https://proxy.test/cargo/", Null] $ \source ->
+                    checkDependencyRegistries ecluseRegistries (registryUpload kind source) `shouldBe` Right ()
+                checkDependencyRegistries ecluseRegistries (object ["deps" .= [object ["name" .= ("original" :: Text), "kind" .= kind]]]) `shouldBe` Right ()
+        it "refuses a source that agreement accepts because the archived manifest declares it too" $ do
+            manifest <- expectRight (decodeManifest defaultLimits "fixture" "1.0.0" cargoForeignRegistryManifest)
+            checkUploadAgreement defaultLimits selectedRegistry manifest cargoForeignRegistryMetadata `shouldBe` Right ()
+            checkDependencyRegistries ecluseRegistries cargoForeignRegistryMetadata `shouldBe` Left (ParseError cargoForeignRegistryRefusal)
+        it "accepts an agreeing upload whose only foreign source is a dev-dependency" $ do
+            manifest <- expectRight (decodeManifest defaultLimits "fixture" "1.0.0" cargoForeignDevManifest)
+            checkUploadAgreement defaultLimits selectedRegistry manifest cargoForeignDevMetadata `shouldBe` Right ()
+            checkDependencyRegistries ecluseRegistries cargoForeignDevMetadata `shouldBe` Right ()
+        it "refuses non-object uploads and dependency entries" $ do
+            checkDependencyRegistries ecluseRegistries Null `shouldBe` Left (ParseError "Cargo upload metadata is not an object")
+            checkDependencyRegistries ecluseRegistries (object ["deps" .= [Null]]) `shouldBe` Left (ParseError "Cargo upload dependency is not an object")
+
     describe "parseRustRelease" $ do
         it "fills omitted numeric components with zeroes" $
             for_ [("1", "1.0.0"), ("1.74", "1.74.0"), ("1.74.1", "1.74.1")] $ \(raw, expected) ->
@@ -384,7 +397,25 @@ spec = do
                 parseRustRelease raw `shouldBe` Left (ParseError "Cargo Rust version is invalid")
 
 selectedRegistry :: Text
-selectedRegistry = "sparse+https://proxy.test/cargo/private/"
+selectedRegistry = "sparse+https://proxy.test/cargo/"
+
+-- The one registry that replaces crates.io and receives publication.
+ecluseRegistries :: [Text]
+ecluseRegistries = [selectedRegistry]
+
+-- Each dependency table header, with the kind and platform target the upload states for it.
+unstableTables :: [(ByteString, Text, Maybe Text)]
+unstableTables = [("[dependencies]", "normal", Nothing), ("[dev-dependencies]", "dev", Nothing), ("[build-dependencies]", "build", Nothing), ("[target.'cfg(unix)'.dependencies]", "normal", Just "cfg(unix)")]
+
+-- Registries other than crates.io and this proxy's index, in sparse and git spellings.
+foreignSources :: [Text]
+foreignSources = [foreignIndex, "https://foreign.test/index", "sparse+https://proxy.test/other/", "sparse+https://proxy.test/cargo/private/", "sparse+https://proxy.test/cargo/private/extra/", "sparse+http://proxy.test/cargo/", "https://proxy.test/cargo/private"]
+
+foreignIndex :: Text
+foreignIndex = "sparse+https://foreign.test/index/"
+
+registryUpload :: Text -> Value -> Value
+registryUpload kind source = object ["deps" .= [object ["name" .= ("original" :: Text), "explicit_name_in_toml" .= ("renamed" :: Text), "kind" .= kind, "registry" .= source]]]
 
 basic :: ByteString
 basic = "[package]\nname='example'\nversion='1.2.3'\n"

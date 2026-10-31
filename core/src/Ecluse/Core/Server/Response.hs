@@ -40,7 +40,7 @@ module Ecluse.Core.Server.Response (
 
 import Data.Semigroup (Max (Max, getMax))
 import Data.Text qualified as T
-import Network.HTTP.Types (Status, status200, status403, status404, status500, status503)
+import Network.HTTP.Types (Status, status200, status403, status404, status500, status502, status503)
 
 import Ecluse.Core.Rules.Render (renderDecision)
 import Ecluse.Core.Rules.Types (
@@ -78,7 +78,7 @@ data RejectReason
       MissingIntegrity
     | -- | A public artifact's strongest digest falls below the configured floor. Trusted private artifacts are exempt.
       BelowIntegrityFloor
-    | -- | An upstream packument names a different package and cannot enter the merge.
+    | -- | An upstream reply was invalid or unusable, such as a document that names a different package.
       UpstreamInvalid
     deriving stock (Eq, Show)
 
@@ -114,6 +114,8 @@ data ArtifactStatus
       Unavailable' (Maybe RetryAfter)
     | -- | @500@: a permanent or internal inability to decide. Not retryable.
       ServerError
+    | -- | @502@: an upstream reply was invalid or unusable.
+      BadGateway
     | -- | @404@: the upstream did not have the artifact (forwarded miss).
       NotFound
     deriving stock (Eq, Show)
@@ -128,9 +130,7 @@ artifactStatus = \case
         BelowIntegrityFloor -> Forbidden
         Unavailable (WillResolve retryAfter) -> Unavailable' retryAfter
         Unavailable WontResolve -> ServerError
-        -- The artifact path never validates a packument name, so this cause does not arise here. A
-        -- misbehaving upstream on this path is an internal inability to serve.
-        UpstreamInvalid -> ServerError
+        UpstreamInvalid -> BadGateway
 
 -- | The HTTP status an 'ArtifactStatus' renders as.
 artifactHttpStatus :: ArtifactStatus -> Status
@@ -139,17 +139,22 @@ artifactHttpStatus = \case
     Forbidden -> status403
     Unavailable'{} -> status503
     ServerError -> status500
+    BadGateway -> status502
     NotFound -> status404
 
--- | The HTTP status a __packument__ request renders to. There is no @404@: absence is decided before the merge.
+-- | The HTTP status a __packument__ request renders to. A name no origin holds is decided before the merge.
 data PackumentStatus
     = -- | @200@: at least one version survived, so the proxy serves the merged, filtered packument.
       PackumentOk
-    | -- | @403@: no version survived and every exclusion was a policy denial. The response body collects the denial reasons.
+    | {- | No version survived and every exclusion was a policy or integrity refusal. A listing answers
+      @404@ and a native coordinate @403@, each with the refusals in its body.
+      -}
+      PackumentDenied
+    | -- | @403@: no version survived and none was excluded, so no exclusion names a cause.
       PackumentForbidden
     | -- | @503@: no version survived and an exclusion can recover. A suggested delay becomes @Retry-After@.
       PackumentUnavailable (Maybe RetryAfter)
-    | -- | @502@: no valid origin remained and an upstream packument named a different package.
+    | -- | @502@: no valid origin remained and an upstream reply was invalid or unusable.
       PackumentBadGateway
     | -- | @500@: no version survived, no exclusion is retryable, and one is a permanent or internal inability to decide. Retrying cannot help.
       PackumentServerError
@@ -162,18 +167,17 @@ packumentStatus decisions
     | not (null willResolveDelays) = PackumentUnavailable (longestRetry willResolveDelays)
     | tallyUpstreamInvalid tally = PackumentBadGateway
     | tallyWontResolve tally = PackumentServerError
+    | tallyRefused tally = PackumentDenied
     | otherwise = PackumentForbidden
   where
     -- One strict pass collects every signal the guards weigh, so the all-denied path walks
     -- the exclusions once, not once per guard.
     tally :: PackumentTally
-    tally = foldl' weighDecision (PackumentTally False [] False False) decisions
+    tally = foldl' weighDecision (PackumentTally False [] False False False) decisions
 
     willResolveDelays :: [Maybe RetryAfter]
     willResolveDelays = tallyWillResolveDelays tally
 
--- A deny-by-default cause (policy or admission refusal) leaves no signal of its own,
--- because an empty tally is exactly the @403@ floor.
 weighDecision :: PackumentTally -> ServeDecision -> PackumentTally
 weighDecision acc = \case
     Admit -> acc{tallyAdmit = True}
@@ -182,9 +186,9 @@ weighDecision acc = \case
             acc{tallyWillResolveDelays = delay : tallyWillResolveDelays acc}
         UpstreamInvalid -> acc{tallyUpstreamInvalid = True}
         Unavailable WontResolve -> acc{tallyWontResolve = True}
-        ByPolicy{} -> acc
-        MissingIntegrity -> acc
-        BelowIntegrityFloor -> acc
+        ByPolicy{} -> acc{tallyRefused = True}
+        MissingIntegrity -> acc{tallyRefused = True}
+        BelowIntegrityFloor -> acc{tallyRefused = True}
 
 -- The signals 'packumentStatus' weighs, accumulated in one pass. Strict fields keep the tally from
 -- building thunks across a large survivor set.
@@ -194,9 +198,11 @@ data PackumentTally = PackumentTally
     , tallyWillResolveDelays :: [Maybe RetryAfter]
     -- ^ The suggested delay of every transient ('WillResolve') exclusion.
     , tallyUpstreamInvalid :: Bool
-    -- ^ A responding upstream returned a packument naming a different package.
+    -- ^ An upstream reply was invalid or unusable.
     , tallyWontResolve :: Bool
     -- ^ An exclusion was a permanent ('WontResolve') inability to decide.
+    , tallyRefused :: Bool
+    -- ^ An exclusion was a policy or integrity refusal.
     }
 
 -- | The longest suggested 'RetryAfter' among transient causes, or 'Nothing' when none suggested one.

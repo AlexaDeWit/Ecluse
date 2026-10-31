@@ -17,6 +17,7 @@ module Ecluse.Core.Package.Merge (
     integrityHashes,
     integrityDivergences,
     mergePackuments,
+    withoutTrustedReleases,
 
     -- * The merge accumulator
     -- $accumulator
@@ -45,7 +46,7 @@ import Ecluse.Core.Package.Entry (AdmittedEntry (..))
 import Ecluse.Core.Package.Hash (canonicalHashValue)
 import Ecluse.Core.Package.Integrity (assertedAlg)
 import Ecluse.Core.Snapshot (ContentDigest, Snapshot (..))
-import Ecluse.Core.Version (Version, renderVersion, selectLatest)
+import Ecluse.Core.Version (Version, releaseIdentity, renderVersion, selectLatest)
 
 {- | Which upstream a document came from. The caller decides this and applies it before merging.
 'Ord' is the trust order: 'TrustedSource' sorts before 'GatedSource', so the smallest wins.
@@ -310,6 +311,15 @@ reconciledTags acc = case selectLatest chosenLatest (map pkgVersion survivingDet
     -- A private document, mirror store or not, is never authoritative for @latest@, so
     -- 'selectLatest' projects over the survivors from the public tag alone.
     chosenLatest = rankedValue <$> mergePublicLatest acc
+
+{- | Drop gated versions that a trusted version claims under another spelling of the same release.
+An exact key collision stays, so precedence and divergence reporting still see it.
+-}
+withoutTrustedReleases :: Map Text PackageDetails -> PackageInfo -> PackageInfo
+withoutTrustedReleases trusted info = info{infoVersions = Map.filterWithKey kept (infoVersions info)}
+  where
+    claimed = Set.fromList (map (releaseIdentity . pkgVersion) (Map.elems trusted))
+    kept key details = Map.member key trusted || Set.notMember (releaseIdentity (pkgVersion details)) claimed
 
 {- | Compare integrity-admitted versions independently of rule eligibility, with the trusted map winning.
 Inputs must share a validated package identity. Only shared version keys are compared.

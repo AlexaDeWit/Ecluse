@@ -3,13 +3,15 @@
 -- SPDX-License-Identifier: MIT
 {-# LANGUAGE TupleSections #-}
 
-{- | Read private archives under the caller's credential and the selected source policy.
-Access refusals stop fallback, and managed views require retained completion proof.
+{- | Read private archives under the caller's credential.
+Access refusals and failed reads stop fallback. Managed mirror copies require retained
+completion proof.
 -}
 module Ecluse.Core.Server.Pipeline.Tarball.Private (
     PrivateLeg (..),
     streamPrivateArtifact,
     privateMetadataMiss,
+    privateReadFailure,
 ) where
 
 import Data.Map.Strict qualified as Map
@@ -27,15 +29,7 @@ import Ecluse.Core.Package (
 import Ecluse.Core.Registry.Adapter.Capability (AdapterArtifact (artifactByFile, artifactByUrl, artifactPrivateAddressing), PrivateArtifactAddressing (..))
 import Ecluse.Core.Registry.Metadata (
     MetadataClient (fetchVersionMetadata),
-    MetadataError (
-        MetadataAbsent,
-        MetadataAuthorisationFailure,
-        MetadataBoundExceeded,
-        MetadataFetch,
-        MetadataHttpFailure,
-        MetadataNameMismatch,
-        MetadataUndecodable
-    ),
+    MetadataError (MetadataAuthorisationFailure),
     VersionDoc (vdDetails),
     VersionRead (vrVersion),
  )
@@ -53,17 +47,19 @@ import Ecluse.Core.Server.Admission.Meter (MemoryTicket)
 import Ecluse.Core.Server.Context (
     Handler,
     PackumentDeps (..),
-    ReadSourceSelection (..),
     ServeRuntime (..),
     pdPrivateBase,
     pdTarballHostGate,
     tarballHostHonoured,
  )
-import Ecluse.Core.Server.MirrorView (mirrorVersionView, publicMirrorCoverage, validateMirrorProject)
+import Ecluse.Core.Server.MirrorView (mirrorVersionView, mirrorViewDocuments, publicMirrorCoverage, validateMirrorProject)
 import Ecluse.Core.Server.Path (unFilename)
 import Ecluse.Core.Server.Pipeline.Origin (
     OriginMiss (MissAbsent, MissUnresolved),
+    ReadFailure (ReadUnavailable),
+    metadataReadFailure,
     mountOrigin,
+    statusReadFailure,
     withPrivateMetadataClient,
  )
 import Ecluse.Core.Server.Pipeline.Shared
@@ -104,7 +100,7 @@ streamPrivateArtifact ctx token = do
     answer prepared = case prepared of
         -- The admission shed already counted its decision.
         PrivateShed headers -> PrivateHandled <$> liftIO (respond (tarballError replies shedStatus headers (mkRefusal Nothing shedMessage)))
-        PrivateUnavailable -> PrivateAnswered Metric.Unavailable <$> liftIO unavailable
+        PrivateUnavailable -> PrivateAnswered Metric.Unavailable <$> liftIO (unavailable Nothing)
         PrivateIncomplete expected -> PrivateHandled <$> servePublicArtifactWithCoverage (covered expected) ctx
         PrivateRefused code -> PrivateAnswered Metric.Deny <$> liftIO (refuse code)
         PrivateMissing miss -> pure (PrivateMissed miss)
@@ -112,15 +108,22 @@ streamPrivateArtifact ctx token = do
             liftIO $
                 relayUpstreamResult (arMode ctx) (srPrivateClient (arRuntime ctx)) (progressFloor (pdLimits (arDeps ctx))) (shaped req) acceptPrivateArtifact relayUnjudged privateResponder >>= \case
                     UpstreamRelayed (_, (decision, received)) -> pure (PrivateAnswered decision received)
-                    UpstreamRejected status -> if managed then PrivateAnswered Metric.Unavailable <$> unavailable else pure (PrivateMissed (if status == status404 then MissAbsent else MissUnresolved))
-                    UpstreamTransportFailure -> if managed then PrivateAnswered Metric.Unavailable <$> unavailable else pure (PrivateMissed MissUnresolved)
-                    UpstreamCooling _ -> if managed then PrivateAnswered Metric.Unavailable <$> unavailable else pure (PrivateMissed MissUnresolved)
+                    UpstreamRejected status retry
+                        | status == status404 -> if managed then PrivateAnswered Metric.Unavailable <$> unavailable Nothing else pure (PrivateMissed MissAbsent)
+                        | otherwise -> failed managed (statusReadFailure (statusCode status) retry)
+                    UpstreamTransportFailure -> failed managed (ReadUnavailable Nothing)
+                    UpstreamCooling retry -> failed managed (ReadUnavailable (Just retry))
     replies = arReplies ctx
     respond = arRespond ctx
 
+    -- A managed copy keeps the mirror view's refusal while the registry is unavailable.
+    failed managed = \case
+        ReadUnavailable retry | managed -> PrivateAnswered Metric.Unavailable <$> unavailable retry
+        failure -> pure (PrivateMissed (MissUnresolved failure))
+
     covered expected = maybe False $ \details -> publicMirrorCoverage (Map.singleton (renderVersion (arVersion ctx)) expected) (PackageInfo (arPackage ctx) (Map.singleton (renderVersion (arVersion ctx)) details) Map.empty [])
     shaped request = withValidators (arValidators ctx) (withMethod (arMode ctx) request)
-    unavailable = respond (tarballError replies status503 [] (mkRefusal (pdHelp (arDeps ctx)) "managed mirror view is unavailable"))
+    unavailable retry = respond (tarballError replies status503 (retryAfterHeaders retry) (mkRefusal (pdHelp (arDeps ctx)) "managed mirror view is unavailable"))
     refuse code = respond (tarballPrivateRefused replies code [] (privateAuthorisationRefusal (pdHelp (arDeps ctx))))
     privateResponder =
         privateArtifactResponder (\status -> (Metric.Deny,) <$> refuse (statusCode status)) (Metric.Admit,) $
@@ -129,7 +132,7 @@ streamPrivateArtifact ctx token = do
 privateMetadataAdmissionRequired :: ArtifactRequest response -> Bool
 privateMetadataAdmissionRequired ctx =
     artifactPrivateAddressing (pdArtifact deps) == AdmittedIndexedArtifactLocation
-        || (isJust (pdMirrorState deps) && pdReadSourceSelection deps /= PrivateOnly && not (pdFirstParty deps (arPackage ctx)))
+        || (isJust (pdMirrorState deps) && not (pdFirstParty deps (arPackage ctx)))
   where
     deps = arDeps ctx
 
@@ -149,9 +152,7 @@ privateArtifactRequest ticket ctx token
         Just privateBase
             | not (tarballHostHonoured TrustedOrigin deps privateHostPort privateHostPort) -> pure (PrivateMissing MissAbsent)
             | otherwise -> case artifactPrivateAddressing (pdArtifact deps) of
-                ConventionalArtifactPath
-                    | pdReadSourceSelection deps == ManagedMirrorAndPublic -> pure (PrivateMissing MissAbsent)
-                    | otherwise -> pure (byConventionalPath privateBase)
+                ConventionalArtifactPath -> pure (byConventionalPath privateBase)
                 IndexedArtifactLocation -> indexed privateBase
                 AdmittedIndexedArtifactLocation -> indexed privateBase
   where
@@ -169,31 +170,25 @@ byIndexedLocation ticket ctx token privateBase privateHostPort = do
     resolved <- tryAny (withPrivateMetadataClient (arRuntime ctx) deps ticket privateBase token (\client -> fetchVersionMetadata client (arPackage ctx) (arVersion ctx)))
     case resolved of
         Right (Left (MetadataAuthorisationFailure code)) -> pure (PrivateRefused code)
+        _ | Just failure <- privateReadFailure resolved -> pure (PrivateMissing (MissUnresolved failure))
         _ -> case (pdMirrorState deps, ticket) of
             (Just mirror, Just admitted)
-                | pdReadSourceSelection deps /= PrivateOnly && not (pdFirstParty deps (arPackage ctx)) ->
+                | not (pdFirstParty deps (arPackage ctx)) ->
                     liftIO (validateMirrorProject mirror admitted (arPackage ctx)) >>= \case
                         Left _ -> pure PrivateUnavailable
-                        Right Nothing -> pure (unmanaged resolved)
+                        Right Nothing -> pure (ordinary resolved)
                         Right (Just (_, record)) -> case recordVersion (arVersion ctx) record of
-                            Nothing -> pure (unmanaged resolved)
-                            Just expected -> case mirrorVersionView (arVersion ctx) record (either (const Nothing) (either (const Nothing) vrVersion) resolved) of
+                            Nothing -> pure (ordinary resolved)
+                            Just expected -> case mirrorVersionView (mirrorViewDocuments mirror) (arVersion ctx) record (either (const Nothing) (either (const Nothing) vrVersion) resolved) of
                                 Left _ -> pure (PrivateIncomplete expected)
                                 Right _ | Map.notMember (unFilename (arFile ctx)) (versionFiles expected) -> pure (PrivateMissing MissAbsent)
                                 Right restored -> pure (maybe PrivateUnavailable (PrivateRequest True) (restored >>= requestForDetails . vdDetails))
-            _ -> pure (unmanaged resolved)
+            _ -> pure (ordinary resolved)
   where
     deps = arDeps ctx
 
-    unmanaged resolved
-        | pdReadSourceSelection deps == ManagedMirrorAndPublic = case resolved of
-            Right (Left err) -> privateMetadataFailure err
-            Left _ -> PrivateMissing MissUnresolved
-            _ -> PrivateMissing MissAbsent
-        | otherwise = ordinary resolved
-
     ordinary = \case
-        Left _ -> PrivateMissing MissUnresolved
+        Left _ -> PrivateMissing (MissUnresolved (ReadUnavailable Nothing))
         Right (Left err) -> privateMetadataFailure err
         Right (Right versionRead) -> maybe (PrivateMissing MissAbsent) (PrivateRequest False) (vrVersion versionRead >>= requestForDetails . vdDetails)
 
@@ -207,15 +202,17 @@ byIndexedLocation ticket ctx token privateBase privateHostPort = do
 privateMetadataFailure :: MetadataError -> PrivateArtifact
 privateMetadataFailure = \case
     MetadataAuthorisationFailure code -> PrivateRefused code
-    err -> PrivateMissing (fromMaybe MissUnresolved (privateMetadataMiss err))
+    err -> PrivateMissing (maybe MissAbsent MissUnresolved (metadataReadFailure err))
 
--- | Classify metadata misses, with 'Nothing' for access refusal and absence for identity faults.
+-- | Classify a private metadata failure: 'Nothing' for an access refusal, else absence or a failure by cause.
 privateMetadataMiss :: MetadataError -> Maybe OriginMiss
 privateMetadataMiss = \case
     MetadataAuthorisationFailure{} -> Nothing
-    MetadataAbsent -> Just MissAbsent
-    MetadataNameMismatch{} -> Just MissAbsent
-    MetadataHttpFailure{} -> Just MissUnresolved
-    MetadataBoundExceeded{} -> Just MissUnresolved
-    MetadataFetch{} -> Just MissUnresolved
-    MetadataUndecodable -> Just MissUnresolved
+    err -> Just (maybe MissAbsent MissUnresolved (metadataReadFailure err))
+
+-- | Why a private version read failed, or 'Nothing' when it resolved, settled absence or refused access.
+privateReadFailure :: Either SomeException (Either MetadataError VersionRead) -> Maybe ReadFailure
+privateReadFailure = \case
+    Left _ -> Just (ReadUnavailable Nothing)
+    Right (Left err) -> metadataReadFailure err
+    Right (Right _) -> Nothing

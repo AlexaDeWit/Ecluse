@@ -12,13 +12,12 @@ module Ecluse.Composition.Worker (
 
 import Data.Map.Strict qualified as Map
 
-import Ecluse.Composition (PublishTarget (ptBackendTag, ptCredentials, ptEcosystem, ptMirrorUrl, ptUploadUrl, ptUsername))
+import Ecluse.Composition (PublishTarget (ptCredentials, ptEcosystem, ptMirrorUrl, ptPresentation, ptUploadUrl, ptUsername))
 import Ecluse.Composition.MirrorState (MirrorStateBinding (msbStore, msbTarget))
-import Ecluse.Config (StoreTag (TagCodeArtifact))
 import Ecluse.Core.Credential (ClientCredential (ClientCredential), mintSecret)
-import Ecluse.Core.Ecosystem (Ecosystem (RubyGems), parseEcosystem)
+import Ecluse.Core.Ecosystem (Ecosystem, parseEcosystem)
 import Ecluse.Core.Registry.Adapter (adapterFor, adapterPublish)
-import Ecluse.Core.Registry.Adapter.Capability (AdapterMetadata (metadataChargeFactors, metadataRead), AdapterPublish (publishCodec, publishMirrorRequirements), MirrorRequirements (mirrorWorkerRead), WorkerMetadataRead (..))
+import Ecluse.Core.Registry.Adapter.Capability (AdapterMetadata (metadataChargeFactors, metadataRead), AdapterPublish (publishCodec, publishMirrorRequirements), MirrorRequirements (mirrorStateFormat, mirrorWorkerRead), WorkerMetadataRead (..))
 import Ecluse.Core.Registry.Metadata (fetchVersionDetails)
 import Ecluse.Core.Registry.Metadata.Fetch (chargingSelectedReads)
 import Ecluse.Core.Registry.Metadata.Fetch.Preparation (PrepareRead (..), prepareRead)
@@ -28,8 +27,6 @@ import Ecluse.Core.Registry.Publish (
     MirrorTransport (MirrorTransport, ptClient, ptLimits, ptMintCredential, ptTracing),
     newMirrorPublish,
  )
-import Ecluse.Core.Registry.RubyGems.Credential (rubyCodeArtifactPublishCredential)
-import Ecluse.Core.Registry.RubyGems.Publish (rubyPublishCodecWith)
 import Ecluse.Core.Security (Limits (maxMirrorArtifactBytes), Origin (UntrustedOrigin), thgPublicHostPort)
 import Ecluse.Core.Security.Egress (registryUrlText)
 import Ecluse.Core.Server.Admission.Meter (charge, newChargeRegion, withMemoryEntry)
@@ -39,7 +36,6 @@ import Ecluse.Core.Server.Context (
     pdArtifact,
     pdEgressUrl,
     pdFirstParty,
-    pdInstallEvidence,
     pdLimits,
     pdMetadata,
     pdMinIntegrity,
@@ -50,7 +46,6 @@ import Ecluse.Core.Server.Context (
     pdTarballHostGate,
     tarballHostHonoured,
  )
-import Ecluse.Core.Server.InstallEvidence (newTicketInstallEvidenceFlightBudget)
 import Ecluse.Core.Server.MemoryModel (decodedDocumentCharge)
 import Ecluse.Core.Server.Metadata (ecosystemMetadataReads, publicMetadataClient, uncachedPublicMetadataClient)
 import Ecluse.Core.Telemetry.Upstream (PublicReadKind (WorkerMetadata))
@@ -90,8 +85,7 @@ workerPoliciesWithState env states bindings targets artifactMaxBytes =
                         archiveCharge <- newChargeRegion (charge ticket)
                         sourceCharge <- newChargeRegion (charge ticket)
                         targetCharge <- newChargeRegion (charge ticket)
-                        evidenceFlight <- traverse (const (newTicketInstallEvidenceFlightBudget ticket)) (pdInstallEvidence deps)
-                        action WorkerStateBudget{wsbState = stateCharge, wsbRecords = recordCharge, wsbCompanions = companionCharge, wsbArtifacts = artifactCharge, wsbArchive = archiveCharge, wsbSource = sourceCharge, wsbTargets = targetCharge, wsbEvidenceFlight = evidenceFlight}
+                        action WorkerStateBudget{wsbState = stateCharge, wsbRecords = recordCharge, wsbCompanions = companionCharge, wsbArtifacts = artifactCharge, wsbArchive = archiveCharge, wsbSource = sourceCharge, wsbTargets = targetCharge}
                 }
     targetsByEcosystem = Map.fromList [(ptEcosystem target, target) | target <- targets]
 
@@ -103,10 +97,7 @@ mirrorPublishFor env deps targets artifactMaxBytes eco = do
     publish <- adapterPublish adapter
     let transport = mirrorTransportFor env deps target
         bounded = transport{ptLimits = (ptLimits transport){maxMirrorArtifactBytes = artifactMaxBytes}}
-        codec = case (eco, ptBackendTag target) of
-            (RubyGems, TagCodeArtifact) -> rubyPublishCodecWith rubyCodeArtifactPublishCredential (metadataChargeFactors (pdMetadata deps))
-            _ -> publishCodec publish
-    pure (newMirrorPublish bounded (ptMirrorUrl target) (ptUploadUrl target) codec, publishMirrorRequirements publish)
+    pure (newMirrorPublish bounded (ptMirrorUrl target) (ptUploadUrl target) (publishCodec publish (ptPresentation target)), publishMirrorRequirements publish)
 
 -- | Use the mount's metadata limits for mirror presence probes and publication.
 mirrorTransportFor :: Env -> PackumentDeps -> PublishTarget -> MirrorTransport
@@ -124,7 +115,6 @@ workerPolicyFor env requirements deps publish artifactMaxBytes =
     WorkerPolicy
         { wpFirstParty = pdFirstParty deps
         , wpResolveVersion = \pay name version -> client pay >>= \metadata -> fetchVersionDetails metadata name version
-        , wpInstallEvidence = pdInstallEvidence deps
         , wpRules = pdRules deps
         , wpMinIntegrity = pdMinIntegrity deps
         , wpArtifactHostHonoured =
@@ -132,6 +122,7 @@ workerPolicyFor env requirements deps publish artifactMaxBytes =
         , wpArtifact = pdArtifact deps
         , wpEgressUrl = pdEgressUrl deps
         , wpPublish = publish
+        , wpMirrorFormat = mirrorStateFormat requirements
         , wpArtifactLimits = (pdLimits deps){maxMirrorArtifactBytes = artifactMaxBytes}
         , wpMirrorState = Nothing
         , wpNow = pdNow deps

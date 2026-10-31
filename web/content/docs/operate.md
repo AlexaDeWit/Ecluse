@@ -31,11 +31,17 @@ Logs use JSON by default. OpenTelemetry export is opt-in. Use `/livez` and `/rea
 5. Roll out compatible readers and workers in the order required by the release.
 6. Repeat the [deployment checks](@/docs/verify.md).
 
-## Two compatibility changes to check {#compatibility}
+## Compatibility changes to check {#compatibility}
 
 Advisory schema 5 uses ecosystem-specific keys such as `npm-osv-schema5.db`. Consumers do not migrate or alias schema 4 files.
 
 Queue schema 2 removes source URLs from jobs. Deploy compatible workers first and stop old workers before new producers enqueue schema 2 jobs.
+
+A PyPI `publicationTarget` now reads from `url` and writes to `uploadUrl`. The [endpoint checks](@/docs/configuration.md#endpoint-collisions) now compare that `url`, so `ecluse dredger` refuses a publication target that names the same registry as its mount's `privateUpstream`.
+
+An npm or RubyGems `mirrorTarget` or `publicationTarget` that sets `uploadUrl` now refuses at load, because those protocols derive the upload address from `url`. Remove the key, and check that `url` names the registry you write to.
+
+The npm mount ships a second admission-only default, `deny-external-dependencies`. A public npm version whose `dependencies`, `optionalDependencies` or `peerDependencies` name a git source, a remote tarball URL or an unsupported scheme such as `jsr:` stops resolving, and npm publication refuses such a release with `400`. Copies your stores already hold keep serving. Pin a package you still need with an `AllowByIdentity` rule at precedence above 300, or disable the default under `mounts.npm.rules` ([Rule policy](@/docs/configuration.md#rule-policy)).
 
 A rollback must account for queued messages and advisory data, as well as the container image.
 

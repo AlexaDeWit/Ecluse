@@ -6,6 +6,7 @@
 module Ecluse.Core.Registry.Npm.Adapter (
     npmAdapter,
     npmPublish,
+    npmFirstPartyNames,
 ) where
 
 import Data.Map.Strict qualified as Map
@@ -13,6 +14,7 @@ import Data.Map.Strict qualified as Map
 import Ecluse.Core.Rules.Types (RuleType (DenyIfYankedType))
 
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
+import Ecluse.Core.Package (Scope)
 import Ecluse.Core.Registry.Adapter.Capability (
     AdapterArtifact (..),
     AdapterMetadata (..),
@@ -27,17 +29,20 @@ import Ecluse.Core.Registry.Adapter.Capability (
     WorkerMetadataRead (..),
  )
 import Ecluse.Core.Registry.Adapter.Types (AdapterServe (..), RegistryAdapter (..))
+import Ecluse.Core.Registry.FirstParty (FirstPartyDeclaration (FirstPartyDeclaration), FirstPartyNames (..))
 import Ecluse.Core.Registry.Metadata.Fetch.Preparation (staticRead)
 import Ecluse.Core.Registry.Npm (relayPublishDocument)
 import Ecluse.Core.Registry.Npm.Credential (npmCredential)
 import Ecluse.Core.Registry.Npm.Filter (assembleMergedDocument, serialiseMergedDocument)
 import Ecluse.Core.Registry.Npm.Maintenance (npmMaintenance)
 import Ecluse.Core.Registry.Npm.Metadata (npmChargeFactors, npmRead)
-import Ecluse.Core.Registry.Npm.Project (projectName)
-import Ecluse.Core.Registry.Npm.Publish (npmPublishCodec, uploadClaims)
+import Ecluse.Core.Registry.Npm.Mirror (npmStateFormat)
+import Ecluse.Core.Registry.Npm.Project (projectName, projectScope)
+import Ecluse.Core.Registry.Npm.Publish (npmPublishAllowed, npmPublishCodec, uploadClaims)
 import Ecluse.Core.Registry.Npm.Request qualified as NpmRequest
 import Ecluse.Core.Registry.Npm.Route qualified as NpmRoute
 import Ecluse.Core.Registry.Origin (OriginClient (ocBaseRequest, ocToken))
+import Ecluse.Core.Registry.Request (StoreOperation (StoreWrite), presentedMapping)
 
 -- | npm's capability record.
 npmAdapter :: RegistryAdapter
@@ -47,7 +52,7 @@ npmAdapter =
         , adapterRuleBlocks = Map.singleton DenyIfYankedType "npm reports no yank flag. Removed releases disappear from its metadata."
         , adapterServe =
             AdapterServe
-                { serveRouter = const NpmRoute.npmRouter
+                { serveRouter = NpmRoute.npmRouter
                 , serveRoutes = NpmRoute.npmRouteSpecs
                 , serveCredential = npmCredential
                 }
@@ -66,9 +71,9 @@ npmAdapter =
                 , artifactPrivateAddressing = ConventionalArtifactPath
                 }
         , adapterProjectName = rightToMaybe . projectName
+        , adapterFirstParty = FirstPartyDeclaration npmFirstPartyNames
         , adapterPublish = Just npmPublish
         , adapterMaintenance = npmMaintenance
-        , adapterInstallEvidence = Nothing
         }
 
 -- | npm's publish capability, named so a consumer of it alone need not unwrap the optional field.
@@ -77,9 +82,20 @@ npmPublish =
     AdapterPublish
         { publishCredential = npmCredential
         , publishRequestExtras = const (Right NoPublishExtras)
-        , publishRelay = \origin name -> relayPublishDocument origin name . publishBodyBytes
+        , publishRelay = \presentation origin name -> relayPublishDocument (presentedMapping presentation StoreWrite npmCredential) origin name . publishBodyBytes
         , publishUploadClaims = \_ _ _ -> pure . uploadClaims . publishBodyBytes
         , publishCodec = npmPublishCodec
-        , publishMirrorRequirements = MirrorRequirements CachedWorkerRead NativeVersionState ReadRootUpload
+        , publishMirrorRequirements = MirrorRequirements CachedWorkerRead npmStateFormat NativeVersionState
+        , publishUploadEndpoint = ReadRootUpload
         , publishIdentity = TokenIdentity
+        }
+
+-- | npm owns exact configured scopes, never an unscoped name.
+npmFirstPartyNames :: FirstPartyNames Scope
+npmFirstPartyNames =
+    FirstPartyNames
+        { namesEntry = projectScope
+        , namesOwn = npmPublishAllowed . toList
+        , namesEntryNoun = "scope"
+        , namesListNoun = "scope"
         }

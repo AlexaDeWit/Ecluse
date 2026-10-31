@@ -13,6 +13,7 @@ module Ecluse.Core.Version (
     versionKeyIn,
     mkVersion,
     renderVersion,
+    releaseIdentity,
     compareVersions,
 
     -- * Canonical ordering keys
@@ -35,7 +36,7 @@ import Data.List.NonEmpty qualified as NE
 import Data.Text qualified as T
 
 import Ecluse.Core.Ecosystem (Ecosystem (..))
-import Ecluse.Core.Version.Cargo (CargoKey, isCargoStable, parseCargo, renderCargo)
+import Ecluse.Core.Version.Cargo (CargoKey, cargoUniquenessKey, isCargoStable, parseCargo, renderCargo)
 import Ecluse.Core.Version.Gem (GemKey, isGemStable, parseGem, renderGem)
 import Ecluse.Core.Version.Pep440 (Pep440Key, isPep440Stable, parsePep440, renderPep440)
 import Ecluse.Core.Version.Semver (SemverKey, isSemverStable, parseSemver, renderSemver)
@@ -57,6 +58,12 @@ mkVersion eco raw = Version raw $ case parseVersionKey eco raw of
 -- | Render a version in wire form: the raw text, verbatim as published.
 renderVersion :: Version -> Text
 renderVersion = versionRaw
+
+-- | The spelling a registry treats as one release. Cargo ignores build metadata, and other ecosystems keep the raw text.
+releaseIdentity :: Version -> Text
+releaseIdentity version = case versionKey version of
+    Just (CargoKey key) -> cargoUniquenessKey key
+    _ -> renderVersion version
 
 -- | The canonical ordering key, or 'Nothing' when the text did not parse for its ecosystem, so ordering rules abstain.
 versionKey :: Version -> Maybe VersionKey

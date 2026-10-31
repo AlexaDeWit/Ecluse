@@ -32,7 +32,6 @@ extra-source-files:
   bench/corpus/rubygems/README.md
   bench/corpus/pins.json
   bench/load/floors.json
-  bench/load/rubygems-calibration.json
   core/test/unit/fixtures/npm/*.json
   core/test/unit/fixtures/json-stream/*.json
   core/test/unit/fixtures/json-stream/README.md
@@ -174,15 +173,18 @@ library ecluse-core
   import:          shared
   hs-source-dirs:  core/src
   exposed-modules:
+    Ecluse.Core.Mirror.Documents
     Ecluse.Core.Mirror.State
     Ecluse.Core.Mirror.State.Internal
     Ecluse.Core.Mirror.State.Codec
+    Ecluse.Core.Mirror.State.Format
     Ecluse.Core.Mirror.State.Weight
     Ecluse.Core.Registry.PyPI.Archive
     Ecluse.Core.Registry.Archive.Path
     Ecluse.Core.Registry.Archive.Inflate
     Ecluse.Core.Registry.Archive.Tar
     Ecluse.Core.Registry.Cargo.Archive
+    Ecluse.Core.Registry.Cargo.Archive.Internal
     Ecluse.Core.Registry.Cargo.Manifest
     Ecluse.Core.Registry.Cargo.Source
     Ecluse.Core.Registry.Cargo.Target
@@ -274,11 +276,13 @@ library ecluse-core
     Ecluse.Core.Registry.Npm
     Ecluse.Core.Registry.Npm.Adapter
     Ecluse.Core.Registry.Npm.Credential
+    Ecluse.Core.Registry.Npm.DependencySource
     Ecluse.Core.Registry.Npm.Document
     Ecluse.Core.Registry.Npm.Filter
     Ecluse.Core.Registry.Npm.Maintenance
     Ecluse.Core.Registry.Npm.Maintenance.Listing
     Ecluse.Core.Registry.Npm.Metadata
+    Ecluse.Core.Registry.Npm.Mirror
     Ecluse.Core.Registry.Npm.Project
     Ecluse.Core.Registry.Npm.Reader
     Ecluse.Core.Registry.Npm.VersionListReader
@@ -317,6 +321,7 @@ library ecluse-core
     Ecluse.Core.Registry.PyPI.Filter
     Ecluse.Core.Registry.PyPI.FirstParty
     Ecluse.Core.Registry.PyPI.Metadata
+    Ecluse.Core.Registry.PyPI.Mirror
     Ecluse.Core.Registry.PyPI.PendingSidecar
     Ecluse.Core.Registry.PyPI.Project
     Ecluse.Core.Registry.Cargo.Project
@@ -333,6 +338,7 @@ library ecluse-core
     Ecluse.Core.Registry.RubyGems.Project
     Ecluse.Core.Registry.RubyGems.Document
     Ecluse.Core.Registry.RubyGems.Directory
+    Ecluse.Core.Registry.RubyGems.Directory.Internal
     Ecluse.Core.Registry.RubyGems.Credential
     Ecluse.Core.Registry.RubyGems.Adapter
     Ecluse.Core.Registry.RubyGems.Handlers.Budget
@@ -356,9 +362,8 @@ library ecluse-core
     Ecluse.Core.Registry.RubyGems.Request
     Ecluse.Core.Registry.RubyGems.Wire
     Ecluse.Core.Registry.Cargo.Metadata
+    Ecluse.Core.Registry.Cargo.Mirror
     Ecluse.Core.Registry.Cargo.Serving
-    Ecluse.Core.Registry.Cargo.Execution
-    Ecluse.Core.Registry.InstallEvidence
     Ecluse.Core.Registry.Cargo.Adapter
     Ecluse.Core.Registry.Cargo.Route
     Ecluse.Core.Registry.Cargo.Route.Internal
@@ -373,7 +378,6 @@ library ecluse-core
     Ecluse.Core.Registry.ServedDocument
     Ecluse.Core.Registry.WireSupport
     Ecluse.Core.Rules
-    Ecluse.Core.Rules.Install
     Ecluse.Core.Rules.Effectful
     Ecluse.Core.Rules.Freshness
     Ecluse.Core.Rules.Outage
@@ -410,7 +414,6 @@ library ecluse-core
     Ecluse.Core.Server.Admission.Weighted
     Ecluse.Core.Server.Conditional
     Ecluse.Core.Server.Context
-    Ecluse.Core.Server.InstallEvidence
     Ecluse.Core.Server.Contract
     Ecluse.Core.Server.Encoding
     Ecluse.Core.Server.Fault
@@ -698,6 +701,7 @@ library ecluse-runtime
     Ecluse.Runtime.Aws.S3.Conditional
     Ecluse.Runtime.Credential.CodeArtifact
     Ecluse.Runtime.Credential.CodeArtifact.Internal
+    Ecluse.Runtime.Credential.CodeArtifact.Presentation
     Ecluse.Runtime.Cve.Sync
     Ecluse.Runtime.Cve.Sync.Internal
     Ecluse.Runtime.Cve.Sync.S3
@@ -1170,8 +1174,7 @@ test-suite ecluse-core-unit
   type:               exitcode-stdio-1.0
   main-is:            Spec.hs
   -- Extra roots supply declarations for coverage audits, not discovered executable examples.
-  -- The bench root supplies the streaming bench's sink model, which a spec here checks.
-  hs-source-dirs:     core/test/unit test/smoke test/residency bench
+  hs-source-dirs:     core/test/unit test/smoke test/residency
   other-modules:
     SpecHook
     Ecluse.Core.Registry.CargoSmokeSpec
@@ -1184,7 +1187,6 @@ test-suite ecluse-core-unit
     Ecluse.Core.Registry.RubyGems.ReaderResidencySpec
     Ecluse.Core.Registry.Json.WalkProbe
     Ecluse.Core.Server.MemoryModel.HeapSample
-    Ecluse.Core.StreamBench.Sink
     Ecluse.Test.Contract.Artifact.IdentitySpec
     Ecluse.Test.Contract.Artifact.AttemptSpec
     Ecluse.Test.Contract.BindingSpec
@@ -1283,7 +1285,6 @@ test-suite ecluse-core-unit
     Ecluse.Core.Registry.BackoffSpec
     Ecluse.Core.Registry.Exchange.ObserveSpec
     Ecluse.Core.Registry.ExchangeSpec
-    Ecluse.Core.Registry.InstallEvidenceSpec
     Ecluse.Core.Registry.Json.InternSpec
     Ecluse.Core.Registry.Json.PackedSpec
     Ecluse.Core.Registry.Json.ScratchSpec
@@ -1312,9 +1313,11 @@ test-suite ecluse-core-unit
     Ecluse.Core.Registry.SweepSpec
     Ecluse.Core.Registry.MetadataSpec
     Ecluse.Core.Registry.Metadata.FetchSpec
+    Ecluse.Core.Registry.Metadata.Fetch.PreparationSpec
     Ecluse.Core.Registry.Metadata.ProjectionSpec
     Ecluse.Core.RegistrySpec
     Ecluse.Core.Registry.Npm.CredentialSpec
+    Ecluse.Core.Registry.Npm.DependencySourceSpec
     Ecluse.Core.Registry.Npm.DocumentSpec
     Ecluse.Core.Registry.Npm.FilterSpec
     Ecluse.Core.Registry.Npm.MaintenanceSpec
@@ -1333,6 +1336,7 @@ test-suite ecluse-core-unit
     Ecluse.Core.Registry.Npm.WireSpec
     Ecluse.Core.Registry.NpmSpec
     Ecluse.Core.Registry.MirrorUpload.InternalSpec
+    Ecluse.Core.Registry.FirstPartySpec
     Ecluse.Core.Registry.PublishSpec
     Ecluse.Core.Registry.PyPI.AdapterSpec
     Ecluse.Core.Registry.PyPI.CredentialSpec
@@ -1384,7 +1388,6 @@ test-suite ecluse-core-unit
     Ecluse.Core.Registry.Cargo.MetadataSpec
     Ecluse.Core.Registry.Cargo.StreamingSpec
     Ecluse.Core.Registry.Cargo.ServingSpec
-    Ecluse.Core.Registry.Cargo.ExecutionSpec
     Ecluse.Core.Registry.Cargo.ArchiveSpec
     Ecluse.Core.Registry.Cargo.ManifestSpec
     Ecluse.Core.Registry.Cargo.SourceSpec
@@ -1410,7 +1413,6 @@ test-suite ecluse-core-unit
     Ecluse.Core.Rules.RenderSpec
     Ecluse.Core.Rules.TypesSpec
     Ecluse.Core.RulesSpec
-    Ecluse.Core.Rules.InstallSpec
     Ecluse.Core.Security.AuthoritySpec
     Ecluse.Core.Security.EgressSpec
     Ecluse.Core.Security.HostSpec
@@ -1440,7 +1442,6 @@ test-suite ecluse-core-unit
     Ecluse.Core.Server.MemoryModelSpec
     Ecluse.Core.Server.MetadataGzipSpec
     Ecluse.Core.Server.MetadataSpec
-    Ecluse.Core.Server.InstallEvidenceSpec
     Ecluse.Core.Server.MirrorViewSpec
     Ecluse.Core.Server.PathSpec
     Ecluse.Core.Server.Pipeline.DiagnosticsSpec
@@ -1462,7 +1463,6 @@ test-suite ecluse-core-unit
     Ecluse.Core.Server.RouteSpec
     Ecluse.Core.Server.StreamSpec
     Ecluse.Core.Server.UpstreamSpec
-    Ecluse.Core.StreamBench.SinkSpec
     Ecluse.Core.StreamSpec
     Ecluse.Core.StrictSpec
     Ecluse.Core.Supervision.InternalSpec
@@ -1497,7 +1497,6 @@ test-suite ecluse-core-unit
     Ecluse.Test.CollectorSpec
     Ecluse.Test.Container.ImageSpec
     Ecluse.Test.Corpus.SubsetSpec
-    Ecluse.Test.LogSpec
     Ecluse.Test.MaintenanceSpec
     Ecluse.Test.Registry.PyPI.WireSpec
     Ecluse.Test.Registry.Metadata.ProjectionSpec
@@ -1580,99 +1579,10 @@ test-suite ecluse-unit
   ghc-options:        -Wno-missing-export-lists -threaded -rtsopts
   type:               exitcode-stdio-1.0
   main-is:            Spec.hs
-  hs-source-dirs:     test/unit bench/load
+  hs-source-dirs:     test/unit
   other-modules:
     Ecluse.Test.ContainersSpec
     Ecluse.Test.ExpositionSpec
-    Ecluse.Report.MarkdownSpec
-    Ecluse.Report.BenchLabelsSpec
-    Ecluse.AcceptanceSpec
-    Ecluse.Acceptance.EvidenceSpec
-    Ecluse.BenchLoad.Advisories
-    Ecluse.BenchLoad.AdvisoryStore
-    Ecluse.BenchLoad.Contract.Driver
-    Ecluse.BenchLoad.Contract.DriverSpec
-    Ecluse.BenchLoad.Stress
-    Ecluse.BenchLoad.AdvisoriesSpec
-    Ecluse.BenchLoad.AdvisoryStoreSpec
-    Ecluse.BenchLoad.ContractSpec
-    Ecluse.BenchLoad.BootLinesSpec
-    Ecluse.BenchLoad.CpuUseSpec
-    Ecluse.BenchLoad.EvidenceSpec
-    Ecluse.BenchLoad.ExpositionSpec
-    Ecluse.BenchLoad.FloorsSpec
-    Ecluse.BenchLoad.LatencySpec
-    Ecluse.BenchLoad.NpmArtifactSpec
-    Ecluse.BenchLoad.NpmSpec
-    Ecluse.BenchLoad.Fixture
-    Ecluse.BenchLoad.Listing
-    Ecluse.BenchLoad.ListingSpec
-    Ecluse.BenchLoad.FixtureSpec
-    Ecluse.BenchLoad.Npm
-    Ecluse.BenchLoad.Worker
-    Ecluse.BenchLoad.PyPI.Worker
-    Ecluse.BenchLoad.Cargo
-    Ecluse.BenchLoad.CargoSpec
-    Ecluse.BenchLoad.RubyGems
-    Ecluse.BenchLoad.RubyGems.Directory
-    Ecluse.BenchLoad.RubyGems.Worker
-    Ecluse.BenchLoad.RubyGems.WorkerFixture
-    Ecluse.BenchLoad.RubyGems.WorkerFixtureSpec
-    Ecluse.BenchLoad.RubyGemsSpec
-    Ecluse.BenchLoad.RubyGems.DirectorySpec
-    Ecluse.BenchLoad.OhaSpec
-    Ecluse.BenchLoad.Cargo.CopyState
-    Ecluse.BenchLoad.Cargo.Worker
-    Ecluse.BenchLoad.Cargo.WorkerFixture
-    Ecluse.BenchLoad.Cargo.WorkerFixtureSpec
-    Ecluse.BenchLoad.ObjectStore
-    Ecluse.BenchLoad.WorkerState
-    Ecluse.BenchLoad.PyPI.WorkerFixture
-    Ecluse.BenchLoad.PyPI.WorkerFixtureSpec
-    Ecluse.BenchLoad.PatternScenario
-    Ecluse.BenchLoad.PrivateCopy
-    Ecluse.BenchLoad.PrivateCopySpec
-    Ecluse.BenchLoad.PyPI
-    Ecluse.BenchLoad.ManagedMirror
-    Ecluse.BenchLoad.PyPISpec
-    Ecluse.BenchLoad.NormaliseSpec
-    Ecluse.BenchLoad.PodSpec
-    Ecluse.BenchLoad.ProfileSpec
-    Ecluse.BenchLoad.Placement
-    Ecluse.BenchLoad.PlacementSpec
-    Ecluse.BenchLoad.ProxyProcess
-    Ecluse.BenchLoad.ProxyProcessSpec
-    Ecluse.BenchLoad.RtsProbe
-    Ecluse.BenchLoad.RtsProbeSpec
-    Ecluse.BenchLoad.RtsWindowSpec
-    Ecluse.BenchLoad.Scenarios
-    Ecluse.BenchLoad.ScenariosSpec
-    Ecluse.BenchLoad.SelectionSpec
-    Ecluse.BenchLoad.SlowReader
-    Ecluse.BenchLoad.SlowReaderSpec
-    Ecluse.BenchLoad.Support
-    Ecluse.BenchLoad.SweepSpec
-    Ecluse.BenchLoad.Error
-    Ecluse.BenchLoad.Harness
-    Ecluse.BenchLoad.HarnessSpec
-    Ecluse.BenchLoad.Oha
-    Ecluse.BenchLoad.Replay
-    Ecluse.BenchLoad.ReplaySpec
-    Ecluse.BenchLoad.Report
-    Ecluse.BenchLoad.ReportSpec
-    Ecluse.BenchLoad.PatternsSpec
-    Ecluse.BenchLoad.PatternReportSpec
-    Ecluse.BenchLoad.VerdictSpec
-    Ecluse.BenchReport.AgainstMain.AcceptanceSpec
-    Ecluse.BenchReport.AgainstMain.BenchSpec
-    Ecluse.BenchReport.AgainstMain.LoadSpec
-    Ecluse.BenchReport.AgainstMainSpec
-    Ecluse.BenchReport.MarkdownSpec
-    Ecluse.BenchReport.PerformanceReceiptSpec
-    Ecluse.BenchReport.PerformanceCommandSpec
-    Ecluse.BenchReport.PerformanceSpec
-    Ecluse.BenchReport.SweepSpec
-    Ecluse.BenchReportSpec
     EcluseSpec
     Ecluse.BootSpec
     Ecluse.CLISpec
@@ -1739,14 +1649,10 @@ test-suite ecluse-unit
   autogen-modules:    Paths_ecluse
   build-tool-depends: hspec-discover:hspec-discover ^>=2.11
   build-depends:
-    , ecluse:ecluse-report-format
     , zlib ^>=0.7
     , amazonka ^>=2.0
     , amazonka-s3 ^>=2.0
     , ecluse
-    , ecluse:ecluse-acceptance
-    , ecluse:ecluse-bench-load
-    , ecluse:ecluse-bench-report
     , optparse-applicative
     , ecluse:ecluse-core
     , ecluse:ecluse-runtime
@@ -1784,6 +1690,7 @@ test-suite ecluse-unit
     , mtl               ^>=2.3
     , network           ^>=3.2
     , retry             ^>=0.9
+    , streaming-commons ^>=0.2.3
     , text              ^>=2.1
     , time              ^>=1.12
     , universe-base     ^>=1.1
@@ -1826,6 +1733,7 @@ test-suite ecluse-runtime-unit
     Ecluse.Runtime.Mirror.State.S3.InternalSpec
     Ecluse.Runtime.Pilot.ExportSpec
     Ecluse.Runtime.Credential.CodeArtifactSpec
+    Ecluse.Runtime.Credential.CodeArtifact.PresentationSpec
     Ecluse.Runtime.Cve.SyncSpec
     Ecluse.Runtime.Cve.Sync.InternalSpec
     Ecluse.Runtime.Cve.Sync.S3Spec
@@ -2144,7 +2052,6 @@ library ecluse-e2e-test-support
     Ecluse.E2E.Cargo.DredgerE2ESpec
     Ecluse.E2E.Cargo.TelemetryE2ESpec
     Ecluse.E2E.Cargo.NativeE2ESpec
-    Ecluse.E2E.Cargo.ExecutionE2ESpec
     Ecluse.E2E.Drivers.Cargo
     Ecluse.E2E.Suites.Cargo
     Ecluse.E2E.Fixtures.PyPI.Dredger
@@ -2552,7 +2459,6 @@ executable bench-load
     Ecluse.BenchLoad.RubyGems.Directory
     Ecluse.BenchLoad.RubyGems.Worker
     Ecluse.BenchLoad.RubyGems.WorkerFixture
-    Ecluse.BenchLoad.Cargo.CopyState
     Ecluse.BenchLoad.Cargo.Worker
     Ecluse.BenchLoad.Cargo.WorkerFixture
     Ecluse.BenchLoad.ObjectStore
@@ -2648,7 +2554,6 @@ library ecluse-report-format
   build-depends: text ^>=2.1
 
 -- Native report rendering and typed receipt assembly stay outside the shipped library.
--- The unit suite tests their independent obligations and artifact checks.
 library ecluse-bench-report
   import:          shared
   hs-source-dirs:  bench/report/src
@@ -2658,6 +2563,7 @@ library ecluse-bench-report
     Ecluse.BenchReport.AgainstMain.Acceptance
     Ecluse.BenchReport.AgainstMain.Bench
     Ecluse.BenchReport.AgainstMain.Load
+    Ecluse.BenchReport.Calibration
     Ecluse.BenchReport.Markdown
     Ecluse.BenchReport.Performance
     Ecluse.BenchReport.PerformanceCommand
@@ -2690,10 +2596,9 @@ executable bench-report
 
 -- Live performance-acceptance harness: the PURE evaluation core. The
 -- version-controlled acceptance criteria, the per-package budget verdict, and the
--- run-summary rendering. An INTERNAL sublibrary, following the ecluse-manifest pattern,
--- so the gating unit suite can test the acceptance decision deterministically. The live
--- fetch and timing stay in the perf-acceptance executable. Links ecluse-core only, and
--- stays out of the shipped library closure.
+-- run-summary rendering. An INTERNAL sublibrary, following the ecluse-manifest pattern.
+-- The live fetch and timing stay in the perf-acceptance executable. Links ecluse-core
+-- only, and stays out of the shipped library closure.
 library ecluse-acceptance
   import:          shared
   hs-source-dirs:  acceptance/src

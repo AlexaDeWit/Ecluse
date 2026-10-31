@@ -7,12 +7,13 @@ module Ecluse.Core.Registry.Cargo.FirstParty (
     CargoFirstParty,
     projectFirstPartyEntry,
     cargoFirstPartyName,
+    cargoFirstPartyNames,
 ) where
 
 import Ecluse.Core.Package (PackageName)
 import Ecluse.Core.Registry (ParseError)
 import Ecluse.Core.Registry.Cargo.Project (cargoCollisionKey, projectName)
-import Ecluse.Core.Registry.FirstParty (FirstPartyEntry, FirstPartyGrammar (..), ownsFirstPartyName, parseFirstPartyEntry)
+import Ecluse.Core.Registry.FirstParty (FirstPartyEntry, FirstPartyGrammar (..), FirstPartyNames (..), ownsFirstPartyName, parseFirstPartyEntry)
 
 -- | The tag that keeps Cargo entries apart from other ecosystems'. It has no values.
 data CargoNames
@@ -37,3 +38,13 @@ projectFirstPartyEntry = parseFirstPartyEntry cargoFirstPartyGrammar
 -- | Match native ownership aliases, excluding foreign ecosystems and npm scopes.
 cargoFirstPartyName :: NonEmpty CargoFirstParty -> PackageName -> Bool
 cargoFirstPartyName = ownsFirstPartyName cargoFirstPartyGrammar
+
+-- | Names and prefixes the mount's @firstParty@ entries declare.
+cargoFirstPartyNames :: FirstPartyNames CargoFirstParty
+cargoFirstPartyNames =
+    FirstPartyNames
+        { namesEntry = projectFirstPartyEntry
+        , namesOwn = cargoFirstPartyName
+        , namesEntryNoun = "Cargo entry"
+        , namesListNoun = "crate or prefix"
+        }

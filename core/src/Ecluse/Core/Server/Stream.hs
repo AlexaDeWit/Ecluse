@@ -31,6 +31,7 @@ import UnliftIO.Exception (finally, mask, throwIO, try, tryAny)
 
 import Ecluse.Core.Fault (RetryAfter, TransportFault, renderTransportFault)
 import Ecluse.Core.Fault.Http (classifyTransport)
+import Ecluse.Core.Fault.RetryAfter (responseRetryAfter)
 import Ecluse.Core.Registry (FetchFault (FetchCooldown))
 import Ecluse.Core.Registry.Exchange.Types (ExchangeClient (ecDeadlines))
 import Ecluse.Core.Registry.Progress (meteredReader, watchedRaising)
@@ -59,8 +60,8 @@ data UpstreamBody
 data UpstreamResult a
     = -- | The responder finished, including any body streaming.
       UpstreamRelayed a
-    | -- | The upstream answered a status the caller did not accept.
-      UpstreamRejected Status
+    | -- | The upstream answered a status the caller did not accept, with any delay its @Retry-After@ asked for.
+      UpstreamRejected Status (Maybe RetryAfter)
     | -- | The upstream connection failed before a response was available.
       UpstreamTransportFailure
     | -- | Public admission refused the exchange before opening a connection.
@@ -102,7 +103,7 @@ withUpstreamResultUsing control client progress request body accept relay respon
         Right (Right received) -> pure received
   where
     answer upstream
-        | not (accept upstreamStatus) = pure (UpstreamRejected upstreamStatus)
+        | not (accept upstreamStatus) = UpstreamRejected upstreamStatus <$> responseRetryAfter (responseHeaders upstream)
         | otherwise = do
             (status, headers, verdict) <- relay upstreamStatus (responseHeaders upstream)
             received <-

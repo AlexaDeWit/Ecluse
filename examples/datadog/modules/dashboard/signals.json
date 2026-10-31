@@ -176,6 +176,9 @@
         "hit",
         "miss",
         "collapsed"
+      ],
+      "store": [
+        "directory"
       ]
     },
     "source": "runtime/src/Ecluse/Runtime/Telemetry/Instruments/Internal.hs"
@@ -214,7 +217,8 @@
       "store": [
         "full",
         "version",
-        "assembled"
+        "assembled",
+        "directory"
       ]
     },
     "source": "runtime/src/Ecluse/Runtime/Telemetry/Instruments/Internal.hs"
@@ -230,7 +234,11 @@
     "name": "ecluse.metadata_cache.resident_bytes",
     "instrument": "gauge",
     "unit": null,
-    "labels": {},
+    "labels": {
+      "store": [
+        "directory"
+      ]
+    },
     "source": "runtime/src/Ecluse/Runtime/Telemetry/Instruments/Internal.hs"
   },
   {

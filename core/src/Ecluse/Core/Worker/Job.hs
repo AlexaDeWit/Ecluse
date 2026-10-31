@@ -25,6 +25,7 @@ import UnliftIO (withRunInIO)
 import Ecluse.Core.Ecosystem (ecosystemName)
 import Ecluse.Core.Fault (tfCause)
 import Ecluse.Core.Mirror.State
+import Ecluse.Core.Mirror.State.Format (MirrorStateFormat (msfCompanions))
 import Ecluse.Core.Package (Artifact (artFilename, artHashes, artSize, artUrl), Hash, PackageDetails (pkgArtifacts, pkgVersion), PackageInfo (..), hashAlg, hashValue, pkgEcosystem, renderHashAlg, renderPackageName)
 import Ecluse.Core.Package.Admission (
     ArtifactAdmission (
@@ -36,7 +37,7 @@ import Ecluse.Core.Package.Admission (
         AdmissionUndecidable
     ),
     admissionTransience,
-    admitArtifactWithInstallRead,
+    admitArtifactWithDecision,
  )
 import Ecluse.Core.Package.Integrity (VersionIntegrity (..), classifyDigests, partitionByFloor)
 import Ecluse.Core.Queue (MirrorJob (jobPackage, jobTraceContext, jobTriggerFilename, jobVersion))
@@ -48,7 +49,6 @@ import Ecluse.Core.Registry (
  )
 import Ecluse.Core.Registry.Adapter.Capability (AdapterArtifact (artifactByUrl))
 import Ecluse.Core.Registry.Exchange.Types (ExchangeClient (ecDeadlines))
-import Ecluse.Core.Registry.InstallEvidence (anonymousInstallArtifactRead)
 import Ecluse.Core.Registry.Metadata (
     MetadataError (..),
     VersionDoc (vdDetails),
@@ -56,7 +56,6 @@ import Ecluse.Core.Registry.Metadata (
     versionTransience,
  )
 import Ecluse.Core.Registry.MirrorUpload
-import Ecluse.Core.Registry.Public (ReadControl (Controlled))
 import Ecluse.Core.Registry.Publish (
     MirrorCompanion (..),
     MirrorPublish (mpMirrorCompanion, mpNativeComplete, mpPrepareVersion, mpProbeInventory),
@@ -68,17 +67,14 @@ import Ecluse.Core.Registry.Publish (
     publishPrepared,
  )
 import Ecluse.Core.Registry.Request (sidecarUrl)
-import Ecluse.Core.Rules.Effectful (ReadFault (rfDetail))
-import Ecluse.Core.Rules.Install
 import Ecluse.Core.Rules.Outage (logSkippedCheckEvidence)
-import Ecluse.Core.Rules.Render (renderDecision, renderInability, renderReason)
+import Ecluse.Core.Rules.Render (renderDecision, renderReason)
 import Ecluse.Core.Rules.Types (Decision (Admitted, Blocked, BlockedByDefault, Undecidable), Transience (WillResolve, WontResolve), identityEvidence, mkEvalContext, skippedChecks)
 import Ecluse.Core.Security (Limits (maxMetadataBytes, maxMirrorArtifactBytes), authorityLabel, hostPortAddress)
 import Ecluse.Core.Security.Egress (RegistryUrl, registryUrlText)
 import Ecluse.Core.Server.Path (Filename, mkFilename, unFilename)
 import Ecluse.Core.Telemetry.Record (WorkerMetricsPort (..), timedSeconds)
 import Ecluse.Core.Telemetry.Span (JobSpanOutcome (JobSpanOutcome), WorkerTracingPort (..))
-import Ecluse.Core.Telemetry.Upstream (PublicReadKind (WorkerArtifact))
 import Ecluse.Core.Version (Version, renderVersion, selectLatest)
 import Ecluse.Core.Worker.Fetch (fetchArtifactBytesCharged)
 import Ecluse.Core.Worker.Managed
@@ -142,7 +138,7 @@ reevaluateThenMirror job = do
 
 withMirrorBudget :: WorkerPolicy -> (WorkerStateBudget -> WorkerM JobOutcome) -> WorkerM JobOutcome
 withMirrorBudget policy action = case wpMirrorState policy of
-    Nothing -> action (WorkerStateBudget ignore ignore ignore ignore ignore ignore ignore Nothing)
+    Nothing -> action (WorkerStateBudget ignore ignore ignore ignore ignore ignore ignore)
       where
         ignore = const (pure ())
     Just binding -> withRunInIO $ \run ->
@@ -162,7 +158,7 @@ firstPartyReason job =
         <> "; refusing to mirror public content under a first-party name"
 
 mirrorUnlessPresent :: WorkerStateBudget -> WorkerPolicy -> MirrorJob -> WorkerM JobOutcome
-mirrorUnlessPresent charge policy job = withWorkerInstallReads charge policy $ \evidenceReads -> do
+mirrorUnlessPresent charge policy job = do
     result <- runExceptT $ do
         target <- ExceptT (probeInventory charge policy job)
         if isNothing (wpMirrorState policy) && triggerPresent (\name -> any ((== name) . artFilename) (targetFiles job target)) && mpNativeComplete (wpPublish policy) (jobPackage job) (jobVersion job) target
@@ -174,7 +170,7 @@ mirrorUnlessPresent charge policy job = withWorkerInstallReads charge policy $ \
                         | triggerPresent (`Map.member` versionFiles version)
                         , checkMirrorCompletion version (targetFiles job target) == MirrorComplete ->
                             DebugS <$ verifyRecordedCompanions charge policy version
-                    _ -> InfoS <$ completePass evidenceReads charge policy job 3 target previous
+                    _ -> InfoS <$ completePass charge policy job 3 target previous
     case result of
         Left failure -> pure failure
         Right severity -> Succeeded <$ logFM severity (ls ("mirror version complete: " <> renderJob job))
@@ -182,10 +178,10 @@ mirrorUnlessPresent charge policy job = withWorkerInstallReads charge policy $ \
     triggerPresent contains = maybe True (contains . unFilename) (jobTriggerFilename job)
 
 -- A pass rereads native inventory before state, so concurrent additions cannot hide behind an old proof.
-completePass :: (PackageDetails -> IO (Maybe InstallEvidenceRead)) -> WorkerStateBudget -> WorkerPolicy -> MirrorJob -> Int -> PackageInfo -> Maybe ProjectMirrorRecord -> ExceptT JobOutcome WorkerM ()
-completePass evidenceReads charge policy job attempts target previous = do
-    admitted <- ExceptT (reevaluatePolicy evidenceReads charge policy job)
-    record <- stateAction (persistInventory charge (wpArtifactLimits policy) (wpMirrorState policy) (pmvInventory (raPrepared admitted)) previous)
+completePass :: WorkerStateBudget -> WorkerPolicy -> MirrorJob -> Int -> PackageInfo -> Maybe ProjectMirrorRecord -> ExceptT JobOutcome WorkerM ()
+completePass charge policy job attempts target previous = do
+    admitted <- ExceptT (reevaluatePolicy charge policy job)
+    record <- stateAction (persistInventory charge (wpMirrorFormat policy) (wpArtifactLimits policy) (wpMirrorState policy) (pmvInventory (raPrepared admitted)) previous)
     copied <- copyRecorded charge policy job target admitted record
     finalTarget <- ExceptT (probeInventory charge policy job)
     latest <- readRecord charge policy job (Just copied)
@@ -196,7 +192,7 @@ completePass evidenceReads charge policy job attempts target previous = do
         MirrorComplete -> verifyRecordedCompanions charge policy version
         MirrorIncomplete faults
             | any conflicting faults -> throwError (Dropped ("mirror target identity conflicts: " <> show faults))
-            | attempts > 1 && any (newlyRequired copiedNames) faults -> completePass evidenceReads charge policy job (attempts - 1) finalTarget (Just current)
+            | attempts > 1 && any (newlyRequired copiedNames) faults -> completePass charge policy job (attempts - 1) finalTarget (Just current)
             | otherwise -> throwError (Retried AfterPublish ("mirror remains incomplete: " <> show faults))
   where
     conflicting (ConflictingMirrorFile _) = True
@@ -248,7 +244,7 @@ probeInventory charge policy job = do
         Left (MetadataFetch fault) -> Left (outcomeOfFetchFault BeforePublish (probeFaultReason job) fault)
         Left (MetadataBoundExceeded limit) -> Left (outcomeOfFetchFault BeforePublish (probeFaultReason job) (FetchBoundExceeded limit))
         Left (MetadataAuthorisationFailure status) -> Left (Retried BeforePublish (probeStatusReason job status))
-        Left (MetadataHttpFailure status) -> Left (Retried BeforePublish (probeStatusReason job status))
+        Left (MetadataHttpFailure status _) -> Left (Retried BeforePublish (probeStatusReason job status))
         Left MetadataUndecodable -> Left (Retried BeforePublish (probeParseReason job "invalid mirror metadata"))
         Left (MetadataNameMismatch _) -> Left (Retried BeforePublish (probeParseReason job "mismatched package identity"))
 
@@ -280,35 +276,15 @@ data Readmitted = Readmitted
     { raPrepared :: PreparedMirrorVersion
     , raLocations :: NonEmpty (ExpectedMirrorFile, RegistryUrl)
     , raUpstreamLatest :: Maybe Version
-    , raInstallReads :: PackageDetails -> IO (Maybe InstallEvidenceRead)
     , raDecision :: Decision
     }
 
-withWorkerInstallReads :: WorkerStateBudget -> WorkerPolicy -> ((PackageDetails -> IO (Maybe InstallEvidenceRead)) -> WorkerM a) -> WorkerM a
-withWorkerInstallReads charge policy use = withRunInIO $ \run -> do
-    client <- run (asks wrClient)
-    control <- run (asks wrPublicControl)
-    evidenceReads <-
-        installEvidenceReads
-            (wpInstallEvidence policy)
-            ( pure
-                InstallEvidenceContext
-                    { ieLimits = wpArtifactLimits policy
-                    , ieRole = InstallWorkerReadmission
-                    , ieReadArtifact = anonymousInstallArtifactRead (wpArtifactLimits policy) client (Controlled control WorkerArtifact) (wpArtifact policy) (rightToMaybe . sourceLocation policy)
-                    , ieBudget = InstallEvidenceBudget (\action -> Just <$> action (wsbArtifacts charge) (wsbArchive charge))
-                    , ieFlightBudget = wsbEvidenceFlight charge
-                    , ieDiagnostic = run . logFM ErrorS . ls . renderInability . rfDetail
-                    }
-            )
-    run (use evidenceReads)
+reevaluatePolicy :: WorkerStateBudget -> WorkerPolicy -> MirrorJob -> WorkerM (Either JobOutcome Readmitted)
+reevaluatePolicy charge policy job =
+    liftIO (wpResolveVersion policy (wsbSource charge) (jobPackage job) (jobVersion job)) >>= admitEvaluation policy job
 
-reevaluatePolicy :: (PackageDetails -> IO (Maybe InstallEvidenceRead)) -> WorkerStateBudget -> WorkerPolicy -> MirrorJob -> WorkerM (Either JobOutcome Readmitted)
-reevaluatePolicy evidenceReads charge policy job =
-    liftIO (wpResolveVersion policy (wsbSource charge) (jobPackage job) (jobVersion job)) >>= admitEvaluation evidenceReads policy job
-
-admitEvaluation :: (PackageDetails -> IO (Maybe InstallEvidenceRead)) -> WorkerPolicy -> MirrorJob -> VersionEvaluation -> WorkerM (Either JobOutcome Readmitted)
-admitEvaluation evidenceReads policy job evaluation = case evaluation of
+admitEvaluation :: WorkerPolicy -> MirrorJob -> VersionEvaluation -> WorkerM (Either JobOutcome Readmitted)
+admitEvaluation policy job evaluation = case evaluation of
     VersionCooling _ -> pure (Left (unresolved "the public upstream is cooling down"))
     VersionMetadataUnavailable -> pure (Left (unresolved ("could not re-fetch metadata to re-evaluate current policy for " <> renderJob job)))
     VersionMissing -> pure (Left (unresolved ("the public upstream no longer offers " <> renderJob job)))
@@ -316,8 +292,7 @@ admitEvaluation evidenceReads policy job evaluation = case evaluation of
         Nothing -> pure (Left (Dropped "the source inventory has no supported trigger artifact"))
         Just trigger -> do
             ctx <- liftIO (mkEvalContext (wpNow policy) (pure Nothing))
-            installRead <- liftIO (evidenceReads (vdDetails doc))
-            (admission, decision) <- liftIO (admitArtifactWithInstallRead (installEvidenceMode (wpInstallEvidence policy)) installRead ctx (wpRules policy) (wpMinIntegrity policy) trigger (vdDetails doc))
+            (admission, decision) <- liftIO (admitArtifactWithDecision ctx (wpRules policy) (wpMinIntegrity policy) trigger (vdDetails doc))
             case outcomeOfAdmission job admission of
                 Left outcome -> pure (Left outcome)
                 Right _ -> do
@@ -330,7 +305,7 @@ admitEvaluation evidenceReads policy job evaluation = case evaluation of
                             Left fault -> Left <$> outcomeOfPublish job (Left fault)
                             Right prepared -> pure $ do
                                 locations <- traverse (admittedLocation policy job) (inventoryFiles (pmvInventory prepared))
-                                pure (Readmitted prepared locations upstreamLatest evidenceReads decision)
+                                pure (Readmitted prepared locations upstreamLatest decision)
   where
     unresolved = retryOrDrop (versionTransience evaluation)
 
@@ -464,7 +439,7 @@ copyFragment context current fragment = do
     if null files
         then pure current
         else do
-            admitted <- ExceptT (admitEvaluation (raInstallReads (cpLatest context)) (cpPolicy context) job{jobTriggerFilename = Nothing} (VersionPresent (fragmentDocument fragment) (raUpstreamLatest (cpLatest context))))
+            admitted <- ExceptT (admitEvaluation (cpPolicy context) job{jobTriggerFilename = Nothing} (VersionPresent (fragmentDocument fragment) (raUpstreamLatest (cpLatest context))))
             foldM (copyFile context admitted) current (toList (raLocations admitted))
   where
     job = cpJob context
@@ -523,9 +498,6 @@ retainPending charge policy job inventory file locations record = do
             Nothing -> throwError (Retried BeforePublish "declared companion requires durable mirror state")
             Just binding -> do
                 let native = mpMirrorCompanion (wpPublish policy)
-                case (inventoryReadData inventory, native) of
-                    (RubyGemsMirrorRead _, Nothing) -> throwError (Retried BeforePublish "native companion preparation is unavailable")
-                    _ -> pure ()
                 candidates <- for locations $ \location -> do
                     url <- case native of
                         Nothing -> pure (sidecarUrl (registryUrlText location))
@@ -537,7 +509,7 @@ retainPending charge policy job inventory file locations record = do
                 checked <- case native of
                     Nothing -> pure bytes
                     Just companion -> publishAction job (liftIO (mcValidate companion deadlines limits (wsbCompanions charge) inventory file bytes))
-                verified <- either (throwError . stateOutcome) pure (verifySourceCompanionBytes (wmsLimits binding) (inventoryReadData inventory) file checked)
+                verified <- either (throwError . stateOutcome) pure (verifySourceCompanionBytes (wmsLimits binding) (msfCompanions (wpMirrorFormat policy)) file checked)
                 stateAction (retainCompanion charge binding (jobVersion job) verified record)
         _ -> pure record
 

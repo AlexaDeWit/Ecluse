@@ -8,10 +8,11 @@ module Ecluse.E2E.Harness.Cargo (
     CargoToolchain (..),
     currentCargo,
     floorCargo,
-    CargoView (..),
+    CargoRole (..),
     CargoProject (..),
     withCargoProject,
     cargoUseFixture,
+    cargoRestrictPublication,
     cargoSelectDependency,
     cargoSelectRequirement,
     runCargo,
@@ -65,8 +66,8 @@ currentCargo = CargoToolchain "cargo" "rustc"
 floorCargo :: CargoToolchain
 floorCargo = CargoToolchain "cargo-1.74" "rustc"
 
--- | The public replacement and private alternate retain distinct native source identities.
-data CargoView = CargoReplacement | CargoAlternate
+-- | Every role replaces crates.io with Écluse. A publisher also names Écluse its default registry.
+data CargoRole = CargoConsumer | CargoPublisher
     deriving stock (Eq, Show)
 
 -- | Every project owns its HOME, cache, target directory and installation root.
@@ -79,8 +80,8 @@ data CargoProject = CargoProject
     }
 
 -- | A required missing tool fails setup. The sparse endpoint and token belong to this fixture only.
-withCargoProject :: CargoToolchain -> CargoView -> E2E -> Text -> Maybe Text -> (CargoProject -> IO a) -> IO a
-withCargoProject toolchain view proxy index token use = withClientDir "cargo" $ \directory -> do
+withCargoProject :: CargoToolchain -> CargoRole -> E2E -> Text -> Maybe Text -> (CargoProject -> IO a) -> IO a
+withCargoProject toolchain role proxy index token use = withClientDir "cargo" $ \directory -> do
     unless ("sparse+https://" `T.isPrefixOf` index) (fail "Cargo fixture requires an explicit sparse HTTPS endpoint")
     unless ("/" `T.isSuffixOf` index) (fail "Cargo fixture sparse endpoint lacks a trailing slash")
     compiler <- required (cargoCompiler toolchain)
@@ -89,9 +90,9 @@ withCargoProject toolchain view proxy index token use = withClientDir "cargo" $ 
         target = directory </> "target"
         installation = directory </> "installed"
     traverse_ (createDirectoryIfMissing True) [home, target, installation, directory </> "src"]
-    writeFileText (home </> "config.toml") (configuration view index)
+    writeFileText (home </> "config.toml") (configuration role index)
     forM_ token $ \value -> writeFileText (home </> "credentials.toml") ("[registries.ecluse-test]\ntoken = " <> tomlString value <> "\n")
-    writeFileText (directory </> "Cargo.toml") (consumerManifest view cargoRoot ("=" <> cargoVersion))
+    writeFileText (directory </> "Cargo.toml") (consumerManifest cargoRoot ("=" <> cargoVersion))
     writeFileText (directory </> "src/main.rs") "fn main() { println!(\"{}\", ecluse_e2e_root::value()); }\n"
     environment <- getEnvironment
     let overrides =
@@ -125,31 +126,28 @@ inheritedKeys =
     ]
         <> compilerEnvironmentKeys
 
-configuration :: CargoView -> Text -> Text
-configuration view index =
+-- The documented client setup: replace-with names the registries entry, with no separate source table.
+configuration :: CargoRole -> Text -> Text
+configuration role index =
     T.unlines $
         [ "[registry]"
         , "global-credential-providers = [\"cargo:token\"]"
-        , "[registries.ecluse-test]"
-        , "index = " <> tomlString index
-        , "credential-provider = \"cargo:token\""
-        , "[net]"
-        , "retry = 0"
-        , "[http]"
-        , "proxy = \"\""
-        , "ssl-verify = true"
         ]
-            <> case view of
-                CargoAlternate -> []
-                CargoReplacement ->
-                    [ "[source.crates-io]"
-                    , "replace-with = \"ecluse-test\""
-                    , "[source.ecluse-test]"
-                    , "registry = " <> tomlString index
-                    ]
+            <> ["default = \"ecluse-test\"" | role == CargoPublisher]
+            <> [ "[registries.ecluse-test]"
+               , "index = " <> tomlString index
+               , "credential-provider = \"cargo:token\""
+               , "[net]"
+               , "retry = 0"
+               , "[http]"
+               , "proxy = \"\""
+               , "ssl-verify = true"
+               , "[source.crates-io]"
+               , "replace-with = \"ecluse-test\""
+               ]
 
-consumerManifest :: CargoView -> Text -> Text -> Text
-consumerManifest view name requirement =
+consumerManifest :: Text -> Text -> Text
+consumerManifest name requirement =
     T.unlines
         [ "[package]"
         , "name = \"ecluse-e2e-consumer\""
@@ -157,12 +155,8 @@ consumerManifest view name requirement =
         , "edition = \"2021\""
         , "resolver = \"2\""
         , "[dependencies]"
-        , name <> " = { version = \"" <> requirement <> "\"" <> registry <> " }"
+        , name <> " = { version = \"" <> requirement <> "\" }"
         ]
-  where
-    registry = case view of
-        CargoReplacement -> ""
-        CargoAlternate -> ", registry = \"ecluse-test\""
 
 tomlString :: Text -> Text
 tomlString = decodeUtf8 . LBS.toStrict . Aeson.encode
@@ -180,14 +174,21 @@ cargoUseFixture project fixtureRoot spec = do
         createDirectoryIfMissing True (takeDirectory destination)
         readFileBS (fixtureRoot </> crateDirectory spec </> path) >>= writeFileBS destination
 
+-- | Allow publication only to Écluse, as the documented first-party crate setup does.
+cargoRestrictPublication :: CargoProject -> IO ()
+cargoRestrictPublication project = do
+    let path = cargoDirectory project </> "Cargo.toml"
+    manifest <- decodeUtf8 <$> readFileBS path
+    writeFileText path (T.replace "[package]\n" "[package]\npublish = [\"ecluse-test\"]\n" manifest)
+
 -- | Select one native dependency without inheriting the graph consumer's executable source.
-cargoSelectDependency :: CargoView -> Text -> Text -> CargoProject -> IO ()
-cargoSelectDependency view name version = cargoSelectRequirement view name ("=" <> version)
+cargoSelectDependency :: Text -> Text -> CargoProject -> IO ()
+cargoSelectDependency name version = cargoSelectRequirement name ("=" <> version)
 
 -- | Select a complete native version requirement for fresh exact or unpinned client observations.
-cargoSelectRequirement :: CargoView -> Text -> Text -> CargoProject -> IO ()
-cargoSelectRequirement view name requirement project = do
-    writeFileText (cargoDirectory project </> "Cargo.toml") (consumerManifest view name requirement)
+cargoSelectRequirement :: Text -> Text -> CargoProject -> IO ()
+cargoSelectRequirement name requirement project = do
+    writeFileText (cargoDirectory project </> "Cargo.toml") (consumerManifest name requirement)
     writeFileText (cargoDirectory project </> "src/main.rs") "fn main() {}\n"
 
 -- | All native commands use the shared E2E runner and return their exact exit status and output.
@@ -224,9 +225,9 @@ cargoInstall :: CargoProject -> Text -> Text -> [String] -> IO ClientResult
 cargoInstall project name version options =
     runCargo project (["install", "--registry", "ecluse-test", "--version", toString ("=" <> version), "--locked", "--root", cargoInstallRoot project, toString name] <> options)
 
--- | Publish an owned fixture through the configured native API, including Cargo's package verification.
+-- | Publish an owned fixture to the default registry, including Cargo's package verification.
 cargoPublish :: CargoProject -> IO ClientResult
-cargoPublish project = runCargo project ["publish", "--registry", "ecluse-test", "--manifest-path", cargoDirectory project </> "Cargo.toml", "--allow-dirty"]
+cargoPublish project = runCargo project ["publish", "--manifest-path", cargoDirectory project </> "Cargo.toml", "--allow-dirty"]
 
 -- | Only an executable installed from the repository-owned graph may be selected here.
 cargoInstalledExecutable :: CargoProject -> Text -> IO ClientResult

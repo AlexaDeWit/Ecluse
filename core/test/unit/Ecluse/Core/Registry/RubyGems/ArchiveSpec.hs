@@ -29,7 +29,7 @@ import Ecluse.Core.Registry.RubyGems.CompactSpec (GemSpecification (specificatio
 import Ecluse.Core.Registry.RubyGems.Project (mkCoordinate, projectName, unGemPlatform)
 import Ecluse.Core.Security.Limits (Limits (..), defaultLimits)
 import Ecluse.Core.Version (renderVersion)
-import Ecluse.Test.Registry.Archive (tarBytes)
+import Ecluse.Test.Registry.Archive (patchFirstHeader, pax, paxAt, paxRecord, regular, tarBytes, tarEntries)
 import Ecluse.Test.Registry.RubyGems.Reference (runRubyReference)
 import Ecluse.Test.Support (expectRight)
 
@@ -81,8 +81,8 @@ spec = describe "native gem validation" $ do
     it "verifies every checksum algorithm and member in well-formed members" $ do
         bytes <- readFileBS fixture
         members <- nativeMembers bytes
-        metadataGzip <- maybe (fail "native fixture has no metadata member") pure (lookup "metadata.gz" members)
-        dataGzip <- maybe (fail "native fixture has no data member") pure (lookup "data.tar.gz" members)
+        metadataGzip <- fixtureMember "metadata.gz" members
+        dataGzip <- fixtureMember "data.tar.gz" members
         let sha256 = "SHA256:\n  metadata.gz: " <> sha256Hex metadataGzip <> "\n  data.tar.gz: " <> sha256Hex dataGzip <> "\n"
             zeros = T.replicate 128 "0"
         for_
@@ -98,7 +98,7 @@ spec = describe "native gem validation" $ do
     it "reaches nested tar validation after accepting recomputed member checksums" $ do
         bytes <- readFileBS fixture
         members <- nativeMembers bytes
-        dataGzip <- maybe (fail "native fixture has no data member") pure (lookup "data.tar.gz" members)
+        dataGzip <- fixtureMember "data.tar.gz" members
         let nativeTar = GZip.decompress (BSL.fromStrict dataGzip)
         trailing <- repack members (BSL.toStrict (GZip.compress (nativeTar <> "junk")))
         void <$> inspect defaultLimits trailing `shouldReturn` Left (ParseError "tar archive has trailing nonzero bytes")
@@ -125,8 +125,8 @@ spec = describe "native gem validation" $ do
         bytes <- readFileBS fixture
         members <- nativeMembers bytes
         length members `shouldBe` 3
-        dataGzip <- maybe (fail "native fixture has no data member") pure (lookup "data.tar.gz" members)
-        entries <- nativeEntries (GZip.decompress (BSL.fromStrict dataGzip))
+        dataGzip <- fixtureMember "data.tar.gz" members
+        entries <- tarEntries (GZip.decompress (BSL.fromStrict dataGzip))
         directories <- forM [1 .. 512 :: Int] $ \index -> do
             path <- expectRight (Tar.toTarPath True ("inventory-" <> show index))
             pure (Tar.simpleEntry path Tar.Directory)
@@ -143,6 +143,56 @@ spec = describe "native gem validation" $ do
                     gemArchiveInventory archive `shouldBe` Set.fromList (map Key.toText (KeyMap.keys regularFiles))
             _ -> fail "native archive reference lacks its physical and regular-file inventories"
         void <$> inspect defaultLimits{maxArtifactCount = memberCount - 1} changed `shouldReturn` Left (ParseError "archive entry count exceeds its bound")
+    it "accepts the gem build envelope and refuses a PAX or GNU extended header in front of it" $ do
+        bytes <- readFileBS fixture
+        void <$> published bytes `shouldReturn` Right ()
+        entries <- tarEntries (BSL.fromStrict bytes)
+        void <$> published (written entries) `shouldReturn` Right ()
+        gnu <- case entries of
+            entry : _ -> pure [Tar.longLinkEntry (Tar.entryPath entry), Tar.longSymLinkEntry "unused"]
+            [] -> fail "native fixture has no envelope entries"
+        posix <- sequence [pax 'x' (paxRecord "mtime=0\n"), pax 'g' (paxRecord "comment=opaque\n")]
+        for_ (posix <> gnu) $ \header ->
+            void <$> published (written (header : entries)) `shouldReturn` Left extendedRefusal
+    it "refuses an outer member named through a ustar prefix" $ do
+        bytes <- readFileBS fixture
+        metadataGzip <- nativeMembers bytes >>= fixtureMember "metadata.gz"
+        entries <- tarEntries (BSL.fromStrict bytes)
+        prefixed <- regular (replicate 120 'a' <> "/metadata.gz") metadataGzip
+        -- No envelope member name holds the slash that joins a prefix, so inspection itself refuses the member.
+        void <$> inspect defaultLimits (written (entries <> [prefixed])) `shouldReturn` Left (ParseError "unsupported gem envelope member")
+    it "refuses a PAX rename that would show RubyGems another metadata.gz" $ do
+        root <- readFileBS fixture >>= nativeMembers
+        leafMetadata <- readFileBS "test/fixtures/rubygems/gems/ecluse-fixture-leaf-1.0.0.gem" >>= nativeMembers >>= fixtureMember "metadata.gz"
+        rootMetadata <- fixtureMember "metadata.gz" root
+        rootData <- fixtureMember "data.tar.gz" root
+        rootChecksums <- fixtureMember "checksums.yaml.gz" root
+        -- RubyGems reads the raw names: the leaf's metadata.gz, and no checksums.yaml.gz to check it against.
+        crafted <-
+            written
+                <$> sequence
+                    [ paxAt "PaxHeaders/metadata" 'x' (paxRecord "path=metadata.gz\n")
+                    , regular "junk-metadata" rootMetadata
+                    , paxAt "PaxHeaders/signature" 'x' (paxRecord "path=metadata.gz.sig\n")
+                    , regular "metadata.gz" leafMetadata
+                    , regular "data.tar.gz" rootData
+                    , paxAt "PaxHeaders/checksums" 'x' (paxRecord "path=checksums.yaml.gz\n")
+                    , regular "junk-checksums" rootChecksums
+                    ]
+        runRubyReference "archive" crafted >>= \case
+            Object native -> KeyMap.lookup "name" native `shouldBe` Just (String "ecluse-fixture-leaf")
+            _ -> fail "native archive reference is not an object"
+        fmap (renderPackageName . gemArchiveName) <$> inspect defaultLimits crafted `shouldReturn` Right "ecluse-fixture-root"
+        void <$> published crafted `shouldReturn` Left extendedRefusal
+    it "refuses an outer member whose name or prefix field holds bytes after its first NUL" $ do
+        bytes <- readFileBS fixture
+        named <- fmap gemArchiveName <$> inspect defaultLimits bytes
+        -- metadata.gz comes first and fills 11 bytes of its name field. The prefix field starts at byte 345.
+        -- RubyGems unpacks both fields with A100 and A155, which keep those bytes, so it reads another name.
+        for_ [11, 345] $ \offset -> do
+            let changed = patchFirstHeader offset "\NULx" bytes
+            fmap gemArchiveName <$> inspect defaultLimits changed `shouldReturn` named
+            void <$> published changed `shouldReturn` Left extendedRefusal
     it "binds the checked archive to an exact admitted coordinate and digest" $ do
         bytes <- readFileBS fixture
         archive <- inspect defaultLimits bytes >>= expectRight
@@ -157,22 +207,33 @@ spec = describe "native gem validation" $ do
 fixture :: FilePath
 fixture = "test/fixtures/rubygems/gems/ecluse-fixture-root-1.0.0.gem"
 
+-- RubyGems' reader yields extended headers as members and keeps bytes after a NUL, so publication and mirroring refuse both and any name prefix.
+extendedRefusal :: ParseError
+extendedRefusal = ParseError "gem envelope carries an extended or prefixed tar header"
+
+written :: [Tar.Entry] -> ByteString
+written = BSL.toStrict . Tar.write
+
+fixtureMember :: Text -> [(Text, ByteString)] -> IO ByteString
+fixtureMember name members = maybe (fail ("native fixture has no " <> toString name <> " member")) pure (lookup name members)
+
 inspect :: Limits -> ByteString -> IO (Either ParseError GemArchive)
 inspect limits = inspectGemArchive limits (const (pure ()))
 
+-- Inspection followed by the envelope check that publication and mirroring add.
+published :: ByteString -> IO (Either ParseError GemArchive)
+published bytes = (>>= checkRawEnvelope) <$> inspect defaultLimits bytes
+
 nativeMembers :: ByteString -> IO [(Text, ByteString)]
-nativeMembers bytes = nativeEntries (BSL.fromStrict bytes) >>= traverse member
+nativeMembers bytes = tarEntries (BSL.fromStrict bytes) >>= traverse member
   where
     member entry = case Tar.entryContent entry of
         Tar.NormalFile body _ -> pure (toText (Tar.entryPath entry), BSL.toStrict body)
         _ -> fail "native fixture contains a non-file envelope entry"
 
-nativeEntries :: BSL.ByteString -> IO [Tar.Entry]
-nativeEntries = Tar.foldEntries (\entry rest -> (entry :) <$> rest) (pure []) (fail . show) . Tar.read
-
 repack :: [(Text, ByteString)] -> ByteString -> IO ByteString
 repack members payload = do
-    metadataGzip <- maybe (fail "native fixture has no metadata member") pure (lookup "metadata.gz" members)
+    metadataGzip <- fixtureMember "metadata.gz" members
     let checksums = TE.encodeUtf8 ("---\nSHA256:\n  metadata.gz: " <> sha256Hex metadataGzip <> "\n  data.tar.gz: " <> sha256Hex payload <> "\n")
         checksumGzip = BSL.toStrict (GZip.compress (BSL.fromStrict checksums))
     BSL.toStrict <$> tarBytes [("metadata.gz", metadataGzip), ("data.tar.gz", payload), ("checksums.yaml.gz", checksumGzip)]
@@ -180,8 +241,8 @@ repack members payload = do
 -- The genuine metadata and data members under the given checksums document, every member well-formed.
 repackChecksums :: [(Text, ByteString)] -> Text -> IO ByteString
 repackChecksums members checksums = do
-    metadataGzip <- maybe (fail "native fixture has no metadata member") pure (lookup "metadata.gz" members)
-    dataGzip <- maybe (fail "native fixture has no data member") pure (lookup "data.tar.gz" members)
+    metadataGzip <- fixtureMember "metadata.gz" members
+    dataGzip <- fixtureMember "data.tar.gz" members
     let checksumGzip = BSL.toStrict (GZip.compress (BSL.fromStrict (TE.encodeUtf8 checksums)))
     BSL.toStrict <$> tarBytes [("metadata.gz", metadataGzip), ("data.tar.gz", dataGzip), ("checksums.yaml.gz", checksumGzip)]
 

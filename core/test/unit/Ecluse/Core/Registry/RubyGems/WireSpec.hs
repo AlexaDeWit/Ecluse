@@ -45,6 +45,11 @@ spec = describe "RubyGems compact info rows" $ do
         parsed <- expectRight (decodeInfoRow name (RecordEntry 1) ("1.0 |checksum:" <> digest))
         grPublishedAt parsed `shouldBe` Nothing
         grRequiredRuby parsed `shouldBe` (">= 0" :| [])
+    it "gives no publication time for a created_at it cannot read, and keeps the row" $ do
+        name <- expectRight (projectName "rack")
+        parsed <- expectRight (decodeInfoRow name (RecordEntry 1) ("1.0 |checksum:" <> digest <> ",created_at:not-a-time"))
+        grPublishedAt parsed `shouldBe` Nothing
+        Map.lookup "created_at" (grExtras parsed) `shouldBe` Just "not-a-time"
     for_ ["1.0 |checksum:bad", "1.0 |checksum:" <> digest <> ",checksum:" <> digest, "1.0 child:>= 1,child:< 2|checksum:" <> digest, "1.0 |checksum:" <> digest <> ",platform:x86_64-linux", "1.0 child:bogus|checksum:" <> digest] $ \bytes ->
         it ("refuses malformed or unsupported data " <> show bytes) $ do
             name <- expectRight (projectName "rack")

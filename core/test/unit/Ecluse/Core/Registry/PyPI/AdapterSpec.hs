@@ -15,13 +15,13 @@ import Ecluse.Core.Registry.Adapter (
 import Ecluse.Core.Registry.Adapter.Capability (
     AdapterArtifact (artifactHosts, artifactPrivateAddressing),
     AdapterMaintenance (maintenanceListing, maintenanceVersionDelete),
-    AdapterPublish (publishIdentity, publishMirrorRequirements),
-    MirrorRequirements (mirrorStateRequirement, mirrorUploadEndpoint, mirrorWorkerRead),
-    MirrorStateRequirement (..),
+    AdapterPublish (publishIdentity, publishMirrorRequirements, publishUploadEndpoint),
+    MirrorRequirements (mirrorStateRequirement, mirrorWorkerRead),
     PrivateArtifactAddressing (..),
     UploadEndpointRequirement (..),
     UploadIdentityRequirement (..),
     WorkerMetadataRead (..),
+    durableMirrorDocuments,
  )
 
 spec :: Spec
@@ -47,15 +47,15 @@ spec = describe "the PyPI adapter" $ do
 
     it "declares PyPI's charged read, durable state, explicit endpoint, and named identity" $ do
         let selected = adapterFor PyPI >>= adapterPublish
-        fmap (mirrorStateRequirement . publishMirrorRequirements) selected `shouldBe` Just DurableVersionState
-        fmap (mirrorUploadEndpoint . publishMirrorRequirements) selected `shouldBe` Just ExplicitUploadEndpoint
+        fmap (isJust . durableMirrorDocuments . mirrorStateRequirement . publishMirrorRequirements) selected `shouldBe` Just True
+        fmap publishUploadEndpoint selected `shouldBe` Just ExplicitUploadEndpoint
         fmap publishIdentity selected `shouldBe` Just NamedIdentity
         fmap (charged . mirrorWorkerRead . publishMirrorRequirements) selected `shouldBe` Just True
 
     it "declares npm's cached read, native state, root endpoint, and token identity" $ do
         let selected = adapterFor Npm >>= adapterPublish
-        fmap (mirrorStateRequirement . publishMirrorRequirements) selected `shouldBe` Just NativeVersionState
-        fmap (mirrorUploadEndpoint . publishMirrorRequirements) selected `shouldBe` Just ReadRootUpload
+        fmap (isJust . durableMirrorDocuments . mirrorStateRequirement . publishMirrorRequirements) selected `shouldBe` Just False
+        fmap publishUploadEndpoint selected `shouldBe` Just ReadRootUpload
         fmap publishIdentity selected `shouldBe` Just TokenIdentity
         fmap (charged . mirrorWorkerRead . publishMirrorRequirements) selected `shouldBe` Just False
 

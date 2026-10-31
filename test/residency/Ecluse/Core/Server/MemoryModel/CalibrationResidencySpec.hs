@@ -10,12 +10,13 @@ import Data.Ratio ((%))
 import Test.Hspec
 
 import Ecluse.Core.Ecosystem (Ecosystem (Cargo, Npm, PyPI, RubyGems))
-import Ecluse.Core.Registry.Adapter (RegistryAdapter (adapterMetadata), adapterFor)
+import Ecluse.Core.Registry.Adapter (RegistryAdapter (adapterMetadata))
 import Ecluse.Core.Registry.Adapter.Capability (AdapterMetadata (metadataChargeFactors))
 import Ecluse.Core.Server.Admission.Types (ChargeFactors (..))
 import Ecluse.Core.Server.MemoryModel.Calibration
 import Ecluse.Core.Server.MemoryModel.Probe (Residency (..), requireResidency)
 import Ecluse.Test.Corpus.Merge (MergeShape (Disjoint, Identical, Overlapping, PublishOrder))
+import Ecluse.Test.Server.Mount (requiredAdapter)
 
 -- | Check exact rounding, each current charge and the production factors.
 spec :: Spec
@@ -61,7 +62,7 @@ spec = do
             map heldLimit (syntheticSingleOutput figures : Map.elems (syntheticMergedOutputs figures)) `shouldSatisfy` all (< marginCharge (outputMaximum rubyGemsCalibration))
         for_ [(Npm, npmCalibration), (PyPI, pypiCalibration), (Cargo, cargoCalibration), (RubyGems, rubyGemsCalibration)] $ \(ecosystem, calibration) ->
             it (show ecosystem <> " matches its adapter") $ do
-                adapter <- maybe (fail "missing registered adapter") pure (adapterFor ecosystem)
+                adapter <- requiredAdapter ecosystem
                 let factors = metadataChargeFactors (adapterMetadata adapter)
                 toInteger (cfFullReadPermille factors) `shouldBe` fullReadCharge calibration
                 toInteger (cfOutputPermille factors) `shouldBe` marginCharge (outputMaximum calibration)
@@ -73,5 +74,5 @@ spec = do
         for_ [Npm, PyPI, Cargo, RubyGems] $ \ecosystem ->
             it (show ecosystem <> " keeps its adapter's kept charge") $ do
                 record <- requireResidency ecosystem
-                adapter <- maybe (fail "missing registered adapter") pure (adapterFor ecosystem)
+                adapter <- requiredAdapter ecosystem
                 toInteger (cfKeptPermille (metadataChargeFactors (adapterMetadata adapter))) `shouldBe` keptCharge (residencyFigures record)

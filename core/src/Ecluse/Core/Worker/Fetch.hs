@@ -40,4 +40,4 @@ fetchArtifactBytesCharged charge limits buildRequest url = do
     pure $
         result >>= \case
             SuccessBody _ bytes -> Right bytes
-            UnreadStatus code -> Left (FetchTransport (transportFault TransportProtocol ("artifact source answered HTTP " <> show code)))
+            UnreadStatus code _ -> Left (FetchTransport (transportFault TransportProtocol ("artifact source answered HTTP " <> show code)))

@@ -190,7 +190,7 @@ sweepRoleEnv = codeArtifactSweepRoleEnv RubyGems
 
 -- | Source rows persist remotely across independently restarted product roles.
 proxyRoleEnv :: [(Text, Text)]
-proxyRoleEnv = codeArtifactProxyRoleEnv RubyGems (PublicationAuthority "" [("TOKEN", "Bearer " <> rubyRegistryToken)] firstPartyName rubyRegistryToken)
+proxyRoleEnv = codeArtifactProxyRoleEnv RubyGems (PublicationAuthority "" [("TOKEN", rubyRegistryToken)] firstPartyName rubyRegistryToken)
 
 -- | Withhold only the named native archive while leaving its public metadata available.
 withSourceWithheld :: RubySweepPlane -> Text -> Text -> IO a -> IO a

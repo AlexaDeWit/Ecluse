@@ -2,7 +2,7 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | Bind validated mounts, source views and publication targets without origin discovery.
+{- | Bind validated mounts and publication targets without origin discovery.
 Live wiring prepares rule state and the credentials required by each role.
 -}
 module Ecluse.Composition (
@@ -14,9 +14,6 @@ module Ecluse.Composition (
 
     -- * Boot-time wiring
     planMounts,
-
-    -- * The first-party privilege
-    firstPartyName,
 
     -- * Publish-side wiring
     PublishBudget (..),
@@ -44,12 +41,11 @@ import Ecluse.Composition.MirrorRole (MirrorMintPlan (MintMirrorWrite, SkipMirro
 import Ecluse.Composition.Validate (
     ValidatedPlan (vpMounts, vpPublications, vpSettings),
     VettedMount (vmAdapter, vmConfig, vmEcosystem, vmMount),
-    VettedPublication (vpubFirstParty, vpubMaxRequestBytes, vpubStaticCredential, vpubTarget),
+    VettedPublication (vpubFirstParty, vpubMaxRequestBytes, vpubStaticCredential, vpubStaticPresentation, vpubTarget),
  )
 import Ecluse.Config (
     AppConfig (..),
     EgressSettings (..),
-    FirstParty (..),
     IntegritySettings (..),
     MirrorTarget (mtBackend, mtUploadUrl, mtUrl, mtUsername),
     Mount (..),
@@ -64,36 +60,32 @@ import Ecluse.Config (
     sbTag,
     unUrl,
  )
+import Ecluse.Config.Target (storePresentation)
 import Ecluse.Core.Credential (CredentialProvider)
 import Ecluse.Core.Credential.Refresh (CredentialReporters)
-import Ecluse.Core.Deadline (Deadlines)
-import Ecluse.Core.Ecosystem (Ecosystem (Cargo), prefixFor)
-import Ecluse.Core.Package (PackageName)
+import Ecluse.Core.Ecosystem (Ecosystem, prefixFor)
 import Ecluse.Core.Registry.Adapter (
     RegistryAdapter,
     adapterArtifact,
-    adapterInstallEvidence,
     adapterMetadata,
     adapterProjectName,
     adapterPublish,
  )
 import Ecluse.Core.Registry.Adapter.Capability (AdapterArtifact (artifactHosts))
-import Ecluse.Core.Registry.Cargo.FirstParty (cargoFirstPartyName)
-import Ecluse.Core.Registry.Npm.Publish (npmPublishAllowed)
-import Ecluse.Core.Registry.PyPI.FirstParty (pypiFirstPartyName)
-import Ecluse.Core.Registry.RubyGems.FirstParty (rubyGemsFirstPartyName)
+import Ecluse.Core.Registry.FirstParty (firstPartyName)
+import Ecluse.Core.Registry.Request (ServicePresentation)
 import Ecluse.Core.Rules (RuleDeps, prepare, rdCurrentAdvisoryEtag, rdSourceReporter)
 import Ecluse.Core.Rules.Outage (SourceReporter (noteAdmission))
 import Ecluse.Core.Security (Limits, maxPublishRequestBytes)
 import Ecluse.Core.Security.Egress (RegistryUrl, mkRegistryUrl)
 import Ecluse.Core.Server.Admission.Bytes (ByteAdmission)
-import Ecluse.Core.Server.Context (MountBinding, PackumentDeps (..), PublishDeps (..), ReadSourceSelection (..))
+import Ecluse.Core.Server.Context (MountBinding, PackumentDeps (..), PublishDeps (..))
 import Ecluse.Core.Server.Response (HelpMessage, mkHelpMessage)
 import Ecluse.Core.Server.Upstream (MirrorServePlan (MirrorOnAdmit, NoMirrorWrite), mountUpstreams)
 import Ecluse.Core.Text (stripTrailingSlash)
 
 -- | Resolve an ecosystem's deps to its mount, 'Nothing' without an adapter. "Ecluse.Service" implements it.
-type ResolveAdapter = Ecosystem -> PackumentDeps -> Maybe PackumentDeps -> Maybe PublishDeps -> Maybe MountBinding
+type ResolveAdapter = Ecosystem -> PackumentDeps -> Maybe PublishDeps -> Maybe MountBinding
 
 -- | The capabilities the wiring is built through, injected so a unit test assembles it with no listener.
 data WiringPorts = WiringPorts
@@ -107,8 +99,6 @@ data WiringPorts = WiringPorts
     -- ^ The clock every mount's serve path reads.
     , wpRuleDeps :: Ecosystem -> RuleDeps
     -- ^ One ecosystem's rule capabilities, including its advisory-database lookup.
-    , wpDeadlines :: Deadlines
-    -- ^ The process's sweeper, which bounds native install-evidence inspection.
     }
 
 -- | What only a live environment settles: the served mounts and the worker's publish targets.
@@ -126,7 +116,7 @@ resolveBootWiring ports mintPlan limits publishBudget plan = do
     case providersE of
         Left errs -> pure (Left errs)
         Right providers -> do
-            bindingsE <- planMounts (wpResolveAdapter ports) (wpClock ports) (wpRuleDeps ports) mintPlan providers (wpDeadlines ports) limits publishBudget plan
+            bindingsE <- planMounts (wpResolveAdapter ports) (wpClock ports) (wpRuleDeps ports) mintPlan providers limits publishBudget plan
             -- The serve side and the publish side read the same providers independently, so
             -- 'Validation' reports both rather than the mounts' refusals alone.
             pure . validationToEither $
@@ -148,8 +138,8 @@ data PublishBudget = PublishBudget
     }
 
 -- | Resolve mounts with their configured authority and publication budget.
-planMounts :: ResolveAdapter -> IO UTCTime -> (Ecosystem -> RuleDeps) -> MirrorMintPlan -> CredentialProviders -> Deadlines -> Limits -> Maybe PublishBudget -> ValidatedPlan -> IO (Either [BootError] [MountBinding])
-planMounts resolveAdapter clock ruleDepsFor mintPlan providers deadlines limits publishBudget plan = do
+planMounts :: ResolveAdapter -> IO UTCTime -> (Ecosystem -> RuleDeps) -> MirrorMintPlan -> CredentialProviders -> Limits -> Maybe PublishBudget -> ValidatedPlan -> IO (Either [BootError] [MountBinding])
+planMounts resolveAdapter clock ruleDepsFor mintPlan providers limits publishBudget plan = do
     bindingResults <- traverse bindingFor (vpMounts plan)
     pure $ case partitionEithers bindingResults of
         ([], bindings) -> Right bindings
@@ -162,7 +152,6 @@ planMounts resolveAdapter clock ruleDepsFor mintPlan providers deadlines limits 
     ctx =
         WiringContext
             { wcApp = app
-            , wcDeadlines = deadlines
             , wcLimits = limits
             , wcClock = clock
             , wcRuleDeps = ruleDepsFor
@@ -177,7 +166,7 @@ planMounts resolveAdapter clock ruleDepsFor mintPlan providers deadlines limits 
     bindingFor :: VettedMount -> IO (Either [BootError] MountBinding)
     bindingFor vetted = do
         deps <- packumentDepsFor ctx (vmAdapter vetted) (vmMount vetted) (vmConfig vetted)
-        pure $ case (credentialError mintPlan providers (vmMount vetted), resolveAdapter eco (primaryView vetted deps) (privateView vetted deps) (mountPublishDeps ctx plan vetted)) of
+        pure $ case (credentialError mintPlan providers (vmMount vetted), resolveAdapter eco deps (mountPublishDeps ctx plan vetted)) of
             (Nothing, Just binding) -> Right binding
             (mCredErr, mBinding) ->
                 Left (maybeToList mCredErr <> [MissingAdapter eco | isNothing mBinding])
@@ -188,48 +177,12 @@ planMounts resolveAdapter clock ruleDepsFor mintPlan providers deadlines limits 
 whole pass, so two mounts cannot be wired against different values of one of them. -}
 data WiringContext = WiringContext
     { wcApp :: AppConfig
-    , wcDeadlines :: Deadlines
     , wcLimits :: Limits
     , wcClock :: IO UTCTime
     , wcRuleDeps :: Ecosystem -> RuleDeps
     , wcPublishBudget :: Maybe PublishBudget
     , wcHelp :: Maybe HelpMessage
     }
-
-primaryView :: VettedMount -> PackumentDeps -> PackumentDeps
-primaryView vetted deps
-    | vmEcosystem vetted == Cargo =
-        deps
-            { pdReadSourceSelection = ManagedMirrorAndPublic
-            , pdUpstreams =
-                mountUpstreams
-                    (artifactHosts (pdArtifact deps))
-                    (mtUrl <$> regMirrorTarget regs)
-                    (regPublicUpstream regs)
-                    (maybe NoMirrorWrite (MirrorOnAdmit . mtUrl) (regMirrorTarget regs))
-            }
-    | otherwise = deps
-  where
-    regs = mountRegistries (vmMount vetted)
-
-privateView :: VettedMount -> PackumentDeps -> Maybe PackumentDeps
-privateView vetted deps
-    | vmEcosystem vetted == Cargo =
-        Just
-            deps
-                { pdReadSourceSelection = PrivateOnly
-                , pdMountBaseUrl = pdMountBaseUrl deps <> "/private"
-                , pdMirrorState = Nothing
-                , pdUpstreams =
-                    mountUpstreams
-                        (artifactHosts (pdArtifact deps))
-                        (regPrivateUpstream regs)
-                        (regPublicUpstream regs)
-                        NoMirrorWrite
-                }
-    | otherwise = Nothing
-  where
-    regs = mountRegistries (vmMount vetted)
 
 -- A mount the pass cleared no publication for leaves @PUT \/{pkg}@ answering @405@.
 mountPublishDeps :: WiringContext -> ValidatedPlan -> VettedMount -> Maybe PublishDeps
@@ -245,7 +198,6 @@ packumentDepsFor ctx adapter mount mcfg = do
     -- 'pdAdvisoryEtag' reads the current ETag through those same 'RuleDeps', so no generation is pinned at boot.
     let ruleDeps = wcRuleDeps ctx (mountEcosystem mount)
     prepared <- prepare ruleDeps (mountPolicy mount)
-    installEvidence <- traverse (\build -> build (wcDeadlines ctx) (wcLimits ctx)) (adapterInstallEvidence adapter)
     let regs = mountRegistries mount
         app = wcApp ctx
     pure
@@ -259,7 +211,6 @@ packumentDepsFor ctx adapter mount mcfg = do
             , -- Deny by default: a mount that declares no namespaces owns no first-party name.
               pdFirstParty = maybe (const False) firstPartyName (mntFirstParty mcfg)
             , pdMountBaseUrl = mountBaseUrl (srvPublicUrl (cfgServer app)) (mountEcosystem mount)
-            , pdInstallEvidence = installEvidence
             , pdRules = prepared
             , -- Operator ranges extending the fixed internal-range block on the @dist.tarball@ host
               -- gate. One list for every mount: internal ranges are a deployment-wide fact.
@@ -277,7 +228,6 @@ packumentDepsFor ctx adapter mount mcfg = do
             , pdMetadata = adapterMetadata adapter
             , pdArtifact = adapterArtifact adapter
             , pdEgressUrl = mkRegistryUrl
-            , pdReadSourceSelection = MergePrivateAndPublic
             , pdMirrorState = Nothing
             , pdMetadataCompression = srvMetadataGzip (cfgServer app)
             }
@@ -318,6 +268,7 @@ publishDepsFor adapter app limits publishBudget helpMessage publication = do
             , pubTargetUrl = publicationTargetUrl (vpubTarget publication)
             , pubAllowed = firstPartyName (vpubFirstParty publication)
             , pubStaticCredential = vpubStaticCredential publication
+            , pubStaticPresentation = vpubStaticPresentation publication
             , pubInboundToken = srvAuthToken (cfgServer app)
             , pubMaxRequestBytes = fromMaybe (pbMaxRequestBytes budget) (vpubMaxRequestBytes publication)
             , pubLimits = limits{maxPublishRequestBytes = fromMaybe (pbMaxRequestBytes budget) (vpubMaxRequestBytes publication)}
@@ -327,14 +278,6 @@ publishDepsFor adapter app limits publishBudget helpMessage publication = do
             , pubAdapter = publish
             }
 
--- | Whether this deployment owns a name: the one predicate every consumer of the privilege reads.
-firstPartyName :: FirstParty -> PackageName -> Bool
-firstPartyName = \case
-    FirstPartyNpmScopes scopes -> npmPublishAllowed (toList scopes)
-    FirstPartyPyPI entries -> pypiFirstPartyName entries
-    FirstPartyCargo entries -> cargoFirstPartyName entries
-    FirstPartyRubyGems entries -> rubyGemsFirstPartyName entries
-
 -- | One ecosystem's publish target, resolved once: the worker's write endpoint and its token provider.
 data PublishTarget = PublishTarget
     { ptEcosystem :: Ecosystem
@@ -343,10 +286,10 @@ data PublishTarget = PublishTarget
     -- ^ The mirror-target endpoint the worker publishes approved artifacts to.
     , ptUploadUrl :: RegistryUrl
     -- ^ The exact native upload endpoint, independently configured from the read root.
-    , ptBackendTag :: StoreTag
-    -- ^ The declared backend selects native service credential presentation.
+    , ptPresentation :: ServicePresentation
+    -- ^ How the mirror target's store asks for the write token on reads and writes.
     , ptUsername :: Maybe Text
-    -- ^ The backend credential convention retained beside the refreshing secret provider.
+    -- ^ The mirror target's configured username, if any. A store that declares its mechanism renders its own.
     , ptCredentials :: CredentialProvider
     -- ^ The provider minting the mirror-target write token.
     }
@@ -376,7 +319,7 @@ publishTargetFor providers mount = do
                     { ptEcosystem = mountEcosystem mount
                     , ptMirrorUrl = mtUrl target
                     , ptUploadUrl = mtUploadUrl target
-                    , ptBackendTag = sbTag (mtBackend target)
+                    , ptPresentation = storePresentation (sbTag (mtBackend target)) (mountEcosystem mount)
                     , ptUsername = mtUsername target
                     , ptCredentials = provider
                     }

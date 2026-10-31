@@ -114,7 +114,7 @@ spec pool =
                                 status refused `shouldBe` 503
                                 (decodeUtf8 (simpleBody refused) :: Text) `shouldSatisfy` T.isInfixOf "AllowIfRemediatesCve: no advisory database loaded"
                                 quarantined <- getPath "/npm/corpus-vuln" skipping
-                                status quarantined `shouldBe` 403
+                                status quarantined `shouldBe` 404
 
                                 -- The running sync task's next poll verifies the new artifact and
                                 -- swaps it in, with no restart and no config change.
@@ -214,7 +214,7 @@ proxyApp deadlines ruleDeps policy privateUrl publicUrl = do
                 { pdMountBaseUrl = "https://proxy.test/npm"
                 , pdEgressUrl = Right . loopbackRegistryUrl
                 }
-    pure (application (mkServerConfig (maybeToList (mountBindingFor Npm deps Nothing Nothing))) env)
+    pure (application (mkServerConfig (maybeToList (mountBindingFor Npm deps Nothing))) env)
 
 -- A young fixed version whose artifact URL resolves against the local stub.
 withPublicUpstream :: (Text -> IO a) -> IO a

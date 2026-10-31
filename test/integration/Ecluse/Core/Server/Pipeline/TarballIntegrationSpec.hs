@@ -122,11 +122,13 @@ privateAuthorisationSpec = describe "private artifact authorisation" $ do
                 publicUp <- artifactUpstream "1.0.0" publicTarballBytes
                 queue <- newTestMemoryQueue
                 withProxyEnvQueueDeps queue privateUp publicUp Nothing (\d -> d{pdFirstParty = const firstParty}) $ \app _ _ -> do
+                    -- Only a merged name's settled private absence reaches the public leg.
+                    let served = not firstParty && upstreamStatus == status404
                     response <- getTarball "1.0.0" Nothing app
-                    status response `shouldBe` if firstParty then statusCode upstreamStatus else 200
-                    if firstParty
-                        then seenAuth publicUp `shouldReturn` []
-                        else simpleBody response `shouldBe` publicTarballBytes
+                    status response `shouldBe` if served then 200 else statusCode upstreamStatus
+                    if served
+                        then simpleBody response `shouldBe` publicTarballBytes
+                        else seenAuth publicUp `shouldReturn` []
 
 tarballSpec :: Spec
 tarballSpec = describe "artifact (tarball) path" $ do

@@ -24,7 +24,8 @@ import Ecluse.Core.Package.Integrity (IntegrityResult (IntegrityVerified), verif
 import Ecluse.Core.Registry (
     FetchFault (FetchTransport),
     MirrorArtifact (maHashes, maSize),
-    PublishBodyFault (PublishUnsupported),
+    ParseError (ParseError),
+    PublishBodyFault (PublishMalformed, PublishUnsupported),
     PublishError (publishErrorMessage),
     PublishFault (PublishFetch, PublishIntegrityMismatch, PublishRejected, PublishSourceUnavailable),
  )
@@ -37,11 +38,12 @@ import Ecluse.Core.Registry.Publish (
     PublishCodec (pcNativeComplete),
     PublishPlan (PublishPlan, ppLatest),
  )
+import Ecluse.Core.Registry.Request (nativePresentation)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Core.Version (mkVersion)
 import Ecluse.Test.Package (hexSha1Of, hexSha256Of, pypiVersion, sriSha256Of, sriSha512Of, unsafeHash, unscopedNpm, unscopedPyPI, v1_0_0)
 import Ecluse.Test.Registry.Npm (dummyArtifact, isOdd, isOddVersionDoc, mirrorVersionDoc)
-import Ecluse.Test.Registry.Npm.Publish (npmDeprecateDocument, npmMisfiledVersion, npmProvenanceRelease, npmReleaseDocument, npmRepeatedAttachments, npmStarDocument, npmTaggedRelease)
+import Ecluse.Test.Registry.Npm.Publish (npmDependentRelease, npmDeprecateDocument, npmExternalDependencyRefusal, npmMisfiledVersion, npmProvenanceRelease, npmReleaseDocument, npmRepeatedAttachments, npmStarDocument, npmTaggedRelease)
 import Ecluse.Test.Registry.Publish (anonymousPublishAt, checkedNpmUpload, isMalformedBody, publishOnlyFile)
 import Ecluse.Test.Registry.PyPI.Metadata (documentFromValue)
 import Ecluse.Test.Support (decodeJsonOrFail, expectRight)
@@ -272,7 +274,7 @@ stubPublish :: Deadlines -> Stub -> IO MirrorPublish
 stubPublish deadlines stub = publishAt deadlines (stubBaseUrl stub)
 
 publishAt :: Deadlines -> Text -> IO MirrorPublish
-publishAt deadlines = anonymousPublishAt deadlines npmPublishCodec . loopbackRegistryUrl
+publishAt deadlines = anonymousPublishAt deadlines (npmPublishCodec nativePresentation) . loopbackRegistryUrl
 
 sizedArtifact :: MirrorArtifact
 sizedArtifact = dummyArtifact{maSize = Just 1234, maHashes = unsafeHash SHA1 (hexSha1Of dummyTarballBytes) :| []}
@@ -323,7 +325,7 @@ nativeCompletionSpec :: Spec
 nativeCompletionSpec = describe "native atomic npm completion" $ do
     let details = vdDetails (mirrorVersionDoc isOdd v1_0_0 isOddVersionDoc sizedArtifact)
         inventory = PackageInfo isOdd (Map.singleton "1.0.0" details) mempty []
-        complete = pcNativeComplete npmPublishCodec isOdd v1_0_0
+        complete = pcNativeComplete (npmPublishCodec nativePresentation) isOdd v1_0_0
         changed update = inventory{infoVersions = Map.singleton "1.0.0" (update details)}
     it "proves one supported native artifact without a source snapshot" $
         complete inventory `shouldBe` True
@@ -380,7 +382,88 @@ uploadGuardSpec = describe "uploadClaims (the first-party new-release guard)" $ 
         uploadClaims (toStrict (npmTaggedRelease (object ["beta" .= ("2.0.0" :: Text)]))) `shouldBe` Right [widget, widget, widget]
         untagged <- editedRelease (KeyMap.delete "dist-tags")
         uploadClaims untagged `shouldBe` Right [widget, widget, widget]
+    it "refuses an installable dependency that names a git source, a remote URL or an unsupported scheme, naming the dependency" $
+        for_ installableFields $ \field ->
+            for_ externalSpecs $ \(written, kind) ->
+                uploadClaims (toStrict (npmDependentRelease [Key.fromText field .= object ["left-pad" .= written]]))
+                    `shouldBe` Left (PublishMalformed (ParseError (npmExternalDependencyRefusal "left-pad" field kind)))
+    it "relays registry, alias and local specs, and a git source only in devDependencies" $ do
+        for_ installableFields $ \field ->
+            for_ inRegistrySpecs $ \written ->
+                uploadClaims (toStrict (npmDependentRelease [Key.fromText field .= object ["left-pad" .= written]])) `shouldBe` Right [widget, widget, widget]
+        uploadClaims (toStrict (npmDependentRelease ["devDependencies" .= object ["left-pad" .= ("github:acme/left-pad" :: Text)]])) `shouldBe` Right [widget, widget, widget]
+    it "refuses the first external dependency by field order, then by name" $ do
+        let git = "github:acme/left-pad" :: Text
+            release =
+                npmDependentRelease
+                    [ "peerDependencies" .= object ["beta" .= git]
+                    , "dependencies" .= object ["safe" .= ("^1.0.0" :: Text)]
+                    , "optionalDependencies" .= object ["zeta" .= git, "alpha" .= ("https://example.test/alpha.tgz" :: Text)]
+                    ]
+        uploadClaims (toStrict release) `shouldBe` Left (PublishMalformed (ParseError (npmExternalDependencyRefusal "alpha" "optionalDependencies" "a remote URL")))
+    it "ignores a dependency map that is not an object and a spec that is not a string"
+        $ for_
+            [ toJSON ["github:acme/left-pad" :: Text]
+            , String "github:acme/left-pad"
+            , Null
+            , object ["left-pad" .= (1 :: Int)]
+            , object ["left-pad" .= ["github:acme/left-pad" :: Text]]
+            , object ["left-pad" .= object ["url" .= ("github:acme/left-pad" :: Text)]]
+            ]
+        $ \dependencies ->
+            uploadClaims (toStrict (npmDependentRelease ["dependencies" .= dependencies])) `shouldBe` Right [widget, widget, widget]
   where
+    installableFields = ["dependencies", "optionalDependencies", "peerDependencies"]
+    externalSpecs :: [(Text, Text)]
+    externalSpecs =
+        [ (written, "a git source")
+        | written <-
+            [ "git+https://github.com/acme/left-pad.git"
+            , "git://github.com/acme/left-pad.git"
+            , "git+ssh://git@github.com:acme/left-pad.git"
+            , "ssh://git@github.com/acme/left-pad.git"
+            , "git@github.com:acme/left-pad.git"
+            , "git@github.com/acme/left-pad"
+            , "github:acme/left-pad"
+            , "gitlab:acme/left-pad"
+            , "bitbucket:acme/left-pad"
+            , "gist:11081aaa"
+            , "sourcehut:~acme/left-pad"
+            , "acme/left-pad"
+            , "acme/left-pad#v1.0.0"
+            , "GIT+HTTPS://github.com/acme/left-pad.git"
+            , " github:acme/left-pad"
+            , "git\t+https://github.com/acme/left-pad.git"
+            , "user:secret@github.com:acme/left-pad"
+            , "\\x@github.com:acme/left-pad"
+            , "\\x@github.com/acme/left-pad"
+            ]
+        ]
+            <> [(written, "a remote URL") | written <- ["https://example.test/left-pad-1.0.0.tgz", "http://example.test/left-pad-1.0.0.tgz", "HTTPS://example.test/left-pad.tgz"]]
+            <> [(written, "an unsupported scheme") | written <- ["jsr:@std/path@^1", "catalog:", "ftp://example.test/left-pad.tgz", "left-pad:1.0.0"]]
+    inRegistrySpecs :: [Text]
+    inRegistrySpecs =
+        [ "^1.2.3"
+        , "1.x"
+        , "latest"
+        , "*"
+        , ""
+        , ">=1.0.0 <2.0.0"
+        , "npm:left-pad@^1"
+        , "NPM:left-pad@^1"
+        , "file:../left-pad"
+        , "./left-pad"
+        , "../left-pad"
+        , "/opt/left-pad"
+        , "~/left-pad"
+        , "C:\\left-pad"
+        , "link:../left-pad"
+        , "workspace:*"
+        , "workspace:left-pad@*"
+        , "a/b/c"
+        , "packages/@acme/widget"
+        , "@acme/widget"
+        ]
     widget :: Text
     widget = "@acme/widget"
     -- A last-wins store reads this version's name as the second, out-of-scope copy.

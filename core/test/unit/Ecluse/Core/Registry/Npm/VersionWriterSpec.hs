@@ -27,7 +27,7 @@ import Test.Hspec
 import Test.Hspec.Hedgehog (hedgehog, modifyMaxSuccess)
 
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
-import Ecluse.Core.Package (Artifact (..), Availability (..), CodeExecSignal (..), Hash, HashAlg (SHA1), PackageDetails (..), PackageInfo (..), PackageName, mkHash, mkSriHashes)
+import Ecluse.Core.Package (Artifact (..), Availability (..), CodeExecSignal (..), DependencySources (..), Hash, HashAlg (SHA1), PackageDetails (..), PackageInfo (..), PackageName, mkHash, mkSriHashes)
 import Ecluse.Core.Package.Entry (EntryKey (ObjectEntry))
 import Ecluse.Core.Package.Merge (Provenance (..), mergePackuments)
 import Ecluse.Core.Registry.CachedDocument (npmPacked)
@@ -37,6 +37,7 @@ import Ecluse.Core.Registry.Json.Shape (Mode (..), Shape (Generic), Trees (..), 
 import Ecluse.Core.Registry.Json.Walk (Steps (Finished), Walked (..), withElement)
 import Ecluse.Core.Registry.Json.Writer (decodeWhole, discard, newWriter, replacedMember, sealValue)
 import Ecluse.Core.Registry.JsonStream (StreamResult)
+import Ecluse.Core.Registry.Npm.DependencySource (ExternalDependency, externalDependencyOf, renderExternalDependency)
 import Ecluse.Core.Registry.Npm.Document (PackedPackument (..), tarballHole)
 import Ecluse.Core.Registry.Npm.Filter (assembleMergedDocument, serialiseMergedDocument)
 import Ecluse.Core.Registry.Npm.Project (projectVersionEntryResult, projectVersionManifest)
@@ -65,6 +66,7 @@ spec = describe "VersionWriter" $ do
     typedFieldsSpec
     relevantScalarsSpec
     growthSpec
+    dependencySpec
     generatedSpec
     assemblySpec
     authorSpec
@@ -199,6 +201,7 @@ genericExpected raw = do
             , vmHasInstallScript = frozenVmHasInstallScript vm
             , vmScripts = Map.map (const "") (Map.filterWithKey (\key _ -> key `elem` frozenInstallHooks) (frozenVmScripts vm))
             , vmLicense = licence <$> frozenVmLicense vm
+            , vmExternalDependency = frozenVmExternal vm
             }
 
 assertGeneric :: Mode -> ByteString -> Expectation
@@ -289,6 +292,35 @@ growthSpec = describe "script and table growth" $ do
         map fst (observedFacts observed) `shouldBe` ["keep"]
         map (fst . snd) (observedFacts observed) `shouldBe` [True]
         observedHooks observed `shouldBe` [Just mempty]
+
+dependencySpec :: Spec
+dependencySpec = describe "dependency spec parity" $
+    for_ dependencyReleases $ \(label, members, expected) ->
+        it ("projects " <> label <> " as the frozen base does, under shared and own keys") $
+            for_ [True, False] $ \share -> do
+                let body = packument (extended members)
+                assertParity 64 share [body]
+                assertParity 64 share (byteChunks body)
+                observed <- successful (directRead 64 share [body])
+                map (fmap pkgDependencySources . snd . snd) (observedFacts observed) `shouldBe` [Right expected]
+
+-- Each release's installable dependency maps, written as bytes so a key can repeat, and the fact it projects.
+dependencyReleases :: [(String, ByteString, DependencySources)]
+dependencyReleases =
+    [ ("a git source in each installable map", "\"peerDependencies\":{\"c\":\"github:acme/c\"},\"optionalDependencies\":{\"b\":\"git+ssh://git@github.com:acme/b.git\"},\"dependencies\":{\"a\":\"https://example.test/a.tgz\"}", outside "a" "dependencies" "a remote URL")
+    , ("the smallest name in the earliest field", "\"optionalDependencies\":{\"zeta\":\"acme/zeta\",\"beta\":\"acme/beta\",\"safe\":\"^1.0.0\"},\"peerDependencies\":{\"alpha\":\"acme/alpha\"}", outside "beta" "optionalDependencies" "a git source")
+    , ("a registry range, then a git source, under one name", "\"dependencies\":{\"left-pad\":\"^1.0.0\",\"left-pad\":\"github:acme/left-pad\"}", RegistryDependencies)
+    , ("a git source, then a registry range, under one name", "\"dependencies\":{\"left-pad\":\"github:acme/left-pad\",\"left-pad\":\"^1.0.0\"}", outside "left-pad" "dependencies" "a git source")
+    , ("a number, then a git source, under one name", "\"dependencies\":{\"left-pad\":7,\"left-pad\":\"github:acme/left-pad\"}", RegistryDependencies)
+    , ("an object, then a git source, under one name", "\"dependencies\":{\"left-pad\":{\"url\":\"github:acme/left-pad\"},\"left-pad\":\"github:acme/left-pad\"}", RegistryDependencies)
+    , ("a repeated dependencies map", "\"dependencies\":{\"a\":\"^1.0.0\"},\"dependencies\":{\"b\":\"github:acme/b\"}", RegistryDependencies)
+    , ("an escaped name and spec", "\"dependencies\":{\"l\\u0065ft-pad\":\"github:acme\\/left-pad\"}", outside "left-pad" "dependencies" "a git source")
+    , ("a git source only in devDependencies", "\"devDependencies\":{\"left-pad\":\"github:acme/left-pad\"},\"dependencies\":{\"other\":\"^1.0.0\"}", RegistryDependencies)
+    , ("an unsupported scheme beside an alias and local specs", "\"dependencies\":{\"alias\":\"npm:left-pad@1\",\"local\":\"link:../local\",\"std\":\"jsr:@std/path@^1\",\"tree\":\"workspace:*\"}", outside "std" "dependencies" "an unsupported scheme")
+    , ("dependency maps that are not objects", "\"dependencies\":\"github:acme/left-pad\",\"optionalDependencies\":[\"github:acme/left-pad\"],\"peerDependencies\":null", RegistryDependencies)
+    ]
+  where
+    outside dependency field kind = FetchesOutsideRegistry ("dependency '" <> dependency <> "' in " <> field <> " names " <> kind)
 
 generatedSpec :: Spec
 generatedSpec = modifyMaxSuccess (const 2000) $ do
@@ -611,6 +643,7 @@ data FrozenVersionManifest = FrozenVersionManifest
     , frozenVmHasInstallScript :: Maybe Bool
     , frozenVmScripts :: Map Text Text
     , frozenVmLicense :: Maybe FrozenLicense
+    , frozenVmExternal :: Maybe ExternalDependency
     }
     deriving stock (Eq, Show)
 
@@ -624,6 +657,7 @@ instance FromJSON FrozenVersionManifest where
             <*> o .:? "hasInstallScript"
             <*> o .:? "scripts" .!= mempty
             <*> o .:? "license"
+            <*> pure (externalDependencyOf o)
 
 frozenAvailability :: Maybe Value -> Availability
 frozenAvailability = \case
@@ -649,6 +683,7 @@ frozenProjectDetails requested version publishedAt (FrozenVersionEntry vm) =
         , pkgVersion = version
         , pkgPublishedAt = publishedAt
         , pkgInstallCode = frozenInstallCode vm
+        , pkgDependencySources = maybe RegistryDependencies (FetchesOutsideRegistry . renderExternalDependency) (frozenVmExternal vm)
         , pkgAvailability = frozenVmAvailability vm
         , pkgArtifacts = (:| []) $! frozenProjectArtifact version (frozenVmDist vm)
         }

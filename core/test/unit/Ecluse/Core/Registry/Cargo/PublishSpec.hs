@@ -10,6 +10,7 @@ import Data.Aeson.KeyMap qualified as KeyMap
 import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as LBS
 import Data.Map.Strict qualified as Map
+import Data.Text qualified as T
 import Network.HTTP.Client (defaultManagerSettings, newManager)
 import Network.HTTP.Types (ResponseHeaders)
 import Network.HTTP.Types.Status (Status, status200, status401, status403, status404, status500)
@@ -18,15 +19,16 @@ import Test.Hspec
 import Ecluse.Core.Credential (bareCredential, mkSecret)
 import Ecluse.Core.Package (PackageDetails (pkgName, pkgVersion), PackageInfo (..))
 import Ecluse.Core.Package.Entry (EntryKey (RecordEntry))
-import Ecluse.Core.Registry (FetchFault (FetchBoundExceeded, FetchUrlUnformable), PublishError (PublishError), PublishFault (..), UrlFormationError (UnparseableUrl))
-import Ecluse.Core.Registry.Adapter.Capability (AdapterPublish (publishMirrorRequirements, publishRelay), MirrorRequirements (mirrorStateRequirement), MirrorStateRequirement (DurableVersionState), PublishExtras (NoPublishExtras), PublishRequestBody (PublishRequestBody))
+import Ecluse.Core.Registry (FetchFault (FetchBoundExceeded, FetchUrlUnformable), ParseError (..), PublishBodyFault (PublishMalformed), PublishError (PublishError), PublishFault (..), UrlFormationError (UnparseableUrl))
+import Ecluse.Core.Registry.Adapter.Capability (AdapterPublish (publishMirrorRequirements, publishRelay), MirrorRequirements (mirrorStateRequirement), PublishExtras (NoPublishExtras), PublishRequestBody (PublishRequestBody), durableMirrorDocuments)
 import Ecluse.Core.Registry.CachedDocument (cargoCached)
 import Ecluse.Core.Registry.Cargo.Document (cargoDocument)
 import Ecluse.Core.Registry.Cargo.Publish
 import Ecluse.Core.Registry.Cargo.Publish.Body qualified as Body
 import Ecluse.Core.Registry.Metadata (VersionDoc (..))
 import Ecluse.Core.Registry.Origin (originClient)
-import Ecluse.Core.Registry.Publish (MirrorTransport (..), PublishCodec (pcNativeComplete), PublishPlan (PublishPlan), newMirrorPublish)
+import Ecluse.Core.Registry.Publish (MirrorPublish (mpProbeInventory), MirrorTransport (..), PublishCodec (pcNativeComplete), PublishPlan (PublishPlan), newMirrorPublish)
+import Ecluse.Core.Registry.Request (AuthMechanism (AuthBearer), declaredPresentation, nativePresentation)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Core.Security.Limits (BodyLimit (MetadataBodyLimit), LimitError (BodyTooLarge), Limits (maxMetadataBytes), defaultLimits)
 import Ecluse.Core.Server.Admission.Types (ChargeFactors (ChargeFactors))
@@ -36,7 +38,7 @@ import Ecluse.Test.Package (hexSha256Of)
 import Ecluse.Test.Port (passthroughTracingPort)
 import Ecluse.Test.Registry.Cargo.Fixtures (CargoRelease (releaseArchive, releaseChecksum), cargoCrateArchive, cargoIndexRecord, cargoUpload, cargoUploadMetadata, cargoUploadWithMetadata)
 import Ecluse.Test.Registry.Cargo.Metadata (cargoTestName)
-import Ecluse.Test.Registry.Cargo.Publish (cargoPublicationFixture, cargoResolverAgreements, cargoResolverArchive, cargoResolverContradictions, cargoResolverMetadata, cargoSourceVersion)
+import Ecluse.Test.Registry.Cargo.Publish (cargoForeignDevArchive, cargoForeignDevMetadata, cargoForeignRegistryArchive, cargoForeignRegistryMetadata, cargoForeignRegistryRefusal, cargoPublicationFixture, cargoResolverAgreements, cargoResolverArchive, cargoResolverContradictions, cargoResolverDependencyField, cargoResolverMetadata, cargoSourceVersion, cargoUnstableManifestArchive, cargoUnstableManifestRefusal)
 import Ecluse.Test.Registry.Cargo.Reference (UploadFrame (..), referenceUpload)
 import Ecluse.Test.Registry.Publish (publishOnlyFile)
 import Ecluse.Test.Stub (Captured (..), allCaptured, headerValue, stubBaseUrl, withRoutedStub)
@@ -67,6 +69,19 @@ spec = do
                     KeyMap.lookup "readme" (uploadMetadata parsed) `shouldBe` Just (String "owned readme")
                     KeyMap.lookup "authors" (uploadMetadata parsed) `shouldBe` Just (Array (fromList [String "Ecluse contributors"]))
                     headerValue "Content-Type" written `shouldBe` Just "application/octet-stream"
+        it "renders a store-declared mechanism on discovery, the index read and the upload" $
+            withRoutedStub (targetReply "/registry") $ \stub -> do
+                release <- cargoPublicationFixture
+                doc <- cargoSourceVersion (cargoIndexRecord release)
+                let details = vdDetails doc
+                withExchangeClient (newManager defaultManagerSettings) $ \exchanges -> do
+                    let transport = MirrorTransport exchanges (pure (Just (bareCredential (mkSecret "cargo-token")))) defaultLimits passthroughTracingPort
+                        writer = newMirrorPublish transport (loopbackRegistryUrl (stubBaseUrl stub <> "/index")) (loopbackRegistryUrl (stubBaseUrl stub <> "/registry")) (cargoPublishCodec factors (declaredPresentation (const AuthBearer)))
+                    _ <- mpProbeInventory writer (const pass) (pkgName details)
+                    publishOnlyFile writer doc (PublishPlan (pkgVersion details)) (releaseArchive release) `shouldReturn` Right ()
+                    captures <- allCaptured stub
+                    map capMethod captures `shouldBe` ["GET", "GET", "GET", "PUT"]
+                    map (headerValue "Authorization") captures `shouldBe` replicate 4 (Just "Bearer cargo-token")
         it "publishes modern source omissions with interpreted dependency defaults" $
             withRoutedStub (targetReply "/registry") $ \stub -> do
                 original <- cargoPublicationFixture
@@ -198,7 +213,7 @@ spec = do
             doc <- cargoSourceVersion (cargoIndexRecord release)
             let details = vdDetails doc
             pcNativeComplete codec (pkgName details) (pkgVersion details) (PackageInfo (pkgName details) (Map.singleton (renderVersion (pkgVersion details)) details) mempty []) `shouldBe` False
-            mirrorStateRequirement (publishMirrorRequirements (cargoPublish factors)) `shouldBe` DurableVersionState
+            isJust (durableMirrorDocuments (mirrorStateRequirement (publishMirrorRequirements (cargoPublish factors)))) `shouldBe` True
     describe "Cargo first-party claims" $ do
         it "refuses authorised-name disagreement and query or fragment API roots before sending a credential" $
             withRoutedStub (targetReply "/registry") $ \stub -> do
@@ -209,16 +224,16 @@ spec = do
                         at target = originClient defaultLimits exchanges (loopbackRegistryUrl target) (Just (bareCredential (mkSecret "cargo-token")))
                         body = PublishRequestBody bytes Nothing NoPublishExtras
                     for_ [root <> "?query=secret", root <> "#fragment"] $ \target ->
-                        publishRelay (cargoPublish factors) (at target) cargoTestName body
+                        publishRelay (cargoPublish factors) nativePresentation (at target) cargoTestName body
                             `shouldReturn` Left (FetchUrlUnformable (UnparseableUrl "Cargo API root must not contain a query or fragment"))
                     case cargoUploadMetadata release of
                         Object fields -> do
                             changed <- LBS.toStrict <$> expectRight (Body.encodeUpload (Object (KeyMap.insert "name" (String "another") fields)) (releaseArchive release))
-                            publishRelay (cargoPublish factors) (at root) cargoTestName (PublishRequestBody changed Nothing NoPublishExtras)
+                            publishRelay (cargoPublish factors) nativePresentation (at root) cargoTestName (PublishRequestBody changed Nothing NoPublishExtras)
                                 `shouldReturn` Left (FetchUrlUnformable (UnparseableUrl "Cargo relay name differs from the authorised package"))
                         _ -> expectationFailure "fixture upload metadata is not an object"
                     allCaptured stub `shouldReturn` []
-                    void (publishRelay (cargoPublish factors) (at root) cargoTestName body >>= expectRight)
+                    void (publishRelay (cargoPublish factors) nativePresentation (at root) cargoTestName body >>= expectRight)
                     captures <- allCaptured stub
                     map capMethod captures `shouldBe` ["PUT"]
                     map capBody captures `shouldBe` [bytes]
@@ -226,25 +241,51 @@ spec = do
         it "accepts matching complete upload metadata and archive identity" $ do
             release <- cargoPublicationFixture
             bytes <- expectRight (cargoUpload release)
-            uploadClaims defaultLimits (const (pure ())) "https://proxy.test/cargo/private" (PublishRequestBody bytes Nothing NoPublishExtras) `shouldReturn` Right ["fixture"]
+            uploadClaims defaultLimits (const (pure ())) "https://proxy.test/cargo" (PublishRequestBody bytes Nothing NoPublishExtras) `shouldReturn` Right ["fixture"]
         it "compares complete resolver facts against the retained effective manifest" $ do
             archive <- cargoResolverArchive
             for_ cargoResolverAgreements $ \metadata -> do
                 valid <- expectRight (cargoUploadWithMetadata metadata archive)
-                uploadClaims defaultLimits (const (pure ())) "https://proxy.test/cargo/private" (PublishRequestBody valid Nothing NoPublishExtras) `shouldReturn` Right ["fixture"]
+                uploadClaims defaultLimits (const (pure ())) "https://proxy.test/cargo" (PublishRequestBody valid Nothing NoPublishExtras) `shouldReturn` Right ["fixture"]
             for_ cargoResolverContradictions $ \metadata -> do
                 bytes <- expectRight (cargoUploadWithMetadata metadata archive)
                 Body.decodeUpload defaultLimits bytes `shouldSatisfy` isRight
-                uploadClaims defaultLimits (const (pure ())) "https://proxy.test/cargo/private" (PublishRequestBody bytes Nothing NoPublishExtras) >>= (`shouldSatisfy` isLeft)
+                uploadClaims defaultLimits (const (pure ())) "https://proxy.test/cargo" (PublishRequestBody bytes Nothing NoPublishExtras) >>= (`shouldSatisfy` isLeft)
         it "reserves comparison workspace after archive inspection and before accepting resolver claims" $ do
             archive <- cargoResolverArchive
             bytes <- expectRight (cargoUploadWithMetadata cargoResolverMetadata archive)
             paid <- newIORef ([] :: [Int])
-            uploadClaims defaultLimits (\cost -> modifyIORef' paid (<> [cost])) "https://proxy.test/cargo/private" (PublishRequestBody bytes Nothing NoPublishExtras) `shouldReturn` Right ["fixture"]
+            uploadClaims defaultLimits (\cost -> modifyIORef' paid (<> [cost])) "https://proxy.test/cargo" (PublishRequestBody bytes Nothing NoPublishExtras) `shouldReturn` Right ["fixture"]
             payments <- readIORef paid
             case reverse payments of
                 comparison : archiveCharge : _ -> comparison `shouldSatisfy` (> archiveCharge)
                 _ -> expectationFailure "Cargo upload omitted its archive or comparison reservation"
+        it "refuses unstable dependency fields before archive inspection" $ do
+            archive <- cargoResolverArchive
+            for_ ["artifact", "bindep_target", "lib", "public"] $ \key -> do
+                bytes <- expectRight (cargoUploadWithMetadata (cargoResolverDependencyField key (Bool True)) archive)
+                paid <- newIORef ([] :: [Int])
+                refused <- uploadClaims defaultLimits (\cost -> modifyIORef' paid (<> [cost])) "https://proxy.test/cargo" (PublishRequestBody bytes Nothing NoPublishExtras)
+                refused `shouldSatisfy` \case
+                    Left (PublishMalformed fault) -> "Cargo upload dependency 'tool' carries an unstable" `T.isInfixOf` parseErrorMessage fault
+                    _ -> False
+                -- The metadata reservation is the only charge, so the archive was never inspected.
+                length <$> readIORef paid `shouldReturn` 1
+        it "refuses a dependency on another registry, naming it and the fix" $ do
+            archive <- cargoForeignRegistryArchive
+            bytes <- expectRight (cargoUploadWithMetadata cargoForeignRegistryMetadata archive)
+            uploadClaims defaultLimits (const (pure ())) "https://proxy.test/cargo" (PublishRequestBody bytes Nothing NoPublishExtras)
+                `shouldReturn` Left (PublishMalformed (ParseError cargoForeignRegistryRefusal))
+        it "refuses an archived manifest dependency carrying an unstable key the upload omits" $
+            for_ ["artifact='bin'", "lib=true", "public=true", "target='x86_64-unknown-linux-gnu'"] $ \declaration -> do
+                archive <- cargoUnstableManifestArchive declaration
+                bytes <- expectRight (cargoUploadWithMetadata cargoResolverMetadata archive)
+                uploadClaims defaultLimits (const (pure ())) "https://proxy.test/cargo" (PublishRequestBody bytes Nothing NoPublishExtras)
+                    `shouldReturn` Left (PublishMalformed (ParseError (cargoUnstableManifestRefusal "tool")))
+        it "accepts a dev-dependency on another registry, as npm accepts devDependencies" $ do
+            archive <- cargoForeignDevArchive
+            bytes <- expectRight (cargoUploadWithMetadata cargoForeignDevMetadata archive)
+            uploadClaims defaultLimits (const (pure ())) "https://proxy.test/cargo" (PublishRequestBody bytes Nothing NoPublishExtras) `shouldReturn` Right ["fixture"]
         it "rejects malformed members before either claims or relay can contact the destination" $
             withRoutedStub (targetReply "/registry") $ \stub -> do
                 release <- cargoPublicationFixture
@@ -254,8 +295,8 @@ spec = do
                         Object fields -> for_ [("deps", Array (fromList [Null])), ("authors", Array (fromList [Number 42]))] $ \(key, value) -> do
                             bytes <- LBS.toStrict <$> expectRight (Body.encodeUpload (Object (KeyMap.insert key value fields)) (releaseArchive release))
                             let body = PublishRequestBody bytes Nothing NoPublishExtras
-                            uploadClaims defaultLimits (const (pure ())) "https://proxy.test/cargo/private" body >>= (`shouldSatisfy` isLeft)
-                            publishRelay (cargoPublish factors) origin cargoTestName body >>= (`shouldSatisfy` isLeft)
+                            uploadClaims defaultLimits (const (pure ())) "https://proxy.test/cargo" body >>= (`shouldSatisfy` isLeft)
+                            publishRelay (cargoPublish factors) nativePresentation origin cargoTestName body >>= (`shouldSatisfy` isLeft)
                         _ -> expectationFailure "fixture upload metadata is not an object"
                     allCaptured stub `shouldReturn` []
         it "rejects different archive name, version and build spelling before relay" $ do
@@ -263,7 +304,7 @@ spec = do
             case cargoUploadMetadata release of
                 Object fields -> for_ [("name", "another"), ("vers", "2.0.0"), ("vers", "1.0.0+other")] $ \(key, value) -> do
                     bytes <- LBS.toStrict <$> expectRight (Body.encodeUpload (Object (KeyMap.insert key (String value) fields)) (releaseArchive release))
-                    uploadClaims defaultLimits (const (pure ())) "https://proxy.test/cargo/private" (PublishRequestBody bytes Nothing NoPublishExtras) >>= (`shouldSatisfy` isLeft)
+                    uploadClaims defaultLimits (const (pure ())) "https://proxy.test/cargo" (PublishRequestBody bytes Nothing NoPublishExtras) >>= (`shouldSatisfy` isLeft)
                 _ -> expectationFailure "fixture upload metadata is not an object"
     describe "Cargo native response classification" $ do
         it "accepts native success objects and rejects errors even with a success status" $ do
@@ -276,7 +317,7 @@ factors :: ChargeFactors
 factors = ChargeFactors 1000 1000 1000
 
 codec :: PublishCodec
-codec = cargoPublishCodec factors
+codec = cargoPublishCodec factors nativePresentation
 
 targetReply :: Text -> Captured -> (Status, ResponseHeaders, LByteString)
 targetReply api captured =

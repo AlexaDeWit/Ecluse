@@ -118,6 +118,7 @@ retainedFields =
     [ ("canonical, display, and base names", \p -> p{pkgName = mkPackageName Npm Nothing longText})
     , ("scope", \p -> p{pkgName = mkPackageName Npm (Just (mkScope longText)) "name"})
     , ("install reason", \p -> p{pkgInstallCode = RunsCodeOnInstall longText})
+    , ("dependency source reason", \p -> p{pkgDependencySources = FetchesOutsideRegistry longText})
     , ("timestamp Integer payload", \p -> p{pkgPublishedAt = Just (UTCTime (ModifiedJulianDay (10 ^ (5000 :: Int))) 0)})
     , ("entry coordinates", changeArtifact (\a -> a{artEntryKey = ObjectEntry longText}))
     , ("filenames", changeArtifact (\a -> a{artFilename = longText}))

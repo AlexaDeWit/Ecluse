@@ -30,6 +30,7 @@ import UnliftIO (MonadUnliftIO)
 import Ecluse.Core.Ecosystem (Ecosystem)
 import Ecluse.Core.Fault (TransportFault)
 import Ecluse.Core.Mirror.State (MirrorState, StateCharge, StateTarget)
+import Ecluse.Core.Mirror.State.Format (MirrorStateFormat)
 import Ecluse.Core.Package (PackageName, renderPackageName)
 import Ecluse.Core.Package.Integrity (MinIntegrity)
 import Ecluse.Core.Queue (MirrorJob (jobPackage, jobVersion), MirrorQueue)
@@ -39,7 +40,6 @@ import Ecluse.Core.Registry.Metadata (VersionEvaluation)
 import Ecluse.Core.Registry.Public (PublicControl)
 import Ecluse.Core.Registry.Publish (MirrorPublish)
 import Ecluse.Core.Rules (PreparedRule)
-import Ecluse.Core.Rules.Install (InstallEvidenceFlightBudget, InstallEvidenceProvider)
 import Ecluse.Core.Security (HostPort, Limits)
 import Ecluse.Core.Security.Egress (RegistryUrl)
 import Ecluse.Core.Telemetry.Record (WorkerMetricsPort)
@@ -73,8 +73,6 @@ data WorkerPolicy = WorkerPolicy
     -- ^ Whether a name belongs to a namespace this deployment owns.
     , wpResolveVersion :: StateCharge -> PackageName -> Version -> IO VersionEvaluation
     -- ^ Resolve through the guarded public origin, charging retained source fields before parsing.
-    , wpInstallEvidence :: Maybe InstallEvidenceProvider
-    -- ^ Rebind each immutable subject to this job's anonymous artifact reader.
     , wpRules :: [PreparedRule]
     -- ^ The prepared rule set re-evaluated against the resolved version.
     , wpMinIntegrity :: MinIntegrity
@@ -87,6 +85,8 @@ data WorkerPolicy = WorkerPolicy
     -- ^ The mount ecosystem's artifact capability. A job's @GET@ rides its by-URL member.
     , wpPublish :: MirrorPublish
     -- ^ Bind inventory reads and publication to the mount's declared mirror target.
+    , wpMirrorFormat :: MirrorStateFormat
+    -- ^ How the mount's mirror records keep its adapter's read data, durable or not.
     , wpArtifactLimits :: Limits
     -- ^ Bound artifact downloads by the memory plan's mirror-artifact allocation.
     , wpMirrorState :: Maybe WorkerMirrorState
@@ -113,7 +113,6 @@ data WorkerStateBudget = WorkerStateBudget
     , wsbArchive :: StateCharge
     , wsbSource :: StateCharge
     , wsbTargets :: StateCharge
-    , wsbEvidenceFlight :: Maybe InstallEvidenceFlightBudget
     }
 
 -- | Key bundles by ecosystem. Jobs without a bundle are dropped without publication.

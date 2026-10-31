@@ -31,29 +31,28 @@ spec = do
 observedDriver :: (Text -> Text) -> (LByteString -> LByteString) -> ServingDriver
 observedDriver changeDigest changeBytes =
     ServingDriver
-        { withServing = \_ _ _ releases action -> do
-            release <- maybe (fail "contract supplied no public fixture") pure (listToMaybe releases)
-            let response =
-                    ServingResponse
-                        { responseStatus = 200
-                        , responseBody = toLazy (releaseBytes release)
-                        , responseHeaders = []
-                        , responseVersions = [releaseVersion release]
-                        , responseDigests = Map.singleton (releaseVersion release) [changeDigest (decodeUtf8 (releaseBytes release))]
-                        }
-            action
-                ServingSession
-                    { requestMetadata = \_ _ -> pure response
-                    , requestArtifact = \_ _ _ -> pure response{responseBody = changeBytes (responseBody response)}
-                    , requestPrivateMetadata = \_ _ -> pure response
-                    , requestPrivateArtifact = \_ _ _ -> pure response
-                    , publicSourceIdentity = "observed"
-                    , privateSourceIdentity = "observed"
-                    }
-        , servingLayout = CombinedRegistry
+        { withServing = \_ _ _ releases action -> observed releases action
+        , withFaultedServing = \_ _ _ releases action -> observed releases action
         , servingIdentity = ("thing@" <>)
         , servingDigest = decodeUtf8
         }
+  where
+    observed :: [ServingRelease] -> (ServingSession -> IO a) -> IO a
+    observed releases action = do
+        release <- maybe (fail "contract supplied no public fixture") pure (listToMaybe releases)
+        let response =
+                ServingResponse
+                    { responseStatus = 200
+                    , responseBody = toLazy (releaseBytes release)
+                    , responseHeaders = []
+                    , responseVersions = [releaseVersion release]
+                    , responseDigests = Map.singleton (releaseVersion release) [changeDigest (decodeUtf8 (releaseBytes release))]
+                    }
+        action
+            ServingSession
+                { requestMetadata = \_ _ -> pure response
+                , requestArtifact = \_ _ _ -> pure response{responseBody = changeBytes (responseBody response)}
+                }
 
 headResponse :: LByteString -> [Network.HTTP.Types.Header] -> ServingResponse
 headResponse body headers = ServingResponse 200 body headers [] mempty

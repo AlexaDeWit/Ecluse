@@ -51,7 +51,6 @@ import Ecluse.Test.Rules (
     constRule,
     differentialRemediation,
     evalRule,
-    evalRules,
     inertRuleDeps,
     isAllow,
     isBlockedByDefault,
@@ -61,7 +60,6 @@ import Ecluse.Test.Rules (
     isUndecidable,
     mapPackageRead,
     mapResilience,
-    newEvaluator,
     packageRule,
     remediationWith,
     sentences,
@@ -86,6 +84,13 @@ import Ecluse.Rules.Support (SourceState (Faulting, Loaded), ctx, ctxAt, normali
 
 listed :: Maybe Text -> RuleEvidence
 listed mScope = identityEvidence (mkPackageName Npm (mkScope <$> mScope) "thing") v1_0_0
+
+-- | Evidence whose installable dependency names a git source.
+fetchesOutside :: RuleEvidence -> RuleEvidence
+fetchesOutside ev = ev{evDependencySources = Known (FetchesOutsideRegistry externalReason)}
+
+externalReason :: Text
+externalReason = "dependency 'left-pad' in dependencies names a git source"
 
 at :: Int -> Rule -> PrecededRule
 at = atPrecedence
@@ -820,7 +825,6 @@ poisonAt eco poison rules = case poison of
 poisonRule :: Version -> RuleVerdict -> PreparedRule -> PreparedRule
 poisonRule version verdict rule = case prepEval rule of
     PerVersion eval -> rule{prepEval = PerVersion (\c ev -> if evVersion ev == version then pure verdict else eval c ev)}
-    PerInstallEvidence eval -> rule{prepEval = PerInstallEvidence (\c ev -> if evVersion ev == version then verdict else eval c ev)}
     PerPackage packageRead -> rule{prepEval = PerPackage packageRead{prVerdict = \rows ev -> if evVersion ev == version then verdict else prVerdict packageRead rows ev}}
 
 -- | A per-version rule at a precedence that returns one of 'poisonedVerdicts' for a release and abstains on every other.
@@ -917,7 +921,6 @@ policyKeys = map (\r -> ((Down (rulePrecedence r), ruleName (prRule r)), readsPa
     readsPackage rule = case verdictSource rule of
         FromAdvisories{} -> True
         FromEvidence _ -> False
-        FromInstallEvidence _ -> False
 
 bombKeys :: Maybe Bomb -> [RuleKey]
 bombKeys = maybe [] (\(Bomb prec _ _) -> [((Down prec, "PureBomb"), False)])
@@ -1061,6 +1064,10 @@ ruleSentences =
     , ("DenyInstallTimeExecution with no install code", inertRuleDeps, DenyInstallTimeExecution, pkg Nothing 0, NoDecision NothingRunsOnInstall, "no install-time code execution")
     , ("DenyInstallTimeExecution with the signal undetermined", inertRuleDeps, DenyInstallTimeExecution, (pkg Nothing 0){evInstallCode = Known CodeExecUnknown}, NoDecision InstallCodeUndetermined, "install-time code execution not yet determined")
     , ("DenyInstallTimeExecution with the signal unread", inertRuleDeps, DenyInstallTimeExecution, listed Nothing, CannotVet FailDeny InstallSignalUnread, "the install-time execution signal is not available")
+    , ("DenyExternalDependencies on a dependency from outside the registry", inertRuleDeps, DenyExternalDependencies, fetchesOutside (pkg Nothing 0), Deny Nothing (FetchesOutside externalReason), "installs a dependency from outside the registry: dependency 'left-pad' in dependencies names a git source")
+    , ("DenyExternalDependencies with every dependency through the registry", inertRuleDeps, DenyExternalDependencies, pkg Nothing 0, NoDecision DependenciesThroughRegistry, "every installable dependency resolves through the registry")
+    , ("DenyExternalDependencies with the dependency sources undetermined", inertRuleDeps, DenyExternalDependencies, (pkg Nothing 0){evDependencySources = Known DependencySourcesUnknown}, NoDecision DependencySourcesUndetermined, "dependency sources not yet determined")
+    , ("DenyExternalDependencies with the dependency sources unread", inertRuleDeps, DenyExternalDependencies, listed Nothing, CannotVet FailDeny DependencySourcesUnread, "the dependency sources are not available")
     , ("DenyByIdentity on its identity", inertRuleDeps, DenyByIdentity "thing@1.0.0", pkg Nothing 0, Deny Nothing (IdentityRevoked "thing@1.0.0"), "identity thing@1.0.0 is revoked by operator")
     , ("DenyByIdentity on another identity", inertRuleDeps, DenyByIdentity "other", pkg Nothing 0, NoDecision (IdentityNotRevoked "other"), "identity is not the revoked other")
     , ("DenyByIdentity on a PyPI project", inertRuleDeps, DenyByIdentity "Flask_Thing@1.0.0", pypiPkg 0, Deny Nothing (IdentityRevoked "Flask_Thing@1.0.0"), "identity Flask_Thing@1.0.0 is revoked by operator")
@@ -1099,7 +1106,7 @@ ruleSentenceSpec = describe "the sentence each built-in rule's reason reads as" 
         it label $
             evalRule deps ctx rule ev `shouldDecide` (verdict, sentence)
 
-    for_ [(AllowIfOlderThan (7 * nominalDay), "AllowIfOlderThan: the publish time is not available"), (DenyInstallTimeExecution, "DenyInstallTimeExecution: the install-time execution signal is not available")] $ \(rule, sentence) ->
+    for_ [(AllowIfOlderThan (7 * nominalDay), "AllowIfOlderThan: the publish time is not available"), (DenyInstallTimeExecution, "DenyInstallTimeExecution: the install-time execution signal is not available"), (DenyExternalDependencies, "DenyExternalDependencies: the dependency sources are not available")] $ \(rule, sentence) ->
         it (toString (ruleName rule <> " names itself in the refusal an unread fact decides")) $ do
             decision <- decide [atDefaultPrecedence rule] (listed Nothing)
             decision `shouldSatisfy` isUndecidable
@@ -1382,6 +1389,19 @@ spec = do
                 (pkg Nothing 99)
                 >>= \d -> blockedBy d `shouldBe` Just "DenyByIdentity"
 
+    describe "deny precedence (DenyExternalDependencies)" $ do
+        it "overrides the quarantine and an identity pin at their default precedences" $
+            decide (map atDefaultPrecedence [AllowIfOlderThan (7 * nominalDay), AllowByIdentity "thing", DenyExternalDependencies]) (fetchesOutside (pkg Nothing 99))
+                >>= \d -> blockedBy d `shouldBe` Just "DenyExternalDependencies"
+        it "yields to an identity pin above its precedence" $
+            decide [atDefaultPrecedence DenyExternalDependencies, at 301 (AllowByIdentity "thing")] (fetchesOutside (pkg Nothing 0))
+                >>= \d -> admittedBy d `shouldBe` Just "AllowByIdentity"
+        it "shares the deny band with the install-script deny" $
+            defaultPrecedence DenyExternalDependencies `shouldBe` defaultPrecedence DenyInstallTimeExecution
+        it "leaves the Dredger's rules when limited to admission" $
+            revocationRules [admissionOnly (atDefaultPrecedence DenyExternalDependencies), atDefaultPrecedence (AllowIfOlderThan 0)]
+                `shouldBe` [atDefaultPrecedence (AllowIfOlderThan 0)]
+
     describe "deny precedence (DenyIfEpss)" $ do
         it "overrides the quarantine allow at default precedences, whatever the order" $ do
             let rs = [atDefaultPrecedence (AllowIfOlderThan (7 * nominalDay)), atDefaultPrecedence (denyEpssAt 0.5)]
@@ -1611,6 +1631,9 @@ spec = do
                         `shouldBe` [ "scope is not the allow-listed @myorg"
                                    , "published only 1 day ago, minimum age is 7 days"
                                    ]
+        it "abstains on an undetermined install signal and lets a lower age allow admit" $
+            decide [at 300 DenyInstallTimeExecution, at 100 (AllowIfOlderThan 0)] (pkg Nothing 30){evInstallCode = Known CodeExecUnknown}
+                >>= \d -> admittedBy d `shouldBe` Just "AllowIfOlderThan"
 
     describe "verdict exceptions" $ do
         let versions = [(pkg Nothing 30){evVersion = v} | v <- map (mkVersion Npm) ["1.0.0", "2.0.0", "3.0.0"]]

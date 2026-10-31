@@ -14,15 +14,16 @@ import Ecluse.Core.Registry (UrlFormationError (UnparseableUrl))
 import Ecluse.Core.Registry.Adapter.Capability (AdapterArtifact (..), AdapterMaintenance (..), AdapterMetadata (..), PrivateArtifactAddressing (AdmittedIndexedArtifactLocation))
 import Ecluse.Core.Registry.Adapter.Types (AdapterServe (..), RegistryAdapter (..))
 import Ecluse.Core.Registry.Cargo.Credential (cargoCredential)
-import Ecluse.Core.Registry.Cargo.Execution (newCargoInstallEvidence)
+import Ecluse.Core.Registry.Cargo.FirstParty (cargoFirstPartyNames)
 import Ecluse.Core.Registry.Cargo.Metadata (prepareCargoRead)
 import Ecluse.Core.Registry.Cargo.Project (cargoNameChars, projectName)
 import Ecluse.Core.Registry.Cargo.Publish (cargoPublish)
 import Ecluse.Core.Registry.Cargo.Request (cargoArtifactHosts, cargoArtifactRequest)
 import Ecluse.Core.Registry.Cargo.Route (cargoRouteSpecs, cargoRouter)
 import Ecluse.Core.Registry.Cargo.Serving (assembleCargoDocument, serialiseCargoDocument)
+import Ecluse.Core.Registry.FirstParty (FirstPartyDeclaration (FirstPartyDeclaration))
 import Ecluse.Core.Registry.Maintenance.NameSpace (mkNameAlphabet)
-import Ecluse.Core.Rules.Types (RuleType (AllowScopeType, DenyIfDeprecatedType))
+import Ecluse.Core.Rules.Types (RuleType (AllowScopeType, DenyIfDeprecatedType, DenyInstallTimeExecutionType))
 import Ecluse.Core.Server.Admission.Types (ChargeFactors)
 
 -- | Supply native measurements before registering the adapter in the runtime.
@@ -32,8 +33,9 @@ cargoAdapter factors =
         { adapterEcosystem = Cargo
         , adapterRuleBlocks =
             Map.fromList
-                [ (AllowScopeType, "Cargo package names have no scope.")
+                [ (DenyInstallTimeExecutionType, "Cargo's sparse index does not declare build scripts or procedural macros. This rule is unsupported for the ecosystem.")
                 , (DenyIfDeprecatedType, "Cargo's sparse index supplies no deprecation flag.")
+                , (AllowScopeType, "Cargo package names have no scope.")
                 ]
         , adapterServe =
             AdapterServe
@@ -56,6 +58,7 @@ cargoAdapter factors =
                 , artifactPrivateAddressing = AdmittedIndexedArtifactLocation
                 }
         , adapterProjectName = rightToMaybe . projectName
+        , adapterFirstParty = FirstPartyDeclaration cargoFirstPartyNames
         , adapterPublish = Just (cargoPublish factors)
         , adapterMaintenance =
             AdapterMaintenance
@@ -63,5 +66,4 @@ cargoAdapter factors =
                 , maintenanceVersionDelete = Nothing
                 , maintenanceAlphabet = mkNameAlphabet cargoNameChars
                 }
-        , adapterInstallEvidence = Just newCargoInstallEvidence
         }

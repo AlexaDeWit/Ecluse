@@ -15,14 +15,12 @@ module Ecluse.Core.StreamBench.Sink (
     SinkBuffer,
     newSinkBuffer,
     sentBytes,
-    sentBody,
 ) where
 
 import Data.ByteString qualified as BS
 import Data.ByteString.Builder (Builder, byteString)
 import Data.ByteString.Builder.Extra (flush)
 import Data.Streaming.ByteString.Builder (Buffer, allocBuffer, newByteStringBuilderRecv, reuseBufferStrategy)
-import UnliftIO.Exception (evaluate)
 
 import Ecluse.Core.Deadline (newDeadlines)
 import Ecluse.Core.Registry.Progress (meteredReader, watchedRaising)
@@ -70,15 +68,6 @@ sentBytes buffer pump chunks = do
     total <- newIORef 0
     runSink buffer (\piece -> modifyIORef' total (+ BS.length piece)) pump chunks
     readIORef total
-
--- | Pump the chunks into the sink and copy out every byte it sends, in order.
-sentBody :: SinkBuffer -> Pump -> [ByteString] -> IO ByteString
-sentBody buffer pump chunks = do
-    pieces <- newIORef []
-    -- The copy must run before send returns, while the piece still holds its bytes.
-    let keep piece = evaluate (BS.copy piece) >>= \copied -> modifyIORef' pieces (copied :)
-    runSink buffer keep pump chunks
-    BS.concat . reverse <$> readIORef pieces
 
 -- Warp's sendRsp for RspStream: writes fill the reused buffer, each full or flushed buffer goes to send,
 -- and the end of the stream sends the tail. A piece aliases the buffer until send returns.

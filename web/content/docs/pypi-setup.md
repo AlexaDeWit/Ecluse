@@ -40,12 +40,12 @@ mounts:
     publicationTarget:
       codeArtifact:
         url: https://acme-123456789012.d.codeartifact.us-east-1.amazonaws.com/pypi/first-party/
+        uploadUrl: https://acme-123456789012.d.codeartifact.us-east-1.amazonaws.com/pypi/first-party/
 ```
 
 The [configuration reference](@/docs/configuration.md#the-configuration-reference) owns every key, default and environment spelling.
-The private and mirror URLs are registry roots. Écluse appends `simple/` for index reads.
-The mirror `uploadUrl` is an explicit native endpoint for the same CodeArtifact repository.
-The publication URL is the exact native upload endpoint, rather than a read root that Écluse rewrites.
+Every `url` is a registry root. Écluse appends `simple/` for index reads.
+Each `uploadUrl` is the native upload endpoint of the same CodeArtifact repository as its `url`.
 For another PyPI registry, use the `registry` tag and its native endpoints.
 A generic mirror also requires a Basic `username` and a secret `token` supplied through the environment.
 See [upload configuration](@/docs/configuration.md#pypi-uploads-and-mirror-state) for state consistency and retention requirements.
@@ -87,7 +87,7 @@ Readiness does not prove that every repository or state operation succeeds.
 The shipped policy admits old releases and qualified exact advisory fixes. Configuring
 `advisories.url` activates the known-malicious deny unless you disable it. Scored CVSS and EPSS
 denies are opt-in.
-PyPI refuses `AllowScope`, `DenyInstallTimeExecution` and `DenyIfDeprecated` in an active policy.
+PyPI refuses `AllowScope`, `DenyInstallTimeExecution`, `DenyExternalDependencies` and `DenyIfDeprecated` in an active policy.
 Do not copy npm-only rules into shared rules.
 The [rule policy](@/docs/configuration.md#rule-policy) defines precedence, unavailable-data behaviour and admission versus revocation.
 The [first-party declarations](@/docs/configuration.md#first-party-namespaces) define exact names and separator-bounded prefixes.

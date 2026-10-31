@@ -25,6 +25,8 @@ import Ecluse.Core.Ecosystem (Ecosystem (PyPI))
 import Ecluse.Core.Mirror.State.Codec (chargedDecodeProjectRecord, projectRecordWeight)
 import Ecluse.Core.Mirror.State.Internal
 import Ecluse.Core.Package
+import Ecluse.Core.Registry.PyPI.Mirror (pypiStateFormat)
+import Ecluse.Core.Registry.RubyGems.Mirror (rubyGemsStateFormat)
 import Ecluse.Core.Server.MemoryModel.Probe (HeapSample (live), sample)
 import Ecluse.Core.Version (mkVersion)
 import Ecluse.Test.Mirror.Read (ReadFixture (fixtureOld), makeReadFixture, readLimits)
@@ -149,10 +151,11 @@ prepare :: String -> FilePath -> IO (StablePtr ProjectMirrorRecord, Int)
 prepare mode path = do
     bytes <- BS.readFile path
     (target, name) <- if nativeMode mode then readRubyStateIdentity (takeDirectory path) else pure (stateTarget "https://private.test", mirrorPackage)
-    record <- chargedDecodeProjectRecord (const (pure ())) readLimits target name bytes >>= expectRight
+    let format = if nativeMode mode then rubyGemsStateFormat else pypiStateFormat
+    record <- chargedDecodeProjectRecord format (const (pure ())) readLimits target name bytes >>= expectRight
     shaped <- if nativeMode mode then pure record else shape mode record
     forceCompared shaped
-    paid <- expectRight (projectRecordWeight readLimits shaped) >>= evaluate
+    paid <- expectRight (projectRecordWeight format readLimits shaped) >>= evaluate
     root <- newStablePtr shaped
     pure (root, paid)
 

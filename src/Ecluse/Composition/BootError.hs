@@ -15,8 +15,10 @@ module Ecluse.Composition.BootError (
     renderAdvisory,
 ) where
 
+import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Data.Time (NominalDiffTime)
+import Data.Universe.Class qualified as Universe
 import UnliftIO (tryAny)
 
 import Ecluse.Config (
@@ -24,10 +26,12 @@ import Ecluse.Config (
     StoreTag,
     renderPolicyError,
     storeTagName,
+    taggedKeyPath,
  )
 import Ecluse.Config.Resolve (mountDocRef, mountKeyRef)
 import Ecluse.Core.Credential (Secret)
-import Ecluse.Core.Ecosystem (Ecosystem (Npm), ecosystemName)
+import Ecluse.Core.Ecosystem (Ecosystem, ecosystemName)
+import Ecluse.Core.Registry.Adapter (RegistryAdapter (adapterRuleBlocks), adapterFor)
 import Ecluse.Core.Registry.Maintenance.Upstream (
     ExternalConnection (externalConnectionText),
     PermissionName (permissionNameText),
@@ -38,6 +42,7 @@ import Ecluse.Core.Registry.Maintenance.Upstream (
 import Ecluse.Core.Rules.Types (RuleType)
 import Ecluse.Core.Security (authorityLabel)
 import Ecluse.Core.Security.Egress (RegistryUrl, registryUrlText)
+import Ecluse.Core.Text (joinAlternatives)
 import Ecluse.Core.Wire (renderWire)
 import Ecluse.Runtime.Aws.Fault (displayAwsFaultT)
 
@@ -63,9 +68,11 @@ data BootError
       CodeArtifactMintFailed (NonEmpty Text) Text
     | -- | A mount declares a mirror target this build cannot write for its ecosystem, so it is refused rather than booted half-wired.
       MirrorTargetWithoutPublish Ecosystem
-    | -- | A PyPI mirror role cannot retain or validate its expected inventory without durable state.
+    | -- | A mirror target's adapter prepares native companions that disagree with its durable declaration.
+      MirrorCompanionMismatch Ecosystem
+    | -- | A durable mirror role cannot retain or validate its expected inventory without durable state.
       MirrorStateRequired Ecosystem
-    | -- | An active native writer lacks its endpoint or credential convention.
+    | -- | An active native writer lacks the Basic username its credential convention needs. Carries the key path.
       UploadConfigurationRequired Ecosystem Text
     | -- | A publication target has no adapter that can write its ecosystem's protocol.
       PublicationTargetWithoutPublish Ecosystem
@@ -170,8 +177,8 @@ renderBootError = \case
             <> ecosystemName eco
             <> " ecosystem blocks: "
             <> reason
-            <> " A rule in shared rules reaches every mount. Move this type from shared rules into "
-            <> mountDocRef Npm "rules"
+            <> " A rule in shared rules reaches every mount. "
+            <> sharedRuleRemedy ty
             <> ", or disable its configured entry with enabled: false under "
             <> mountDocRef eco "rules"
             <> " ("
@@ -210,6 +217,11 @@ renderBootError = \case
             <> " is set but this build writes nothing for the "
             <> ecosystemName eco
             <> " protocol: the mirror would drain its queue with no way to publish, so the mount is refused rather than served with a mirror that fails every job."
+    MirrorCompanionMismatch eco ->
+        mountKeyRef eco "mirrorTarget"
+            <> " is set but this build's "
+            <> ecosystemName eco
+            <> " mirror writer does not prepare exactly the native metadata companions its durable state declares, so the mount is refused rather than served with a mirror that can never complete a version."
     MirrorStateRequired eco ->
         "mirrorState.url is required for mirroring on the " <> ecosystemName eco <> " mount"
     UploadConfigurationRequired eco key ->
@@ -227,7 +239,7 @@ renderBootError = \case
             <> mountKeyRef eco "privateUpstream"
             <> " is not: first-party names resolve from the private upstream alone. Configure privateUpstream for these names, or remove firstParty."
     PublishStaticCredentialNeedsEdge eco tag ->
-        mountKeyRef eco ("publicationTarget." <> storeTagName tag <> ".token")
+        mountKeyRef eco (taggedKeyPath "publicationTarget" tag "token")
             <> " is set but ECLUSE_SERVER__AUTH_TOKEN is not: a static publish credential needs a verifiable inbound edge."
     PublicationTargetOnPublicUpstream eco other url ->
         mountKeyRef eco "publicationTarget"
@@ -348,6 +360,12 @@ renderBootError = \case
             <> show configured
             <> ": the bytes an upstream must deliver in each progress window must be a positive count"
 
+-- Move a blocked shared rule into the rules of every mount whose adapter supports its type.
+sharedRuleRemedy :: RuleType -> Text
+sharedRuleRemedy ty = case [mountDocRef eco "rules" | eco <- Universe.universe, Just adapter <- [adapterFor eco], Map.notMember ty (adapterRuleBlocks adapter)] of
+    [] -> "Remove this type from shared rules"
+    supporting -> "Move this type from shared rules into " <> joinAlternatives supporting
+
 renderStoreMaintenanceReason :: Ecosystem -> StoreMaintenanceReason -> Text
 renderStoreMaintenanceReason eco = \case
     NoControlPlane tag ->
@@ -356,7 +374,7 @@ renderStoreMaintenanceReason eco = \case
         "its target is a "
             <> storeTagName tag
             <> " store and "
-            <> mountKeyRef eco ("mirrorTarget." <> storeTagName tag <> ".permitDeletion")
+            <> mountKeyRef eco (taggedKeyPath "mirrorTarget" tag "permitDeletion")
             <> " is not set: that key is your consent for the Dredger to delete from this store"
     NoProtocolMaintenance ->
         "its store has no control plane, and the "

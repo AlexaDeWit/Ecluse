@@ -7,7 +7,10 @@ module Ecluse.Core.Registry.Sweep.WalkSpec (spec) where
 import Data.Conduit (ConduitT, fuseUpstream, yield)
 import Data.Conduit.List qualified as CL
 import Data.Text qualified as T
+import Hedgehog (forAll, (===))
+import Hedgehog.Gen qualified as Gen
 import Test.Hspec
+import Test.Hspec.Hedgehog (hedgehog)
 
 import Ecluse.Core.Package (PackageName)
 import Ecluse.Core.Registry.Maintenance (
@@ -19,11 +22,14 @@ import Ecluse.Core.Registry.Maintenance (
 import Ecluse.Core.Registry.Maintenance.NameSpace (
     NameAlphabet,
     NamePrefix,
+    extendBucket,
     mkNameAlphabet,
     noNameAlphabet,
     parseNamePrefix,
     renderNamePrefix,
  )
+import Ecluse.Core.Registry.PyPI.Project (pypiNameLeadChars)
+import Ecluse.Core.Registry.RubyGems.Project (rubyGemsNameChars)
 import Ecluse.Core.Registry.Sweep.Walk (
     BucketNames (BucketFaulted, BucketOverflowed, BucketRead, BucketUnsplittable),
     bucketDepthLimit,
@@ -43,14 +49,14 @@ spec = do
 
 sequenceSpec :: Spec
 sequenceSpec = describe "walkBuckets" $ do
-    it "covers the alphabet's buckets in order, so a cursor's ordering decides resumption" $
+    it "covers the alphabet's buckets in the alphabet's own order" $
         map renderNamePrefix (walkBuckets (mkNameAlphabet "abc")) `shouldBe` ["a", "b", "c"]
 
     it "covers a store its listing cannot partition as the one bucket that holds everything" $
         map renderNamePrefix (walkBuckets noNameAlphabet) `shouldBe` [""]
 
-{- A restart re-does at most the bucket that was in flight, so resumption drops every bucket at
-or before the one the last run recorded. -}
+{- A restart re-does at most the bucket that was in flight, so resumption drops every bucket the
+walk covers at or before the one the last run recorded. -}
 resumeSpec :: Spec
 resumeSpec = describe "resumeAfter" $ do
     it "starts from the first bucket when no walk is under way" $
@@ -76,8 +82,38 @@ resumeSpec = describe "resumeAfter" $ do
         withBucket "ab" $ \ab ->
             map renderNamePrefix (resumeAfter (Just ab) (spelledBuckets ["aa", "ab", "ac"]))
                 `shouldBe` ["ac"]
+
+    -- Both alphabets walk digits after letters, although digits sort first.
+    it "resumes a PyPI walk interrupted after z at the digit buckets" $
+        withBucket "z" $ \z ->
+            map renderNamePrefix (resumeAfter (Just z) (walkBuckets (mkNameAlphabet pypiNameLeadChars)))
+                `shouldBe` map T.singleton ['0' .. '9']
+
+    it "resumes a RubyGems walk interrupted after z at the digit and punctuation buckets" $
+        withBucket "z" $ \z ->
+            map renderNamePrefix (resumeAfter (Just z) (walkBuckets (mkNameAlphabet rubyGemsNameChars)))
+                `shouldBe` map T.singleton (['0' .. '9'] <> "._-")
+
+    it "resumes every interrupted walk at the bucket after the one it recorded, however the walk split" $
+        hedgehog $ do
+            chars <- forAll (Gen.shuffle "ab0._")
+            oversized <- forAll (Gen.subsequence (map T.singleton chars <> [T.pack [outer, inner] | outer <- chars, inner <- chars]))
+            let walked = completedBuckets chars oversized Nothing
+            for_ (zip [1 ..] walked) $ \(done, record) ->
+                completedBuckets chars oversized (Just record) === drop done walked
   where
     buckets = walkBuckets (mkNameAlphabet "abc")
+
+-- The buckets a walk completes from a record, as the sweep splits each oversized bucket.
+completedBuckets :: [Char] -> [Text] -> Maybe NamePrefix -> [NamePrefix]
+completedBuckets chars oversized record = go (resumeAfter record (walkBuckets alphabet))
+  where
+    alphabet = mkNameAlphabet chars
+    go = \case
+        [] -> []
+        bucket : rest
+            | renderNamePrefix bucket `elem` oversized -> go (resumeAfter record (extendBucket alphabet bucket) <> rest)
+            | otherwise -> bucket : go rest
 
 collectSpec :: Spec
 collectSpec = describe "collectBucketWith" $ do

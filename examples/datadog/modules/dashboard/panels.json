@@ -417,14 +417,18 @@
         "aggregation": "sum",
         "modifier": "count",
         "filters": [
-          "result:hit"
+          "result:hit",
+          "NOT store:directory"
         ]
       },
       {
         "metric": "ecluse.metadata_cache.requests",
         "alias": "All lookups",
         "aggregation": "sum",
-        "modifier": "count"
+        "modifier": "count",
+        "filters": [
+          "NOT store:directory"
+        ]
       },
       {
         "metric": "ecluse.metadata_cache.requests",
@@ -432,7 +436,8 @@
         "aggregation": "sum",
         "modifier": "count",
         "filters": [
-          "result:collapsed"
+          "result:collapsed",
+          "NOT store:directory"
         ]
       }
     ],
@@ -550,7 +555,10 @@
         "metric": "ecluse.metadata_cache.resident_bytes",
         "alias": "Full",
         "aggregation": "sum",
-        "modifier": "gauge"
+        "modifier": "gauge",
+        "filters": [
+          "NOT store:directory"
+        ]
       },
       {
         "metric": "ecluse.metadata_cache.version.resident_bytes",

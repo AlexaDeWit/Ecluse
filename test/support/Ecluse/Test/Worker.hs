@@ -25,10 +25,11 @@ import Ecluse.Core.Version (Version, renderVersion)
 
 import Ecluse.Core.Registry.Adapter.Types (RegistryAdapter (adapterArtifact))
 import Ecluse.Core.Registry.Npm.Adapter (npmAdapter)
+import Ecluse.Core.Registry.Npm.Mirror (npmStateFormat)
 import Ecluse.Core.Registry.Publish (MirrorPublish)
 import Ecluse.Core.Security (Limits (maxMirrorArtifactBytes), defaultLimits)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
-import Ecluse.Core.Worker (WorkerPolicies, WorkerPolicy (WorkerPolicy, wpArtifact, wpArtifactHostHonoured, wpArtifactLimits, wpEgressUrl, wpFirstParty, wpInstallEvidence, wpMinIntegrity, wpMirrorState, wpNow, wpPublish, wpResolveVersion, wpRules))
+import Ecluse.Core.Worker (WorkerPolicies, WorkerPolicy (WorkerPolicy, wpArtifact, wpArtifactHostHonoured, wpArtifactLimits, wpEgressUrl, wpFirstParty, wpMinIntegrity, wpMirrorFormat, wpMirrorState, wpNow, wpPublish, wpResolveVersion, wpRules))
 import Ecluse.Test.Package (defaultMinIntegrity, sampleArtifact, sampleDetails)
 import Ecluse.Test.Registry.Npm (sourceVersionDoc)
 import Ecluse.Test.Rules (admitRule)
@@ -48,7 +49,6 @@ npmPolicyWith clock artifactMaxBytes publish resolve rules =
         { -- Deny by default, as a mount that declares no namespaces owns none. A case
           -- that drives the privilege overrides this field.
           wpFirstParty = const False
-        , wpInstallEvidence = Nothing
         , wpResolveVersion = const resolve
         , wpRules = rules
         , wpMinIntegrity = defaultMinIntegrity
@@ -58,6 +58,7 @@ npmPolicyWith clock artifactMaxBytes publish resolve rules =
           wpArtifact = adapterArtifact npmAdapter
         , wpEgressUrl = Right . loopbackRegistryUrl
         , wpPublish = publish
+        , wpMirrorFormat = npmStateFormat
         , wpArtifactLimits = defaultLimits{maxMirrorArtifactBytes = artifactMaxBytes}
         , wpMirrorState = Nothing
         , wpNow = clock

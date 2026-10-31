@@ -42,6 +42,7 @@ import Ecluse.Core.Package (
     Artifact (..),
     Availability (Available, Yanked),
     CodeExecSignal (NoCodeOnInstall, RunsCodeOnInstall),
+    DependencySources (DependencySourcesUnknown),
     Hash,
     InvalidEntry,
     InvalidEntryKind (InvalidIndexFile),
@@ -178,6 +179,7 @@ projectDetails name file held =
                 , pkgVersion = frVersion file
                 , pkgPublishedAt = frPublishedAt file
                 , pkgInstallCode = releaseInstallCode (frKind file) NoCodeOnInstall
+                , pkgDependencySources = DependencySourcesUnknown
                 , pkgAvailability = releaseAvailability (frYanked file) Yanked
                 , pkgArtifacts = artifact :| []
                 }

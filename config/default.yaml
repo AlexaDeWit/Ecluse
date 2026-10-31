@@ -23,8 +23,9 @@ server:
   # key here.
   port: 8080
   # The proxy's own externally-reachable base URL. The proxy rewrites served tarball
-  # URLs against it. http(s) with a dialable authority, and http stays legal for
-  # loopback. Required as soon as any mount is active, else the boot refuses
+  # URLs against it, and Cargo publication accepts dependencies from the Cargo indexes
+  # under it as the proxy's own. http(s) with a dialable authority, and http stays
+  # legal for loopback. Required as soon as any mount is active, else the boot refuses
   # (PublicUrlRequired).
   # publicUrl: https://registry.example.com
   # Set via ECLUSE_SERVER__AUTH_TOKEN (a secret): clients must then present it.
@@ -68,16 +69,19 @@ queue:
 
 limits:
   # Structural policy limits stay independent of the memory and CPU controls.
+  # The RubyGems /versions directory reads neither count key below. A fixed ceiling of
+  # 2,000,000 gem names in code bounds it, maxResponseBytes bounds its rows, and raising
+  # the ceiling takes a release.
   # maxVersionCount counts every source npm version. PyPI full reads count distinct
   # releases, while selected reads count all source file positions, including skips.
   # Cargo full and selected reads count every nonblank source index record, including invalid records.
-  # RubyGems full reads count distinct raw versions. Selected reads count every
+  # RubyGems /info full reads count distinct raw versions. Selected reads count every
   # nonblank artifact position, including skipped and malformed rows.
   maxVersionCount: 1000000
   # Valid retained npm artifacts and full-read PyPI distribution files. The selected
   # PyPI path uses maxVersionCount's source-file bound instead of a separate check.
   # Cargo full and selected reads count every valid projected archive before version selection.
-  # RubyGems counts every nonblank artifact row before parsing or version selection.
+  # RubyGems /info reads count every nonblank artifact row before parsing or version selection.
   # This counts files. maxArtifactBytes below bounds worker artifact bodies.
   maxArtifactCount: 1000000
   # Nesting in retained metadata fields and Cargo records. Skipped npm/PyPI fields do not use this limit.
@@ -130,8 +134,8 @@ cache:
   # maxEntries: 1024
   # The local backend never retains full metadata. Active fetches still coalesce.
   # Selected versions, assembled responses and the public RubyGems discovery directory share
-  # one byte budget, with no reserved shares. No gauge reports the directory's bytes.
-  # A pod too small for the plan sheds the
+  # one byte budget, with no reserved shares. ecluse.metadata_cache.resident_bytes with
+  # store=directory reports the directory's bytes. A pod too small for the plan sheds the
   # mirror-artifact cap first and this aggregate second.
   # maxBytes: 268435456
 
@@ -380,6 +384,10 @@ mounts:
   # tags are refused too, because one store has one backend.
   # Every url must be an https:// URL carrying a dialable host, and none may carry
   # userinfo, a query, or a fragment: a credential belongs in its own key.
+  # On mirrorTarget and publicationTarget, url is where Écluse reads and uploadUrl is
+  # where it writes. pypi and cargo upload to a separate endpoint, so the load requires
+  # uploadUrl on both targets there. npm and rubygems derive the write address from url,
+  # so the load refuses uploadUrl on them.
   npm:
     # DenyIfYanked: npm reports no yank flag. Removed releases disappear from its metadata.
     publicUpstream:
@@ -391,6 +399,10 @@ mounts:
     # enabled: true
     # The read authority. Required on a mirrored mount, so the mirror reads back.
     # Optional on a serve-only mount, where it still merges with the gated public set.
+    # A failed private read refuses the mount's reads for every name: 503 while the private
+    # registry is unavailable, forwarding its Retry-After, and 502 when its reply is invalid.
+    # A private 404 still lets the gated public set serve. Each cause is listed at
+    # https://ecluse-proxy.com/docs/private-reads/#private-outage
     # Must name a different repository from this mount's publicUpstream. Boot refuses
     # equal repository identities, including equivalent URL spellings.
     # Proxy reads forward the caller's credential. Dredger uses this target's own authority.
@@ -459,7 +471,8 @@ mounts:
     # Only a first-party name may be published here, and a first-party name
     # resolves from privateUpstream alone: it is never fetched from publicUpstream,
     # never merged with a public document, and never mirrored. A private 404 answers
-    # 404. A private 401/403 answers a local 403. Other private read failures answer 503.
+    # 404. A private 401/403 answers a local 403. Other private read failures answer 503
+    # or 502, as for any other name.
     # The shape is per-ecosystem. npm reads scopes. PyPI reads PEP 503 canonical
     # distribution names, and an entry ending in a separator then * is a prefix, so
     # acme-* covers acme-tools and not acmeco. A star on no separator (acme*) is
@@ -471,12 +484,21 @@ mounts:
     #   minTrusted: sha256
     #   divergencePolicy: warn # deprecated compatibility only, remove this key
     # ECLUSE_MOUNTS__NPM__RULES refines the shared policy, then these shipped rules.
-    # This default refuses npm install scripts at admission and keeps stored copies.
+    # Both defaults refuse at admission, at precedence 300, and keep stored copies.
+    # deny-scripts refuses npm install scripts. deny-external-dependencies refuses a version
+    # whose dependencies, optionalDependencies or peerDependencies name a git source
+    # (git+https:, git:, github:, user/repo and the like), a remote tarball URL, or any other
+    # scheme such as jsr:, which a client would fetch from outside Écluse. Registry ranges and
+    # tags, npm: aliases, file:, link:, workspace: and local paths pass. It reads the specs the
+    # packument already holds.
     rules:
       deny-scripts:
         type: DenyInstallTimeExecution
         appliesTo: [admission]
-      # Disable it here with deny-scripts: { enabled: false }, not under shared rules.
+      deny-external-dependencies:
+        type: DenyExternalDependencies
+        appliesTo: [admission]
+      # Disable either here with <name>: { enabled: false }, not under shared rules.
       # Or add an AllowByIdentity pin here with explicit precedence above 300.
       # Restate appliesTo: [admission, revocation] here to include Dredger deletion.
       # Optional deprecation deny, disabled unless added. No parameters. Default precedence: 300.
@@ -496,7 +518,8 @@ mounts:
     # Unset, it inherits the computed/configured global limit. Exceeding it returns 413.
     # maxRequestBytes: 52428800
     # The read root and native upload endpoint are distinct. The state store above is required.
-    # Generic PyPI write credentials declare their Basic username. CodeArtifact binds aws.
+    # Registry and verdaccio write credentials declare their Basic username. A store that
+    # declares its own write mechanism needs none: CodeArtifact binds aws.
     # CodeArtifact reads use /pypi/{repository}/. Its uploadUrl accepts that root or
     # /pypi/{repository}/legacy/ for the same domain, account, region and repository.
     # mirrorTarget:
@@ -505,16 +528,19 @@ mounts:
     #     uploadUrl: https://mirror.internal/legacy/
     #     username: publisher
     #     token:
-    # Client publication uses this exact native endpoint and preserves multipart framing.
-    # A static token requires server.authToken and an explicit generic username.
+    # Client publication posts to uploadUrl and preserves multipart framing. url is the
+    # repository's read root, and the CodeArtifact paths above apply here too.
+    # A static token requires server.authToken, and a username on a registry or verdaccio target.
     # Without a static token, the complete caller Basic pair passes through unchanged.
     # publicationTarget:
     #   registry:
-    #     url: https://first-party.internal/legacy/
+    #     url: https://first-party.internal/
+    #     uploadUrl: https://first-party.internal/legacy/
     #     username: publisher
     #     token:
     # pypi blocks these rule types at boot, even through shared rules:
     # DenyInstallTimeExecution: Most PyPI releases offer a source distribution, which runs its own build on install, so this rule would deny nearly every release.
+    # DenyExternalDependencies: The PyPI adapter does not read where a release's dependencies install from.
     # DenyIfDeprecated: The PyPI adapter supplies no deprecation flag.
     # AllowScope: A PyPI project name has no scope, so this rule can never match one.
     # Move supported types from shared rules into mounts.npm.rules, or disable its configured
@@ -535,33 +561,49 @@ mounts:
       registry:
         url: https://index.crates.io/
     # enabled: true
-    # /cargo/ replaces crates.io using the public source and completed managed mirrors.
-    # It excludes private-only versions and declared first-party names. It has no publish API.
-    # /cargo/private/ reads privateUpstream with each caller's credential, without public fallback.
-    # A configured publicationTarget enables first-party publication through that private view.
+    # /cargo/ replaces crates.io. It merges privateUpstream, read with each caller's credential,
+    # with admitted crates.io crates. Declared first-party names read privateUpstream only, so
+    # declare every private crate name or prefix. privateUpstream must include the mirror repository.
+    # /cargo/config.json is answered locally. It requires authentication whenever privateUpstream
+    # or server.authToken is set. A configured publicationTarget enables first-party publication
+    # at PUT /cargo/api/v1/crates/new.
     # For mirrorTarget and publicationTarget, url is the sparse index root. uploadUrl is
     # the exact approved API base advertised by that index's config.json, without /api/v1/crates/new.
     # Cargo mirroring requires mirrorState.url. Preserve its original source records across restarts.
-    # Discovery runs after caller or service authentication, never at boot. Private discovery is not cached.
+    # Upstream discovery runs after caller or service authentication, never at boot, and is not cached.
     # Ownership folds ASCII case and hyphen/underscore aliases, preserving separator runs.
     # Names use at most 64 ASCII letters, digits, hyphens, or underscores, starting with a letter.
     # Exact names and prefixes use native Cargo grammar. acme-* covers acme-tools and
     # acme_tools, but excludes acmeco. Cargo has no npm scope.
     # Prefix declarations must end in -* or _*. Exact names preserve each separator run.
     # firstParty: "acme-tools,acme-*"
-    # Execution denial requires an explicit rule and verified archive evidence.
-    # The shared age and advisory defaults do not inspect crate archives.
-    # Cargo blocks AllowScope and DenyIfDeprecated at boot.
-    # AllowScope: Cargo package names have no scope.
+    # cargo blocks these rule types at boot, even through shared rules:
+    # DenyInstallTimeExecution: Cargo's sparse index does not declare build scripts or procedural macros. This rule is unsupported for the ecosystem.
     # DenyIfDeprecated: Cargo's sparse index supplies no deprecation flag.
+    # AllowScope: Cargo package names have no scope.
+    # Move supported types from shared rules into mounts.npm.rules, or disable its configured
+    # entry with enabled: false under mounts.cargo.rules (ECLUSE_MOUNTS__CARGO__RULES).
+    # ECLUSE_MOUNTS__CARGO__RULES refines the shared policy, then this shipped rule. It refuses at
+    # admission, at precedence 300, and keeps stored copies. deny-external-dependencies refuses a
+    # public crate whose normal or build dependency names a registry other than crates.io in its
+    # index row. crates.io refuses such crates, so it acts on another publicUpstream.
+    rules:
+      deny-external-dependencies:
+        type: DenyExternalDependencies
+        appliesTo: [admission]
+      # Disable it here with deny-external-dependencies: { enabled: false }, not under shared rules.
+      # Or add an AllowByIdentity pin here with explicit precedence above 300.
   # Bundler 2.6.9 and 4.0.23 use /versions discovery and on-demand /info metadata.
   # Compact specifications and .gem downloads stay under this mount. No full specification index is served.
   # Native publication posts the original built .gem to /api/v1/gems below the target root.
   # Reads preserve caller Basic pairs. Publication preserves the raw API key and optional OTP.
-  # Declared CodeArtifact service roles use Basic aws reads and Bearer publication.
+  # A static publicationTarget token is the bare secret. On codeArtifact, the mirror worker's
+  # token and that static token read with Basic aws and publish as Bearer.
   # Mirroring requires mirrorState.url and retains every supported platform artifact,
   # original compact specifications and source facts. Preserve that state across restarts.
   # DenyInstallTimeExecution: RubyGems native builds are normal installation behaviour. This rule is unsupported for the ecosystem.
+  # DenyIfYanked: RubyGems reports no yank flag in a gem's metadata. Yanked versions disappear from it.
+  # DenyExternalDependencies: A RubyGems dependency names only a gem and its requirements, never a source, so this rule can never match one.
   # DenyIfDeprecated: RubyGems metadata supplies no supported deprecation flag.
   # AllowScope: RubyGems package names have no scope.
   # Active entries refuse boot, including rules inherited from the shared policy.
@@ -661,12 +703,15 @@ rules:
   # exactly, or that name and version joined by an @: no prefix, glob, or range.
   # At precedence 250 it overrides the scored DenyIfCve and DenyIfEpss rules.
   # It stays below DenyIfKnownMalicious, DenyIfYanked, DenyIfDeprecated,
-  # DenyInstallTimeExecution and DenyByIdentity. Override MAL with precedence 301.
+  # DenyInstallTimeExecution, DenyExternalDependencies and DenyByIdentity. Override MAL
+  # with precedence 301.
   # pin-fix:
   #   type: AllowByIdentity
   #   identity: left-pad@1.3.0  # a bare name pins every version of that package
-  # The npm install-script deny ships under mounts.npm.rules, at admission only.
-  # Disable or refine deny-scripts there. An AllowByIdentity pin needs precedence > 300.
+  # The npm install-script and external-dependency denies ship under mounts.npm.rules, and the
+  # Cargo external-dependency deny under mounts.cargo.rules, all at admission only. Disable or
+  # refine deny-scripts and deny-external-dependencies there.
+  # An AllowByIdentity pin needs precedence > 300.
   # Opt-in revoke, absent from this shipped policy. It denies one package, or one
   # package@version, whatever else would admit it. `identity` matches on the same exact
   # terms as AllowByIdentity. It carries the highest precedence of any shipped type, so

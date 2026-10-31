@@ -126,7 +126,7 @@ defaultLoadKnobs =
     LoadKnobs
         { lkConcurrency = 100
         , lkDurationSeconds = 30
-        , lkUpstreamLatencyMicros = 5_000
+        , lkUpstreamLatencyMicros = 20_000
         , lkPayloadBytes = 355 * 1024
         , lkCacheMaxEntries = 3
         , lkWorkingSet = 64

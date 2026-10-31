@@ -78,7 +78,6 @@ import Ecluse.Core.Registry.Maintenance.Upstream (noUpstreamMechanism)
 import Ecluse.Core.Registry.Origin (OriginClient (ocClient, ocLimits, ocToken), originBaseUrl)
 import Ecluse.Core.Registry.Publish (PublishCodec (pcProbeRequest, pcVersionListWalk), fetchVersionList)
 import Ecluse.Core.Registry.VersionList (VersionListState)
-import Ecluse.Core.Rules.Install (InstallArtifactRead)
 import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), Limits (progressFloor), maxMetadataBytes)
 import Ecluse.Core.Version (Version)
 
@@ -92,8 +91,6 @@ data ProtocolRead = ProtocolRead
     -- ^ The ecosystem's publish codec, whose presence probe already reads a store's version list for the mirror worker.
     , prReadManifest :: StoreManifestRead
     -- ^ One package's metadata as this store serves it, assembled at the composition root.
-    , prReadArtifact :: InstallArtifactRead
-    -- ^ The store's authenticated artifact reader, assembled at the composition root.
     , prBackendName :: Text
     -- ^ The store backend's name, which the boot line records the Dredger's blast radius as.
     , prPermitDeletion :: Bool
@@ -116,7 +113,6 @@ newProtocolObservation store =
         { obFacts = protocolFacts (prBackendName store)
         , obListPackagesIn = listBucket store
         , obEnumerateVersions = listVersions store
-        , obReadArtifact = prReadArtifact store
         , obReadManifest = prReadManifest store
         , obVerifyConsent = pure (Right (consentVerdict store))
         , obClassifyStore = pure (Right (storeClass store))
@@ -185,7 +181,7 @@ listPackages store =
         Left fault -> Left fault
         Right (SuccessBody 200 streamed) -> first (parseFault "package listing") (streamValue streamed)
         Right (SuccessBody status _) -> Left (listingUnavailable status)
-        Right (UnreadStatus status) -> Left (listingUnavailable status)
+        Right (UnreadStatus status _) -> Left (listingUnavailable status)
   where
     origin = prOrigin store
     fetch request =
@@ -217,8 +213,8 @@ listVersionsWith store name walk =
     formThen unformableFault fetch (pcProbeRequest codec (originBase store) (originToken store) name) <&> \case
         Left fault -> Left fault
         Right (SuccessBody _ listed) -> first (parseFault "version list") (map stored <$> listed)
-        Right (UnreadStatus 404) -> Right []
-        Right (UnreadStatus status) -> Left (readFault "version list" status)
+        Right (UnreadStatus 404 _) -> Right []
+        Right (UnreadStatus status _) -> Left (readFault "version list" status)
   where
     origin = prOrigin store
     codec = prCodec store

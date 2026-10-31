@@ -44,8 +44,7 @@ import Ecluse.Core.Registry.Sweep (paceAtCeiling, sweepCycle)
 import Ecluse.Core.Registry.Sweep.Outcome (CycleOutcome (outcomeTally), SweepTally (..), outcomeComplete)
 import Ecluse.Core.Registry.Sweep.Pacing (defaultCycleWindow)
 import Ecluse.Core.Registry.Sweep.Types (SweepMount (..), SweepPacing (..), SweepPorts (..), SweepShape (SweepCandidates, SweepEverything), deletingCache, pairedStore)
-import Ecluse.Core.Rules (AdvisoryDatabase (AdvisoryDatabase, NoAdvisoryDatabase), AdvisoryGeneration (agLookup), PreparedRule (prepEval, prepName), RuleDeps (rdAdvisoryDatabase, rdCurrentAdvisoryEtag), RuleEval (PerInstallEvidence, PerPackage, PerVersion), prepare)
-import Ecluse.Core.Rules.Install (InstallEvidenceBudget (InstallEvidenceBudget))
+import Ecluse.Core.Rules (AdvisoryDatabase (AdvisoryDatabase, NoAdvisoryDatabase), AdvisoryGeneration (agLookup), PreparedRule (prepEval, prepName), RuleDeps (rdAdvisoryDatabase, rdCurrentAdvisoryEtag), RuleEval (PerPackage, PerVersion), prepare)
 import Ecluse.Core.Rules.Types (Rule (DenyByIdentity, DenyIfCve), RuleEvidence (evName, evVersion), ruleName)
 import Ecluse.Core.Security (Limits (maxVersionCount), defaultLimits)
 import Ecluse.Core.Server.Metadata (selectVersion)
@@ -355,7 +354,6 @@ tracedRules probe = map traced
             | prepName rule == ruleName identityDeny ->
                 rule{prepEval = PerVersion (\ctx evidence -> note evidence >> verdict ctx evidence)}
             | otherwise -> rule
-        PerInstallEvidence _ -> rule
         PerPackage _ -> rule
     note evidence = modifyIORef' (prIdentities probe) (noted (renderPackageName (evName evidence)) (renderVersion (evVersion evidence)))
 
@@ -442,9 +440,6 @@ scaleMount row gateFor mirror cache =
     SweepMount
         { smEcosystem = ebEcosystem bench
         , smStore = pairedStore limit (deletingCache (metered "mirror" fixedMirror mirror)) (deletingCache (metered "cache" fixedCache cache))
-        , smInstallEvidence = Nothing
-        , smInstallBudget = InstallEvidenceBudget (\action -> Just <$> action (const pass) (const pass))
-        , smInstallLimits = defaultLimits
         , smRules = []
         , smConfigured = configuredRules
         , smRuleDeps = rowCatalogue row

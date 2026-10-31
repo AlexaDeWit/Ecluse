@@ -33,6 +33,7 @@ import Ecluse.Core.Queue (MirrorQueue (ack, deadLetter))
 import Ecluse.Core.Registry.Npm.Filter (rewriteVersion)
 import Ecluse.Core.Registry.Npm.Publish (npmPublishCodec)
 import Ecluse.Core.Registry.Publish (MirrorPublish, MirrorTransport (MirrorTransport, ptClient, ptLimits, ptMintCredential, ptTracing), newMirrorPublish)
+import Ecluse.Core.Registry.Request (nativePresentation)
 import Ecluse.Core.Registry.ServedDocument (documentObject, objectField)
 import Ecluse.Core.Rules (PreparedRule)
 import Ecluse.Core.Security (defaultLimits)
@@ -130,7 +131,7 @@ newPublishAt deadlines mirrorUrl = do
                 , ptLimits = defaultLimits
                 , ptTracing = passthroughTracingPort
                 }
-    pure (newMirrorPublish transport (loopbackRegistryUrl mirrorUrl) (loopbackRegistryUrl mirrorUrl) npmPublishCodec)
+    pure (newMirrorPublish transport (loopbackRegistryUrl mirrorUrl) (loopbackRegistryUrl mirrorUrl) (npmPublishCodec nativePresentation))
 
 -- | An 'Env' over handle doubles, a real (no-TLS) manager and swept deadlines, carrying only the given queue.
 newQueueEnv :: Deadlines -> MirrorQueue -> IO Env

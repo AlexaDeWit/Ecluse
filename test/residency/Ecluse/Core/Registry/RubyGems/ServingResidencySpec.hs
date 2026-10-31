@@ -19,7 +19,7 @@ import UnliftIO.Temporary (withSystemTempDirectory)
 import Ecluse.Composition.MemoryPlan.Transient (meterStepBytes)
 import Ecluse.Core.Ecosystem (Ecosystem (RubyGems))
 import Ecluse.Core.Package (renderPackageName)
-import Ecluse.Core.Registry.Adapter (RegistryAdapter (adapterMetadata), adapterFor)
+import Ecluse.Core.Registry.Adapter (RegistryAdapter (adapterMetadata))
 import Ecluse.Core.Registry.Adapter.Capability (AdapterMetadata (metadataChargeFactors))
 import Ecluse.Core.Server.MemoryModel.Calibration (SyntheticListingFigures (..), rubyGemsSyntheticFigures)
 import Ecluse.Core.Server.MemoryModel.Probe (ListingPeaks (..), SingleListing (..), measurePathInChild, writeNamedMergeDocuments)
@@ -29,6 +29,7 @@ import Ecluse.Test.Corpus.Merge (MergeShape (..), realisticShape)
 import Ecluse.Test.Corpus.RubyGems (benchGem, syntheticInfoBytes)
 import Ecluse.Test.Package (hexSha256Of)
 import Ecluse.Test.Registry.RubyGems.Reference (RubyInfoRow (..), referenceInfo)
+import Ecluse.Test.Server.Mount (requiredAdapter)
 import Ecluse.Test.Support (expectRight)
 
 data GeneratedSource = GeneratedSource
@@ -110,7 +111,7 @@ checkBasis input peaks = do
 
 runChargeGuards :: ListingPeaks -> Expectation
 runChargeGuards peaks = do
-    adapter <- maybe (fail "RubyGems synthetic listing has no measured adapter factors") pure (adapterFor RubyGems)
+    adapter <- requiredAdapter RubyGems
     let factors = metadataChargeFactors (adapterMetadata adapter)
     checkPaid factors peaks
     checkPhases factors peaks

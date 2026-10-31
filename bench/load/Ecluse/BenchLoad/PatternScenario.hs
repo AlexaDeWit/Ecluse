@@ -17,7 +17,7 @@ import UnliftIO (evaluate)
 import Ecluse.BenchLoad.BootLines (BootLimits (blCacheBytes, blCacheEntries), bootLimits)
 import Ecluse.BenchLoad.CapturedArtifact (SelectedArtifact (..))
 import Ecluse.BenchLoad.Error (benchFail)
-import Ecluse.BenchLoad.Exposition (CacheOutcomes (..), Sample, expositionName, seriesTotal, storeLabel, storeOutcomes)
+import Ecluse.BenchLoad.Exposition (CacheOutcomes (..), Sample, expositionName, seriesTotal, storeLabel, storeOutcomes, storeSamples)
 import Ecluse.BenchLoad.Fixture (artifactBytes, benchNow, loadCorpusBodies, withProxyConfigured)
 import Ecluse.BenchLoad.Harness (Driver (DriveReplay), LoadKnobs (..), Scenario (scenarioServiceTime), Target, proxied, scenario)
 import Ecluse.BenchLoad.PatternReport (StoreEvidence (..), renderStoreEvidence)
@@ -30,7 +30,7 @@ import Ecluse.Core.Registry.Metadata.Fetch.Types (EcosystemRead)
 import Ecluse.Core.Security (Limits (maxMetadataBytes), defaultLimits)
 import Ecluse.Core.Server.Cache (CacheEntry (..))
 import Ecluse.Core.Telemetry.Catalogue (MetricName (AssembledCacheResidentBytes, MetadataCacheRefused, MetadataCacheResidentBytes, SingleVersionCacheResidentBytes))
-import Ecluse.Core.Telemetry.Metrics (CacheStore (AssembledStore, FullStore, VersionStore), Label (LCacheStore), renderLabel)
+import Ecluse.Core.Telemetry.Metrics (CacheStore (AssembledStore, DirectoryStore, FullStore, VersionStore), Label (LCacheStore), renderLabel)
 import Ecluse.Test.Corpus (CaptureRecord (crCapturedAt), CorpusPackage (cpPackage), cpName, readCaptureRecords)
 import Ecluse.Test.Registry.Metadata.Fetch (heldManifest)
 import Ecluse.Test.Server.Cache (weighCacheEntry)
@@ -211,7 +211,7 @@ collect scraped fullWorkingBytes store capacity =
         { seStore = storeLabel store
         , seCapacity = capacity
         , seAccountedWorkingSet = if store == FullStore then Just fullWorkingBytes else Nothing
-        , seResidentBytes = round (fromMaybe 0 (seriesTotal (expositionName residentBytes) [] scraped))
+        , seResidentBytes = round (fromMaybe 0 (seriesTotal (expositionName residentBytes) [] (storeSamples store scraped)))
         , seHits = coHits outcomes
         , seMisses = coMisses outcomes
         , seCollapsed = coCollapsed outcomes
@@ -223,6 +223,7 @@ collect scraped fullWorkingBytes store capacity =
         FullStore -> MetadataCacheResidentBytes
         VersionStore -> SingleVersionCacheResidentBytes
         AssembledStore -> AssembledCacheResidentBytes
+        DirectoryStore -> MetadataCacheResidentBytes
 
 accountedFullBytes :: EcosystemRead -> Text -> CorpusPackage -> LByteString -> IO (Either Text Int)
 accountedFullBytes eco upstreamBase package bytes =

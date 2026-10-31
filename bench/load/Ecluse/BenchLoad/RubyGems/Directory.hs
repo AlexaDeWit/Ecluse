@@ -27,7 +27,7 @@ rubyGemsDirectoryScenario :: Scenario
 rubyGemsDirectoryScenario =
     (scenario "versions-directory" description boot)
         { scenarioServiceTime = False
-        , scenarioPublicLegUnavailableReason = Just "the baseline measures per-gem /info RTT rather than a directory transfer"
+        , scenarioPublicLegUnavailableReason = Just "one injected latency per request does not model a directory transfer"
         }
   where
     description =

@@ -41,9 +41,9 @@ import Ecluse.Core.Server.Context (Handler, MountBinding (bindingPackumentDeps),
 import Ecluse.Core.Server.MirrorView (readMirrorCompanion, validateMirrorProject)
 import Ecluse.Core.Server.Path (Filename, unFilename)
 import Ecluse.Core.Server.Pipeline.Internal (VersionVerdict (VersionVerdict), logDenials, recordDenials, statusServeDecision)
-import Ecluse.Core.Server.Pipeline.Origin (ObservedReadBoundExceeded (ObservedReadBoundExceeded))
+import Ecluse.Core.Server.Pipeline.Origin (ObservedReadBoundExceeded (ObservedReadBoundExceeded), ReadFailure (ReadInvalid, ReadUnavailable), fetchReadFailure, statusReadFailure)
 import Ecluse.Core.Server.Pipeline.Packument (DocumentRejectionObserver (..), PackumentReplies (..), answerMetadataBytes, mapPackumentReplies, noSurvivors, withObservedAdmittedDocument)
-import Ecluse.Core.Server.Pipeline.Shared (forwardedCredential, withListingAdmission, withMetadataAdmission)
+import Ecluse.Core.Server.Pipeline.Shared (forwardedCredential, retryAfterHeaders, withListingAdmission, withMetadataAdmission)
 import Ecluse.Core.Server.Pipeline.Tarball (headTarball, serveTarball)
 import Ecluse.Core.Server.Pipeline.Tarball.Types (TarballReplies)
 import Ecluse.Core.Server.Response (RejectReason (..), Rejection (rejectionReason), ServeDecision (Reject), mkRefusal, packumentStatus)
@@ -112,10 +112,12 @@ resolveCoordinate ticket observe request file = do
             _ -> pure (Left (rubyBadRequest "the native coordinate names more than one admitted artifact"))
         name : names -> do
             rejected <- liftIO (newIORef Nothing)
-            let replies =
+            let candidateDenied headers refusal = CandidateDenied (packumentForbidden rubyReplies headers refusal)
+                replies =
                     (mapPackumentReplies CandidateRefused rubyReplies)
                         { packumentNotFound = \_ _ -> CandidateAbsent
-                        , packumentForbidden = \headers refusal -> CandidateDenied (packumentForbidden rubyReplies headers refusal)
+                        , packumentDenied = candidateDenied
+                        , packumentForbidden = candidateDenied
                         }
                 recordRejected ctx details rejection =
                     when (any (\candidate -> coordinateName candidate == pkgName details && coordinateVersion candidate == pkgVersion details) candidates && any ((== unFilename file) . artFilename) (pkgArtifacts details)) $
@@ -130,7 +132,7 @@ resolveCoordinate ticket observe request file = do
                 continueRejected current@(CoordinateRejection _ _ _ rejection) next
                     | terminalRejection rejection = Left <$> coordinateRefusal deps current
                     | otherwise = next (denied <|> Just (Right current)) names
-            result <- withObservedAdmittedDocument replies ticket observer checkDocument (Just rejectionObserver) name request CandidateAbsent $ \cached sourceBytes origins -> do
+            result <- withObservedAdmittedDocument replies ticket observer checkDocument (Just rejectionObserver) name request (Just CandidateAbsent) $ \cached sourceBytes origins -> do
                 liftIO (charge ticket (scaleCharge (cfOutputPermille (metadataChargeFactors (pdMetadata deps))) sourceBytes))
                 pure (CandidateAdmitted (cached, sourceBytes, origins))
             case result of
@@ -167,7 +169,11 @@ coordinateRefusal deps (CoordinateRejection name version etag rejection) = do
         recordDenials (srMetrics rt) [decision]
         mpServeDecision (srMetrics rt) (statusServeDecision status)
     logDenials name etag [VersionVerdict version decision]
-    pure (noSurvivors rubyReplies (pdHelp deps) status [decision])
+    pure (noSurvivors coordinateReplies (pdHelp deps) status [decision])
+
+-- A coordinate names a version that exists, so its denial keeps the 403 a listing that admitted nothing no longer answers.
+coordinateReplies :: PackumentReplies RubyResponse
+coordinateReplies = rubyReplies{packumentDenied = packumentForbidden rubyReplies}
 
 fetchCompact :: MemoryTicket -> (Int -> IO ()) -> Request -> (GemRow, Provenance) -> Handler RubyResponse
 fetchCompact ticket observe request (row, provenance) = do
@@ -177,8 +183,13 @@ fetchCompact ticket observe request (row, provenance) = do
         coordinate = grCoordinate row
         limits = pdLimits deps
         token = forwardedCredential mount request
-        unavailable = packumentUnavailable rubyReplies [] (mkRefusal (pdHelp deps) "the compact specification source is unavailable")
+        unavailableAfter retry = packumentUnavailable rubyReplies (retryAfterHeaders retry) (mkRefusal (pdHelp deps) "the compact specification source is unavailable")
+        unavailable = unavailableAfter Nothing
         invalid = packumentBadGateway rubyReplies [] (mkRefusal (pdHelp deps) "the compact specification disagrees with its admitted coordinate")
+        -- A failed private read refuses by cause. A public one stays unavailable.
+        privateFailure = \case
+            ReadUnavailable retry -> unavailableAfter retry
+            ReadInvalid -> packumentBadGateway rubyReplies [] (mkRefusal (pdHelp deps) "the private compact specification source returned an invalid or unusable reply")
     retained <- case (provenance, pdMirrorState deps) of
         (TrustedSource, Just mirror) ->
             liftIO (validateMirrorProject mirror ticket (coordinateName coordinate)) >>= \case
@@ -211,8 +222,10 @@ fetchCompact ticket observe request (row, provenance) = do
                     <&> \case
                         Left (ObservedReadBoundExceeded fault) -> Left (packumentBadGateway rubyReplies [] (mkRefusal Nothing ("the cumulative compact input exceeded its bound: " <> show fault)))
                         Right (Right (SuccessBody _ (_, body))) -> Right body
-                        Right (Right (UnreadStatus code)) | private && (code == 401 || code == 403) -> Left (packumentPrivateRefused rubyReplies code [] (mkRefusal Nothing "the private compact specification source refused access"))
-                        Right (Right (UnreadStatus 404)) -> Left (packumentNotFound rubyReplies [] (mkRefusal Nothing "the compact specification is absent"))
+                        Right (Right (UnreadStatus code _)) | private && (code == 401 || code == 403) -> Left (packumentPrivateRefused rubyReplies code [] (mkRefusal Nothing "the private compact specification source refused access"))
+                        Right (Right (UnreadStatus 404 _)) -> Left (packumentNotFound rubyReplies [] (mkRefusal Nothing "the compact specification is absent"))
+                        Right (Right (UnreadStatus code retry)) | private -> Left (privateFailure (statusReadFailure code retry))
+                        Right (Left fault) | private -> Left (privateFailure (fetchReadFailure fault))
                         _ -> Left unavailable
     case bytes of
         Left refusal -> pure refusal

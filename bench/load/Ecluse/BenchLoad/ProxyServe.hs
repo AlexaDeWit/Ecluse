@@ -71,8 +71,8 @@ clockFromEnv =
 
 -- The production resolver over deps whose upstreams answer on loopback without TLS.
 loopbackAdapter :: Maybe UTCTime -> ResolveAdapter
-loopbackAdapter clock ecosystem deps privateView =
-    mountBindingFor ecosystem (overLoopback clock deps) (overLoopback clock <$> privateView)
+loopbackAdapter clock ecosystem deps =
+    mountBindingFor ecosystem (overLoopback clock deps)
 
 overLoopback :: Maybe UTCTime -> PackumentDeps -> PackumentDeps
 overLoopback clock deps =

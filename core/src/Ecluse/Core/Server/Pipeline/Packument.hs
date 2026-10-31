@@ -2,7 +2,9 @@
 --
 -- SPDX-License-Identifier: MIT
 
--- | Merge authorised private metadata with admitted public versions. First-party names use only private metadata.
+{- | Merge authorised private metadata with admitted public versions. First-party names use only
+private metadata, and a private read that fails refuses every name with the status its cause sets.
+-}
 module Ecluse.Core.Server.Pipeline.Packument (
     PackumentReplies (..),
     DocumentRejectionObserver (..),
@@ -27,14 +29,15 @@ import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as LBS
 import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
-import Katip (Severity (DebugS, ErrorS), logFM, ls)
+import Katip (Severity (DebugS), logFM, ls)
 import Network.HTTP.Types (Method, ResponseHeaders, hContentLength)
 import Network.Wai (Request, ResponseReceived, requestHeaders, requestMethod)
-import UnliftIO (concurrently, withRunInIO)
+import UnliftIO (concurrently)
 import UnliftIO.Exception (catchAny, evaluate, throwIO)
 
 import Ecluse.Core.Credential (ClientCredential)
 import Ecluse.Core.Cve.Types (DbEtag)
+import Ecluse.Core.Mirror.Documents (MirrorDocuments)
 import Ecluse.Core.Mirror.State (ProjectMirrorRecord, StateRevision)
 import Ecluse.Core.Package (
     Artifact (artHashes),
@@ -55,16 +58,14 @@ import Ecluse.Core.Package.Merge (
     Provenance (GatedSource, TrustedSource),
     integrityDivergences,
     mergePackuments,
+    withoutTrustedReleases,
  )
 import Ecluse.Core.Registry.Adapter.Capability (AdapterMetadata (metadataChargeFactors, metadataSerialise))
 import Ecluse.Core.Registry.CachedDocument (CachedDoc)
 import Ecluse.Core.Registry.Metadata (
     Manifest (manifestBodyBytes, manifestDigest, manifestInfo, manifestRaw),
  )
-import Ecluse.Core.Rules (newEvaluatorWithInstallRead)
-import Ecluse.Core.Rules.Effectful (ReadFault (rfDetail))
-import Ecluse.Core.Rules.Install (InstallEvidenceRead, InstallEvidenceRole (InstallPublicAdmission), installEvidenceMode)
-import Ecluse.Core.Rules.Render (renderInability)
+import Ecluse.Core.Rules (newEvaluator)
 import Ecluse.Core.Rules.Types (Decision (Blocked), EvalContext (ctxAdvisoryEtag), completeEvidence, mkEvalContext)
 import Ecluse.Core.Security.Egress (registryUrlText)
 import Ecluse.Core.Server.Admission.Budget (scaleCharge)
@@ -77,7 +78,6 @@ import Ecluse.Core.Server.Context (
     Handler,
     MountBinding (bindingPackumentDeps),
     PackumentDeps (..),
-    ReadSourceSelection (..),
     ResponseAction (RunPipeline),
     ServeRuntime (..),
     ctxMount,
@@ -94,9 +94,8 @@ import Ecluse.Core.Server.Encoding (
     varyAcceptEncoding,
  )
 import Ecluse.Core.Server.Fault (RenderEscape (RenderEscape))
-import Ecluse.Core.Server.InstallEvidence (newPublicInstallEvidenceReads)
 import Ecluse.Core.Server.MetadataGzip (GzipBody (gzipLength), gzipLazyBody, gzipMetadata)
-import Ecluse.Core.Server.MirrorView (mirrorProjectViews, publicMirrorCoverage, validateMirrorProject)
+import Ecluse.Core.Server.MirrorView (mirrorProjectViews, mirrorViewDocuments, publicMirrorCoverage, validateMirrorProject)
 import Ecluse.Core.Server.Pipeline.Diagnostics (warnDivergences)
 import Ecluse.Core.Server.Pipeline.Internal (
     VersionVerdict (..),
@@ -106,29 +105,33 @@ import Ecluse.Core.Server.Pipeline.Internal (
     packumentServeDecision,
     recordDenials,
     recordEffectfulFailures,
+    serveDecisionClass,
     statusServeDecision,
  )
 import Ecluse.Core.Server.Pipeline.Origin (
     OriginMiss (MissAbsent, MissUnresolved),
     OriginResult (..),
+    ReadFailure (ReadInvalid, ReadUnavailable),
     fetchPrivateOriginObserved,
     fetchPublicOriginObserved,
     originManifest,
     originMiss,
+    readFailureRefusal,
  )
 import Ecluse.Core.Server.Pipeline.Packument.Representation
 import Ecluse.Core.Server.Pipeline.Shared
 import Ecluse.Core.Server.Response (
     HelpMessage,
-    PackumentStatus (PackumentBadGateway, PackumentForbidden, PackumentOk, PackumentServerError, PackumentUnavailable),
+    PackumentStatus (PackumentBadGateway, PackumentDenied, PackumentForbidden, PackumentOk, PackumentServerError, PackumentUnavailable),
     Refusal,
     RejectReason (ByPolicy, Unavailable, UpstreamInvalid),
     Rejection (Rejection),
     RetryAfter,
     ServeDecision (Admit, Reject),
-    Transience (WillResolve),
+    Transience (WillResolve, WontResolve),
     mkRefusal,
     packumentStatus,
+    rejectUnavailable,
     serveDecisionOf,
  )
 import Ecluse.Core.Server.Response.Summary (detailedRejections)
@@ -140,14 +143,16 @@ import Ecluse.Core.Telemetry.Span (TracingPort, spanPackumentGate)
 
 -- | The route-owned ways the ecosystem-neutral packument pipeline may answer.
 data PackumentReplies response = PackumentReplies
-    { packumentForbiddenText :: [ServeDecision] -> Text
-    -- ^ Render only a no-survivor 403, after status selection.
+    { packumentDeniedText :: [ServeDecision] -> Text
+    -- ^ Render the refusals of a listing with no survivor and no outage, after status selection.
     , packumentOk :: ResponseHeaders -> LByteString -> response
     , packumentNotModified :: ResponseHeaders -> response
     , packumentUnauthorised :: ResponseHeaders -> Refusal -> response
     , packumentPrivateRefused :: Int -> ResponseHeaders -> Refusal -> response
     -- ^ Preserve or collapse the private origin status according to the native protocol.
     , packumentForbidden :: ResponseHeaders -> Refusal -> response
+    , packumentDenied :: ResponseHeaders -> Refusal -> response
+    -- ^ Answer a listing that admitted nothing because every exclusion was a policy or integrity refusal.
     , packumentNotFound :: ResponseHeaders -> Refusal -> response
     , packumentNotAcceptable :: ResponseHeaders -> Refusal -> response
     , packumentInternal :: ResponseHeaders -> Refusal -> response
@@ -167,12 +172,13 @@ data DocumentRejectionObserver response = DocumentRejectionObserver
 mapPackumentReplies :: (a -> b) -> PackumentReplies a -> PackumentReplies b
 mapPackumentReplies convert replies =
     PackumentReplies
-        { packumentForbiddenText = packumentForbiddenText replies
+        { packumentDeniedText = packumentDeniedText replies
         , packumentOk = \headers -> convert . packumentOk replies headers
         , packumentNotModified = convert . packumentNotModified replies
         , packumentUnauthorised = \headers -> convert . packumentUnauthorised replies headers
         , packumentPrivateRefused = \code headers -> convert . packumentPrivateRefused replies code headers
         , packumentForbidden = \headers -> convert . packumentForbidden replies headers
+        , packumentDenied = \headers -> convert . packumentDenied replies headers
         , packumentNotFound = \headers -> convert . packumentNotFound replies headers
         , packumentNotAcceptable = \headers -> convert . packumentNotAcceptable replies headers
         , packumentInternal = \headers -> convert . packumentInternal replies headers
@@ -250,16 +256,15 @@ packumentWith mode replies name request respond = do
         deps = bindingPackumentDeps mount
         clientToken = forwardedCredential mount request
         serving ticket = newServing mode replies name request ticket answerPackumentConditional
-    if not (edgeTokenMatches (pdInboundToken deps) clientToken)
-        then refuse packumentUnauthorised [] unauthorisedMessage
-        else
-            if pdReadSourceSelection deps == ManagedMirrorAndPublic && pdFirstParty deps name
-                then refuse packumentNotFound [] "first-party packages require the private registry view"
-                else withListingAdmission (ctxRuntime ctx) (\headers -> refuse packumentUnavailable headers shedMessage) (serving >=> (`serveAdmittedPackument` clientToken) >=> evaluate) (liftIO . respond)
+    if edgeTokenMatches (pdInboundToken deps) clientToken
+        then withListingAdmission (ctxRuntime ctx) (\headers -> refuse packumentUnavailable headers shedMessage) (serving >=> (`serveAdmittedPackument` clientToken) >=> evaluate) (liftIO . respond)
+        else refuse packumentUnauthorised [] unauthorisedMessage
   where
     refuse reply headers message = liftIO (respond (reply replies headers (mkRefusal Nothing message)))
 
--- | Observe source sizes and checked rejections, including admission with no surviving contribution.
+{- | Observe source sizes and checked rejections, including admission with no surviving contribution.
+A caller that supplies an absent answer receives it for a name both origins answered @404@ for.
+-}
 withObservedAdmittedDocument ::
     PackumentReplies response ->
     MemoryTicket ->
@@ -268,7 +273,7 @@ withObservedAdmittedDocument ::
     Maybe (DocumentRejectionObserver response) ->
     PackageName ->
     Request ->
-    response ->
+    Maybe response ->
     (CachedDoc -> Int -> Map Text Provenance -> Handler response) ->
     Handler response
 withObservedAdmittedDocument replies ticket observe checkDocument rejected name request absent consume = do
@@ -276,14 +281,11 @@ withObservedAdmittedDocument replies ticket observe checkDocument rejected name 
     let deps = bindingPackumentDeps mount
         clientToken = forwardedCredential mount request
         refuse reply message = pure (reply replies [] (mkRefusal Nothing message))
-    if not (edgeTokenMatches (pdInboundToken deps) clientToken)
-        then refuse packumentUnauthorised unauthorisedMessage
-        else
-            if pdReadSourceSelection deps == ManagedMirrorAndPublic && pdFirstParty deps name
-                then refuse packumentNotFound "first-party packages require the private registry view"
-                else do
-                    serving <- newServing PackumentFull replies name request ticket admitted
-                    serveAdmittedPackument serving{psvAbsent = Just absent, psvInputBytes = observe, psvDocumentBytes = checkDocument, psvRejectionObserver = rejected} clientToken
+    if edgeTokenMatches (pdInboundToken deps) clientToken
+        then do
+            serving <- newServing PackumentFull replies name request ticket admitted
+            serveAdmittedPackument serving{psvAbsent = absent, psvInputBytes = observe, psvDocumentBytes = checkDocument, psvRejectionObserver = rejected} clientToken
+        else refuse packumentUnauthorised unauthorisedMessage
   where
     admitted serving sources plan = do
         let basis = outputBasisBytes plan sources
@@ -331,14 +333,15 @@ serveAdmittedPackument serving clientToken = do
     logFM DebugS (ls ("serving packument request for " <> renderPackageName (psvName serving)))
     evalCtx <- liftIO (mkEvalContext (pdNow deps) (pdAdvisoryEtag deps))
     case pdMirrorState deps of
-        Just mirror | pdReadSourceSelection deps /= PrivateOnly && not (pdFirstParty deps (psvName serving)) -> do
+        Just mirror | not (pdFirstParty deps (psvName serving)) -> do
             ((private, checked), public) <-
                 concurrently
                     ( do
                         private <- readPrivate serving clientToken
-                        checked <- case private of
-                            OriginAuthorisationFailure _ -> pure (Right Nothing)
-                            _ -> liftIO (validateMirrorProject mirror (psvTicket serving) (psvName serving))
+                        checked <-
+                            if refusesBeforeMirror private
+                                then pure (Right Nothing)
+                                else liftIO (validateMirrorProject mirror (psvTicket serving) (psvName serving))
                         pure (private, checked)
                     )
                     (readPublic serving)
@@ -346,7 +349,7 @@ serveAdmittedPackument serving clientToken = do
                 OriginAuthorisationFailure code -> privateAccessRefused serving code
                 _ -> case checked of
                     Left _ -> mirrorUnavailable serving
-                    Right record -> serveMergedPackument serving evalCtx record private public
+                    Right record -> serveMergedPackument serving evalCtx ((mirrorViewDocuments mirror,) <$> record) private public
         _ -> do
             (private, public) <- resolveOrigins serving clientToken
             case private of
@@ -355,9 +358,17 @@ serveAdmittedPackument serving clientToken = do
   where
     deps = psvDeps serving
 
+-- An access refusal or a failed private read decides the request before mirror state can.
+refusesBeforeMirror :: OriginResult -> Bool
+refusesBeforeMirror = \case
+    OriginAuthorisationFailure _ -> True
+    result -> case originMiss result of
+        Just (MissUnresolved _) -> True
+        _ -> False
+
 resolveOrigins :: PackumentServing response -> Maybe ClientCredential -> Handler (OriginResult, OriginResult)
 resolveOrigins serving clientToken
-    | pdReadSourceSelection (psvDeps serving) == PrivateOnly || pdFirstParty (psvDeps serving) (psvName serving) = (,OriginAbsent) <$> readPrivate serving clientToken
+    | pdFirstParty (psvDeps serving) (psvName serving) = (,OriginAbsent) <$> readPrivate serving clientToken
     | otherwise = concurrently (readPrivate serving clientToken) (readPublic serving)
 
 readPrivate :: PackumentServing response -> Maybe ClientCredential -> Handler OriginResult
@@ -374,19 +385,19 @@ privateAccessRefused serving code = do
 serveMergedPackument ::
     PackumentServing response ->
     EvalContext ->
-    Maybe (StateRevision, ProjectMirrorRecord) ->
+    Maybe (MirrorDocuments, (StateRevision, ProjectMirrorRecord)) ->
     OriginResult ->
     OriginResult ->
     Handler response
 serveMergedPackument serving evalCtx record privResult pubResult
     | OriginBudgetExceeded fault <- privResult = budgetRefused fault
+    | Just (MissUnresolved failure) <- originMiss privResult = privateUnresolved serving evalCtx privResult failure
     | OriginBudgetExceeded fault <- pubResult = budgetRefused fault
-    | Just absent <- psvAbsent serving
-    , isNothing record
-    , not (pdFirstParty (psvDeps serving) (psvName serving))
+    | not (pdFirstParty deps name)
     , settledAbsence privResult
-    , settledAbsence pubResult =
-        pure absent
+    , settledAbsence pubResult
+    , Just answer <- unheldAnswer =
+        answer
     | otherwise = withCheckedSourceDocuments serving (catMaybes [originManifest privResult, originManifest pubResult]) $ case views of
         Left _ -> mirrorUnavailable serving
         Right (unmanagedManifest, managedManifest, pending) -> do
@@ -394,17 +405,16 @@ serveMergedPackument serving evalCtx record privResult pubResult
                 (managed, managedExclusions) = admitTrusted (pdMinTrustedIntegrity deps) managedManifest
                 privateSources = catMaybes [unmanaged, managed]
                 trustedVersions = Map.unions (map (infoVersions . srcInfo) privateSources)
-            public <- withRunInIO $ \run -> do
-                evidenceReads <- newPublicInstallEvidenceReads deps (srPublicClient rt) (srPublicControl rt) InstallPublicAdmission (psvTicket serving) (run . logFM ErrorS . ls . renderInability . rfDetail)
-                gatePublic (observeVersionRejection <$> psvRejectionObserver serving) evidenceReads (srTracing rt) (servingMetrics serving) deps name evalCtx trustedVersions (Map.keysSet pending) (originManifest pubResult)
+                -- A public version that a private one claims under another spelling of its release is not offered.
+                publicManifest = (\manifest -> manifest{manifestInfo = withoutTrustedReleases trustedVersions (manifestInfo manifest)}) <$> originManifest pubResult
+            public <- liftIO (gatePublic (observeVersionRejection <$> psvRejectionObserver serving) (srTracing rt) (servingMetrics serving) deps name evalCtx trustedVersions (Map.keysSet pending) publicManifest)
             let sources = privateSources <> maybeToList (paContribution public)
                 required = Map.withoutKeys pending (paBlockedPending public)
                 covered = Map.null required || maybe False (publicMirrorCoverage required . srcInfo) (paContribution public)
             if not covered || fmap (infoVersions . manifestInfo) managedManifest /= fmap (infoVersions . srcInfo) managed
                 then mirrorUnavailableWithRetry serving (case pubResult of OriginCooling retry -> Just retry; _ -> Nothing)
                 else case originMiss privResult of
-                    Just miss | pdReadSourceSelection deps == PrivateOnly -> privateViewMissed serving miss
-                    Just miss | pdFirstParty deps name -> firstPartyMissed serving miss
+                    Just MissAbsent | pdFirstParty deps name -> firstPartyMissed serving MissAbsent
                     _ -> case packumentPlan sources trustedVersions (paDeniedEvidence public) of
                         Just plan -> do
                             liftIO $ do
@@ -419,9 +429,6 @@ serveMergedPackument serving evalCtx record privResult pubResult
                             , Just manifest <- originManifest pubResult
                             , null (infoInvalidEntries (manifestInfo manifest)) ->
                                 liftIO (paReportRejections public >> onCheckedNoSurvivorAdmission observer)
-                            | pdReadSourceSelection deps == ManagedMirrorAndPublic
-                            , OriginUnresolved <- pubResult ->
-                                mirrorUnavailable serving
                             | otherwise ->
                                 noServeableVersions serving (ctxAdvisoryEtag evalCtx) (paVerdicts public) $
                                     collectDecisions privResult pubResult (privateExclusions <> managedExclusions <> paExclusions public)
@@ -430,16 +437,19 @@ serveMergedPackument serving evalCtx record privResult pubResult
     settledAbsence OriginAbsent = True
     settledAbsence OriginNotFound = True
     settledAbsence _ = False
+    -- A listing answers 404 unless a recorded version survives in the mirror. A coordinate lookup takes
+    -- its own answer, and a recorded name keeps its managed path there.
+    unheldAnswer = case psvAbsent serving of
+        Nothing | noRecordedCopy -> Just (liftIO (unheldNameReply (servingMetrics serving) (psvReplies serving) deps))
+        Just absent | isNothing record -> Just (pure absent)
+        _ -> Nothing
+    noRecordedCopy = either (const False) (\(_, managed, _) -> isNothing managed) views
     deps = psvDeps serving
     name = psvName serving
     rt = psvRuntime serving
     views = case record of
-        Nothing
-            | pdReadSourceSelection deps == ManagedMirrorAndPublic -> Right (Nothing, Nothing, Map.empty)
-            | otherwise -> Right (originManifest privResult, Nothing, Map.empty)
-        Just (revision, current) -> do
-            (unmanaged, managed, pending) <- mirrorProjectViews revision current (originManifest privResult)
-            pure (if pdReadSourceSelection deps == ManagedMirrorAndPublic then Nothing else unmanaged, managed, pending)
+        Nothing -> Right (originManifest privResult, Nothing, Map.empty)
+        Just (documents, (revision, current)) -> mirrorProjectViews documents revision current (originManifest privResult)
 
 withCheckedSourceDocuments :: PackumentServing response -> [Manifest] -> Handler response -> Handler response
 withCheckedSourceDocuments serving manifests action = go manifests
@@ -480,12 +490,12 @@ data PublicAdmission = PublicAdmission
       paReportRejections :: IO ()
     }
 
-gatePublic :: Maybe (EvalContext -> PackageDetails -> Rejection -> IO ()) -> (PackageDetails -> IO (Maybe InstallEvidenceRead)) -> TracingPort -> MetricsPort -> PackumentDeps -> PackageName -> EvalContext -> Map Text PackageDetails -> Set Text -> Maybe Manifest -> IO PublicAdmission
-gatePublic rejected evidenceReads tracing metrics deps name ctx trustedVersions pendingVersions = \case
+gatePublic :: Maybe (EvalContext -> PackageDetails -> Rejection -> IO ()) -> TracingPort -> MetricsPort -> PackumentDeps -> PackageName -> EvalContext -> Map Text PackageDetails -> Set Text -> Maybe Manifest -> IO PublicAdmission
+gatePublic rejected tracing metrics deps name ctx trustedVersions pendingVersions = \case
     Nothing -> pure (PublicAdmission Nothing [] [] Set.empty Map.empty pass)
     Just manifest -> spanPackumentGate tracing name $ do
         let (admissible, integrityRefusals) = admitByIntegrity (pdMinIntegrity deps) integrityBelowFloor integrityMissing (manifestInfo manifest)
-        (decisions, seconds) <- timedSeconds (decideVersions evidenceReads deps ctx admissible)
+        (decisions, seconds) <- timedSeconds (decideVersions deps ctx admissible)
         mpRuleEvalDuration metrics (evalTier (pdRules deps)) seconds
         recordEffectfulFailures metrics (Map.elems decisions)
         let plan = filterPlanFromDecisions decisions
@@ -524,10 +534,10 @@ reportIntegrityRejections report ctx floorSpec below missing info =
         Admit -> pass
         Reject rejection -> report ctx details{pkgArtifacts = artifact :| []} rejection
 
-decideVersions :: (PackageDetails -> IO (Maybe InstallEvidenceRead)) -> PackumentDeps -> EvalContext -> PackageInfo -> IO (Map Text Decision)
-decideVersions evidenceReads deps ctx info = do
-    decide <- newEvaluatorWithInstallRead (installEvidenceMode (pdInstallEvidence deps)) ctx (pdRules deps)
-    traverse (\details -> evidenceReads details >>= decide (completeEvidence details)) (infoVersions info)
+decideVersions :: PackumentDeps -> EvalContext -> PackageInfo -> IO (Map Text Decision)
+decideVersions deps ctx info = do
+    decide <- newEvaluator ctx (pdRules deps)
+    traverse (decide . completeEvidence) (infoVersions info)
 
 projectDecisions :: PackageInfo -> [Decision] -> [VersionVerdict]
 projectDecisions info =
@@ -650,30 +660,40 @@ noServeableVersions serving etag verdicts decisions = do
 noSurvivors :: PackumentReplies response -> Maybe HelpMessage -> PackumentStatus -> [ServeDecision] -> response
 noSurvivors replies help status decisions = case status of
     PackumentOk -> packumentInternal replies [] body
+    PackumentDenied -> packumentDenied replies [] body
     PackumentForbidden -> packumentForbidden replies [] body
     PackumentUnavailable retry -> packumentUnavailable replies (retryAfterHeaders retry) body
     PackumentBadGateway -> packumentBadGateway replies [] body
     PackumentServerError -> packumentInternal replies [] body
   where
     message = case status of
-        PackumentForbidden -> packumentForbiddenText replies decisions
+        PackumentDenied -> packumentDeniedText replies decisions
+        PackumentForbidden -> packumentDeniedText replies decisions
         _ -> detailedRejections decisions
 
     !body = mkRefusal help message
 
 collectDecisions :: OriginResult -> OriginResult -> [ServeDecision] -> [ServeDecision]
-collectDecisions privResult pubResult publicExclusions =
-    privateDecision privResult <> publicDecision pubResult <> publicExclusions
+collectDecisions privResult pubResult exclusions =
+    privateLeg <> publicLeg <> exclusions
+  where
+    -- A private 404 beside a public document the gate refused in full is settled, so the refusals decide.
+    privateLeg = case (privResult, pubResult) of
+        (OriginNotFound, OriginResolved _) | packumentStatus exclusions == PackumentDenied -> []
+        _ -> privateDecision privResult
+    -- With no private origin the public one is the only source, so its outage refuses as a private one does.
+    publicLeg = case (privResult, pubResult) of
+        (OriginAbsent, OriginUnresolved (ReadUnavailable retry)) -> [neededUpstreamUnavailable retry]
+        _ -> publicDecision pubResult
 
 privateDecision :: OriginResult -> [ServeDecision]
 privateDecision = \case
     OriginBudgetExceeded _ -> [upstreamInvalidDecision]
     OriginAuthorisationFailure _ -> []
     OriginResolved _ -> []
-    -- A merged name keeps a private 404 and a private outage on one refusal, so a name
-    -- neither leg could serve still invites a retry.
-    OriginNotFound -> [neededUpstreamUnavailable]
-    OriginUnresolved -> [neededUpstreamUnavailable]
+    -- Unless the public origin settles the name, a private 404 with no public survivor keeps the outage refusal.
+    OriginNotFound -> [neededUpstreamUnavailable Nothing]
+    OriginUnresolved failure -> [readFailureRefusal neededUpstreamUnavailableMessage failure]
     OriginCooling retry -> [upstreamCooling retry]
     OriginNameMismatch -> [upstreamInvalidDecision]
     -- An unconfigured private leg (a serve-only pure gate) is not an outage:
@@ -687,25 +707,37 @@ publicDecision = \case
     OriginNameMismatch -> [upstreamInvalidDecision]
     OriginResolved _ -> []
     OriginNotFound -> []
-    OriginUnresolved -> []
+    OriginUnresolved _ -> []
     OriginCooling retry -> [upstreamCooling retry]
     OriginAbsent -> []
 
-neededUpstreamUnavailable :: ServeDecision
-neededUpstreamUnavailable = Reject (Rejection (Unavailable (WillResolve Nothing)) "a needed upstream was unavailable")
+neededUpstreamUnavailable :: Maybe RetryAfter -> ServeDecision
+neededUpstreamUnavailable retry = rejectUnavailable (WillResolve retry) neededUpstreamUnavailableMessage
+
+neededUpstreamUnavailableMessage :: Text
+neededUpstreamUnavailableMessage = "a needed upstream was unavailable"
 
 upstreamInvalidDecision :: ServeDecision
 upstreamInvalidDecision = Reject (Rejection UpstreamInvalid "an upstream returned a packument for a different package")
 
-privateViewMissed :: PackumentServing response -> OriginMiss -> Handler response
-privateViewMissed serving miss = do
-    liftIO (mpServeDecision (servingMetrics serving) (if miss == MissAbsent then Metric.Deny else Metric.Unavailable))
-    pure $ case miss of
-        MissAbsent -> packumentNotFound replies [] (mkRefusal help "the private registry has no such package")
-        MissUnresolved -> packumentUnavailable replies [] (mkRefusal help "the private registry is unavailable")
+-- Answer 404 for a name no configured origin holds, recorded as the artifact path records a missing version.
+unheldNameReply :: MetricsPort -> PackumentReplies response -> PackumentDeps -> IO response
+unheldNameReply metrics replies deps = do
+    mpServeDecision metrics (serveDecisionClass decision)
+    recordDenials metrics [decision]
+    pure (packumentNotFound replies [] (mkRefusal (pdHelp deps) message))
   where
-    replies = psvReplies serving
-    help = pdHelp (psvDeps serving)
+    message
+        | isJust (pdPrivateBaseUrl deps) = "neither the private nor the public upstream has the requested package"
+        | otherwise = "the public upstream does not have the requested package"
+    decision = rejectUnavailable WontResolve message
+
+-- A private origin that was not read refuses every name, so no public namesake stands in for a
+-- private package. Its cause alone sets the status, whatever the public leg did.
+privateUnresolved :: PackumentServing response -> EvalContext -> OriginResult -> ReadFailure -> Handler response
+privateUnresolved serving evalCtx privResult failure
+    | pdFirstParty (psvDeps serving) (psvName serving) = firstPartyMissed serving (MissUnresolved failure)
+    | otherwise = noServeableVersions serving (ctxAdvisoryEtag evalCtx) [] (privateDecision privResult)
 
 firstPartyMissed :: PackumentServing response -> OriginMiss -> Handler response
 firstPartyMissed serving miss = do
@@ -724,25 +756,31 @@ firstPartyMissMessage name = \case
         "'"
             <> rendered
             <> "' did not resolve from the private upstream, and its namespace is first-party to this deployment, so it is never fetched from the public registry"
-    MissUnresolved ->
+    MissUnresolved (ReadUnavailable _) ->
         "the private upstream did not answer for '"
+            <> rendered
+            <> "', and its namespace is first-party to this deployment, so no public document may stand in for it"
+    MissUnresolved ReadInvalid ->
+        "the private upstream returned an invalid or unusable reply for '"
             <> rendered
             <> "', and its namespace is first-party to this deployment, so no public document may stand in for it"
   where
     rendered = renderPackageName name
 
--- | Classify a first-party absence as a policy refusal and an unread origin as an outage.
+-- | Classify a first-party absence as a policy refusal, and an unread origin by its cause.
 firstPartyMissDecision :: PackageName -> OriginMiss -> ServeDecision
 firstPartyMissDecision name miss = Reject (Rejection reason (firstPartyMissMessage name miss))
   where
     reason = case miss of
         MissAbsent -> ByPolicy firstPartyRule []
-        MissUnresolved -> Unavailable (WillResolve Nothing)
+        MissUnresolved (ReadUnavailable retry) -> Unavailable (WillResolve retry)
+        MissUnresolved ReadInvalid -> UpstreamInvalid
 
--- | Render a settled absence as @404@ and an unread origin as @503@ without @Retry-After@.
+-- | Render a settled absence as @404@, an unavailable origin as @503@ with its delay, and an invalid reply as @502@.
 firstPartyMissReply :: PackumentReplies response -> Maybe HelpMessage -> PackageName -> OriginMiss -> response
 firstPartyMissReply replies help name miss = case miss of
     MissAbsent -> packumentNotFound replies [] body
-    MissUnresolved -> packumentUnavailable replies [] body
+    MissUnresolved (ReadUnavailable retry) -> packumentUnavailable replies (retryAfterHeaders retry) body
+    MissUnresolved ReadInvalid -> packumentBadGateway replies [] body
   where
     body = mkRefusal help (firstPartyMissMessage name miss)

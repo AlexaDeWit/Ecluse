@@ -20,6 +20,7 @@ module Ecluse.Runtime.Server.Internal (
     runWarp,
     serveBound,
     proxyListener,
+    serverModule,
     listeningPrefix,
     raceServerAgainstLoop,
     probeApplication,
@@ -74,11 +75,12 @@ import Ecluse.Core.Server.Context (
  )
 import Ecluse.Core.Server.Contract (responseToWai)
 import Ecluse.Core.Server.Fault (RequestFault (rqCause, rqDetail), classifyEscape)
+import Ecluse.Core.Server.Pipeline.Internal (pipelineModule)
 import Ecluse.Core.Server.Readiness (Readiness, alwaysReady)
 import Ecluse.Core.Telemetry.Record (MetricsPort (mpRequestPerimeterFault))
 import Ecluse.Core.Worker (Liveness, alwaysLive)
 import Ecluse.Runtime.Env (Env, envDdContext, envDeadlines, envLogEnv, envTelemetry, serveRuntimeOf)
-import Ecluse.Runtime.Log (moduleLog)
+import Ecluse.Runtime.Log (moduleField, moduleLog)
 import Ecluse.Runtime.Server.Drain (
     DrainSignal,
     ShutdownDrainTimeout (..),
@@ -208,12 +210,12 @@ serve env binding (RouteAction contract action) request respond =
     ctx :: RequestCtx
     ctx = RequestCtx (serveRuntimeOf env) binding
 
--- Discharge a 'Handler' to 'IO' over the per-request context. Resolving @dd@ here is what makes
--- every serve-path log line carry its trace correlation.
+-- Discharge a 'Handler' to 'IO' over the per-request context, so every line a request logs carries
+-- its trace correlation and a @module@: the log site's own, or else the pipeline's.
 runInRequest :: Env -> RequestCtx -> Handler a -> IO a
 runInRequest env ctx action = do
     dd <- ddPayloadNow (envDdContext env)
-    runHandler (envLogEnv env) dd ctx action
+    runHandler (envLogEnv env) (moduleField pipelineModule <> dd) ctx action
 
 -- Record an escaped pre-commit fault on the metric and the audit line, both before the
 -- perimeter answers its neutral fallback.
@@ -223,11 +225,10 @@ observePerimeterFault env ctx request fault = do
     runInRequest env ctx . katipAddContext (perimeterPayload request fault) $
         logFM ErrorS "the request perimeter answered an escaped pre-commit fault with the neutral 500"
 
--- The fields mirror the denial audit line, so an operator triages both surfaces with one
--- vocabulary. The @module@ key names the public module, because operators filter on it.
+-- The fields mirror the denial audit line, so an operator triages both surfaces with one vocabulary.
 perimeterPayload :: Request -> RequestFault -> SimpleLogPayload
 perimeterPayload request fault =
-    sl "module" ("Ecluse.Runtime.Server" :: Text)
+    moduleField serverModule
         <> sl "path" (decodeUtf8 (rawPathInfo request) :: Text)
         <> sl "perimeterCause" (show (rqCause fault) :: Text)
         <> sl "perimeterDetail" (rqDetail fault)
@@ -322,11 +323,15 @@ serveBound logEnv listener settings app =
             port <- socketPort socket
             Warp.runSettingsSocket (Warp.setBeforeMainLoop (announce port) settings) socket app
   where
-    announce port = moduleLog logEnv "Ecluse.Runtime.Server" InfoS (listeningPrefix listener <> show (fromIntegral port :: Int))
+    announce port = moduleLog logEnv serverModule InfoS (listeningPrefix listener <> show (fromIntegral port :: Int))
 
 -- | The proxy's listener name, which starts the line it logs once bound.
 proxyListener :: Text
 proxyListener = "proxy"
+
+-- | The @module@ field of the front door's own lines, named for the public module so an operator's saved filter keeps matching.
+serverModule :: Text
+serverModule = "Ecluse.Runtime.Server"
 
 -- | The start of the line a named listener logs once bound, followed by the port.
 listeningPrefix :: Text -> Text

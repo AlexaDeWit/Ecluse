@@ -99,6 +99,7 @@ import Ecluse.Core.Telemetry.Metrics (
     BreakerSource,
     BreakerState,
     CacheResult,
+    CacheStore (DirectoryStore),
     Cause,
     CredentialResult,
     Decision,
@@ -194,12 +195,12 @@ newMetrics telemetry = do
     upstreamRequests <- counter meter UpstreamRequests "{request}" "public HTTP attempts by host, kind, and status"
     upstreamFetchDuration <- histogram meter UpstreamFetchDuration "upstream metadata-fetch latency by upstream and status class"
     upstreamFetchErrors <- counter meter UpstreamFetchErrors "{error}" "upstream metadata-fetch errors by upstream and cause"
-    metadataCacheRequests <- counter meter MetadataCacheRequests "{request}" "full-store requests by hit/miss/collapsed"
+    metadataCacheRequests <- counter meter MetadataCacheRequests "{request}" "full-store requests by hit/miss/collapsed, and directory requests with store=directory"
     singleVersionCacheRequests <- counter meter SingleVersionCacheRequests "{request}" "selected-version requests by hit/miss/collapsed"
     assembledCacheRequests <- counter meter AssembledCacheRequests "{request}" "assembled-response requests by hit/miss/collapsed"
     metadataCacheRefused <- counter meter MetadataCacheRefused "{entry}" "capacity refusals and backend failures by store"
     metadataCacheEntries <- gauge meter MetadataCacheEntries "metadata-cache occupancy"
-    metadataCacheResidentBytes <- gauge meter MetadataCacheResidentBytes "full-packument metadata-cache resident bytes"
+    metadataCacheResidentBytes <- gauge meter MetadataCacheResidentBytes "full-packument metadata-cache resident bytes, and directory bytes with store=directory"
     singleVersionCacheResidentBytes <- gauge meter SingleVersionCacheResidentBytes "single-version metadata-cache resident bytes"
     assembledCacheResidentBytes <- gauge meter AssembledCacheResidentBytes "assembled-representation store resident bytes"
     serveRelayAnomalies <- counter meter ServeRelayAnomalies "{relay}" "public relays that were not the admitted artifact, by class"
@@ -334,11 +335,13 @@ metricsPortOf m =
         , mpCacheRequest = recordCacheRequest m
         , mpVersionCacheRequest = \result -> addOne (mSingleVersionCacheRequests m) [LCacheResult result]
         , mpAssembledCacheRequest = \result -> addOne (mAssembledCacheRequests m) [LCacheResult result]
+        , mpDirectoryCacheRequest = \result -> addOne (mMetadataCacheRequests m) [LCacheResult result, LCacheStore DirectoryStore]
         , mpCacheRefused = \store -> addOne (mMetadataCacheRefused m) [LCacheStore store]
         , mpCacheEntries = recordCacheEntries m
         , mpCacheResidentBytes = recordCacheResidentBytes m
         , mpVersionCacheResidentBytes = recordVersionCacheResidentBytes m
         , mpAssembledCacheResidentBytes = recordAssembledCacheResidentBytes m
+        , mpDirectoryCacheResidentBytes = \bytes -> set (mMetadataCacheResidentBytes m) (fromIntegral bytes) [LCacheStore DirectoryStore]
         , mpMirrorEnqueued = recordMirrorEnqueued m
         , mpPublicRelayAnomaly = recordPublicRelayAnomaly m
         , mpRequestPerimeterFault = recordRequestPerimeterFault m

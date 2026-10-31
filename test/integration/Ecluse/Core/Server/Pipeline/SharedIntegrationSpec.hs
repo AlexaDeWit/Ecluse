@@ -12,6 +12,8 @@ import Data.Time (getCurrentTime)
 import Ecluse.Server.Pipeline.TestSupport
 import Ecluse.Test.Contract.Catalogue (caseLabel)
 import Ecluse.Test.Wai
+import Network.HTTP.Types (status403)
+import Network.Wai (responseLBS)
 import Network.Wai.Test (SResponse (..), simpleBody)
 import Test.Hspec
 import UnliftIO.Exception (impureThrow, throwIO)
@@ -24,8 +26,8 @@ import Ecluse.Core.Rules.Effectful (EffectfulConfig (..), defaultEffectfulConfig
 import Ecluse.Core.Rules.Types (FailureAlignment (..), Reason (FixesNoAdvisory), RuleVerdict (..))
 import Ecluse.Core.Security (Limits (..), defaultLimits)
 import Ecluse.Core.Server.Context (PackumentDeps (..))
-import Ecluse.Runtime.Log (DdContext (DdContext), LogFormat (JsonLog), LogLevel (InfoLevel), newLogEnv)
-import Ecluse.Test.Log (captureStdout)
+import Ecluse.Runtime.Log (DdContext (DdContext), LogFormat (JsonLog), LogLevel (DebugLevel, InfoLevel), newLogEnv)
+import Ecluse.Test.Log (captureStdout, lineField, lineWhere, moduleOfLineWhere, untaggedLines)
 import Ecluse.Test.Queue (newTestMemoryQueue)
 import Ecluse.Test.Rules (packageRule, remediation, revocation)
 import Katip (Environment (Environment), closeScribes)
@@ -66,13 +68,13 @@ effectfulSpec = describe "effectful rule tier" $ do
             status resp `shouldBe` 503
             status resp `shouldNotBe` 404
 
-    it (caseLabel "integration/pipeline-faults/native-002" "excludes a version a reachable effectful deny rejects (403 when nothing else survives)") $ do
+    it (caseLabel "integration/pipeline-faults/native-002" "excludes a version a reachable effectful deny rejects (404 when nothing else survives)") $ do
         rule <- denyingEffectfulRule
         privateUp <- servingUpstream (encodePackument (privatePackument [] "0.0.0"))
         publicUp <- servingUpstream (encodePackument (admittingPublic "1.0.0"))
         withProxyEffectful [rule] privateUp publicUp $ \app -> do
             resp <- getThing Nothing app
-            status resp `shouldBe` 403
+            status resp `shouldBe` 404
 
     it (caseLabel "integration/pipeline-faults/native-003" "serves a version a reachable effectful allow admits (a 200 with that version)") $ do
         rule <- allowingEffectfulRule
@@ -167,7 +169,7 @@ boundsSpec = describe "response bounds through the request path (security.md inv
         let body = case admittingPublic "1.0.0" of
                 Object fields -> Object (KeyMap.insert "_unknown" nestedValue fields)
                 other -> other
-        privateUp <- failingUpstream
+        privateUp <- absentUpstream
         publicUp <- servingUpstream (encodePackument body)
         queue <- newTestMemoryQueue
         withProxyEnvQueueDeps queue privateUp publicUp Nothing (withLimits tightLimits) $ \app _env _port -> do
@@ -178,56 +180,59 @@ boundsSpec = describe "response bounds through the request path (security.md inv
                 Object fields -> KeyMap.lookup "_unknown" fields `shouldBe` Nothing
                 _ -> expectationFailure "expected a metadata object"
 
-    it (caseLabel "integration/pipeline-faults/native-007" "refuses an oversized private packument fail-closed, serving only the public set") $ do
+    it (caseLabel "integration/pipeline-faults/native-007" "refuses an oversized private packument with 502, serving no public set") $ do
         privateUp <- servingUpstream (oversizedPackument "9.9.9")
         publicUp <- servingUpstream (encodePackument (admittingPublic "1.0.0"))
         queue <- newTestMemoryQueue
         withProxyEnvQueueDeps queue privateUp publicUp Nothing (withLimits tightLimits) $ \app _env _port -> do
             resp <- getThing Nothing app
-            status resp `shouldBe` 200
-            servedVersions resp `shouldBe` ["1.0.0"]
+            status resp `shouldBe` 502
+            servedVersions resp `shouldBe` []
 
-    it (caseLabel "integration/pipeline-faults/native-008" "503s when the only (public) packument is oversized and the private upstream is down") $ do
-        privateUp <- failingUpstream
+    it (caseLabel "integration/pipeline-faults/native-008" "503s when the only (public) packument is oversized and the private upstream has no such package") $ do
+        privateUp <- absentUpstream
         publicUp <- servingUpstream (oversizedPackument "1.0.0")
         queue <- newTestMemoryQueue
         withProxyEnvQueueDeps queue privateUp publicUp Nothing (withLimits tightLimits) $ \app _env _port -> do
             resp <- getThing Nothing app
             status resp `shouldBe` 503
+            servedVersions resp `shouldBe` []
 
     it (caseLabel "integration/pipeline-faults/native-009" "refuses a version-flood public packument fail-closed (nothing served from it)") $ do
-        privateUp <- failingUpstream
+        privateUp <- absentUpstream
         publicUp <- servingUpstream versionFloodPackument
         queue <- newTestMemoryQueue
         withProxyEnvQueueDeps queue privateUp publicUp Nothing (withLimits tightLimits) $ \app _env _port -> do
             resp <- getThing Nothing app
             status resp `shouldBe` 503
+            servedVersions resp `shouldBe` []
 
-    it (caseLabel "integration/pipeline-faults/native-010" "serves the public set when a version-flood document arrives on the private leg") $ do
+    it (caseLabel "integration/pipeline-faults/native-010" "refuses with 502 when a version-flood document arrives on the private leg") $ do
         privateUp <- servingUpstream versionFloodPackument
         publicUp <- servingUpstream (encodePackument (admittingPublic "1.0.0"))
         queue <- newTestMemoryQueue
         withProxyEnvQueueDeps queue privateUp publicUp Nothing (withLimits tightLimits) $ \app _env _port -> do
             resp <- getThing Nothing app
-            status resp `shouldBe` 200
-            servedVersions resp `shouldBe` ["1.0.0"]
+            status resp `shouldBe` 502
+            servedVersions resp `shouldBe` []
 
-    it (caseLabel "integration/pipeline-faults/native-011" "refuses a deeply-nested public document fail-closed (503 with the private upstream down)") $ do
-        privateUp <- failingUpstream
+    it (caseLabel "integration/pipeline-faults/native-011" "refuses a deeply-nested public document fail-closed (503 with no private package)") $ do
+        privateUp <- absentUpstream
         publicUp <- servingUpstream deeplyNestedBody
         queue <- newTestMemoryQueue
         withProxyEnvQueueDeps queue privateUp publicUp Nothing (withLimits tightLimits) $ \app _env _port -> do
             resp <- getThing Nothing app
             status resp `shouldBe` 503
+            servedVersions resp `shouldBe` []
 
-    it (caseLabel "integration/pipeline-faults/native-012" "serves the public set when a deeply-nested document arrives on the private leg") $ do
+    it (caseLabel "integration/pipeline-faults/native-012" "refuses with 502 when a deeply-nested document arrives on the private leg") $ do
         privateUp <- servingUpstream deeplyNestedBody
         publicUp <- servingUpstream (encodePackument (admittingPublic "1.0.0"))
         queue <- newTestMemoryQueue
         withProxyEnvQueueDeps queue privateUp publicUp Nothing (withLimits tightLimits) $ \app _env _port -> do
             resp <- getThing Nothing app
-            status resp `shouldBe` 200
-            servedVersions resp `shouldBe` ["1.0.0"]
+            status resp `shouldBe` 502
+            servedVersions resp `shouldBe` []
 
     it (caseLabel "integration/pipeline-faults/native-013" "serves normally when every document is within the bounds (no false refusal)") $ do
         privateUp <- servingUpstream (encodePackument (privatePackument [("3.0.0", plainVersion "3.0.0")] "3.0.0"))
@@ -238,14 +243,22 @@ boundsSpec = describe "response bounds through the request path (security.md inv
             status resp `shouldBe` 200
             servedVersions resp `shouldBe` ["1.0.0", "3.0.0"]
 
--- The serve path's JSON log lines for one request, over an upstream whose document breaches a
--- bound. The proxy runs on a capturing log environment, so the assertions read real output.
+-- The serve path's JSON log lines at the default level for one request, over a private document
+-- that breaches a bound and a failing public upstream.
 captureBreachLog :: LByteString -> IO Text
-captureBreachLog privateBody = do
-    privateUp <- servingUpstream privateBody
-    publicUp <- failingUpstream
+captureBreachLog = captureBreachLogAt InfoLevel
+
+captureBreachLogAt :: LogLevel -> LByteString -> IO Text
+captureBreachLogAt level privateBody = captureServeLog level (servingUpstream privateBody) failingUpstream
+
+-- The serve path's JSON log lines at @level@ for one request over the two upstreams. The proxy
+-- runs on a capturing log environment, so the assertions read real output.
+captureServeLog :: LogLevel -> IO Upstream -> IO Upstream -> IO Text
+captureServeLog level private public = do
+    privateUp <- private
+    publicUp <- public
     queue <- newTestMemoryQueue
-    logEnv <- newLogEnv JsonLog InfoLevel (DdContext "ecluse" Nothing Nothing Nothing) (Environment "test")
+    logEnv <- newLogEnv JsonLog level (DdContext "ecluse" Nothing Nothing Nothing) (Environment "test")
     withProxyOver logEnv queue privateUp publicUp Nothing (withLimits tightLimits) $ \app _env _port ->
         captureStdout $ do
             _ <- getThing Nothing app
@@ -276,15 +289,26 @@ boundsLogSpec = describe "serve-path warnings are logged before degrading" $ do
         logged `shouldSatisfy` T.isInfixOf "did not decode"
 
     it (caseLabel "integration/pipeline-faults/native-018" "tags every serve-path log line with the emitting module") $ do
-        logged <- captureBreachLog versionFloodPackument
-        logged `shouldSatisfy` T.isInfixOf "\"module\":\"Ecluse.Server.Pipeline\""
+        breach <- captureBreachLogAt DebugLevel versionFloodPackument
+        -- The private version-count breach, the public HTTP 500, and a debug line of the serve.
+        moduleOfLineWhere ["data", "bound"] "version-count" breach `shouldBe` Just "Ecluse.Server.Pipeline"
+        moduleOfLineWhere ["message"] "the upstream refused the metadata read" breach `shouldBe` Just "Ecluse.Server.Pipeline"
+        moduleOfLineWhere ["message"] "serving packument request for thing" breach `shouldBe` Just "Ecluse.Server.Pipeline"
+        untaggedLines breach `shouldBe` []
+        -- A private upstream refusing access with 403, beside an admitting public upstream.
+        refused <- captureServeLog DebugLevel (upstreamRespondingWith (responseLBS status403 [] "forbidden")) (servingUpstream (encodePackument (admittingPublic "1.0.0")))
+        let refusal = lineWhere ["message"] "the upstream refused metadata access" refused
+        moduleOfLineWhere ["message"] "the upstream refused metadata access" refused `shouldBe` Just "Ecluse.Server.Pipeline"
+        (lineField ["data", "package"] =<< refusal) `shouldBe` Just "thing"
+        (lineField ["data", "upstream"] =<< refusal) `shouldSatisfy` isJust
+        untaggedLines refused `shouldBe` []
 
 perimeterSpec :: Spec
 perimeterSpec = describe "the typed request perimeter (an escaped pre-commit fault)" $
     it (caseLabel "integration/pipeline-faults/native-019" "answers a bottoming assembly with the route's declared neutral 500, never a torn session") $ do
         -- The assembly hook bottoms when the render forces it, an invariant break escaping the
         -- handler pre-commit. The perimeter answers a neutral 500 and the session survives.
-        privateUp <- failingUpstream
+        privateUp <- absentUpstream
         publicUp <- servingUpstream (encodePackument (admittingPublic "1.0.0"))
         queue <- newTestMemoryQueue
         withProxyEnvQueueDeps queue privateUp publicUp Nothing withBottomingAssemble $ \app _env _port -> do

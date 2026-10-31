@@ -22,7 +22,9 @@ import Ecluse.Core.Registry.Metadata (versionEvaluation)
 import Ecluse.Core.Registry.Metadata.Fetch.Preparation (prepareVersion)
 import Ecluse.Core.Registry.Origin (chargingNativeReads, originClientOf)
 import Ecluse.Core.Registry.Publish (MirrorTransport (..), newMirrorPublish)
+import Ecluse.Core.Registry.Request (nativePresentation)
 import Ecluse.Core.Registry.RubyGems.Metadata (prepareGemRead)
+import Ecluse.Core.Registry.RubyGems.Mirror (rubyGemsStateFormat)
 import Ecluse.Core.Registry.RubyGems.Publish (rubyPublishCodec)
 import Ecluse.Core.Security (defaultLimits)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
@@ -47,6 +49,7 @@ boot knobs use = do
                 { nwSourceApp = sourceApp latency fixture
                 , nwTargetApp = targetApp latency fixture
                 , nwStateApp = stateApp latency fixture
+                , nwStateFormat = rubyGemsStateFormat
                 , nwPolicy = rubyGemsPolicy adapter
                 , nwJob = MirrorJob fixturePackage fixtureVersion (Just (unsafeFilename fixtureTrigger)) Nothing
                 , nwExpectedFiles = 4
@@ -63,18 +66,18 @@ rubyGemsPolicy :: RegistryAdapter -> WorkerEnvironment -> IO WorkerPolicy
 rubyGemsPolicy adapter environment = do
     let factors = metadataChargeFactors (adapterMetadata adapter)
         target = weTargetReadRoot environment
-        publish = newMirrorPublish (MirrorTransport (weClient environment) (pure Nothing) defaultLimits passthroughTracingPort) target target (rubyPublishCodec factors)
+        publish = newMirrorPublish (MirrorTransport (weClient environment) (pure Nothing) defaultLimits passthroughTracingPort) target target (rubyPublishCodec factors nativePresentation)
     pure
         WorkerPolicy
             { wpFirstParty = const False
             , wpResolveVersion = \pay name version -> chargingNativeReads factors pay (weSourceOrigin environment) >>= \origin -> versionEvaluation <$> prepareVersion prepareGemRead passthroughTracingPort (originClientOf origin) name version
-            , wpInstallEvidence = Nothing
             , wpRules = weRules environment
             , wpMinIntegrity = defaultMinIntegrity
             , wpArtifactHostHonoured = const True
             , wpEgressUrl = Right . loopbackRegistryUrl
             , wpArtifact = adapterArtifact adapter
             , wpPublish = publish
+            , wpMirrorFormat = rubyGemsStateFormat
             , wpArtifactLimits = defaultLimits
             , wpMirrorState = Just (weMirrorState environment)
             , wpNow = pure benchNow

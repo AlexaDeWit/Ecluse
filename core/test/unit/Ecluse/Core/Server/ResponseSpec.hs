@@ -101,6 +101,9 @@ spec = do
         it "a below-floor refusal is a 403 (an admission-policy denial)" $
             artifactStatus (Reject (Rejection BelowIntegrityFloor "too weak"))
                 `shouldBe` Forbidden
+        it "an invalid upstream reply renders as 502 Bad Gateway" $
+            codeAndReason (artifactHttpStatus (artifactStatus (Reject (Rejection UpstreamInvalid "redirected"))))
+                `shouldBe` (502, "Bad Gateway")
 
     describe "artifactHttpStatus -- code and reason phrase" $ do
         it "Ok is 200 OK" $ codeAndReason (artifactHttpStatus Ok) `shouldBe` (200, "OK")
@@ -130,9 +133,9 @@ spec = do
         it "serves (200) when any version survives, whatever else was excluded" $ do
             packumentStatus [Admit] `shouldBe` PackumentOk
             packumentStatus [denied, Admit, broken] `shouldBe` PackumentOk
-        it "is 403 when no survivor and every exclusion is by policy" $
-            packumentStatus [denied, denied] `shouldBe` PackumentForbidden
-        it "is 403 (deny-by-default) for an empty decision set" $
+        it "is denied when no survivor and every exclusion is by policy" $
+            packumentStatus [denied, denied] `shouldBe` PackumentDenied
+        it "is 403 for an empty decision set, which names no cause" $
             packumentStatus [] `shouldBe` PackumentForbidden
         it "is 503 when any exclusion may self-heal -- a retry may yield survivors" $
             packumentStatus [denied, transient Nothing] `shouldBe` PackumentUnavailable Nothing
@@ -146,12 +149,12 @@ spec = do
                 `shouldBe` PackumentUnavailable (Just (RetryAfter 10))
         it "is 500 when an exclusion is a permanent inability and none is retryable" $
             packumentStatus [denied, broken] `shouldBe` PackumentServerError
-        it "is 403 when no survivor and the only exclusion is a missing-integrity refusal" $
+        it "is denied when no survivor and the only exclusion is a missing-integrity refusal" $
             packumentStatus [Reject (Rejection MissingIntegrity "no integrity")]
-                `shouldBe` PackumentForbidden
-        it "is 403 when no survivor and the only exclusion is a below-floor refusal" $
+                `shouldBe` PackumentDenied
+        it "is denied when no survivor and the only exclusion is a below-floor refusal" $
             packumentStatus [Reject (Rejection BelowIntegrityFloor "too weak")]
-                `shouldBe` PackumentForbidden
+                `shouldBe` PackumentDenied
         it "is 502 when a responding upstream returned a packument for a different package" $
             packumentStatus [invalid] `shouldBe` PackumentBadGateway
         it "is 502 when both responding origins reported the wrong package" $

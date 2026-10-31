@@ -17,6 +17,7 @@ import Data.Map.Strict qualified as Map
 
 import Ecluse.Core.Mirror.State
 import Ecluse.Core.Mirror.State.Codec (projectRecordWorkWeight)
+import Ecluse.Core.Mirror.State.Format (MirrorStateFormat)
 import Ecluse.Core.Mirror.State.Internal (retainVerifiedIdentity)
 import Ecluse.Core.Package (PackageName)
 import Ecluse.Core.Registry.Metadata (VersionDoc (VersionDoc))
@@ -40,10 +41,10 @@ readMirrorRecord charge binding name = do
         | otherwise = Left StateIdentityMismatch
 
 -- | A native upload follows this write, including pending companion declarations.
-persistInventory :: WorkerStateBudget -> Limits -> Maybe WorkerMirrorState -> MirrorInventory -> Maybe ProjectMirrorRecord -> IO (Either MirrorStateFault ProjectMirrorRecord)
-persistInventory charge limits binding inventory previous = case binding of
-    Nothing -> pure (extendProjectRecord limits (stateTarget "transient worker") inventory previous)
-    Just managed -> recordExpectedInventory (wmsLimits managed) (wsbState charge) (wmsTarget managed) (wmsStore managed) inventory >>= chargeRecord charge (wmsLimits managed) . fmap snd
+persistInventory :: WorkerStateBudget -> MirrorStateFormat -> Limits -> Maybe WorkerMirrorState -> MirrorInventory -> Maybe ProjectMirrorRecord -> IO (Either MirrorStateFault ProjectMirrorRecord)
+persistInventory charge format limits binding inventory previous = case binding of
+    Nothing -> pure (extendProjectRecord format limits (stateTarget "transient worker") inventory previous)
+    Just managed -> recordExpectedInventory format (wmsLimits managed) (wsbState charge) (wmsTarget managed) (wmsStore managed) inventory >>= chargeRecord charge (wmsLimits managed) . fmap snd
 
 -- | Retain the bridge from a verified source digest to the digest the native target advertises.
 persistVerified :: WorkerStateBudget -> Maybe WorkerMirrorState -> Version -> VerifiedArtifactBytes -> ProjectMirrorRecord -> IO (Either MirrorStateFault ProjectMirrorRecord)

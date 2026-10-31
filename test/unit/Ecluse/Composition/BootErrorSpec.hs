@@ -32,7 +32,7 @@ import Ecluse.Core.Registry.Maintenance.Upstream (
     UndecidabilityReason (ChainBoundExceeded, NetworkFailure, NoMechanism),
     UnsafeReason (ConfigurationEvidence, InsufficientPermissions),
  )
-import Ecluse.Core.Rules.Types (RuleType (AllowScopeType, DenyInstallTimeExecutionType))
+import Ecluse.Core.Rules.Types (RuleType (AllowScopeType, DenyIfYankedType, DenyInstallTimeExecutionType))
 import Ecluse.Runtime.Aws.Fault (AwsFault (AwsUndecodable), AwsParty (AwsServiceNamed), AwsRequestFailed (AwsRequestFailed))
 import Ecluse.Runtime.Test.Aws (deliverRefreshFailure, holdsNoPlantedSecret, refreshFailures)
 import Ecluse.Test.Package (unsafeRegistryUrl)
@@ -75,6 +75,18 @@ ruleBlockRenderSpec = describe "blocked-rule remedies" $ do
     it "retains both block lines beside an independent refusal" $
         renderBootErrors ([RuleBlockedOnMount PyPI ty reason | (ty, _, reason) <- entries] <> [MissingAdapter RubyGems])
             `shouldBe` T.unlines ([expected name reason | (_, name, reason) <- entries] <> ["mount rubygems has no adapter wired in this build"])
+    for_ [(Npm, "npm", "NPM"), (RubyGems, "rubygems", "RUBYGEMS")] $ \(eco, name, envName) ->
+        it ("moves a shared yank deny on " <> toString name <> " only into the mounts that support it") $
+            renderBootError (RuleBlockedOnMount eco DenyIfYankedType "No yank flag.")
+                `shouldBe` "mount \""
+                    <> name
+                    <> "\" carries the rule DenyIfYanked, which the "
+                    <> name
+                    <> " ecosystem blocks: No yank flag. A rule in shared rules reaches every mount. Move this type from shared rules into mounts.pypi.rules or mounts.cargo.rules, or disable its configured entry with enabled: false under mounts."
+                    <> name
+                    <> ".rules (ECLUSE_MOUNTS__"
+                    <> envName
+                    <> "__RULES)."
 
 refuseOnThrowSpec :: Spec
 refuseOnThrowSpec =
@@ -133,6 +145,8 @@ renderBootErrorSpec = describe "renderBootError" $
             `shouldNotSatisfy` infixed "AWS_ENDPOINT_URL_SQS"
         renderBootError (CodeArtifactMintFailed ("ECLUSE_MOUNTS__NPM__MIRROR_TARGET" :| []) "AccessDenied") `shouldSatisfy` infixed "transient"
         renderBootError (FirstPartyMissing Npm) `shouldSatisfy` infixed "ECLUSE_MOUNTS__NPM__FIRST_PARTY"
+        renderBootError (MirrorCompanionMismatch RubyGems) `shouldSatisfy` infixed "ECLUSE_MOUNTS__RUBYGEMS__MIRROR_TARGET"
+        renderBootError (MirrorCompanionMismatch RubyGems) `shouldSatisfy` infixed "native metadata companions"
         renderBootError (PublishStaticCredentialNeedsEdge Npm TagVerdaccio) `shouldSatisfy` infixed "ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET__VERDACCIO__TOKEN"
         renderBootError (PublicationTargetOnPublicUpstream Npm PyPI "https://store.example.test")
             `shouldSatisfy` infixed "ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET (https://store.example.test) shares a host with ECLUSE_MOUNTS__PYPI__PUBLIC_UPSTREAM"

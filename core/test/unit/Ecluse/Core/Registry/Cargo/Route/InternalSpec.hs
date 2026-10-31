@@ -10,7 +10,7 @@ import Data.Aeson (Value, eitherDecode, object, (.=))
 import Data.Aeson qualified as Aeson
 import Data.List (lookup)
 import Data.Text qualified as T
-import Network.HTTP.Types (Method, ResponseHeaders, Status, methodDelete, methodGet, methodHead, methodPut, status200, status400, status401, status403, status404, status405, status500, status503)
+import Network.HTTP.Types (Method, ResponseHeaders, Status, methodDelete, methodGet, methodHead, methodPut, status200, status400, status401, status403, status404, status405, status500)
 import Network.Wai (Request (pathInfo, requestHeaders, requestMethod), responseHeaders, responseStatus)
 import Network.Wai.Test (SRequest (SRequest), SResponse (..), defaultRequest, runSession, setPath, srequest)
 import Test.Hspec
@@ -22,8 +22,9 @@ import Ecluse.Core.Registry.Cargo.Adapter (cargoAdapter)
 import Ecluse.Core.Registry.Cargo.Credential (cargoCredential)
 import Ecluse.Core.Registry.Cargo.Project (projectName)
 import Ecluse.Core.Registry.Cargo.Publish (cargoPublish)
-import Ecluse.Core.Registry.Cargo.Route.Internal (CargoView (..), artifactContract, artifactCoordinate, artifactReplies, cargoRouter, cargoRoutes, indexContract, indexReplies, takeIndexPath)
+import Ecluse.Core.Registry.Cargo.Route.Internal (artifactContract, artifactCoordinate, artifactReplies, cargoRouter, cargoRoutes, indexContract, indexReplies, takeIndexPath)
 import Ecluse.Core.Registry.Npm.Route.Internal (npmPackumentContract, npmPackumentReplies, npmTarballContract, npmTarballReplies)
+import Ecluse.Core.Registry.Request (nativePresentation)
 import Ecluse.Core.Security (Limits (maxPublishRequestBytes), defaultLimits)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Core.Server.Admission (newServeAdmissionTuned, withServeAdmission)
@@ -32,7 +33,7 @@ import Ecluse.Core.Server.Admission.Types (ChargeFactors (ChargeFactors))
 import Ecluse.Core.Server.Context (MountBinding (..), PackumentDeps (..), PublishDeps (..), RequestCtx (RequestCtx), ResponseAction (..), RouteAction (RouteAction), ServeRuntime (..), runHandler)
 import Ecluse.Core.Server.Contract (responseToWai)
 import Ecluse.Core.Server.Path (unFilename)
-import Ecluse.Core.Server.Pipeline.Packument (PackumentReplies (packumentForbidden, packumentForbiddenText, packumentInternal, packumentNotFound, packumentPrivateRefused, packumentUnauthorised))
+import Ecluse.Core.Server.Pipeline.Packument (PackumentReplies (packumentDenied, packumentDeniedText, packumentInternal, packumentNotFound, packumentPrivateRefused, packumentUnauthorised))
 import Ecluse.Core.Server.Pipeline.Tarball.Types (TarballReplies (tarballError, tarballPrivateRefused))
 import Ecluse.Core.Server.Response (RejectReason (Unavailable), Rejection (Rejection), ServeDecision (Reject), Transience (WontResolve), mkHelpMessage, mkRefusal)
 import Ecluse.Core.Server.Route (Route (routeName), RouteName (RouteName), matchRoute)
@@ -44,88 +45,70 @@ import Ecluse.Test.Log (newTestLogEnv)
 import Ecluse.Test.Port (noopMetricsPort)
 import Ecluse.Test.Registry.Cargo.Fixtures (cargoUpload)
 import Ecluse.Test.Registry.Cargo.Publish (cargoPublicationFixture)
+import Ecluse.Test.Registry.Cargo.Reference (referenceDiscovery)
 import Ecluse.Test.Server.Handler (responseBytes, testServeRuntime, testServeRuntimeWith)
-import Ecluse.Test.Server.Mount (serveDepsFor)
-import Ecluse.Test.Stub (Captured (..), Stub, allCaptured, headerValue, stubBaseUrl, withRoutedStub, withStub)
+import Ecluse.Test.Server.Mount (serveDepsFor, withPrivateBaseUrl)
+import Ecluse.Test.Stub (Captured (..), Stub, allCaptured, stubBaseUrl, withRoutedStub, withStub)
 import Ecluse.Test.Support (expectRight)
 import Ecluse.Test.Wai (selfBaseUrlOf)
 
 spec :: Spec
 spec = do
     describe "bound native routes" $ do
-        it "returns local 404s for an absent private binding and unknown private paths" $
+        it "answers local 404s under the removed private prefix" $
             withSweeper $ \deadlines -> withStub status200 "never read" $ \stub -> do
                 runtime <- testServeRuntime deadlines noopMetricsPort
-                let deps = routeDeps stub
-                for_ [(Nothing, ["private", "config.json"]), (Just deps, ["private", "unknown"])] $ \(private, path) -> do
-                    response <- captureCargo runtime (routeBinding deps private Nothing) methodGet path ""
+                budget <- newByteAdmission deadlines (128 * 1024 * 1024)
+                let binding = routeBinding (routeDeps stub) (Just (routePublication stub budget))
+                for_ [(methodGet, ["private", "config.json"]), (methodGet, ["private", "unknown"]), (methodPut, ["private", "api", "v1", "crates", "new"])] $ \(method, path) -> do
+                    response <- captureCargo runtime binding method path ""
                     simpleStatus response `shouldBe` status404
                     simpleBody response `shouldBe` ""
                 allCaptured stub `shouldReturn` []
-        it "keeps public discovery local and reports the missing private origin" $
+        it "answers discovery locally without a private origin" $
             withSweeper $ \deadlines -> withStub status200 "never read" $ \stub -> do
                 runtime <- testServeRuntime deadlines noopMetricsPort
-                let deps = routeDeps stub
-                    binding = routeBinding deps (Just deps) Nothing
-                public <- captureCargo runtime binding methodGet ["config.json"] ""
-                simpleStatus public `shouldBe` status200
-                (eitherDecode (simpleBody public) :: Either String Value)
+                response <- captureCargo runtime (routeBinding (routeDeps stub) Nothing) methodGet ["config.json"] ""
+                simpleStatus response `shouldBe` status200
+                (eitherDecode (simpleBody response) :: Either String Value)
                     `shouldBe` Right (object ["dl" .= ("https://proxy.test/cargo/crates/{crate}/{version}/{crate}-{version}.crate" :: Text), "auth-required" .= False])
-                private <- captureCargo runtime binding methodGet ["private", "config.json"] ""
-                simpleStatus private `shouldBe` status503
-                simpleBody private `shouldBe` "private registry discovery is unavailable"
-                lookup "Cache-Control" (simpleHeaders private) `shouldBe` Just "no-store"
+                lookup "Cache-Control" (simpleHeaders response) `shouldBe` Just "no-store"
                 allCaptured stub `shouldReturn` []
         it "requires the edge credential before discovery and advertises authentication after it agrees" $
             withSweeper $ \deadlines -> withStub status200 "never read" $ \stub -> do
                 runtime <- testServeRuntime deadlines noopMetricsPort
                 let refused = (routeDeps stub){pdInboundToken = Just (mkSecret "required-edge-token")}
                     admitted = refused{pdInboundToken = Just (mkSecret "cargo-token")}
-                response <- captureCargo runtime (routeBinding refused Nothing Nothing) methodGet ["config.json"] ""
+                response <- captureCargo runtime (routeBinding refused Nothing) methodGet ["config.json"] ""
                 simpleStatus response `shouldBe` status401
                 simpleBody response `shouldBe` "authentication required"
                 lookup "WWW-Authenticate" (simpleHeaders response) `shouldBe` Just "Cargo"
                 lookup "Cache-Control" (simpleHeaders response) `shouldBe` Just "no-store"
-                control <- captureCargo runtime (routeBinding admitted Nothing Nothing) methodGet ["config.json"] ""
+                control <- captureCargo runtime (routeBinding admitted Nothing) methodGet ["config.json"] ""
                 simpleStatus control `shouldBe` status200
                 (eitherDecode (simpleBody control) :: Either String Value)
                     `shouldBe` Right (object ["dl" .= ("https://proxy.test/cargo/crates/{crate}/{version}/{crate}-{version}.crate" :: Text), "auth-required" .= True])
                 allCaptured stub `shouldReturn` []
-        it "binds the private origin and preserves trusted discovery refusals" $
+        it "answers discovery locally with authentication required whatever the private origin would answer" $
             withSweeper $ \deadlines ->
-                for_ [(status200, status200, Nothing, Nothing), (status401, status401, Just "Cargo", Just "authentication required"), (status403, status403, Nothing, Just "private registry refused access"), (status500, status503, Nothing, Just "registry discovery is unavailable")] $ \(upstream, expected, challenge, body) ->
+                for_ [status200, status401, status403, status500] $ \upstream ->
                     withRoutedStub (\captured -> if upstream == status200 then discoveryReply captured else (upstream, [], "upstream refusal")) $ \stub -> do
                         runtime <- testServeRuntime deadlines noopMetricsPort
-                        let public = routeDeps stub
-                            private = (serveDepsFor (cargoAdapter factors) (Just (loopbackRegistryUrl (stubBaseUrl stub <> "/private-index"))) (loopbackRegistryUrl (stubBaseUrl stub)) NoMirrorWrite [] (pure now)){pdMountBaseUrl = "https://proxy.test/cargo/private"}
-                        response <- captureCargo runtime (routeBinding public (Just private) Nothing) methodGet ["private", "config.json"] ""
-                        simpleStatus response `shouldBe` expected
-                        lookup "WWW-Authenticate" (simpleHeaders response) `shouldBe` challenge
+                        response <- captureCargo runtime (routeBinding (privateDeps stub) Nothing) methodGet ["config.json"] ""
+                        simpleStatus response `shouldBe` status200
                         lookup "Cache-Control" (simpleHeaders response) `shouldBe` Just "no-store"
-                        for_ body $ \message -> simpleBody response `shouldBe` message
-                        when (upstream == status200) $
-                            (eitherDecode (simpleBody response) :: Either String Value)
-                                `shouldBe` Right (object ["dl" .= ("https://proxy.test/cargo/private/crates/{crate}/{version}/{crate}-{version}.crate" :: Text), "auth-required" .= True])
-                        captures <- allCaptured stub
-                        map capPath captures `shouldBe` ["/private-index/config.json"]
-                        map (headerValue "Authorization") captures `shouldBe` [Just "cargo-token"]
-        it "refuses trusted discovery while admission is held and releases capacity for the valid control" $
+                        (eitherDecode (simpleBody response) :: Either String Value)
+                            `shouldBe` Right (object ["dl" .= ("https://proxy.test/cargo/crates/{crate}/{version}/{crate}-{version}.crate" :: Text), "auth-required" .= True])
+                        allCaptured stub `shouldReturn` []
+        it "answers discovery while listing admission is held" $
             withSweeper $ \deadlines -> withRoutedStub discoveryReply $ \stub -> do
                 admission <- newServeAdmissionTuned deadlines 1 0 0
                 runtime <- testServeRuntimeWith deadlines admission noopMetricsPort
-                let public = routeDeps stub
-                    private = (serveDepsFor (cargoAdapter factors) (Just (loopbackRegistryUrl (stubBaseUrl stub))) (loopbackRegistryUrl (stubBaseUrl stub)) NoMirrorWrite [] (pure now)){pdMountBaseUrl = "https://proxy.test/cargo/private"}
-                    binding = routeBinding public (Just private) Nothing
-                held <- withServeAdmission noopMetricsPort admission (captureCargo runtime binding methodGet ["private", "config.json"] "")
+                held <- withServeAdmission noopMetricsPort admission (captureCargo runtime (routeBinding (privateDeps stub) Nothing) methodGet ["config.json"] "")
                 response <- expectRight held
-                simpleStatus response `shouldBe` status503
-                lookup "Cache-Control" (simpleHeaders response) `shouldBe` Just "no-store"
-                lookup "Retry-After" (simpleHeaders response) `shouldBe` Just "1"
-                simpleBody response `shouldBe` "server is busy; retry later"
+                simpleStatus response `shouldBe` status200
+                lookup "Retry-After" (simpleHeaders response) `shouldBe` Nothing
                 allCaptured stub `shouldReturn` []
-                control <- captureCargo runtime binding methodGet ["private", "config.json"] ""
-                simpleStatus control `shouldBe` status200
-                length <$> allCaptured stub `shouldReturn` 1
         it "keeps publication disabled until configured and preserves local and upstream native responses" $
             withSweeper $ \deadlines -> do
                 release <- cargoPublicationFixture
@@ -135,9 +118,15 @@ spec = do
                         runtime <- testServeRuntime deadlines noopMetricsPort
                         budget <- newByteAdmission deadlines (128 * 1024 * 1024)
                         let deps = routeDeps stub
-                            disabled = routeBinding deps (Just deps) Nothing
-                            enabled = routeBinding deps (Just deps) (Just (routePublication stub budget))
-                            path = ["private", "api", "v1", "crates", "new"]
+                            disabled = routeBinding deps Nothing
+                            enabled = routeBinding deps (Just (routePublication stub budget))
+                            path = ["api", "v1", "crates", "new"]
+                            advertised binding = do
+                                discovery <- captureCargo runtime binding methodGet ["config.json"] ""
+                                (_, api, _, _) <- expectRight (referenceDiscovery (toStrict (simpleBody discovery)))
+                                pure api
+                        advertised disabled `shouldReturn` Nothing
+                        advertised enabled `shouldReturn` Just "https://proxy.test/cargo"
                         absent <- captureCargo runtime disabled methodPut path bytes
                         simpleStatus absent `shouldBe` status405
                         lookup "Allow" (simpleHeaders absent) `shouldBe` Just "PUT"
@@ -162,7 +151,7 @@ spec = do
                 runtime <- testServeRuntime deadlines noopMetricsPort
                 let deps = routeDeps stub
                 for_ [["crates"], ["crates", "fixture"], ["crates", "fixture", "1.0.0"], ["crates", "fixture", "invalid", "fixture-invalid.crate"]] $ \path -> do
-                    response <- captureCargo runtime (routeBinding deps (Just deps) Nothing) methodGet path ""
+                    response <- captureCargo runtime (routeBinding deps Nothing) methodGet path ""
                     simpleStatus response `shouldBe` status404
                 allCaptured stub `shouldReturn` []
         it "answers native yank and unyank writes locally without reaching the registry" $
@@ -170,20 +159,20 @@ spec = do
                 runtime <- testServeRuntime deadlines noopMetricsPort
                 budget <- newByteAdmission deadlines (128 * 1024 * 1024)
                 let deps = routeDeps stub
-                    enabled = routeBinding deps (Just deps) (Just (routePublication stub budget))
+                    enabled = routeBinding deps (Just (routePublication stub budget))
                 for_ [(methodDelete, "yank"), (methodPut, "unyank")] $ \(method, operation) -> do
-                    response <- captureCargo runtime enabled method ["private", "api", "v1", "crates", "fixture", "1.0.0", operation] ""
+                    response <- captureCargo runtime enabled method ["api", "v1", "crates", "fixture", "1.0.0", operation] ""
                     simpleStatus response `shouldBe` status404
                     simpleBody response `shouldBe` ""
                 allCaptured stub `shouldReturn` []
 
     describe "native private refusals" $
         for_ [(401, status401, Just "Cargo"), (403, status403, Nothing)] $ \(code, status, challenge) ->
-            it ("retains private HTTP " <> show code <> " in sparse and archive responses") $ for_ [PublicReplacement, PrivateRegistry] $ \view -> do
+            it ("retains private HTTP " <> show code <> " in sparse and archive responses") $ do
                 let headers = [("Cache-Control", "no-store")]
                     refusal = mkRefusal Nothing "private access was refused"
-                    metadata = responseToWai indexContract (packumentPrivateRefused (indexReplies view) code headers refusal)
-                    archive = responseToWai artifactContract (tarballPrivateRefused (artifactReplies view) code headers refusal)
+                    metadata = responseToWai indexContract (packumentPrivateRefused indexReplies code headers refusal)
+                    archive = responseToWai artifactContract (tarballPrivateRefused artifactReplies code headers refusal)
                 for_ [metadata, archive] $ \response -> do
                     responseStatus response `shouldBe` status
                     lookup "WWW-Authenticate" (responseHeaders response) `shouldBe` challenge
@@ -195,46 +184,44 @@ spec = do
             for_ [(Nothing, "example@1.0.0 was denied by execution: runs code on install"), (Just (mkHelpMessage "Contact the platform team."), "example@1.0.0 was denied by execution: runs code on install Contact the platform team.")] $ \(help, expected) -> do
                 let refusal = mkRefusal help "example@1.0.0 was denied by execution: runs code on install"
                     responses =
-                        [ responseToWai indexContract (packumentForbidden (indexReplies PublicReplacement) [] refusal)
-                        , responseToWai artifactContract (tarballError (artifactReplies PublicReplacement) status403 [] refusal)
+                        [ (status404, responseToWai indexContract (packumentDenied indexReplies [] refusal))
+                        , (status403, responseToWai artifactContract (tarballError artifactReplies status403 [] refusal))
                         ]
-                for_ responses $ \response -> do
-                    responseStatus response `shouldBe` status403
+                for_ responses $ \(status, response) -> do
+                    responseStatus response `shouldBe` status
                     responseBytes response `shouldReturn` expected
         it "keeps detailed public rejection messages in their existing order" $ do
             let decisions = [Reject (Rejection (Unavailable WontResolve) reason) | reason <- ["example@1.0.0 could not be evaluated", "example@2.0.0 could not be evaluated"]]
-            packumentForbiddenText (indexReplies PublicReplacement) decisions
+            packumentDeniedText indexReplies decisions
                 `shouldBe` "example@1.0.0 could not be evaluated; example@2.0.0 could not be evaluated"
         it "renders the exact public evaluation failure without operator-only evidence details" $ do
             let refusal = mkRefusal Nothing "example@1.0.0 could not be evaluated: the rule could not be evaluated"
                 responses =
-                    [ responseToWai indexContract (packumentInternal (indexReplies PublicReplacement) [] refusal)
-                    , responseToWai artifactContract (tarballError (artifactReplies PublicReplacement) status500 [] refusal)
+                    [ responseToWai indexContract (packumentInternal indexReplies [] refusal)
+                    , responseToWai artifactContract (tarballError artifactReplies status500 [] refusal)
                     ]
             for_ responses $ \response -> do
                 responseStatus response `shouldBe` status500
                 responseBytes response `shouldReturn` "example@1.0.0 could not be evaluated: the rule could not be evaluated"
-        it "keeps inbound authentication and first-party exclusion quiet in both views" $
-            for_ [PublicReplacement, PrivateRegistry] $ \view -> do
-                let refusal = mkRefusal Nothing "request-specific private information"
+        it "keeps inbound authentication, access refusals and misses quiet" $ do
+            let refusal = mkRefusal Nothing "request-specific private information"
+                responses =
+                    [ responseToWai indexContract (packumentUnauthorised indexReplies [] refusal)
+                    , responseToWai artifactContract (tarballError artifactReplies status401 [] refusal)
+                    , responseToWai indexContract (packumentNotFound indexReplies [] refusal)
+                    , responseToWai artifactContract (tarballError artifactReplies status404 [] refusal)
+                    , responseToWai indexContract (packumentPrivateRefused indexReplies 403 [] refusal)
+                    , responseToWai artifactContract (tarballPrivateRefused artifactReplies 403 [] refusal)
+                    ]
+            for_ responses $ \response -> responseBytes response `shouldReturn` ""
+        it "keeps private credential failures limited to configured operator help" $
+            for_ [401, 403] $ \code -> do
+                let refusal = mkRefusal (Just (mkHelpMessage "Contact the platform team.")) "request-specific private information"
                     responses =
-                        [ responseToWai indexContract (packumentUnauthorised (indexReplies view) [] refusal)
-                        , responseToWai artifactContract (tarballError (artifactReplies view) status401 [] refusal)
-                        , responseToWai indexContract (packumentNotFound (indexReplies view) [] refusal)
-                        , responseToWai artifactContract (tarballError (artifactReplies view) status404 [] refusal)
-                        , responseToWai indexContract (packumentForbidden (indexReplies PrivateRegistry) [] refusal)
-                        , responseToWai artifactContract (tarballError (artifactReplies PrivateRegistry) status403 [] refusal)
+                        [ responseToWai indexContract (packumentPrivateRefused indexReplies code [] refusal)
+                        , responseToWai artifactContract (tarballPrivateRefused artifactReplies code [] refusal)
                         ]
-                for_ responses $ \response -> responseBytes response `shouldReturn` ""
-        it "keeps private credential failures limited to configured operator help in both views" $
-            for_ [PublicReplacement, PrivateRegistry] $ \view ->
-                for_ [401, 403] $ \code -> do
-                    let refusal = mkRefusal (Just (mkHelpMessage "Contact the platform team.")) "request-specific private information"
-                        responses =
-                            [ responseToWai indexContract (packumentPrivateRefused (indexReplies view) code [] refusal)
-                            , responseToWai artifactContract (tarballPrivateRefused (artifactReplies view) code [] refusal)
-                            ]
-                    for_ responses $ \response -> responseBytes response `shouldReturn` "Contact the platform team."
+                for_ responses $ \response -> responseBytes response `shouldReturn` "Contact the platform team."
 
     describe "legacy private refusals" $
         for_ [401, 403] $ \code ->
@@ -270,18 +257,17 @@ spec = do
 
     describe "native route selection" $ do
         for_ [methodGet, methodHead] $ \method -> do
-            it "claims each view's discovery and sparse records" $ do
-                claimed method ["config.json"] `shouldBe` Just (RouteName "public.discovery")
-                claimed method ["private", "config.json"] `shouldBe` Just (RouteName "private.discovery")
-                claimed method ["se", "rd", "serde"] `shouldBe` Just (RouteName "public.index")
-                claimed method ["private", "se", "rd", "serde"] `shouldBe` Just (RouteName "private.index")
+            it "claims discovery and sparse records" $ do
+                claimed method ["config.json"] `shouldBe` Just (RouteName "discovery")
+                claimed method ["se", "rd", "serde"] `shouldBe` Just (RouteName "index")
+                claimed method ["private", "config.json"] `shouldBe` Nothing
+                claimed method ["private", "se", "rd", "serde"] `shouldBe` Nothing
             it "claims the explicit archive route" $
                 claimed method ["crates", "my-crate", "1.2.3-beta.4", "my-crate-1.2.3-beta.4.crate"]
-                    `shouldBe` Just (RouteName "public.archive")
-        it "refuses the public publication path" $
-            claimed methodPut ["api", "v1", "crates", "new"] `shouldBe` Nothing
-        it "claims only the native private publication path" $
-            claimed methodPut ["private", "api", "v1", "crates", "new"] `shouldBe` Just (RouteName "private.publish")
+                    `shouldBe` Just (RouteName "archive")
+        it "claims the native publication path and no private prefix" $ do
+            claimed methodPut ["api", "v1", "crates", "new"] `shouldBe` Just (RouteName "publish")
+            claimed methodPut ["private", "api", "v1", "crates", "new"] `shouldBe` Nothing
 
 claimed :: Method -> [Text] -> Maybe RouteName
 claimed method path = fmap (routeName . fst) (matchRoute cargoRoutes method [] path)
@@ -295,11 +281,15 @@ routeDeps stub =
         { pdMountBaseUrl = "https://proxy.test/cargo"
         }
 
-routeBinding :: PackumentDeps -> Maybe PackumentDeps -> Maybe PublishDeps -> MountBinding
-routeBinding deps private publication =
+-- The route deps with a private origin on the same stub, which discovery never reads.
+privateDeps :: Stub -> PackumentDeps
+privateDeps stub = withPrivateBaseUrl (Just (loopbackRegistryUrl (stubBaseUrl stub <> "/private-index"))) (routeDeps stub)
+
+routeBinding :: PackumentDeps -> Maybe PublishDeps -> MountBinding
+routeBinding deps publication =
     MountBinding
         { bindingPrefix = "cargo" :| []
-        , bindingRouter = cargoRouter private
+        , bindingRouter = cargoRouter
         , bindingCredential = cargoCredential
         , bindingPackumentDeps = deps
         , bindingPublishDeps = publication
@@ -323,6 +313,7 @@ routePublication stub budget =
         , pubTargetUrl = loopbackRegistryUrl (stubBaseUrl stub <> "/registry")
         , pubAllowed = \name -> projectName "fixture" == Right name
         , pubStaticCredential = Nothing
+        , pubStaticPresentation = nativePresentation
         , pubInboundToken = Nothing
         , pubMaxRequestBytes = maxPublishRequestBytes defaultLimits
         , pubLimits = defaultLimits
