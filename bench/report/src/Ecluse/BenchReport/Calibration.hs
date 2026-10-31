@@ -4,8 +4,8 @@
 
 {- | Write the success floors from three calibration runs of the Load test workflow. Each selected cell
 that is not flagged report-only takes the floor fraction of the median of its three first-attempt
-counts. Every run must be held to the floors, and every count must come from a first attempt that
-ran clean.
+counts. The runs must be dispatches of one commit, every run must be held to the floors, and every
+count must come from a first attempt that ran clean.
 -}
 module Ecluse.BenchReport.Calibration (
     RunObservations (..),
@@ -63,6 +63,7 @@ calibrate floors runs selection = do
     ids <- case nonEmpty (ordNub (map (runId . roRun) runs)) of
         Just distinct | length distinct == calibrationRuns, length runs == calibrationRuns -> Right distinct
         _ -> Left ["a calibration takes " <> show calibrationRuns <> " distinct runs, not " <> show (length runs)]
+    unless (null provenance) (Left provenance)
     unless (null unknown) (Left ["no scenario in the floors is named " <> name | name <- unknown])
     counts <- first ordNub (everyProblem [(target,) <$> everyProblem (map (countIn shape key) runs) | target@(shape, key) <- targets])
     let fraction = calFloorFraction (floorsCalibration floors)
@@ -72,6 +73,9 @@ calibrate floors runs selection = do
         listed = Map.fromList [(runId run, run) | run <- calRuns (floorsCalibration floors) <> map roRun runs]
     pure floors{floorsCalibration = (floorsCalibration floors){calRuns = [run | (runNumber, run) <- Map.toList listed, runNumber `elem` named]}, floorsByShape = byShape}
   where
+    provenance =
+        [runName observed <> " was triggered by " <> event <> ", not workflow_dispatch" | observed <- runs, let event = runEvent (roRun observed), event /= "workflow_dispatch"]
+            <> ["the runs measured different commits: " <> T.intercalate ", " [runName observed <> " at " <> runCommit (roRun observed) | observed <- runs] | length (ordNub (map (runCommit . roRun) runs)) > 1]
     known = ordNub [scenario | cellsOf <- Map.elems (floorsByShape floors), (scenario, _) <- Map.keys cellsOf]
     unknown = maybe [] (filter (`notElem` known)) selection
     targets = [(shape, key) | (shape, cellsOf) <- Map.toList (floorsByShape floors), (key@(scenario, _), cell) <- Map.toList cellsOf, maybe True (scenario `elem`) selection, notFlagged cell]
