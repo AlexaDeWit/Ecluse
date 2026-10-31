@@ -24,7 +24,7 @@ import Ecluse.E2E.Fixtures.RubyGems
 import Ecluse.E2E.Harness
 import Ecluse.E2E.Harness.NativeEdge
 import Ecluse.E2E.Harness.RubyGems
-import Ecluse.E2E.InstallationE2ESpec (codedArtifact)
+import Ecluse.E2E.InstallationE2ESpec (codedArtifact, probedArtifact)
 import Ecluse.Test.Contract.Ecosystem (FamilyFixture)
 import Ecluse.Test.Contract.Install
 import Ecluse.Test.Contract.Phase (timedFixture)
@@ -47,7 +47,7 @@ installation observed release =
         , installationDenied = InstallDriver denied (False, mempty)
         , installationArtifact = (,) <$> advertised <*> proxyGetCoded proxy archive
         , installationDigest = hexSha256Of
-        , installationHead = proxyHead proxy archive
+        , installationHead = probedArtifact proxy RubyGemsPublic (T.drop (T.length "/rubygems") archive) archive
         , installationCodedArtifact = codedArtifact proxy RubyGemsPublic (T.drop (T.length "/rubygems") archive) archive advertised
         }
   where
