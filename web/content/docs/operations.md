@@ -151,7 +151,7 @@ the format to `console` for local development instead. Each JSON line carries th
 | `message` | The message text. | |
 | `service`, `env`, `version` | The resolved identity. | |
 | `dd` | `trace_id` and `span_id`. | Present only while a span is in scope. |
-| `data` | The emitting call's own fields. | Every line a request logs names its emitting module in `module`. |
+| `data` | The emitting call's own fields. | Every line a request logs carries a `module` filter key: the log site's own key, or `Ecluse.Server.Pipeline` when the site names none. |
 | `katip` | The `katip` emitter fields. | These include the emitting process's hostname (`katip.host`), so a collector's own host attribution governs the line's `host`. |
 
 Four of those names matter to Datadog specifically: `timestamp`, `status`, `message`, and
