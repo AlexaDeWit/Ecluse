@@ -146,8 +146,6 @@ data ProxySettings = ProxySettings
     , psMaxResponseBytes :: Maybe Int
     , psServeMaxInFlight :: Maybe Int
     , psPublicConnections :: Maybe Int
-    , psPublicHost :: Maybe Text
-    -- ^ An override for the public leg only. 'Nothing' dials 'publicStubHost'.
     , psPrivateConnections :: Maybe Int
     , psClock :: Maybe UTCTime
     -- ^ A fixed evaluation clock for the rules, 'Nothing' for the wall clock.
@@ -168,7 +166,6 @@ proxySettings ecosystem ttl =
         , psMaxResponseBytes = Nothing
         , psServeMaxInFlight = Nothing
         , psPublicConnections = Nothing
-        , psPublicHost = Nothing
         , psPrivateConnections = Nothing
         , psClock = Nothing
         , psMirrorStatePort = Nothing
@@ -407,7 +404,7 @@ proxyEnvironment settings shape capabilities dir (port, controlPort, scrapePort)
     upstreamUrl leg p = "https://" <> upstreamHost leg <> ":" <> show p
     upstreamHost :: Text -> Text
     upstreamHost leg
-        | leg == "PUBLIC_UPSTREAM" = fromMaybe publicStubHost (psPublicHost settings)
+        | leg == "PUBLIC_UPSTREAM" = publicStubHost
         | otherwise = privateStubHost
     fixed =
         [ ("ECLUSE_SERVER__PORT", show port)
