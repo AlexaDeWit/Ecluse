@@ -1630,9 +1630,38 @@ The report's "Breach confirmation" table shows every attempt.
 #### Calibration
 
 Each floor comes from three full dispatches of the Load test workflow. Until the first calibration
-lands, every cell is uncalibrated, and a run checks zero successes and process failures only. A new
-scenario's pull request adds its cells as `{ "floor": null }`, so its passes check zero successes
-and process failures only until a calibration gives them floors.
+lands, every cell is uncalibrated, and a run checks zero successes and process failures only.
+
+1. Dispatch three runs at one commit, each with its own `calibration-slot`, so they run side by
+   side instead of replacing each other in the workflow's concurrency group:
+
+   ```bash
+   for slot in 1 2 3; do
+     gh workflow run bench-load.yml --ref <branch> -f profile=full -f pod-shape=all -f calibration-slot=$slot
+   done
+   ```
+
+2. Once all three finish, run `task performance:load-floors -- <run-id>,<run-id>,<run-id>`. It
+   downloads each run's record and `bench-load-results-*` artifacts into `scratchpad/load-floors/`,
+   sets each unflagged cell to 60% of the median of its three first-attempt counts,
+   lists the runs in `calibration.runs`, and prints the cells that changed. It refuses a job that
+   was not held, and a pass whose first attempt had no successes or a process failure, naming
+   each. A run that went red on older floors still counts.
+3. Commit `bench/load/floors.json` in a pull request, with the printed table.
+
+A pull request that deliberately changes performance recalibrates the cells it affects from three
+runs dispatched on its branch, naming their scenarios:
+`task performance:load-floors -- <run-id>,<run-id>,<run-id> npm/merge-cold,pypi/index-cold`. Every
+other cell keeps its floor and the runs it names.
+
+A new scenario's pull request adds its cells as `{ "floor": null }`, so its passes check zero
+successes and process failures only. Recalibrating them from three runs on that branch, by the
+scenario's name, gives them floors. To exempt a noisy row, set `reportOnly` with its reason on its
+cells. To give it a floor again, delete the reason and recalibrate it.
+
+A change to the operating point, a knob default, the runner, the pod shapes, or the measurement
+conditions changes what the `calibration` record must match. A change to `floorFraction` changes
+what every floor must be. Make either with a recalibration of every cell in one pull request.
 
 ### Benchmark captures
 
