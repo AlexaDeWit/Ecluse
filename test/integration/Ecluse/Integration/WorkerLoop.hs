@@ -13,6 +13,7 @@ module Ecluse.Integration.WorkerLoop (
     TargetMemory (..),
     withMirrorTarget,
     withObservedMirrorTarget,
+    npmAttachment,
     observeAcknowledgement,
     observeDeadLetter,
     mirrorPoliciesAt,
@@ -20,8 +21,10 @@ module Ecluse.Integration.WorkerLoop (
     newQueueEnv,
 ) where
 
-import Data.Aeson (Value (Object), encode)
+import Data.Aeson (Value (Object), encode, object, (.=))
+import Data.Aeson.Key qualified as Key
 import Data.Aeson.KeyMap qualified as KeyMap
+import Data.ByteString.Lazy qualified as LBS
 import Network.HTTP.Client (defaultManagerSettings, newManager)
 import Network.HTTP.Types (Status, status200, status404, statusCode)
 import Network.Wai (Application, rawPathInfo, requestMethod, responseLBS, strictRequestBody)
@@ -45,6 +48,7 @@ import Ecluse.Runtime.Env (Env)
 import Ecluse.Server.Pipeline.TestSupport (newTestEnvWithQueue)
 import Ecluse.Service (runWorker)
 import Ecluse.Test.Deadline (untracedClient)
+import Ecluse.Test.Package (base64Of)
 import Ecluse.Test.Poll (runUntil)
 import Ecluse.Test.Port (passthroughTracingPort)
 import Ecluse.Test.Support (decodeJsonOrFail, expectRightText)
@@ -122,6 +126,18 @@ withObservedMirrorTarget memory replyStatus body = do
     retains = case memory of
         RetainsPublication -> True
         ForgetsPublication -> False
+
+-- | The @_attachments@ object of an npm publication that carries one tarball's bytes.
+npmAttachment :: Text -> LByteString -> Value
+npmAttachment filename bytes =
+    object
+        [ Key.fromText filename
+            .= object
+                [ "content_type" .= ("application/octet-stream" :: Text)
+                , "data" .= base64Of (toStrict bytes)
+                , "length" .= LBS.length bytes
+                ]
+        ]
 
 -- | Admit every version through the npm writer, with an optional artifact fetch cap.
 mirrorPoliciesAt :: Deadlines -> Maybe Int -> Text -> NonEmpty Hash -> IO WorkerPolicies

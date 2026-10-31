@@ -4,11 +4,8 @@
 
 module Ecluse.AwsEndToEndIntegrationSpec (spec) where
 
-import Data.Aeson (Value (Object, String), encode, toJSON, (.=))
-import Data.Aeson.Key qualified as Key
-import Data.Aeson.KeyMap qualified as KeyMap
+import Data.Aeson (Value, encode, (.=))
 import Data.ByteString qualified as BS
-import Data.ByteString.Lazy qualified as LBS
 import Data.Text qualified as T
 import Data.Time (UTCTime (UTCTime), fromGregorian, nominalDay)
 import Ecluse.Test.Contract.Catalogue (caseLabel)
@@ -43,6 +40,7 @@ import Ecluse.Integration.WorkerLoop (
     TargetMemory (RetainsPublication),
     mirrorPoliciesAt,
     newQueueEnv,
+    npmAttachment,
     observeAcknowledgement,
     runLoopUntil,
     withObservedMirrorTarget,
@@ -54,7 +52,8 @@ import Ecluse.Runtime.Server (MountBinding, application, mkServerConfig)
 import Ecluse.Server.Pipeline.TestSupport (getPath)
 import Ecluse.Service (mountBindingFor)
 import Ecluse.Test.Deadline (withSweeper)
-import Ecluse.Test.Package (base64Of, hexSha1Of, sriSha512Of, unsafeHash)
+import Ecluse.Test.Json (fieldAt)
+import Ecluse.Test.Package (hexSha1Of, sriSha512Of, unsafeHash)
 import Ecluse.Test.Registry.Npm (VersionSpec (..), packumentValue, versionSpec, versionValue)
 import Ecluse.Test.Rules (atDefaultPrecedence, inertRuleDeps)
 import Ecluse.Test.Server.Mount (npmServeDeps)
@@ -95,8 +94,8 @@ spec pool =
                     runLoopUntil (tpPolicies proxy) (tpEnv proxy) (tpAcknowledged proxy)
                     tpAcknowledged proxy `shouldReturn` True
                     readIORef (tpMirrorLog proxy) `shouldReturn` ["/left-pad"]
-                    map attachmentsOf <$> tpPublications proxy
-                        `shouldReturn` [[("left-pad-1.0.0.tgz", Just (String (base64Of (toStrict tarballBytes))), Just (toJSON (LBS.length tarballBytes)))]]
+                    map (fieldAt "_attachments") <$> tpPublications proxy
+                        `shouldReturn` [Just (npmAttachment "left-pad-1.0.0.tgz" tarballBytes)]
 
 {- | The in-process Écluse under test: the serve 'Application', the composition-root 'Env' the
 worker runs over, the SQS handle it enqueues to, and what the mirror-target stub received.
@@ -204,14 +203,6 @@ withPublicUpstream k = testWithApplication (pure app) (k . localhost)
 -- A path where the public stub serves bytes other than 'tarballBytes'.
 tamperedPath :: Text
 tamperedPath = "/tampered/left-pad-1.0.0.tgz"
-
--- Each attachment of a publication document: its name, @data@, and @length@.
-attachmentsOf :: Value -> [(Text, Maybe Value, Maybe Value)]
-attachmentsOf = \case
-    Object document
-        | Just (Object attachments) <- KeyMap.lookup "_attachments" document ->
-            [(Key.toText name, KeyMap.lookup "data" fields, KeyMap.lookup "length" fields) | (name, Object fields) <- KeyMap.toList attachments]
-    _ -> []
 
 -- The private upstream: a clean 404 miss for everything, so every request falls
 -- through to the public origin.
