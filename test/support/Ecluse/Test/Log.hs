@@ -18,6 +18,8 @@ module Ecluse.Test.Log (
     lineMessage,
     lineField,
     lineWhere,
+    moduleOfLineWhere,
+    untaggedLines,
 ) where
 
 import Data.Aeson (Key, Object, decodeStrict', eitherDecodeStrict, (.:))
@@ -137,3 +139,14 @@ lineField path line = textAtPath path =<< decodeStrict' (encodeUtf8 line)
 -- | The first captured line whose string at a key path is the given value.
 lineWhere :: [Key] -> Text -> Text -> Maybe Text
 lineWhere path value = find ((== Just value) . lineField path) . lines
+
+-- | The @data.module@ of the first captured line whose string at a key path is the given value.
+moduleOfLineWhere :: [Key] -> Text -> Text -> Maybe Text
+moduleOfLineWhere path value logged = lineField moduleKey =<< lineWhere path value logged
+
+-- | The captured lines that carry no @data.module@, a line that is not JSON included.
+untaggedLines :: Text -> [Text]
+untaggedLines = filter (isNothing . lineField moduleKey) . lines
+
+moduleKey :: [Key]
+moduleKey = ["data", "module"]

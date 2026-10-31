@@ -102,7 +102,7 @@ import Ecluse.Runtime.Test.Support (newTestEnv, newTestEnvLogging)
 import Ecluse.Service (mountBindingFor)
 import Ecluse.Test.Cve (fakeCveDb)
 import Ecluse.Test.Deadline (withSweeper)
-import Ecluse.Test.Log (captureJsonLog, lineField, lineWhere, memoryLogEnv, newTestLogEnv)
+import Ecluse.Test.Log (captureJsonLog, memoryLogEnv, moduleOfLineWhere, newTestLogEnv, untaggedLines)
 import Ecluse.Test.Osv (mkDbWithWrongEpoch, mkMinimalValidDbWithMeta)
 import Ecluse.Test.Package (validSha256, validSha256Sri)
 import Ecluse.Test.Poll (awaitUntil, pollUntil)
@@ -806,15 +806,15 @@ requestLogContextSpec = describe "the request log context" $ do
                 app <- loggingMountApp deadlines logEnv ecosystem (inertDepsFor adapter)
                 requestPath app path
             lines logged `shouldSatisfy` (not . null)
-            filter (isNothing . lineField ["data", "module"]) (lines logged) `shouldBe` []
+            untaggedLines logged `shouldBe` []
 
     it "keeps a log site's own module over the request's" $
         withRoutedStub upstreamReply $ \stub -> do
             (_, logged) <- captureJsonLog $ \logEnv -> withSweeper $ \deadlines -> do
                 app <- refusingRenderApp deadlines (stubLocalhostUrl stub) logEnv
                 requestPath app "/npm/leftpad"
-            (lineField ["data", "module"] =<< lineWhere ["data", "perimeterCause"] "RenderFault" logged) `shouldBe` Just "Ecluse.Runtime.Server"
-            (lineField ["data", "module"] =<< lineWhere ["msg"] "serving packument request for leftpad" logged) `shouldBe` Just "Ecluse.Server.Pipeline"
+            moduleOfLineWhere ["data", "perimeterCause"] "RenderFault" logged `shouldBe` Just "Ecluse.Runtime.Server"
+            moduleOfLineWhere ["msg"] "serving packument request for leftpad" logged `shouldBe` Just "Ecluse.Server.Pipeline"
 
 -- | Bind both mounts to their advisory handles, with the named ecosystems initially loaded.
 advisoryApp :: Deadlines -> Text -> [PrecededRule] -> [Ecosystem] -> Bool -> IO (Application, Map.Map Ecosystem CveSyncHandle)

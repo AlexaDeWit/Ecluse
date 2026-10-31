@@ -10,7 +10,7 @@ import Katip (Severity (WarningS), logFM, ls)
 import Test.Hspec (Spec, describe, it, shouldBe, shouldReturn, shouldThrow)
 import UnliftIO.Exception (throwIO)
 
-import Ecluse.Test.Log (captureStderr, captureStdout, lineField, lineMessage, lineWhere, runJsonLog)
+import Ecluse.Test.Log (captureStderr, captureStdout, lineField, lineMessage, lineWhere, moduleOfLineWhere, runJsonLog, untaggedLines)
 import Ecluse.Test.Support (TestContractEscape (TestContractEscape))
 
 spec :: Spec
@@ -40,6 +40,19 @@ spec = do
 
         it "finds nothing when no line holds the value" $
             lineWhere ["msg"] "third" captured `shouldBe` Nothing
+
+    describe "moduleOfLineWhere" $ do
+        let captured = T.unlines ["{\"msg\":\"first\",\"data\":{\"module\":\"A\"}}", "{\"msg\":\"second\"}", "{\"msg\":\"first\",\"data\":{\"module\":\"B\"}}"]
+        it "reads the module of the first line whose key path holds the value" $
+            moduleOfLineWhere ["msg"] "first" captured `shouldBe` Just "A"
+
+        it "reads nothing when that line names no module, or no line holds the value" $
+            map (\message -> moduleOfLineWhere ["msg"] message captured) ["second", "third"] `shouldBe` [Nothing, Nothing]
+
+    describe "untaggedLines" $
+        it "keeps the lines that name no module, a line that is not JSON included" $
+            untaggedLines (T.unlines ["not JSON", "{\"data\":{\"module\":\"A\"}}", "{\"data\":{}}", "{\"data\":{\"module\":42}}"])
+                `shouldBe` ["not JSON", "{\"data\":{}}", "{\"data\":{\"module\":42}}"]
 
     describe "captureStdout" $ do
         it "returns what the action wrote to stdout" $
