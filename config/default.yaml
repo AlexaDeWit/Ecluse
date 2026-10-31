@@ -518,7 +518,8 @@ mounts:
     # Unset, it inherits the computed/configured global limit. Exceeding it returns 413.
     # maxRequestBytes: 52428800
     # The read root and native upload endpoint are distinct. The state store above is required.
-    # Generic PyPI write credentials declare their Basic username. CodeArtifact binds aws.
+    # Registry and verdaccio write credentials declare their Basic username. A store that
+    # declares its own write mechanism needs none: CodeArtifact binds aws.
     # CodeArtifact reads use /pypi/{repository}/. Its uploadUrl accepts that root or
     # /pypi/{repository}/legacy/ for the same domain, account, region and repository.
     # mirrorTarget:
@@ -529,7 +530,7 @@ mounts:
     #     token:
     # Client publication posts to uploadUrl and preserves multipart framing. url is the
     # repository's read root, and the CodeArtifact paths above apply here too.
-    # A static token requires server.authToken and an explicit generic username.
+    # A static token requires server.authToken, and a username on a registry or verdaccio target.
     # Without a static token, the complete caller Basic pair passes through unchanged.
     # publicationTarget:
     #   registry:

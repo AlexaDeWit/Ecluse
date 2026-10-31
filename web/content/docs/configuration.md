@@ -205,8 +205,10 @@ different tags are refused for every role, because one store has one backend.
 PyPI mirror and publication tags also admit `username`.
 The role requires these fields as described below.
 
-A PyPI mirror or publication target declares the registry root as `url`, from which reads append `simple/`, and the native upload endpoint as `uploadUrl`. A generic static
-write token also declares its Basic `username`. CodeArtifact supplies `aws` at its backend binding.
+A PyPI mirror or publication target declares the registry root as `url`, from which reads append `simple/`, and the native upload endpoint as `uploadUrl`. A write token
+on a `registry` or `verdaccio` target also declares its Basic `username`, which PyPI's own Basic
+presentation sends. A store that declares its own write mechanism needs none: CodeArtifact supplies
+`aws` at its backend binding.
 A CodeArtifact upload URL must name the same domain, account, region and repository as its read root.
 Its supported upload paths are listed in the [configuration reference](#the-configuration-reference).
 The refresh provider still owns only the secret. Client publication posts to `uploadUrl`
