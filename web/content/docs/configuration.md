@@ -475,8 +475,9 @@ mounts:
 ```
 
 `ECLUSE_MOUNTS__NPM__RULES` and `ECLUSE_MOUNTS__CARGO__RULES` carry the same patch as JSON, for
-example `'{"deny-scripts":{"enabled":false}}'`. Disabling `deny-scripts` or `deny-external-dependencies`
-in the shared `rules` object fails the load because that shared list defines no rule by either name.
+example `'{"deny-external-dependencies":{"enabled":false}}'`, a rule both mounts ship. Disabling
+`deny-scripts` or `deny-external-dependencies` in the shared `rules` object fails the load because
+that shared list defines no rule by either name.
 Mount rules resolve over the shared policy, then the shipped mount rules, then your mount patch.
 To extend an npm deny to stored copies, restate its phases under `mounts.npm.rules`, for example
 `deny-scripts: {appliesTo: [admission, revocation]}`.
@@ -598,7 +599,7 @@ The precedence values, the patch/add/suppress merge model, and the strict valida
 ### Where a rule applies
 
 A new rule applies at two phases unless you limit it. The shipped npm `deny-scripts` and
-`deny-external-dependencies` apply only at admission. Admission is the gate: a listing, an artifact request, and the mirror worker's check before it writes a version to your mirror target.
+`deny-external-dependencies`, and the shipped Cargo `deny-external-dependencies`, apply only at admission. Admission is the gate: a listing, an artifact request, and the mirror worker's check before it writes a version to your mirror target.
 Revocation is the Dredger's check of the versions your stores already hold. The `appliesTo` list
 on a rule names its phases:
 

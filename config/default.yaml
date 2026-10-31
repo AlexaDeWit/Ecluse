@@ -707,8 +707,9 @@ rules:
   # pin-fix:
   #   type: AllowByIdentity
   #   identity: left-pad@1.3.0  # a bare name pins every version of that package
-  # The npm install-script and external-dependency denies ship under mounts.npm.rules, at
-  # admission only. Disable or refine deny-scripts and deny-external-dependencies there.
+  # The npm install-script and external-dependency denies ship under mounts.npm.rules, and the
+  # Cargo external-dependency deny under mounts.cargo.rules, all at admission only. Disable or
+  # refine deny-scripts and deny-external-dependencies there.
   # An AllowByIdentity pin needs precedence > 300.
   # Opt-in revoke, absent from this shipped policy. It denies one package, or one
   # package@version, whatever else would admit it. `identity` matches on the same exact

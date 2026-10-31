@@ -260,7 +260,7 @@ An unheld or missing status produces diagnostic-only evidence and keeps the nati
 | Memory queue with an in-process worker | Supported with destructive receive. Split roles over the memory queue remain boot refusals. |
 | SQS queue and S3 advisory transport | Supported with native lease, redelivery, and advisory transport checks. S3 advisory storage grants no package-store capability. |
 | PyPI publication and mirroring | Supported. Keep native multipart publication, every supported wheel and source distribution, retained companions, and durable complete-version evidence. |
-| Cargo sparse reads, mirroring, and publication | Cargo 1.74+ through sparse HTTPS. Keep native discovery, records, dependencies, source identity, checksums, and original-source durable state. Prove archive requests traverse Écluse with real clients. |
+| Cargo sparse reads, mirroring, and publication | Cargo 1.74+ through sparse HTTPS. Keep native discovery, records, dependencies, source identity, checksums, and original-source durable state. Prove archive requests traverse Écluse with real clients. Keep the shipped admission-only deny of a public row whose normal or build dependency names another registry (`integration/cargo/native-028`). |
 | Cargo merged registry and authentication | One registry replaces crates.io. Preserve native credential-provider retry on an edge `401`, local discovery and its `auth-required` rule, private authorisation, first-party private-only reads, build-metadata version identity, and read/upload authority checks. |
 | Cargo CodeArtifact maintenance | Physical deletion through deterministic native fixtures. A generic registry's yank API does not provide deletion. No live AWS fidelity claim. |
 | Hosted incremental PyPI copying | Supported under [#1639](https://github.com/AlexaDeWit/Ecluse/issues/1639). Contracts require a complete authorised served view or explicit unavailability, retry/restart, and offline completion. |
@@ -269,7 +269,7 @@ An unheld or missing status produces diagnostic-only evidence and keeps the nati
 | RubyGems Compact Index reads, mirroring, and publication | Bundler 2.6.9 and 4.0.23. Keep `/versions` discovery, on-demand `/info` metadata, archive SHA-256 values, complete platform mirrors with original-source durable state, and native publication. See the [protocol reference](https://ecluse-proxy.com/docs/protocol-support/#rubygems). |
 | RubyGems CodeArtifact maintenance | Inventory and physical deletion through deterministic native fixtures. A native yank is not deletion. No live AWS fidelity claim. |
 | RubyGems install-time execution denial, yank, external-dependency, scope allow, and deprecation rules | Refused because the adapter blocks those rule types. Existing boot and capability tests keep the reasons explicit. |
-| Cargo install-time execution denial, external-dependency, scope allow, and deprecation rules | Refused because the adapter blocks those rule types. Existing boot and capability tests keep the reasons explicit. |
+| Cargo install-time execution denial, scope allow, and deprecation rules | Refused because the adapter blocks those rule types. Existing boot and capability tests keep the reasons explicit. |
 | Missing external service in smoke | Unavailable evidence, never a passing conformance result. Deterministic mirrors remain gating. |
 | Missing image, client, ownership, or Docker in required E2E | Failed setup. Pending or absent cases cannot satisfy the execution audit. |
 

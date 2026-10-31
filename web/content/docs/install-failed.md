@@ -15,7 +15,7 @@ reference = "/docs/operations/"
 
 | What you see | Check first |
 | --- | --- |
-| No matching version | The minimum age, npm install scripts, npm dependencies on a git source, a remote URL or an unsupported scheme, explicit denies, and file eligibility. Filtered versions do not appear in listings. |
+| No matching version | The minimum age, npm install scripts, npm dependencies on a git source, a remote URL or an unsupported scheme, Cargo dependencies from a registry other than crates.io, explicit denies, and file eligibility. Filtered versions do not appear in listings. |
 | 403 from an artifact request | The deciding policy rule or integrity refusal in the response and logs. Also check private credentials. |
 | 404 for a package | Whether the package name is spelled as published. Écluse answers `404` when neither the private nor the public registry holds the name. |
 | 503 | Whether Écluse can obtain required evidence or upstream data. Check advisory state, managed mirror completion, and whether the private registry answers. A failed private read refuses every package on the mount. |
