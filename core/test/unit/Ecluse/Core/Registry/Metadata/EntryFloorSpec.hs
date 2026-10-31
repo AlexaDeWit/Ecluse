@@ -12,7 +12,7 @@ import Data.Primitive.PrimVar (PrimVar, newPrimVar, readPrimVar, writePrimVar)
 import Test.Hspec
 
 import Ecluse.Core.Registry.JsonStream (Steps (..), StreamResult (..))
-import Ecluse.Core.Registry.Metadata.EntryFloor (RetainedEntries (RetainedEntries), countingEntries, entryFloorBytes, entryFloorCharge, readFlooredWalk, releaseFloorBytes)
+import Ecluse.Core.Registry.Metadata.EntryFloor (RetainedEntries (RetainedEntries), countingEntries, entryFloorBytes, entryFloorCharge, noRetainedEntries, readFlooredWalk, releaseFloorBytes)
 import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), LimitError (TooManyVersions))
 import Ecluse.Test.Registry.JsonStream (heldChunks)
 
@@ -26,7 +26,7 @@ spec = describe "the full-read entry floor" $ do
 
     it "owes the release floor for each version or file and the entry floor for every other entry" $ do
         entryFloorCharge (RetainedEntries 2 3) `shouldBe` 2 * 1152 + 3 * 704
-        entryFloorCharge mempty `shouldBe` 0
+        entryFloorCharge noRetainedEntries `shouldBe` 0
 
     it "saturates the floors at the largest charge" $
         entryFloorCharge (RetainedEntries maxBound 1) `shouldBe` maxBound

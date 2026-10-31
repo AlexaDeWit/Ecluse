@@ -45,6 +45,7 @@ import Ecluse.Core.Registry.Adapter (RegistryAdapter (adapterMetadata))
 import Ecluse.Core.Registry.Adapter.Capability (AdapterMetadata (metadataChargeFactors, metadataSerialise))
 import Ecluse.Core.Registry.CachedDocument (CachedDoc, pypiPacked)
 import Ecluse.Core.Registry.Metadata (Manifest (..))
+import Ecluse.Core.Registry.Metadata.EntryFloor (noRetainedEntries)
 import Ecluse.Core.Registry.MirrorUpload (MirrorInventory, MirrorReadData (PyPIMirrorRead), inventoryDetails)
 import Ecluse.Core.Registry.MirrorUpload.Internal (restoreMirrorInventory)
 import Ecluse.Core.Registry.PyPI.Adapter (pypiAdapter)
@@ -182,7 +183,7 @@ newSession target limits privateBytes load = do
     meter <- testMemoryMeter
     streamed <- expectRight (projectPyPIPackedChunks readLimits mirrorPackage [privateBytes])
     (info, packed) <- expectRight (projectPyPIPacked readLimits mirrorPackage streamed)
-    let private = Manifest info (fst pypiPacked packed) (BS.length privateBytes) mempty (digestFromContext (hashUpdate hashInit privateBytes))
+    let private = Manifest info (fst pypiPacked packed) (BS.length privateBytes) noRetainedEntries (digestFromContext (hashUpdate hashInit privateBytes))
         store = MirrorState (fetch changed exchanges) (\_ _ _ _ -> pure (Left StateRetryExhausted)) (\_ _ -> pure (Left StateMissingCompanion)) (\_ _ -> pure (Left StateMissingCompanion))
     pure (ReadSession (newMirrorView limits target store retention pypiMirrorDocuments) meter private changed exchanges)
   where

@@ -32,6 +32,7 @@ import Ecluse.Core.Mirror.State.Internal (StateRevision (..), targetKey)
 import Ecluse.Core.Package (Artifact (..), PackageDetails (..), PackageInfo (..), PackageName)
 import Ecluse.Core.Registry.CachedDocument (weighCachedDoc)
 import Ecluse.Core.Registry.Metadata (Manifest (..), VersionDoc (..))
+import Ecluse.Core.Registry.Metadata.EntryFloor (noRetainedEntries)
 import Ecluse.Core.Registry.MirrorUpload (expectedTargetMatchesWith)
 import Ecluse.Core.Security (Limits)
 import Ecluse.Core.Server.Admission.Meter (MemoryTicket, charge, newChargeRegion)
@@ -115,7 +116,7 @@ mirrorProjectViews documents revision record private = do
         details = Map.fromList [(key, vdDetails doc) | (key, doc) <- rebased]
         managedRaw = mdAssemble documents record (map snd rebased)
         fingerprint = TE.encodeUtf8 (show revision) <> maybe mempty (digestBytes . manifestDigest) private
-        managed = Manifest (PackageInfo (recordPackage record) details Map.empty []) managedRaw (fromIntegral (weighCachedDoc managedRaw)) mempty (digestFromContext (hashUpdate hashInit fingerprint))
+        managed = Manifest (PackageInfo (recordPackage record) details Map.empty []) managedRaw (fromIntegral (weighCachedDoc managedRaw)) noRetainedEntries (digestFromContext (hashUpdate hashInit fingerprint))
     pure (unmanaged, managed <$ guard (not (Map.null details)), pending)
 
 rekeyVersion :: MirrorDocuments -> Int -> (Text, VersionDoc) -> (Int, (Text, VersionDoc))

@@ -45,6 +45,7 @@ import Ecluse.Core.Registry.Maintenance (
     storeRefusal,
  )
 import Ecluse.Core.Registry.Metadata (Manifest (Manifest, manifestInfo))
+import Ecluse.Core.Registry.Metadata.EntryFloor (noRetainedEntries)
 import Ecluse.Core.Registry.Sweep.Outcome (
     CycleHalt (HaltDeletionCap),
     EvidenceGaps (gapManifests),
@@ -781,7 +782,7 @@ yankedPyPIManifest :: Text -> IO Manifest
 yankedPyPIManifest rawVersion = do
     let body = toStrict (encode (simpleIndex "requests" [withFileKeys [("yanked", Bool True)] (simpleFile ("requests-" <> rawVersion <> "-py3-none-any.whl"))]))
     (info, document) <- expectRight (projectPyPIIndex defaultLimits requestsName body)
-    pure (Manifest info (fst pypiSimpleCached document) (BS.length body) mempty (digestOf body))
+    pure (Manifest info (fst pypiSimpleCached document) (BS.length body) noRetainedEntries (digestOf body))
 
 -- A rule at its default precedence, limited to admission as @appliesTo: [admission]@ resolves it.
 limitedToAdmission :: Rule -> PrecededRule

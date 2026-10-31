@@ -11,6 +11,7 @@ module Ecluse.Core.Registry.Metadata.EntryFloor (
     entryFloorBytes,
     releaseFloorBytes,
     RetainedEntries (..),
+    noRetainedEntries,
     entryFloorCharge,
     countingEntries,
     readFlooredWalk,
@@ -43,18 +44,18 @@ data RetainedEntries = RetainedEntries
     }
     deriving stock (Eq, Show)
 
-instance Semigroup RetainedEntries where
-    RetainedEntries releases others <> RetainedEntries releases' others' = RetainedEntries (releases + releases') (others + others')
-
-instance Monoid RetainedEntries where
-    mempty = RetainedEntries 0 0
+-- | No retained entries: a read with no floor, or a document no read produced.
+noRetainedEntries :: RetainedEntries
+noRetainedEntries = RetainedEntries 0 0
 
 -- | The floors the retained entries owe, saturating at the largest charge. Each step of a walk computes it, so it stays in 'Int'.
 entryFloorCharge :: RetainedEntries -> Int
-entryFloorCharge (RetainedEntries releases others)
+entryFloorCharge entries
     | releases > bound || others > bound = maxBound
     | otherwise = releaseFloorBytes * releases + entryFloorBytes * others
   where
+    releases = retainedReleases entries
+    others = retainedOthers entries
     -- Up to this count each product stays within half the largest 'Int'.
     bound = maxBound `div` (2 * releaseFloorBytes)
 

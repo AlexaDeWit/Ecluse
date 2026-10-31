@@ -22,6 +22,7 @@ import Ecluse.Core.Registry.Exchange (accumulatingCharge, chargedRead, chargedRe
 import Ecluse.Core.Registry.Json.Intern (newInternTable, newTableKey)
 import Ecluse.Core.Registry.JsonStream (StreamResult (streamBytes, streamValue))
 import Ecluse.Core.Registry.Metadata (Manifest (..), MetadataError, VersionRead, metadataResponse)
+import Ecluse.Core.Registry.Metadata.EntryFloor (noRetainedEntries)
 import Ecluse.Core.Registry.Metadata.Fetch.Types (Body (Body), DocumentWalk, EcosystemRead (..), ManifestFetch, ReadTerms (..))
 import Ecluse.Core.Registry.Origin (OriginClient (ocBaseRequest, ocChargeFullRead, ocClient, ocLimits, ocPublicControl, ocReadKind, ocToken), originBaseUrl)
 import Ecluse.Core.Registry.Public (ReadControl (..))
@@ -62,7 +63,7 @@ readManifest EcosystemRead{erUniqueFields = uniqueFields, erWalkFull = walk, erF
         (streamed, digest) <- result
         -- The size, the count and the document are forced first, so the typed view's location check holds none of the walk's result.
         let !bodyBytes = streamBytes streamed
-            !entries = either (const mempty) retained (streamValue streamed)
+            !entries = either (const noRetainedEntries) retained (streamValue streamed)
         (info, raw) <- finish limits name base streamed
         pure (raw `pseq` Manifest{manifestInfo = info, manifestRaw = raw, manifestBodyBytes = bodyBytes, manifestRetainedEntries = entries, manifestDigest = digest})
   where
