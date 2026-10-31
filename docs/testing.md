@@ -2199,6 +2199,8 @@ Yank and timestamp controls change target metadata and verify retained original-
 Missing, corrupt, and unrecorded state must not become completed managed reads during outage.
 Unrecorded target rows reached through the private upstream serve as trusted private content.
 CodeArtifact maintenance fixtures prove physical deletion through deterministic control-plane boundaries, without claiming live AWS fidelity.
+Role authority runs the Dredger as an AWS identity the fixture refuses.
+The role must exit at boot with status 2, report the refused token mint and upstream probe, and leave both stores unchanged.
 
 Cargo corpus and OSV fixtures retain capture identity, hashes, acquisition records, and attribution beside their native data.
 Independent benchmark references can adapt NDJSON to arrays internally. Native served output remains line-framed.
@@ -2225,7 +2227,7 @@ Native coverage must exercise these boundaries:
 - Admission, advisory decisions, direct denied downloads, and boot rejection of unsupported rules.
 - Exact raw archive publication, identity mismatches, bounded Marshal and archive decoding, and independent reference fixtures.
 - Complete platform mirroring, retained original source facts, restart, public outage, and incomplete or corrupt inventory refusal.
-- Physical maintenance deletion, first-party protection, role authority, consent, caps, and native telemetry.
+- Physical maintenance deletion, first-party protection, [role authority](#cargo-native-provider), consent, caps, and native telemetry.
 - Per-gem reads, selected compact specifications, long histories, platform multiplicity, and whole-version worker costs.
 
 Source registration alone supplies no runtime evidence. Backend fixtures supply no live AWS or IAM evidence.

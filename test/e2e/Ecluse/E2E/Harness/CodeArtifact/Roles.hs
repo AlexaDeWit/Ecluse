@@ -7,6 +7,8 @@ module Ecluse.E2E.Harness.CodeArtifact.Roles (
     PublicationAuthority (..),
     codeArtifactSweepRoleEnv,
     codeArtifactProxyRoleEnv,
+    refusedAwsIdentity,
+    refusedIdentityReports,
 ) where
 
 import Data.Text qualified as T
@@ -68,6 +70,21 @@ codeArtifactProxyRoleEnv ecosystem authority =
     mirror = codeArtifactRepositoryUrl ecosystem "mirror"
     upload = mirror <> paUploadPath authority
     publication key = mountKey ecosystem ("PUBLICATION_TARGET__CODE_ARTIFACT__" <> key)
+
+-- | Keys to append to a role's environment so it signs as an identity other than the fixture's @test@, which the control plane refuses.
+refusedAwsIdentity :: [(Text, Text)]
+refusedAwsIdentity = [("AWS_ACCESS_KEY_ID", "AKIAREFUSEDIDENTITY"), ("AWS_SECRET_ACCESS_KEY", "refused")]
+
+-- | The boot refusals a Dredger signing as 'refusedAwsIdentity' reports: the token mint and the private upstream probe.
+refusedIdentityReports :: Ecosystem -> [Text]
+refusedIdentityReports ecosystem =
+    [ "credential provider codeartifact for "
+        <> mountKey ecosystem "PRIVATE_UPSTREAM"
+        <> ", "
+        <> mountKey ecosystem "MIRROR_TARGET"
+        <> " failed to mint an initial token at boot: AWS request failed at codeartifact.us-east-1.amazonaws.com:443: HTTP 403 AccessDenied"
+    , mountKey ecosystem "PRIVATE_UPSTREAM" <> " could not be read: this role's identity is refused codeartifact:DescribeRepository"
+    ]
 
 -- The load requires uploadUrl where the protocol uploads separately and refuses it elsewhere.
 separateUpload :: Ecosystem -> Bool

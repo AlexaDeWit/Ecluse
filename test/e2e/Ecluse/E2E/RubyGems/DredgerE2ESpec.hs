@@ -13,9 +13,7 @@ module Ecluse.E2E.RubyGems.DredgerE2ESpec (
 import Data.ByteString.Lazy qualified as LBS
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
-import Network.HTTP.Client qualified as Http
-import Network.HTTP.Types (statusCode)
-import System.Exit (ExitCode (ExitSuccess))
+import System.Exit (ExitCode (ExitFailure, ExitSuccess))
 import Test.Hspec
 
 import Ecluse.Core.Ecosystem (Ecosystem (RubyGems))
@@ -24,7 +22,8 @@ import Ecluse.E2E.Fixtures.Advisories (maliciousAdvisoryId)
 import Ecluse.E2E.Fixtures.Contracts (ConcreteFixture (..))
 import Ecluse.E2E.Harness.Advisories (advisoryStoreEnv, publishAdvisoryExport)
 import Ecluse.E2E.Harness.Client (shouldSucceed)
-import Ecluse.E2E.Harness.CodeArtifact (CodeArtifactFixture (cafPort), codeArtifactDeleteRequests, creditCodeArtifactDeletes, withCodeArtifactDeleteAudit)
+import Ecluse.E2E.Harness.CodeArtifact (codeArtifactDeleteRequests, creditCodeArtifactDeletes, withCodeArtifactDeleteAudit)
+import Ecluse.E2E.Harness.CodeArtifact.Roles (refusedAwsIdentity, refusedIdentityReports)
 import Ecluse.E2E.Harness.Docker (RoleRun (..), awaitContainerLog, containerLogs, runRoleOnce, sharedMirrorQueue, withDataPlane, withMirrorRole)
 import Ecluse.E2E.Harness.Lifecycle (timedFixtureWith)
 import Ecluse.E2E.Harness.NativeEdge (observedProxy)
@@ -35,7 +34,7 @@ import Ecluse.E2E.Harness.RubyGemsCodeArtifact.Client (rubySweepClientOps)
 import Ecluse.E2E.Harness.RubyGemsCodeArtifact.Fixtures
 import Ecluse.E2E.Harness.RubyGemsRegistry (awaitRubyRegistry, removeRubyRegistryVersion, rubyRegistryFiles, seedRubyRegistry)
 import Ecluse.E2E.Harness.Sweep
-import Ecluse.E2E.Harness.Types (E2E (e2eManager), GlobalDataPlane, Topology (..))
+import Ecluse.E2E.Harness.Types (GlobalDataPlane, Topology (..))
 import Ecluse.E2E.Harness.Verdaccio (awaitMirrorWindow)
 import Ecluse.Test.Contract.Catalogue (caseLabel)
 import Ecluse.Test.Contract.Ecosystem (FamilyMetadata (..))
@@ -46,7 +45,7 @@ import Ecluse.Test.Contract.Sweep.Types
 import Ecluse.Test.Contract.Types
 import Ecluse.Test.Osv (CorpusVersion (..))
 import Ecluse.Test.Poll (pollUntil)
-import Ecluse.Test.Registry.RubyGems.Fixtures (RubyRelease (..), rubyRelease)
+import Ecluse.Test.Registry.RubyGems.Fixtures (RubyRelease (..))
 
 -- | Each canonical family acquires a fresh native registry, remote state and independently observed backend.
 rubySweepDriver :: ConcreteFixture FamilyMetadata -> PhaseRecorder -> SweepDriver Native.RubySweepPlane Native.RubySweepStore RubyProject
@@ -297,15 +296,16 @@ safetyCases recorder = aroundAll acquire $ do
         (fst <$> Native.storeArtifactBytes mirror name version) `shouldReturn` 404
         made <- drop (length requests) <$> codeArtifactDeleteRequests (Native.rspControl plane)
         made `shouldBe` [("POST", "v1/package/versions/delete")]
-    it (caseLabel "rubygems/dredger-native-safety/authorisation" "refuses unsigned control requests and incorrect native service credentials without mutation") $ \(plane, mirror, cache) -> do
+    it (caseLabel "rubygems/dredger-native-safety/authorisation" "reports CodeArtifact refusing the Dredger's identity and changes neither store") $ \(plane, mirror, cache) -> do
+        let name = packageName keptPackage
         initialState <- (,) <$> Native.storeInventory mirror <*> Native.storeInventory cache
-        release <- rubyRelease (Native.rspReleases plane) (packageName keptPackage) "1.0.0" "ruby"
-        let base = "http://127.0.0.1:" <> show (cafPort (Native.rspControl plane))
-            manager = e2eManager (observedProxy (Native.rssObserved mirror))
-        unauthorised manager (base <> "/ruby/mirror/info/" <> packageName keptPackage) "GET" "" `shouldReturn` 401
-        unauthorised manager (base <> "/ruby/mirror/api/v1/gems") "POST" (releaseArchive release) `shouldReturn` 401
-        unauthorised manager (base <> "/v1/package/versions/delete") "POST" "{}" `shouldReturn` 403
+        Map.lookup name (fst initialState) `shouldBe` Just [packageVersion keptPackage]
+        requests <- codeArtifactDeleteRequests (Native.rspControl plane)
+        run <- runNativeSweep plane refusedAwsIdentity Apply (IdentityPolicy [name])
+        sweepExit run `shouldBe` ExitFailure 2
+        for_ (refusedIdentityReports RubyGems) $ \report -> sweepOutput run `shouldSatisfy` T.isInfixOf report
         ((,) <$> Native.storeInventory mirror <*> Native.storeInventory cache) `shouldReturn` initialState
+        codeArtifactDeleteRequests (Native.rspControl plane) `shouldReturn` requests
     it (caseLabel "rubygems/dredger-native-safety/multi-platform-deletion" "physically removes every platform artifact in one denied native version") $ \(plane, mirror, _) -> do
         let name = packageName keptPackage
             version = packageVersion keptPackage
@@ -322,12 +322,6 @@ safetyCases recorder = aroundAll acquire $ do
         made `shouldBe` [("POST", "v1/package/versions/delete")]
   where
     acquire action = timedFixture recorder (withFixture rubyDredgerFixture) (timedFixtureWith recorder withIdentity action)
-
-unauthorised :: Http.Manager -> Text -> ByteString -> ByteString -> IO Int
-unauthorised manager url method body = do
-    initial <- Http.parseRequest (toString url)
-    response <- Http.httpLbs initial{Http.method = method, Http.requestBody = Http.RequestBodyBS body, Http.redirectCount = 0} manager
-    pure (statusCode (Http.responseStatus response))
 
 runNativeSweep :: Native.RubySweepPlane -> [(Text, Text)] -> SweepMode -> SweepPolicy -> IO SweepRun
 runNativeSweep plane extra mode policy = do
