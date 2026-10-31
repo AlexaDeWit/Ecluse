@@ -223,7 +223,7 @@ spec = do
         it "keeps the shipped Cargo deny out of the npm and PyPI policies" $ do
             cfg <- configFor "{\"mounts\":{\"npm\":{\"enabled\":true},\"pypi\":{\"enabled\":true},\"cargo\":{\"enabled\":true}}}"
             fmap (map (ruleName . prRule) . mountPolicy) (Map.lookup PyPI (configMounts cfg)) `shouldBe` Just ["AllowIfOlderThan"]
-            Map.map limitedRules (configMounts cfg) `shouldBe` Map.fromList [(Npm, ["DenyExternalDependencies", "DenyInstallTimeExecution"]), (Cargo, ["DenyExternalDependencies"])]
+            Map.map limitedRules (configMounts cfg) `shouldBe` Map.fromList [(Npm, ["DenyExternalDependencies", "DenyInstallTimeExecution"]), (PyPI, []), (Cargo, ["DenyExternalDependencies"])]
 
     describe "configuration type error paths" $ do
         forM_
