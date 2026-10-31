@@ -17,11 +17,9 @@ module Ecluse.Test.Contract.Install (
     CodedArtifact (..),
     ArtifactProbe (..),
     installationContract,
-    codedArtifactCase,
     RefusalDriver (..),
     refusesWithoutEffects,
     installsObserved,
-    refusesObserved,
     shouldSucceed,
     shouldFail,
     shouldWarn,
@@ -112,7 +110,7 @@ installationContract prefix = do
   where
     label name = caseLabel (prefix <> "/" <> name)
 
-{- | Require an identity-coded upstream fetch and the advertised bytes, uncoded, for a client that
+{- Require an identity-coded upstream fetch and the advertised bytes, uncoded, for a client that
 accepts gzip. The upstream must have gzipped some read, or the fetch proves nothing.
 -}
 codedArtifactCase :: (ByteString -> Text) -> CodedArtifact -> Expectation
@@ -145,7 +143,7 @@ installsObserved driver = do
     void (shouldSucceed result)
     observed `shouldBe` installExpected driver
 
--- | Require client refusal and the expected unchanged installation result.
+-- Require client refusal and the expected unchanged installation result.
 refusesObserved :: (Eq observation, Show observation) => InstallDriver observation -> Expectation
 refusesObserved driver = do
     (result, observed) <- installRun driver

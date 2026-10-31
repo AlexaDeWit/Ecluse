@@ -13,8 +13,6 @@ module Ecluse.Test.Contract.Install.Advisory (
     Denial (..),
     parseDenial,
     advisoryRefuses,
-    advisoryDenies,
-    advisoryAdmits,
 ) where
 
 import Data.Aeson (Value, decodeStrict')
@@ -99,7 +97,7 @@ advisoryContract prefix = do
             advisoryListedVersions session `shouldReturn` [advisoryAffectedVersion control]
             refuse control session (advisoryFixedVersion control) "BlockedByDefault" (Just (advisoryExpectedId control))
 
--- | A denial retains the unaffected listing and cannot publish into a required mirror.
+-- A denial retains the unaffected listing and cannot publish into a required mirror.
 advisoryDenies :: AdvisoryCase -> Text -> AdvisorySession -> Expectation
 advisoryDenies fixture rule session = do
     advisoryListedVersions session `shouldReturn` [advisoryFixedVersion fixture]
@@ -143,7 +141,7 @@ advisoryRefuses nativeMessage expected driver = do
     observed <- advisoryAwaitDenials driver expected
     observed `shouldSatisfy` elem expected
 
--- | Require the exact native artifact before installing the admitted remediation.
+-- Require the exact native artifact before installing the admitted remediation.
 advisoryAdmits :: AdvisoryDriver -> Expectation
 advisoryAdmits driver = do
     lookup (advisoryExpectedArtifact driver) (advisoryAdvertisedArtifacts driver) `shouldSatisfy` isJust

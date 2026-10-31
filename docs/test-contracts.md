@@ -14,8 +14,7 @@ inventory, deletion, integrity, and recovery. These lists are normative for each
 Driver capability flags cannot shrink them. Independent obligations detect a family omitted
 from registration, while actual Hspec execution proves the registered laws ran.
 Each missing required family must fail by name, and unrelated families continue.
-npm, PyPI, Cargo, and RubyGems run the full composition. The separate read-only foundation API remains partial
-and does not satisfy the full ecosystem contract.
+npm, PyPI, Cargo, and RubyGems run the full composition.
 
 ## Metadata and serving
 
@@ -114,13 +113,7 @@ Native PyPI media type, multi-file identity, exact mount-local URLs, canonical s
 Native deprecation/yank policy tests from the current baseline remain unchanged.
 Native OriginIntegrationSpec and TarballIntegrationSpec retain their assertions under fixed integration case IDs. All pipeline core tests remain unchanged.
 
-### Contract controls
-
-core/test/unit/Ecluse/Test/Contract/ServingSpec.hs runs the exact artifactIntegrityCase used by both integration providers.
-
-- core.contract.serving.valid-observations passes matching bytes and advertised digest.
-- core.contract.serving.corrupt-bytes requires failure from successful HTTP carrying changed bytes.
-- core.contract.serving.corrupt-digest requires failure from a false advertised digest with matching fixture bytes.
+### Contract boundaries
 
 The shared contract library imports core/test support only. Runtime/application resource and HTTP wiring stay in the integration driver.
 The native driver uses existing serveDepsFor, newTestEnvWithQueue, testWithApplication, requestAt, package fixture builders and digest helpers.
@@ -186,8 +179,6 @@ The npm and PyPI integrity controls alter successful production reads to change 
 A PyPI control also removes distribution files.
 Each control requires an assertion failure and proves that the altered read ran.
 
-`Ecluse.Test.Contract.QueueSpec` runs the same `queuePayloadLaw` with the real memory driver, an empty-delivery driver, a corrupted-payload driver, a driver that drops the trace carrier and a driver that drops the package scope. Wrong drivers must fail.
-
 Ecluse.Test.Poll.runUntil replaces discarded timeout/poll results in Integration.WorkerLoop. It throws TestContractEscape on progress timeout or early normal worker exit, propagates worker errors, and cancels the worker after progress. Ecluse.Test.PollSpec covers all four outcomes including cleanup.
 
 Ecluse.Test.Env.withEnvOverrides hoists Collector save/apply/restore, saves unique keys, preserves override order and restores absent values. Collector, Ministack and withAmbientAws use it. Existing withEnvVars clear/apply/clear semantics stay intact. EnvSpec checks success, typed action failure, assignment failure, cancellation and duplicate override order. Environment callers remain serial. Boot refusal timing and compiler-output isolation are
@@ -195,13 +186,8 @@ separate concerns tracked by #1349, #1182, and #1329.
 
 ## Smoke and measurement
 
-`Ecluse.Test.Contract.Measurement` holds independent obligations and provider metadata for the migrated smoke and reader-retention cases.
-Its independent obligation rows require every listed case before a live fetch or a heap probe can count as registered coverage.
-The core-unit `MeasurementSpec` reads the actual npm, PyPI, Cargo and RubyGems smoke and reader-retention declaration trees through `Binding.labelledCaseIds`.
-It checks their labels against independent obligations without executing network calls, fixture hooks, GC samples, or reader probes.
-Mutation controls delete each real provider or example and replace each case label with malformed or unknown text.
-Each mutation must fail validation. Genuine unlabelled native smoke examples remain outside the migrated inventory.
-`RegistrySmokeSpec` and `RetentionSpec` supply deliberately wrong observations to test the shared verdicts.
+The smoke and reader-retention suites run the shared `Contract.RegistrySmoke` and `Contract.Retention` laws under the case IDs below.
+Genuine unlabelled native smoke examples remain outside these laws.
 The live version-ordering smoke fetches the `smokeNames` packages in `bench/corpus/pins.json`, which list npm, PyPI, RubyGems and Cargo names.
 
 | Original assertion | Replacement case IDs | Preserved conditions |
@@ -456,10 +442,6 @@ The new shared installation family runs these five IDs for each of `npm` and `py
 
 Admission preserves the native version or distribution observation until the contract compares it with the expected result.
 Refusal requires a failed client and an empty installation tree, including npm's lock file or pip's complete target directory.
-`core/test/unit/Ecluse/Test/Contract/InstallSpec.hs` rejects unexpected versions and files left by failed clients.
-Those negative controls create and inspect their files before checking the contract's failure.
-For `artifact-identity-coding` it rejects a gzip-permitting upstream fetch, a relayed content coding,
-bytes that miss the digest, a fetch the upstream never saw, and an upstream that never gzipped.
 
 The npm advisory counterparts are `npm/advisories/deny-cve`, `npm/advisories/deny-epss`,
 `npm/advisories/mal-denial`, `npm/advisories/exact-fix`, and `npm/advisories/partial-fix`.
@@ -641,10 +623,9 @@ Coverage remains one full integration invocation with the same Cabal instrumenta
 Core and runtime retain `hspec-discover` and their existing dependency boundaries.
 The core `Ecluse.Test.Contract.UnitCatalogue` and runtime `Ecluse.Runtime.Test.Contract.UnitCatalogue` hold separate obligations.
 Together, they require 100 canonical examples across nine actual spec roots.
-`UnitCatalogueSpec` reads labelled declaration trees without executing hooks or examples.
+Each suite's `SpecHook` reads the labelled declaration trees without executing hooks or examples.
+A reporting run validates that catalogue and rejects missing, duplicate, and unknown IDs and missing capabilities.
 Native unlabelled examples continue in their original suites.
-The audits reject missing, duplicate, and unknown IDs and missing capabilities.
-Deletion mutations cover each group, case, and profile capability.
 Production adapter registration anchors ecosystem coverage.
 The npm maintenance operations and CodeArtifact format anchor their supported maintenance profiles.
 Add a provider's obligations separately from its actual registrations.

@@ -16,13 +16,7 @@ module Ecluse.Test.Contract.Telemetry (
     PrivateFetchKind (..),
     mirrorTelemetryContract,
     TelemetryIdentity (..),
-    exportsSignals,
-    exportsDomainSpans,
-    exportsPrivateFetch,
     logsWithoutCollector,
-    exportsNothingWhenDisabled,
-    servesAfterExportFailure,
-    exportsIdentity,
     hasPopulatedTraceId,
 ) where
 
@@ -143,7 +137,7 @@ data TelemetryIdentity = TelemetryIdentity
     , telemetryVersion :: Text
     }
 
--- | Both metric and trace signals must reach the configured collector.
+-- Both metric and trace signals must reach the configured collector.
 exportsSignals :: Text -> TrafficDriver -> CollectorDriver -> Expectation
 exportsSignals package traffic collector = do
     void (telemetryInstall traffic package >>= shouldSucceed)
@@ -152,7 +146,7 @@ exportsSignals package traffic collector = do
   where
     signals logs = "ecluse.serve.decision" `T.isInfixOf` logs && "Span #" `T.isInfixOf` logs
 
-{- | The coordinate's rule evaluation and enqueue share the serving request's trace, and its mirror
+{- The coordinate's rule evaluation and enqueue share the serving request's trace, and its mirror
 job links back to that enqueue span.
 -}
 exportsDomainSpans :: Text -> Text -> TrafficDriver -> MirrorTelemetryDriver -> CollectorDriver -> Expectation
@@ -167,7 +161,7 @@ exportsDomainSpans package version traffic mirror collector = do
     correlated = linkedMirrorTraces package version
     domainSpans = ["ecluse.rule.eval", "ecluse.mirror.enqueue", "ecluse.mirror.job"]
 
--- | A fresh second install records a successful private fetch after the initial miss.
+-- A fresh second install records a successful private fetch after the initial miss.
 exportsPrivateFetch :: PrivateFetchKind -> Text -> Text -> Text -> Text -> TrafficDriver -> MirrorTelemetryDriver -> CollectorDriver -> Expectation
 exportsPrivateFetch kind package version host target traffic mirror collector = do
     versions <- telemetryVersions mirror package
@@ -185,7 +179,7 @@ exportsPrivateFetch kind package version host target traffic mirror collector = 
         ConventionalArtifact -> privateArtifactAnswers host target . exportedSpans
         IndexedLookup -> privateLookupAnswers host target
 
-{- | With telemetry off, a fresh client is served, its request is logged, and nothing reaches the
+{- With telemetry off, a fresh client is served, its request is logged, and nothing reaches the
 collector the exporter could have reached, over several export intervals.
 -}
 exportsNothingWhenDisabled :: Text -> TrafficDriver -> LogDriver -> CollectorDriver -> Expectation
@@ -209,7 +203,7 @@ logsWithoutCollector package traffic logs = do
     observed <- telemetryLogs logs (T.isInfixOf "\"message\":") 80
     observed `shouldSatisfy` T.isInfixOf "\"message\":"
 
--- | Export failure produces a warning without losing readiness or fresh-client service.
+-- Export failure produces a warning without losing readiness or fresh-client service.
 servesAfterExportFailure :: Text -> Text -> TrafficDriver -> LogDriver -> Expectation
 servesAfterExportFailure firstPackage secondPackage traffic logs = do
     logsWithoutCollector firstPackage traffic logs
@@ -218,7 +212,7 @@ servesAfterExportFailure firstPackage secondPackage traffic logs = do
     telemetryReadiness traffic `shouldReturn` 200
     void (telemetryInstall traffic secondPackage >>= shouldSucceed)
 
-{- | Configured resource identity reaches the collector, and a log line under that identity
+{- Configured resource identity reaches the collector, and a log line under that identity
 carries the Datadog form of an exported span's trace and span IDs.
 -}
 exportsIdentity :: Text -> TelemetryIdentity -> TrafficDriver -> LogDriver -> CollectorDriver -> Expectation

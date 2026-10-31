@@ -9,7 +9,6 @@ module Ecluse.Test.Contract.Runner (
     RunSettings (..),
     contractMain,
     validateDeclaredGroups,
-    executeGroups,
     captureResult,
 ) where
 
@@ -96,7 +95,7 @@ readSettings = do
   where
     parseNumber name value = maybe (failRunner $ name <> " requires an integer") pure $ readMaybe value
 
--- | Each completed group is persisted before the next acquisition begins.
+-- Each completed group is persisted before the next acquisition begins.
 executeGroups :: ExecutionIdentity -> RunSettings -> Text -> [DeclaredGroup] -> (Group -> IO (Maybe Text)) -> IO Report
 executeGroups executionIdentity options suite declarations prerequisites = Exception.mask $ \restore -> do
     reportRef <- newIORef $ Report 1 executionIdentity suite False [] [] (runSeed options) (map declaredGroup declarations)

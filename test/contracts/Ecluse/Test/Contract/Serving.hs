@@ -15,7 +15,6 @@ module Ecluse.Test.Contract.Serving (
     OriginFault (..),
     ServingFaults (..),
     servingContract,
-    artifactIntegrityCase,
     artifactDigestCase,
     artifactHeadCase,
     artifactHeadLengthCase,
@@ -321,7 +320,7 @@ servingContract provider driver = describe "shared serving contract" $ do
     young = old{releaseAgeDays = 1}
     other = old{releaseVersion = "2.3.4"}
 
--- | Require both the fixture bytes and the digest advertised by the native listing.
+-- Require both the fixture bytes and the digest advertised by the native listing.
 artifactIntegrityCase :: ServingDriver -> IO ()
 artifactIntegrityCase driver =
     withServing driver (servingSetup [AllowIfOlderThan (7 * nominalDay)]) [] [release] $ \session -> do

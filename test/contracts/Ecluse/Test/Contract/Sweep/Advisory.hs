@@ -4,7 +4,7 @@
 {-# LANGUAGE RecordWildCards #-}
 
 -- | Advisory-driven revocation through compile, sync, sweep and install.
-module Ecluse.Test.Contract.Sweep.Advisory (advisoryScenario, maliciousScenario, reportsRevocation) where
+module Ecluse.Test.Contract.Sweep.Advisory (advisoryScenario, maliciousScenario) where
 
 import Data.ByteString.Lazy qualified as LBS
 import Data.Map.Strict qualified as Map
@@ -82,7 +82,7 @@ assertAdvisoryInstalls AdvisoryFixture{..} StoreOps{..} ClientOps{..} SweepOps{.
     served <- clientArtifact proxy name advisoryFixed
     second LBS.length served `shouldSatisfy` servedBytes
 
--- | Match the exact deletions and tally while retaining an unpinned advisory generation.
+-- Match the exact deletions and tally while retaining an unpinned advisory generation.
 reportsRevocation :: [Text] -> Text -> [Text] -> Bool
 reportsRevocation deletions tally messages =
     map (fst . T.breakOn "; advisory generation ") (filter (T.isPrefixOf "deleting ") messages) == deletions
