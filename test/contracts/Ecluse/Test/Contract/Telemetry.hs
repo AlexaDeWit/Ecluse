@@ -26,8 +26,6 @@ module Ecluse.Test.Contract.Telemetry (
     hasPopulatedTraceId,
 ) where
 
-import Data.Aeson (Value (Object, String), decodeStrict)
-import Data.Aeson.KeyMap qualified as KeyMap
 import Data.Char (isDigit)
 import Data.Text qualified as T
 import Test.Hspec (Expectation, SpecWith, it, shouldBe, shouldNotSatisfy, shouldReturn, shouldSatisfy)
@@ -36,7 +34,7 @@ import Ecluse.Test.Contract.Catalogue (caseLabel)
 
 import Ecluse.Test.Collector
 import Ecluse.Test.Contract.Install (ClientResult, shouldSucceed)
-import Ecluse.Test.Log (lineMessage)
+import Ecluse.Test.Log (lineField, lineMessage)
 
 {- | Exporter configurations required for read-only service conformance. 'DisabledTelemetry' turns
 telemetry off beside a reachable collector, so an ignored switch shows as exported signals.
@@ -240,13 +238,10 @@ exportsIdentity package expectedIdentity traffic logs collector = do
             , "-> service.version: Str(" <> telemetryVersion expectedIdentity <> ")"
             ]
     loggedSpans output =
-        [ (traceKey, spanKey)
-        | line <- lines output
-        , Just (Object fields) <- [decodeStrict (encodeUtf8 (T.dropWhile (/= '{') line))]
-        , all (\(key, expected) -> KeyMap.lookup key fields == Just (String expected)) identityFields
-        , Just (Object dd) <- [KeyMap.lookup "dd" fields]
-        , Just (String traceKey) <- [KeyMap.lookup "trace_id" dd]
-        , Just (String spanKey) <- [KeyMap.lookup "span_id" dd]
+        [ ids
+        | line <- map (T.dropWhile (/= '{')) (lines output)
+        , all (\(key, expected) -> lineField [key] line == Just expected) identityFields
+        , Just ids <- [loggedDatadogIds [] line]
         ]
     identityFields =
         [ ("service", telemetryService expectedIdentity)

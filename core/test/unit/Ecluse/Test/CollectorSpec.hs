@@ -192,16 +192,9 @@ coordinate = [("ecluse.package", "Str(pkg)"), ("ecluse.version", "Str(1.0.0)")]
 jobSpanId :: Text
 jobSpanId = "00f067aa0ba902b7"
 
--- A consumer span in the exporter's layout, with one link block per trace ID.
+-- A consumer span with one link to the enqueue span per trace ID.
 linkedSpan :: Text -> [Text] -> Text
-linkedSpan name links =
-    "Span #0\n    Trace ID       : "
-        <> workerTrace
-        <> "\n    ID             : "
-        <> jobSpanId
-        <> "\n    Kind           : Consumer\n"
-        <> spanBody name []
-        <> (if null links then "" else "Links:\n" <> T.concat ["SpanLink #" <> show index <> "\n     -> Trace ID: " <> traceKey <> "\n     -> ID: " <> enqueueId <> "\n" | (index, traceKey) <- zip [0 :: Int ..] links])
+linkedSpan name links = detailedSpan name "Consumer" workerTrace jobSpanId [] [(traceKey, enqueueId) | traceKey <- links]
 
 coordinateValues :: [(Text, AttributeValue)]
 coordinateValues = [("ecluse.package", TextValue "pkg"), ("ecluse.version", TextValue "1.0.0")]
@@ -252,22 +245,8 @@ enqueue = tracedSpan "ecluse.mirror.enqueue" servingTrace enqueueId coordinate [
 mirrorJob :: [(Text, Text)] -> Text
 mirrorJob = tracedSpan "ecluse.mirror.job" workerTrace "6666666666666666" coordinate
 
--- A span in the debug exporter's detailed layout, with its links after its attributes.
 tracedSpan :: Text -> Text -> Text -> [(Text, Text)] -> [(Text, Text)] -> Text
-tracedSpan name traceKey spanKey attributes links =
-    "Span #0\n    Trace ID       : "
-        <> traceKey
-        <> "\n    Parent ID      : \n    ID             : "
-        <> spanKey
-        <> "\n    Name           : "
-        <> name
-        <> "\n    Kind           : Internal\nAttributes:\n"
-        <> T.concat ["     -> " <> key <> ": " <> value <> "\n" | (key, value) <- attributes]
-        <> (if null links then "" else "Links:\n")
-        <> T.concat
-            [ "SpanLink #" <> show index <> "\n     -> Trace ID: " <> linkTrace <> "\n     -> ID: " <> linkSpan <> "\n     -> TraceState: \n     -> DroppedAttributesCount: 0\n"
-            | (index, (linkTrace, linkSpan)) <- zip [0 :: Int ..] links
-            ]
+tracedSpan name = detailedSpan name "Internal"
 
 lookupAnswers :: Text -> [AttributeValue]
 lookupAnswers = privateLookupAnswers "mirror" "/ec/lu/ecluse-e2e-macro"

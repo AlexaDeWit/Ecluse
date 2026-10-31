@@ -9,6 +9,7 @@ import Data.Text qualified as T
 import System.Exit (ExitCode (ExitSuccess))
 import Test.Hspec
 
+import Ecluse.Test.Collector (detailedSpan)
 import Ecluse.Test.Contract.Install (ClientResult (..))
 import Ecluse.Test.Contract.Telemetry
 
@@ -75,11 +76,9 @@ domainSpansSpec = describe "domain span correlation" $ do
     domainSpans ruleTrace links =
         exportsDomainSpans "pkg" "1.0.0" (TrafficDriver (const (pure installed)) (pure 200)) (MirrorTelemetryDriver (const (pure [])) (\_ version -> pure [version])) . CollectorDriver $ \_ _ ->
             pure $
-                coordinateSpan "ecluse.rule.eval" ruleTrace ruleSpan
-                    <> coordinateSpan "ecluse.mirror.enqueue" servingTrace enqueueSpan
-                    <> coordinateSpan "ecluse.mirror.job" workerTrace "3333333333333333"
-                    <> linkBlock links
-    linkBlock links = if null links then "" else "Links:\n" <> T.concat ["SpanLink #" <> show index <> "\n     -> Trace ID: " <> linkTrace <> "\n     -> ID: " <> linkSpan <> "\n" | (index, (linkTrace, linkSpan)) <- zip [0 :: Int ..] links]
+                coordinateSpan "ecluse.rule.eval" ruleTrace ruleSpan []
+                    <> coordinateSpan "ecluse.mirror.enqueue" servingTrace enqueueSpan []
+                    <> coordinateSpan "ecluse.mirror.job" workerTrace "3333333333333333" links
 
 identitySpec :: Spec
 identitySpec = describe "Datadog identity and log correlation" $ do
@@ -89,13 +88,17 @@ identitySpec = describe "Datadog identity and log correlation" $ do
         correlates resourceLines (logLine datadogSpanId datadogSpanId) `shouldThrow` anyException
     it "rejects a log line for a span the collector never exported" $
         correlates resourceLines (logLine datadogTraceId "1") `shouldThrow` anyException
+    it "reads a log line after a container log prefix" $
+        correlates resourceLines ("proxy-1  | " <> logLine datadogTraceId datadogSpanId)
+    it "rejects a log line under another service" $
+        correlates resourceLines (T.replace "\"service\":\"ecluse-test\"" "\"service\":\"other\"" (logLine datadogTraceId datadogSpanId)) `shouldThrow` anyException
     it "rejects an identity value under another attribute" $
         correlates (resourceAttributes [("service.name", "ecluse-test"), ("deployment.environment.name", "9.9.9"), ("service.version", "staging")]) (logLine datadogTraceId datadogSpanId)
             `shouldThrow` anyException
   where
     expected = TelemetryIdentity "ecluse-test" "staging" "9.9.9"
     correlates resource logged =
-        exportsIdentity "pkg" expected (TrafficDriver (const (pure installed)) (pure 200)) (LogDriver (\_ _ -> pure logged)) (CollectorDriver (\_ _ -> pure (resource <> coordinateSpan "request" servingTrace datadogSpanHex)))
+        exportsIdentity "pkg" expected (TrafficDriver (const (pure installed)) (pure 200)) (LogDriver (\_ _ -> pure logged)) (CollectorDriver (\_ _ -> pure (resource <> coordinateSpan "request" servingTrace datadogSpanHex [])))
     resourceLines = resourceAttributes [("service.name", "ecluse-test"), ("deployment.environment.name", "staging"), ("service.version", "9.9.9")]
     resourceAttributes pairs = "Resource attributes:\n" <> T.concat ["     -> " <> key <> ": Str(" <> value <> ")\n" | (key, value) <- pairs]
     logLine traceKey spanKey = "{\"service\":\"ecluse-test\",\"env\":\"staging\",\"version\":\"9.9.9\",\"dd\":{\"trace_id\":\"" <> traceKey <> "\",\"span_id\":\"" <> spanKey <> "\"}}\n"
@@ -109,15 +112,9 @@ datadogSpanHex = "00f067aa0ba902b7"
 installed :: ClientResult
 installed = ClientResult "client" ExitSuccess "" ""
 
--- A span carrying the scenario coordinate, with its trace ID and an optional span ID.
-coordinateSpan :: Text -> Text -> Text -> Text
-coordinateSpan name traceKey spanKey =
-    "Span #0\n     Trace ID: "
-        <> traceKey
-        <> (if T.null spanKey then "" else "\n     ID: " <> spanKey)
-        <> "\n     Name: "
-        <> name
-        <> "\nAttributes:\n     -> ecluse.package: Str(pkg)\n     -> ecluse.version: Str(1.0.0)\n"
+-- A span carrying the scenario coordinate, with its trace and span IDs and its links.
+coordinateSpan :: Text -> Text -> Text -> [(Text, Text)] -> Text
+coordinateSpan name traceKey spanKey = detailedSpan name "Internal" traceKey spanKey [("ecluse.package", "Str(pkg)"), ("ecluse.version", "Str(1.0.0)")]
 
 privateFetchSpec :: Spec
 privateFetchSpec = describe "native private fetch evidence" $ do
