@@ -10,11 +10,11 @@ module Ecluse.Core.Server.Pipeline.OriginIntegrationSpec (spec) where
 import Data.Aeson (Value (String))
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
-import Ecluse.Composition (firstPartyName)
-import Ecluse.Config.Types (FirstParty (FirstPartyNpmScopes))
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Package (PackageName, mkPackageName, mkScope)
+import Ecluse.Core.Registry.FirstParty (FirstParty (FirstParty), firstPartyName)
 import Ecluse.Core.Registry.Maintenance (StoredVersion (StoredVersion, storedVersion), VersionPresence (VersionServed))
+import Ecluse.Core.Registry.Npm.Adapter (npmFirstPartyNames)
 import Ecluse.Core.Registry.Sweep.Package (sweepPackageGroup)
 import Ecluse.Core.Registry.Sweep.Types (SweepMount (smFirstParty, smStore), newSweepState)
 import Ecluse.Core.Rules (prepare)
@@ -233,7 +233,7 @@ namespaceTransitionSpec = describe "declaring a namespace after public ingestion
         publicRequests <- seenAuth publicUp
         publicRequests `shouldSatisfy` (not . null)
         rules <- prepare inertRuleDeps [atDefaultPrecedence (DenyByIdentity "@acme/thing")]
-        let declared = firstPartyName (FirstPartyNpmScopes (mkScope "acme" :| []))
+        let declared = firstPartyName (FirstParty npmFirstPartyNames (mkScope "acme" :| []))
             afterDeclaration deps = deps{pdFirstParty = declared, pdRules = rules}
             maintenance = fakeMaintenance store
             protectedMount = (testMount maintenance rules [DenyByIdentity "@acme/thing"]){smFirstParty = declared}

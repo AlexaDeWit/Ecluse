@@ -167,7 +167,9 @@ In the merged index, a private version and a public version that differ only in 
 
 The age rule uses native `pubtime`. Missing or invalid time stays unknown.
 OSV `crates.io` advisories use the existing freshness, malicious-package, and exact-fix rules.
-Build scripts and procedural macros remain allowed. Cargo blocks active `DenyInstallTimeExecution`, `DenyExternalDependencies`, `DenyIfDeprecated`, and `AllowScope` rules at boot.
+Build scripts and procedural macros remain allowed. Cargo blocks active `DenyInstallTimeExecution`, `DenyIfDeprecated`, and `AllowScope` rules at boot.
+An active `DenyExternalDependencies` entry denies a public crate whose index row names a registry other than crates.io for a normal or build dependency.
+A null registry, either crates.io spelling and development dependencies pass. No Cargo entry ships by default.
 
 Cargo mirrors retain the original admitted index row, source identity, and checksum-verified archive using durable version state.
 Native-library `links` declarations must agree. Cargo defines omitted index `links` as null.
@@ -182,11 +184,14 @@ Dependency inventories, aliases, kinds, targets, registry sources, version requi
 Package feature graphs, native-library `links` declarations, and the optional minimum Rust version must also agree, allowing native normalisation.
 Upload dependencies must not carry the `artifact`, `bindep_target`, `lib`, or `public` fields of unstable Cargo features such as nightly `-Z bindeps`.
 Écluse refuses such an upload with `400`, as mirroring refuses index rows that carry them.
+The archived `Cargo.toml` dependency tables must not carry the same features' `artifact`, `target`, `lib`, or `public` keys either, because the upload cannot state them.
+Écluse refuses such an archive with `400` and names the dependency. Mirroring does not apply this manifest check.
 Target comparison parses native cfg expressions under the configured nesting limit, including final commas in `all` and `any` lists.
 Registry comparison uses native logical identities, preserving source kinds and sparse registry paths.
 A null upload dependency registry identifies this `/cargo/` registry. An absent manifest registry identifies crates.io.
-Every dependency, development and build dependencies included, must come from crates.io or from Écluse's `/cargo/` index under `server.publicUrl`.
-Écluse refuses a dependency from any other registry with `400` and names it.
+Every normal and build dependency must come from crates.io or from Écluse's `/cargo/` index under `server.publicUrl`.
+Écluse refuses such a dependency from any other registry with `400` and names it.
+A development dependency may come from any registry, as npm publishes `devDependencies`, because no consumer resolves it.
 Publish that dependency through Écluse first, then depend on Écluse's copy.
 Écluse does not check crates that reach the private upstream by other means.
 Descriptive and additive metadata need not match the manifest. Accepted uploads retain their original bytes.
@@ -263,9 +268,15 @@ That covers the mirror worker's minted token and a static `publicationTarget` to
 The backend declaration selects this presentation, not a hostname guess.
 Static publication credentials retain the required edge-token guard.
 
-RubyGems' own archive reader treats PAX and GNU extended tar headers as ordinary members.
-So `POST /api/v1/gems` answers `400` when the outer gem tar carries a PAX (`x`, `g`) or GNU (`L`, `K`) extended header, or a member name split by a ustar prefix, because Écluse and the store could read different gem names.
-Archives that `gem build` writes carry neither.
+`POST /api/v1/gems` answers `400` when the outer gem tar carries any of the following, because Écluse and the store could read different gem names:
+
+- a PAX (`x`, `g`) or GNU (`L`, `K`) extended header, which RubyGems' own archive reader treats as an ordinary member
+- a member name split by a ustar prefix
+- a name or prefix field with bytes after its first NUL, which RubyGems' reader keeps and Écluse ignores
+
+Écluse does not upload a public gem whose outer tar carries one to the mirror target either.
+Clients still download that version through Écluse, but the mirror holds no copy of it.
+Archives that `gem build` writes carry none of them.
 
 Mirroring copies every supported platform artifact of an admitted raw version, with original compact specifications and durable source facts.
 The worker verifies exact archives and native identities without executing Ruby, constructing YAML objects, or extracting files to disk.

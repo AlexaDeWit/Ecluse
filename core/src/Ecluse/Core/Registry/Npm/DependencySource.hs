@@ -2,10 +2,11 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | npm dependency specs a client fetches from outside the registry: git sources and remote URLs.
-Aliases and local specs stay exempt on npm-package-arg's terms, by its POSIX path grammar, the
-narrower of its two. Detection follows hosted-git-info, widened to what another client or URL
-parsing could fetch, so it refuses beyond npm only a spec npm cannot install either.
+{- | npm dependency specs a client fetches from outside the registry. Only registry ranges and tags,
+@npm:@ aliases, @file:@, @link:@ and @workspace:@ specs, and local paths pass, so any other scheme
+fails closed. Aliases and local specs stay exempt on npm-package-arg's terms, by its POSIX path
+grammar, the narrower of its two. Git detection follows hosted-git-info, widened to what another
+client or URL parsing could fetch.
 -}
 module Ecluse.Core.Registry.Npm.DependencySource (
     -- * One spec
@@ -37,7 +38,11 @@ data ExternalSource
       GitSource
     | -- | A tarball at an @http@ or @https@ URL.
       RemoteUrl
-    deriving stock (Eq, Show)
+    | -- | Any other scheme, such as pnpm's @jsr:@, which this registry does not resolve.
+      UnsupportedScheme
+    deriving stock (Eq, Generic, Show)
+
+instance Universe ExternalSource where universe = universeGeneric
 
 -- | The dependency maps a consumer's install reads, in the order a refusal names them.
 data InstallableField
@@ -98,7 +103,8 @@ detect spec = case scheme spec of
         | named `elem` gitSchemes || "git+" `T.isPrefixOf` named -> Just GitSource
         -- hosted-git-info reads an unknown scheme before an @ as the user of an ssh URL.
         | userAtGitHost spec -> Just GitSource
-        | otherwise -> Nothing
+        | named `elem` resolvedSchemes || T.compareLength named 1 == EQ -> Nothing
+        | otherwise -> Just UnsupportedScheme
     Nothing
         | gitHubShorthand spec -> Just GitSource
         | userAtHost (T.takeWhile (/= '#') spec) -> Just GitSource
@@ -108,6 +114,11 @@ detect spec = case scheme spec of
 userAtHost :: Text -> Bool
 userAtHost text = case T.break (== '@') text of
     (user, rest) -> not (T.null user || T.null rest || T.any (== '/') user)
+
+-- Registry aliases and local specs, for a spec npm-package-arg does not read as written.
+-- A one-letter scheme is a Windows drive.
+resolvedSchemes :: [Text]
+resolvedSchemes = ["npm", "file", "link", "workspace"]
 
 gitSchemes :: [Text]
 gitSchemes = ["git", "ssh", "github", "gitlab", "bitbucket", "gist", "sourcehut"]
@@ -174,3 +185,4 @@ renderExternalDependency dependency =
     kind = case edSource dependency of
         GitSource -> "a git source"
         RemoteUrl -> "a remote URL"
+        UnsupportedScheme -> "an unsupported scheme"

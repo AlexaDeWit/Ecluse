@@ -7,6 +7,7 @@ module Ecluse.CompositionSpec (spec) where
 import Data.List (lookup)
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
+import Data.Traversable (for)
 import Network.HTTP.Client qualified as Client
 import Network.HTTP.Types (hAuthorization, hContentType, methodPost, status200)
 import Network.Wai (Request (requestHeaders, requestMethod), defaultRequest)
@@ -16,9 +17,8 @@ import Test.Hspec
 import Ecluse.Composition (
     BootWiring (bwBindings),
     PublishBudget (..),
-    PublishTarget (ptPresentation),
+    PublishTarget (ptEcosystem, ptPresentation, ptUsername),
     WiringPorts (WiringPorts, wpBuildCredentials, wpClock, wpReporters, wpResolveAdapter, wpRuleDeps),
-    firstPartyName,
     planMounts,
     planPublishTargets,
     resolveBootWiring,
@@ -27,6 +27,7 @@ import Ecluse.Composition.BootError (BootError (..), renderBootError)
 import Ecluse.Composition.Credential (initCredentialProviders, initTargetCredentialProviders)
 import Ecluse.Composition.MirrorRole (MirrorMintPlan (MintMirrorWrite, SkipMirrorWrite))
 import Ecluse.Composition.Support (
+    cargoCodeArtifactEnv,
     cargoMirrorEnv,
     codeArtifactDomain,
     completeMountDoc,
@@ -43,6 +44,7 @@ import Ecluse.Composition.Support (
     slotCredentials,
     staticEnvVars,
     testLimits,
+    twoStoreEnv,
     withRubyInstallBlock,
     withoutMirrorTargetUrl,
  )
@@ -52,7 +54,7 @@ import Ecluse.Composition.Vet (runVet)
 import Ecluse.Config (
     Config (configMounts),
     ConfigError (..),
-    FirstParty (FirstPartyNpmScopes, FirstPartyPyPI, FirstPartyRubyGems),
+    FirstParty (FirstParty),
     Mount (mountPolicy),
     PolicyError (UnknownRuleType),
     StoreTag (TagRegistry),
@@ -67,10 +69,14 @@ import Ecluse.Core.Package.Integrity (
     mkMinIntegrity,
     mkMinTrustedIntegrity,
  )
-import Ecluse.Core.Registry.FirstParty (FirstPartyEntry (OwnedName))
-import Ecluse.Core.Registry.PyPI.FirstParty (PyPIFirstParty (PyPIOwnedName))
+import Ecluse.Core.Registry.Adapter (AdapterServe (serveCredential), adapterFor, adapterServe)
+import Ecluse.Core.Registry.Cargo.FirstParty (cargoFirstPartyNames)
+import Ecluse.Core.Registry.FirstParty (FirstPartyEntry (OwnedName), firstPartyName)
+import Ecluse.Core.Registry.Npm.Adapter (npmFirstPartyNames)
+import Ecluse.Core.Registry.PyPI.FirstParty (PyPIFirstParty (PyPIOwnedName), pypiFirstPartyNames)
 import Ecluse.Core.Registry.Request (StoreOperation (StoreRead, StoreWrite), attachCredential, nativePresentation, presentedMapping)
 import Ecluse.Core.Registry.RubyGems.Credential (rubyPublishCredential, rubyReadCredential)
+import Ecluse.Core.Registry.RubyGems.FirstParty (rubyGemsFirstPartyNames)
 import Ecluse.Core.Rules (PreparedRule (prepName), bootOrder, renderBootOrder)
 import Ecluse.Core.Rules.Types (EvalContext (EvalContext), identityEvidence)
 import Ecluse.Core.Security (Limits (maxMetadataBytes, maxNestingDepth, maxVersionCount), defaultLimits)
@@ -549,6 +555,21 @@ mirrorTargetSpec = describe "planPublishTargets (the mirror worker's write targe
         authorization (presentedMapping (ptPresentation target) StoreWrite rubyPublishCredential) `shouldBe` Just "Bearer key"
         authorization (presentedMapping (ptPresentation target) StoreRead rubyReadCredential) `shouldBe` Just "Basic YXdzOmtleQ=="
 
+    it "renders each minted CodeArtifact token through its plan's username and its store's presentation" $ do
+        targets <- concat <$> traverse plannedMirrorTargets [twoStoreEnv, cargoCodeArtifactEnv, rubyGemsCodeArtifactMirrorEnv]
+        request <- parseRequestOrFail (codeArtifactDomain <> "/any/mirror/")
+        rendered <- for targets $ \target -> do
+            native <- maybe (fail "missing adapter") (pure . serveCredential . adapterServe) (adapterFor (ptEcosystem target))
+            let token = Just (ClientCredential (ptUsername target) (mkSecret "key"))
+                authorization operation = lookup "Authorization" (Client.requestHeaders (attachCredential (presentedMapping (ptPresentation target) operation native) token request))
+            pure (ptEcosystem target, authorization StoreRead, authorization StoreWrite)
+        sortOn (\(eco, _, _) -> eco) rendered
+            `shouldBe` [ (Npm, Just "Bearer key", Just "Bearer key")
+                       , (PyPI, Just "Basic YXdzOmtleQ==", Just "Basic YXdzOmtleQ==")
+                       , (RubyGems, Just "Basic YXdzOmtleQ==", Just "Bearer key")
+                       , (Cargo, Just "key", Just "key")
+                       ]
+
     it "plans a registry mirror target with the protocol's own presentation" $ do
         target <- plannedMirrorTarget rubyGemsMirrorEnv
         ptPresentation target `shouldBe` nativePresentation
@@ -563,6 +584,13 @@ plannedMirrorTarget env = do
         Right targets -> fail ("expected one mirror target, got " <> show (length targets))
         Left errs -> fail ("mirror target planning refused: " <> show errs)
 
+-- Every mirror target a writing role plans for a fixture, its providers minted per slot.
+plannedMirrorTargets :: [(String, String)] -> IO [PublishTarget]
+plannedMirrorTargets env = do
+    plan <- expectConfig env Nothing >>= expectValidated
+    providers <- initCredentialProviders slotCredentials (const (const noCredentialReporters)) (map vmMount (vpMounts plan)) >>= either (\errs -> fail ("provider init failed: " <> show errs)) pure
+    either (\errs -> fail ("mirror target planning refused: " <> show errs)) pure (planPublishTargets MintMirrorWrite providers plan)
+
 -- 'rubyGemsMirrorEnv' mirroring to a CodeArtifact repository, which mints its own write token.
 rubyGemsCodeArtifactMirrorEnv :: [(String, String)]
 rubyGemsCodeArtifactMirrorEnv =
@@ -574,7 +602,7 @@ firstPartySpec :: Spec
 firstPartySpec = describe "firstPartyName (the derived first-party predicate)" $ do
     it "matches an npm scope exactly, refusing a lookalike and an unscoped name" $
         map
-            (firstPartyName (FirstPartyNpmScopes (mkScope "acme" :| [mkScope "beta"])))
+            (firstPartyName (FirstParty npmFirstPartyNames (mkScope "acme" :| [mkScope "beta"])))
             [scopedName "acme", scopedName "beta", scopedName "acme-evil", thingName]
             `shouldBe` [True, True, False, False]
 
@@ -587,9 +615,16 @@ firstPartySpec = describe "firstPartyName (the derived first-party predicate)" $
     it "dispatches RubyGems ownership without changing native identity" $
         let owned = mkPackageName RubyGems Nothing "Acme_Tools"
          in map
-                (firstPartyName (FirstPartyRubyGems (OwnedName owned :| [])))
+                (firstPartyName (FirstParty rubyGemsFirstPartyNames (OwnedName owned :| [])))
                 [owned, mkPackageName RubyGems Nothing "acme-tools", mkPackageName Npm Nothing "Acme_Tools"]
                 `shouldBe` [True, False, False]
+
+    it "dispatches Cargo ownership through its collision key, refusing another ecosystem" $
+        let owned = mkPackageName Cargo Nothing "acme_tools"
+         in map
+                (firstPartyName (FirstParty cargoFirstPartyNames (OwnedName owned :| [])))
+                [owned, mkPackageName Cargo Nothing "acme-tools", mkPackageName Cargo Nothing "acme-toolsx", mkPackageName RubyGems Nothing "acme_tools"]
+                `shouldBe` [True, True, False, False]
 
     it "wires the same predicate onto the mount's serve deps, deny by default" $ do
         let testEnv = [("ECLUSE_MOUNTS__NPM__FIRST_PARTY", "@acme")] <> staticEnvVars
@@ -611,4 +646,4 @@ firstPartySpec = describe "firstPartyName (the derived first-party predicate)" $
 
 -- A PyPI declaration of exact names.
 pypiFirstParty :: NonEmpty Text -> FirstParty
-pypiFirstParty = FirstPartyPyPI . fmap (PyPIOwnedName . unscopedPyPI)
+pypiFirstParty = FirstParty pypiFirstPartyNames . fmap (PyPIOwnedName . unscopedPyPI)

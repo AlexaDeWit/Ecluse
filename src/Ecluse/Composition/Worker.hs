@@ -17,7 +17,7 @@ import Ecluse.Composition.MirrorState (MirrorStateBinding (msbStore, msbTarget))
 import Ecluse.Core.Credential (ClientCredential (ClientCredential), mintSecret)
 import Ecluse.Core.Ecosystem (Ecosystem, parseEcosystem)
 import Ecluse.Core.Registry.Adapter (adapterFor, adapterPublish)
-import Ecluse.Core.Registry.Adapter.Capability (AdapterMetadata (metadataChargeFactors, metadataRead), AdapterPublish (publishCodec, publishMirrorRequirements), MirrorRequirements (mirrorWorkerRead), WorkerMetadataRead (..))
+import Ecluse.Core.Registry.Adapter.Capability (AdapterMetadata (metadataChargeFactors, metadataRead), AdapterPublish (publishCodec, publishMirrorRequirements), MirrorRequirements (mirrorStateFormat, mirrorWorkerRead), WorkerMetadataRead (..))
 import Ecluse.Core.Registry.Metadata (fetchVersionDetails)
 import Ecluse.Core.Registry.Metadata.Fetch (chargingSelectedReads)
 import Ecluse.Core.Registry.Metadata.Fetch.Preparation (PrepareRead (..), prepareRead)
@@ -122,6 +122,7 @@ workerPolicyFor env requirements deps publish artifactMaxBytes =
         , wpArtifact = pdArtifact deps
         , wpEgressUrl = pdEgressUrl deps
         , wpPublish = publish
+        , wpMirrorFormat = mirrorStateFormat requirements
         , wpArtifactLimits = (pdLimits deps){maxMirrorArtifactBytes = artifactMaxBytes}
         , wpMirrorState = Nothing
         , wpNow = pdNow deps

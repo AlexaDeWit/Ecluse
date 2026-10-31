@@ -48,6 +48,7 @@ module Ecluse.Core.Mirror.State (
 ) where
 
 import Ecluse.Core.Mirror.State.Codec
+import Ecluse.Core.Mirror.State.Format (MirrorStateFormat)
 import Ecluse.Core.Mirror.State.Internal
 import Ecluse.Core.Package (PackageDetails, PackageName)
 import Ecluse.Core.Registry.MirrorUpload (MirrorInventory, MirrorReadData, VerifiedArtifactBytes, inventoryPackage)
@@ -64,9 +65,9 @@ fragmentReadData :: StoredMirrorFragment -> MirrorReadData
 fragmentReadData (StoredMirrorFragment _ source _) = source
 
 -- | Record additions before any new distribution upload. Collisions reread and union within a fixed budget.
-recordExpectedInventory :: Limits -> StateCharge -> StateTarget -> MirrorState -> MirrorInventory -> IO (Either MirrorStateFault (StateRevision, ProjectMirrorRecord))
-recordExpectedInventory limits charge target store inventory =
-    updateRecord limits charge (mirrorInventoryWeight inventory) store (inventoryPackage inventory) (extendProjectRecord limits target inventory)
+recordExpectedInventory :: MirrorStateFormat -> Limits -> StateCharge -> StateTarget -> MirrorState -> MirrorInventory -> IO (Either MirrorStateFault (StateRevision, ProjectMirrorRecord))
+recordExpectedInventory format limits charge target store inventory =
+    updateRecord limits charge (mirrorInventoryWeight inventory) store (inventoryPackage inventory) (extendProjectRecord format limits target inventory)
 
 -- | Store the target's usable digest before upload without changing the original served hash fields.
 recordVerifiedArtifact :: Limits -> StateCharge -> MirrorState -> PackageName -> Version -> VerifiedArtifactBytes -> IO (Either MirrorStateFault (StateRevision, ProjectMirrorRecord))

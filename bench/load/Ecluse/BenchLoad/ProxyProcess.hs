@@ -190,17 +190,13 @@ data AdvisoryFeed = AdvisoryFeed
 mirrorStateBucket :: Text
 mirrorStateBucket = "ecluse-bench-mirror-state"
 
-{- | The name the proxy dials the public stub by. Boot refuses a mirror target on the public
-upstream's host, so it differs from 'privateStubHost'.
+{- | The name the proxy dials the public stub by. The internal-range block refuses a public artifact URL at a
+loopback literal, and boot refuses a mirror target on the public upstream's host, so it differs from 'privateStubHost'.
 -}
 publicStubHost :: Text
 publicStubHost = "localhost"
 
-{- | The address the private and mirror target stubs listen on, and the one the proxy dials them by.
-The proxy leaves a private miss's body unread, which closes the connection, so the next private
-read connects again. Over plain HTTP, http-client tries each further address of a name 250 ms after
-the previous one, even when that one refused, and @localhost@ resolves to @::1@ first.
--}
+-- | The address the proxy dials the private and mirror target stubs by, and the host their prepared mirror records name.
 privateStubHost :: Text
 privateStubHost = "127.0.0.1"
 

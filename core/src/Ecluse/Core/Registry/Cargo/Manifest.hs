@@ -13,6 +13,8 @@ module Ecluse.Core.Registry.Cargo.Manifest (
     checkPublicationIndex,
     checkUploadAgreement,
     checkDependencyRegistries,
+    acceptedRegistries,
+    namesOtherRegistry,
     parseRustRelease,
     publishMetadataValue,
     cratesIoIndex,
@@ -38,6 +40,7 @@ import Ecluse.Core.Registry.Archive.Path (resolveArchivePath)
 import Ecluse.Core.Registry.Cargo.Source (CargoSource, parseSource, sourceComparisonKey)
 import Ecluse.Core.Registry.Cargo.Target (CargoTarget, parseTarget)
 import Ecluse.Core.Security.Limits (Limits (..))
+import Ecluse.Core.Text (joinAlternatives)
 import Ecluse.Core.Version.Cargo (CargoKey, parseCargo)
 
 -- | Identity is the exact spelling from the effective normalised Cargo.toml.
@@ -133,6 +136,7 @@ resolverMetadata manifest =
 checkUploadAgreement :: Limits -> Text -> CargoManifest -> Value -> Either ParseError ()
 checkUploadAgreement limits registry manifest (Object metadata) = do
     (dependencies, features, rustVersion, links) <- resolverMetadata manifest
+    void (manifestDependenciesWith refuseUnstableKeys (cmRoot manifest))
     currentRegistry <- parseSource registry
     expected <- traverse (uploadDependency currentRegistry) dependencies >>= foldM (insertDependency indexRepeat limits) Map.empty
     uploaded <- requiredJson "deps" metadata >>= array >>= traverse (uploadDependency currentRegistry)
@@ -152,22 +156,36 @@ checkUploadAgreement limits registry manifest (Object metadata) = do
     unless (expectedRust == actualRust) (parseRefusal "Cargo upload and manifest Rust versions disagree")
 checkUploadAgreement _ _ _ _ = parseRefusal "Cargo upload metadata is not an object"
 
-{- | Refuse a dependency from a registry other than crates.io or one of this proxy's own. A null or
-absent source is the publication registry, which the caller lists. Run after 'checkUploadAgreement'.
+{- | Refuse a dependency a consumer resolves from a registry other than crates.io or one of this
+proxy's own. A null or absent source is the publication registry, which the caller lists. Run after
+'checkUploadAgreement'.
 -}
 checkDependencyRegistries :: [Text] -> Value -> Either ParseError ()
 checkDependencyRegistries own (Object metadata) = do
-    accepted <- Set.fromList . map sourceComparisonKey <$> traverse parseSource (cratesIoIndex : own)
+    accepted <- acceptedRegistries own
     dependencies <- requiredJson "deps" metadata >>= array
     for_ dependencies $ \case
         Object fields -> do
             name <- requiredJson "name" fields >>= jsonString
-            declared <- nullableString "registry" fields >>= traverse parseSource
-            for_ declared $ \source ->
-                unless (Set.member (sourceComparisonKey source) accepted) $
-                    parseRefusal ("Cargo dependency '" <> name <> "' comes from a registry other than crates.io or this proxy: publish it through this proxy first, then depend on this proxy's copy")
+            other <- namesOtherRegistry accepted fields
+            when other $
+                parseRefusal ("Cargo dependency '" <> name <> "' comes from a registry other than crates.io or this proxy: publish it through this proxy first, then depend on this proxy's copy")
         _ -> parseRefusal "Cargo upload dependency is not an object"
 checkDependencyRegistries _ _ = parseRefusal "Cargo upload metadata is not an object"
+
+-- | The comparison keys of crates.io and the given registries, the sources a consumed dependency may name.
+acceptedRegistries :: [Text] -> Either ParseError (Set Text)
+acceptedRegistries own = Set.fromList . map sourceComparisonKey <$> traverse parseSource (cratesIoIndex : own)
+
+{- | Whether a dependency names a registry outside @accepted@. A null or absent registry is the current
+one, and a dev-dependency never counts, because no consumer resolves it, as with npm's @devDependencies@.
+-}
+namesOtherRegistry :: Set Text -> KeyMap.KeyMap Value -> Either ParseError Bool
+namesOtherRegistry accepted fields = do
+    kind <- nullableString "kind" fields
+    declared <- if kind == Just "dev" then Right Nothing else nullableString "registry" fields >>= traverse parseSource
+    pure (any ((`Set.notMember` accepted) . sourceComparisonKey) declared)
+{-# INLINE namesOtherRegistry #-}
 
 uploadDependency :: CargoSource -> Value -> Either ParseError Value
 uploadDependency registry (Object fields) = do
@@ -323,14 +341,18 @@ textContent content path = do
     first (const (ParseError "Cargo publication text is not UTF-8")) (TE.decodeUtf8' bytes)
 
 manifestDependencies :: Table -> Either ParseError [Value]
-manifestDependencies root = do
-    direct <- dependencyGroups Nothing root
+manifestDependencies = manifestDependenciesWith dependency
+
+-- Visit each declaration of the root and platform dependency tables with its platform target, kind and key.
+manifestDependenciesWith :: (Maybe Text -> Text -> Text -> Toml.Value -> Either ParseError a) -> Table -> Either ParseError [a]
+manifestDependenciesWith visit root = do
+    direct <- dependencyGroups visit Nothing root
     targets <- optionalTable "target" root
-    targeted <- forM (Map.toList targets) $ \(target, value) -> table value >>= dependencyGroups (Just target)
+    targeted <- forM (Map.toList targets) $ \(target, value) -> table value >>= dependencyGroups visit (Just target)
     pure (direct <> concat targeted)
 
-dependencyGroups :: Maybe Text -> Table -> Either ParseError [Value]
-dependencyGroups target values =
+dependencyGroups :: (Maybe Text -> Text -> Text -> Toml.Value -> Either ParseError a) -> Maybe Text -> Table -> Either ParseError [a]
+dependencyGroups visit target values =
     concat
         <$> traverse
             dependencyGroup
@@ -338,7 +360,15 @@ dependencyGroups target values =
   where
     dependencyGroup (key, legacy, kind) = do
         dependencies <- if key == legacy then optionalTable key values else aliased key legacy values >>= maybe (Right Map.empty) table
-        traverse (uncurry (dependency target kind)) (Map.toList dependencies)
+        traverse (uncurry (visit target kind)) (Map.toList dependencies)
+
+-- An upload cannot carry these keys, so an archived declaration with one would describe a dependency its index row omits.
+refuseUnstableKeys :: Maybe Text -> Text -> Text -> Toml.Value -> Either ParseError ()
+refuseUnstableKeys _ _ alias = \case
+    Toml.Table' _ declared
+        | any (`Map.member` tableValues declared) unstableManifestKeys ->
+            parseRefusal ("Cargo manifest dependency '" <> alias <> "' carries an unstable " <> joinAlternatives unstableManifestKeys <> " key")
+    _ -> Right ()
 
 dependency :: Maybe Text -> Text -> Text -> Toml.Value -> Either ParseError Value
 dependency target kind alias value = do
@@ -370,9 +400,19 @@ dependency target kind alias value = do
 cratesIoIndex :: Text
 cratesIoIndex = "https://github.com/rust-lang/crates.io-index"
 
--- | Nightly @-Z bindeps@ and public-dependency fields. Mirrored index rows and first-party uploads both refuse them.
+{- | Nightly @-Z bindeps@ and public-dependency fields. Mirrored index rows refuse them, and first-party
+publication refuses them in the upload and, under their manifest keys, in the archived manifest.
+-}
 unstableDependencyFields :: [Key.Key]
 unstableDependencyFields = ["artifact", "bindep_target", "lib", "public"]
+
+-- The manifest spelling of each of 'unstableDependencyFields': the index's @bindep_target@ is a dependency's @target@.
+unstableManifestKeys :: [Text]
+unstableManifestKeys = map (manifestKey . Key.toText) unstableDependencyFields
+  where
+    manifestKey = \case
+        "bindep_target" -> "target"
+        field -> field
 
 -- | Whether a dependency carries any of 'unstableDependencyFields', by presence.
 usesUnstableDependencyField :: KeyMap.KeyMap Value -> Bool

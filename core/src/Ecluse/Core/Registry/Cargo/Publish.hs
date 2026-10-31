@@ -31,7 +31,7 @@ import Ecluse.Core.Registry.Cargo.Discovery (cargoDiscovery, discoveryApi)
 import Ecluse.Core.Registry.Cargo.Document (cargoRecords)
 import Ecluse.Core.Registry.Cargo.Manifest (CargoPublishMetadata, checkDependencyRegistries, publishMetadataValue)
 import Ecluse.Core.Registry.Cargo.Metadata (prepareCargoRead, prepareCargoReadAs)
-import Ecluse.Core.Registry.Cargo.Mirror (cargoMirrorDocuments)
+import Ecluse.Core.Registry.Cargo.Mirror (cargoMirrorDocuments, cargoStateFormat)
 import Ecluse.Core.Registry.Cargo.Project (projectName)
 import Ecluse.Core.Registry.Cargo.Publish.Body qualified as Body
 import Ecluse.Core.Registry.Cargo.Request (cargoIndexPath)
@@ -58,7 +58,7 @@ cargoPublish factors =
         , publishRelay = \presentation origin name body -> relayPublishRequest origin (relayRequest (presentedMapping presentation StoreWrite cargoCredential) origin name body)
         , publishUploadClaims = uploadClaims
         , publishCodec = cargoPublishCodec factors
-        , publishMirrorRequirements = MirrorRequirements (NativeChargedWorkerRead prepareCargoRead) (DurableVersionState cargoMirrorDocuments)
+        , publishMirrorRequirements = MirrorRequirements (NativeChargedWorkerRead prepareCargoRead) cargoStateFormat (DurableVersionState cargoMirrorDocuments)
         , publishUploadEndpoint = ExplicitUploadEndpoint
         , publishIdentity = TokenIdentity
         }

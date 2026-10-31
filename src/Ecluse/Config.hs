@@ -305,9 +305,7 @@ resolveMirrored policy eco privateUpstream mirrorTarget mcfg = do
                             { mtUrl = meUrl mirrorTarget
                             , mtBackend = backend
                             , mtUploadUrl = fromMaybe (meUrl mirrorTarget) (meUploadUrl mirrorTarget)
-                            , mtUsername = case sbMint backend of
-                                MintCodeArtifact{} -> Just "aws"
-                                MintStatic{} -> meUsername mirrorTarget
+                            , mtUsername = meUsername mirrorTarget
                             }
                     }
 

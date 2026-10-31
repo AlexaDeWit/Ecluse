@@ -24,10 +24,12 @@ import Data.Time (UTCTime (UTCTime), fromGregorian)
 import Ecluse.Core.Ecosystem (Ecosystem (Cargo, PyPI))
 import Ecluse.Core.Mirror.Documents (MirrorDocuments)
 import Ecluse.Core.Mirror.State (MirrorState (MirrorState), MirrorStateFault (StateInvalid, StateMissingCompanion), ProjectMirrorRecord, StateRead, StateTarget, extendProjectRecord)
+import Ecluse.Core.Mirror.State.Format (MirrorStateFormat)
 import Ecluse.Core.Mirror.State.Internal (StateRevision, retainVerifiedIdentity)
 import Ecluse.Core.Package
 import Ecluse.Core.Package.Entry (EntryKey (ArrayEntry, RecordEntry))
 import Ecluse.Core.Registry.Cargo.Document (cargoDocument)
+import Ecluse.Core.Registry.Cargo.Mirror (cargoStateFormat)
 import Ecluse.Core.Registry.MirrorUpload (MirrorInventory, MirrorReadData (..), inventoryDetails, inventoryFiles, inventoryReadData, verifyMirrorBytes)
 import Ecluse.Core.Registry.MirrorUpload.Internal (restoreMirrorInventory)
 import Ecluse.Core.Registry.PyPI.Document (simpleDocument, simpleFiles)
@@ -101,15 +103,15 @@ cargoMirrorRecord target name archive rows = do
             artifact = Artifact (RecordEntry position) filename ("https://static.crates.io/crates/" <> renderPackageName name <> "/" <> filename) [checksum] Nothing Nothing
             details = PackageDetails name (mkVersion Cargo version) (Just (UTCTime (fromGregorian 2020 1 1) 0)) CodeExecUnknown DependencySourcesUnknown Available (artifact :| [])
         inventory <- expectRight (restoreMirrorInventory details (CargoMirrorRead (cargoDocument [(RecordEntry position, row)])))
-        expected <- expectRight (extendProjectRecord defaultLimits target inventory previous)
+        expected <- expectRight (extendProjectRecord cargoStateFormat defaultLimits target inventory previous)
         let file :| _ = inventoryFiles inventory
         verified <- expectRight (verifyMirrorBytes file archive)
         Just <$> expectRight (retainVerifiedIdentity (mkVersion Cargo version) verified expected)
 
 -- | A bounded managed view with a supplied reader and no write or companion capabilities.
-mirrorViewWith :: MirrorDocuments -> StateTarget -> (PackageName -> Maybe StateRevision -> IO (Either MirrorStateFault StateRead)) -> IO MirrorView
-mirrorViewWith documents target readState = do
+mirrorViewWith :: MirrorStateFormat -> MirrorDocuments -> StateTarget -> (PackageName -> Maybe StateRevision -> IO (Either MirrorStateFault StateRead)) -> IO MirrorView
+mirrorViewWith format documents target readState = do
     pool <- newLocalPool 20 10_000_000
     cache <- newMirrorRetention pool 60 (StoreBudget 0 0)
     let store = MirrorState (const readState) (\_ _ _ _ -> pure (Left (StateInvalid "unexpected write"))) (\_ _ -> pure (Left StateMissingCompanion)) (\_ _ -> pure (Left StateMissingCompanion))
-    pure (newMirrorView defaultLimits target store cache documents)
+    pure (newMirrorView defaultLimits target store cache format documents)

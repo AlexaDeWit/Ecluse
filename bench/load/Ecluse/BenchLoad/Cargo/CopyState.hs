@@ -28,6 +28,7 @@ import Ecluse.Core.Registry (RegistryResponse (..))
 import Ecluse.Core.Registry.CachedDocument (cargoCached)
 import Ecluse.Core.Registry.Cargo.Document (cargoRecords)
 import Ecluse.Core.Registry.Cargo.Metadata (selectCargoVersionDoc)
+import Ecluse.Core.Registry.Cargo.Mirror (cargoStateFormat)
 import Ecluse.Core.Registry.Cargo.Request (cargoArtifactHosts)
 import Ecluse.Core.Registry.Metadata (Manifest (..), VersionDoc (VersionDoc))
 import Ecluse.Core.Registry.MirrorUpload (MirrorReadData (CargoMirrorRead), checkedMirrorInventory, expectedArtifact, inventoryFiles, verifyMirrorBytes)
@@ -74,7 +75,7 @@ prepareRecords privatePort publicPort =
                     record <- foldM (retain client name targetRows source) Nothing (Map.toList (infoVersions (manifestInfo source)))
                     traverse
                         ( \value -> do
-                            body <- either (benchFail . show) pure (encodeProjectRecord defaultLimits value)
+                            body <- either (benchFail . show) pure (encodeProjectRecord cargoStateFormat defaultLimits value)
                             let key = encodeUtf8 ("/" <> mirrorStateBucket <> "/" <> projectKey target name <> "/project.json")
                             pure (key, body)
                         )
@@ -99,7 +100,7 @@ prepareRecords privatePort publicPort =
                     bytes <- fetch client (MirrorArtifactBodyLimit (maxMirrorArtifactBytes defaultLimits)) (privateBase <> path)
                     unless (responseStatusCode bytes == 200) (benchFail "Cargo copy-state target archive is absent")
                     either (benchFail . show) pure (verifyMirrorBytes file (responseBody bytes))
-                record <- either (benchFail . show) pure (extendProjectRecord defaultLimits target inventory previous)
+                record <- either (benchFail . show) pure (extendProjectRecord cargoStateFormat defaultLimits target inventory previous)
                 Just <$> foldM (\current proof -> either (benchFail . show) pure (retainVerifiedIdentity version proof current)) record verified
             _ | Map.member rawVersion targetRows -> benchFail "Cargo private-copy row differs from its owned source"
             _ -> pure previous

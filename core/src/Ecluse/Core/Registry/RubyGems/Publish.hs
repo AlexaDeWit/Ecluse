@@ -32,7 +32,7 @@ import Ecluse.Core.Registry.RubyGems.CompactSpec (checkGemSpecification)
 import Ecluse.Core.Registry.RubyGems.Credential
 import Ecluse.Core.Registry.RubyGems.Document (GemRow (..))
 import Ecluse.Core.Registry.RubyGems.Metadata (prepareGemRead)
-import Ecluse.Core.Registry.RubyGems.Mirror (mirrorRow, rubyGemsMirrorDocuments, rubyMirrorCompanion)
+import Ecluse.Core.Registry.RubyGems.Mirror (mirrorRow, rubyGemsMirrorDocuments, rubyGemsStateFormat, rubyMirrorCompanion)
 import Ecluse.Core.Registry.RubyGems.Request (gemInfoUrl)
 import Ecluse.Core.Security.Limits (Limits)
 import Ecluse.Core.Server.Admission.Types (ChargeFactors (cfFullReadPermille))
@@ -46,7 +46,7 @@ rubyPublish factors =
         , publishRequestExtras = rubyPublishExtras
         , publishUploadClaims = uploadClaims
         , publishCodec = rubyPublishCodec factors
-        , publishMirrorRequirements = MirrorRequirements (NativeChargedWorkerRead prepareGemRead) (DurableVersionState rubyGemsMirrorDocuments)
+        , publishMirrorRequirements = MirrorRequirements (NativeChargedWorkerRead prepareGemRead) rubyGemsStateFormat (DurableVersionState rubyGemsMirrorDocuments)
         , publishUploadEndpoint = ReadRootUpload
         , publishIdentity = TokenIdentity
         }
@@ -62,7 +62,7 @@ rubyPublishCodec factors presentation =
         , pcPrepareUpload = \deadlines limits charge inventory () file verified -> inspectionDeadline deadlines (PublishSourceUnavailable "gem archive validation timed out") $ do
             inspected <- inspectGemArchive limits charge (verifiedBytes verified)
             evaluate $ do
-                archive <- first (PublishSourceUnavailable . parseErrorMessage) inspected
+                archive <- first (PublishSourceUnavailable . parseErrorMessage) (inspected >>= checkRawEnvelope)
                 row <- mirrorRow inventory file
                 checked <- first (PublishSourceUnavailable . parseErrorMessage) (checkGemArchive (grCoordinate row) (hashValue (grChecksum row)) archive)
                 _ <- first (PublishSourceUnavailable . parseErrorMessage) (checkGemSpecification (grCoordinate row) row (gemArchiveSpecification checked))

@@ -382,7 +382,7 @@ uploadGuardSpec = describe "uploadClaims (the first-party new-release guard)" $ 
         uploadClaims (toStrict (npmTaggedRelease (object ["beta" .= ("2.0.0" :: Text)]))) `shouldBe` Right [widget, widget, widget]
         untagged <- editedRelease (KeyMap.delete "dist-tags")
         uploadClaims untagged `shouldBe` Right [widget, widget, widget]
-    it "refuses an installable dependency that names a git source or a remote URL, naming the dependency" $
+    it "refuses an installable dependency that names a git source, a remote URL or an unsupported scheme, naming the dependency" $
         for_ installableFields $ \field ->
             for_ externalSpecs $ \(written, kind) ->
                 uploadClaims (toStrict (npmDependentRelease [Key.fromText field .= object ["left-pad" .= written]]))
@@ -440,6 +440,7 @@ uploadGuardSpec = describe "uploadClaims (the first-party new-release guard)" $ 
             ]
         ]
             <> [(written, "a remote URL") | written <- ["https://example.test/left-pad-1.0.0.tgz", "http://example.test/left-pad-1.0.0.tgz", "HTTPS://example.test/left-pad.tgz"]]
+            <> [(written, "an unsupported scheme") | written <- ["jsr:@std/path@^1", "catalog:", "ftp://example.test/left-pad.tgz", "left-pad:1.0.0"]]
     inRegistrySpecs :: [Text]
     inRegistrySpecs =
         [ "^1.2.3"

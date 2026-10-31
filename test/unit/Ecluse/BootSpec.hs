@@ -26,7 +26,7 @@ import Ecluse.Composition.BootError (
     BootError (AwsEndpointMalformed, FirstPartyWithoutPrivateUpstream, MirrorRoleWithoutMirroring, PrivateUpstreamOnPublicUpstream, RuleBlockedOnMount, SplitRoleNeedsDurableQueue),
     renderBootError,
  )
-import Ecluse.Composition.Support (captureBoot, cargoDependencyRefusal, cargoDeprecationRefusal, cargoGateEnv, cargoInstallRefusal, cargoScopeRefusal, collapsedMirrorRefusal, collapsingMirrorTarget, expectAppConfig, malformedAwsEndpoint, noMaintenanceBackend, overrideEnv, privateInventoryRefusal, privateUpstreamUrl, publicGateEnv, reportLines, rubyDependencyRefusal, rubyYankRefusal, withRubyInstallBlock, withoutMirrorTargetToken, withoutMirrorTargetUrl, withoutQueueUrl)
+import Ecluse.Composition.Support (captureBoot, cargoDeprecationRefusal, cargoGateEnv, cargoInstallRefusal, cargoScopeRefusal, collapsedMirrorRefusal, collapsingMirrorTarget, expectAppConfig, malformedAwsEndpoint, noMaintenanceBackend, overrideEnv, privateInventoryRefusal, privateUpstreamUrl, publicGateEnv, reportLines, rubyDependencyRefusal, rubyYankRefusal, withRubyInstallBlock, withoutMirrorTargetToken, withoutMirrorTargetUrl, withoutQueueUrl)
 import Ecluse.Composition.Types (BootRole (BootWithoutPipeline))
 import Ecluse.Config (AppConfig (cfgServer), Config (configApp), ServerSettings (srvAuthToken), loadConfig)
 import Ecluse.Core.Credential (Secret, mkSecret, unSecret)
@@ -103,7 +103,6 @@ spec = sequential $ do
             [ ("AllowScope", ",\"scope\":\"acme\"", cargoScopeRefusal)
             , ("DenyIfDeprecated", "", cargoDeprecationRefusal)
             , ("DenyInstallTimeExecution", "", cargoInstallRefusal)
-            , ("DenyExternalDependencies", "", cargoDependencyRefusal)
             ]
             $ \(name, parameters, refusal) ->
                 it ("refuses Cargo " <> name <> " at boot and check-config") $
@@ -113,6 +112,10 @@ spec = sequential $ do
                 refusesWithBlockLine
                     (overrideEnv "ECLUSE_MOUNTS__RUBYGEMS__RULES" (customRule name "") (overrideEnv "ECLUSE_MOUNTS__RUBYGEMS__ENABLED" "true" publicGateEnv))
                     refusal
+        it "boots and checks a Cargo external-dependency deny from the shared or the mount rules" $
+            for_ [overrideEnv "ECLUSE_RULES" (customRule "DenyExternalDependencies" ""), overrideEnv "ECLUSE_MOUNTS__CARGO__RULES" (customRule "DenyExternalDependencies" ",\"appliesTo\":[\"admission\"]")] $ \withRule -> do
+                checkConfig (withRule cargoGateEnv) `shouldReturn` Left ExitSuccess
+                serves ["proxy"] (withRule cargoGateEnv)
         it "boots and checks the Cargo defaults without mirror state" $ do
             checkConfig cargoGateEnv `shouldReturn` Left ExitSuccess
             serves ["proxy"] cargoGateEnv

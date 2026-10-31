@@ -18,7 +18,7 @@ import Ecluse.Core.Registry (ParseError (..))
 import Ecluse.Core.Registry.Cargo.Manifest
 import Ecluse.Core.Security.Limits (Limits (..), defaultLimits)
 import Ecluse.Core.Version.Cargo (renderCargo)
-import Ecluse.Test.Registry.Cargo.Publish (cargoForeignRegistryManifest, cargoForeignRegistryMetadata, cargoForeignRegistryRefusal, cargoResolverAgreements, cargoResolverContradictions, cargoResolverManifest, cargoResolverMetadata)
+import Ecluse.Test.Registry.Cargo.Publish (cargoForeignDevManifest, cargoForeignDevMetadata, cargoForeignRegistryManifest, cargoForeignRegistryMetadata, cargoForeignRegistryRefusal, cargoResolverAgreements, cargoResolverContradictions, cargoResolverManifest, cargoResolverMetadata)
 import Ecluse.Test.Support (expectRight)
 
 spec :: Spec
@@ -68,6 +68,9 @@ spec = do
             expected <- expectRight (publicationMetadata manifest Map.empty)
             publicationMetadata annotated Map.empty `shouldBe` Right expected
     describe "publicationMetadata" $ do
+        it "keeps reconstructing a manifest whose dependency carries an unstable key, as the mirror path did" $ do
+            manifest <- expectRight (parse (basic <> "[dependencies]\nunstable={version='1',artifact='bin',lib=true,public=true,target='x86_64-unknown-linux-gnu'}\n"))
+            publicationMetadata manifest Map.empty `shouldSatisfy` isRight
         it "uses Cargo README defaults and preserves publication-only data" $ do
             manifest <- expectRight (parse (basic <> "authors=['Alice']\nlicense='MIT'\nrust-version='1.74'\n"))
             paths <- expectRight (manifestTextPaths manifest (Set.fromList ["README", "README.txt", "README.md"]))
@@ -212,7 +215,7 @@ spec = do
                     Object fields -> Object (KeyMap.insert "deps" (toJSON ([] :: [Value])) fields)
                     value -> value
             checkPublicationIndex defaultLimits metadata changed `shouldBe` Left (ParseError "Cargo manifest and index dependency counts disagree")
-        it "refuses two manifest dependencies that share one index identity" $ do
+        it "attributes a repeated dependency identity to the side that repeats it" $ do
             let dependencyRow name = object ["name" .= (name :: Text), "req" .= ("^1" :: Text), "target" .= ("cfg(unix)" :: Text)]
                 row deps = object ["name" .= ("example" :: Text), "vers" .= ("1.2.3" :: Text), "deps" .= map dependencyRow deps]
             single <- expectRight (parse (basic <> "[target.'cfg(unix)'.dependencies]\nshared='1'\n"))
@@ -221,6 +224,10 @@ spec = do
             spaced <- expectRight (parse (basic <> "[target.'cfg(unix)'.dependencies]\nshared='1'\n[target.'cfg( unix )'.dependencies]\nshared='1'\n"))
             spacedMetadata <- expectRight (publicationMetadata spaced Map.empty)
             checkPublicationIndex defaultLimits spacedMetadata (row ["shared", "unrelated"]) `shouldBe` Left (ParseError "Cargo manifest repeats a dependency identity")
+            pair <- expectRight (parse (basic <> "[target.'cfg(unix)'.dependencies]\nshared='1'\nother='1'\n"))
+            pairMetadata <- expectRight (publicationMetadata pair Map.empty)
+            checkPublicationIndex defaultLimits pairMetadata (row ["shared", "other"]) `shouldSatisfy` isRight
+            checkPublicationIndex defaultLimits pairMetadata (row ["shared", "shared"]) `shouldBe` Left (ParseError "Cargo index repeats a dependency identity")
         it "refuses unresolved dependency sources after a valid version declaration" $ do
             for_ ["path='local'", "git='https://registry.test/source'", "branch='main'", "rev='abc123'", "tag='v1'", "registry='private'", "workspace=true"] $ \source -> do
                 manifest <- expectRight (parse (basic <> "[dependencies.alias]\nversion='1'\n" <> source <> "\n"))
@@ -314,6 +321,14 @@ spec = do
             case metadata of
                 Object fields -> checkUploadAgreement defaultLimits selectedRegistry manifest (Object (KeyMap.insert "rust_version" Null fields)) `shouldBe` Right ()
                 _ -> expectationFailure "literal metadata is not an object"
+        it "refuses a repeated dependency identity on either side with the text its client receives" $ do
+            let dependency = object ["name" .= ("dependency" :: Text), "version_req" .= ("1" :: Text), "features" .= ([] :: [Text]), "optional" .= False, "default_features" .= True, "registry" .= cratesIoIndex]
+                upload deps = object ["deps" .= deps, "features" .= object []]
+            manifest <- expectRight (parse (basic <> "[dependencies]\ndependency='1'\n"))
+            checkUploadAgreement defaultLimits selectedRegistry manifest (upload [dependency]) `shouldBe` Right ()
+            checkUploadAgreement defaultLimits selectedRegistry manifest (upload [dependency, dependency]) `shouldBe` Left (ParseError "Cargo index repeats a dependency identity")
+            spaced <- expectRight (parse (basic <> "[target.'cfg(unix)'.dependencies]\ndependency='1'\n[target.'cfg( unix )'.dependencies]\ndependency='1'\n"))
+            checkUploadAgreement defaultLimits selectedRegistry spaced (upload [dependency]) `shouldBe` Left (ParseError "Cargo index repeats a dependency identity")
         it "preserves prerelease constraints, comparator precision and quoted target values" $ do
             let requirementPairs :: [(Text, Text)]
                 requirementPairs = [("1.2.3-alpha", "^1.2.3"), (">1.2", ">=1.2"), ("=1.2", "=1.2.0"), ("1 .2", "^1.2"), ("1.2.3-a b", "^1.2.3-ab"), ("1.*.2", "1.*")]
@@ -333,11 +348,29 @@ spec = do
                 let dependency = object ["name" .= ("dependency" :: Text), "version_req" .= uploaded, "features" .= ([] :: [Text]), "optional" .= False, "default_features" .= True, "registry" .= cratesIoIndex]
                 checkUploadAgreement defaultLimits selectedRegistry manifest (object ["deps" .= [dependency], "features" .= object []]) `shouldBe` Right ()
 
+        it "refuses a manifest dependency carrying an unstable key the upload omits, in every dependency table" $
+            for_ ["artifact='bin'", "lib=true", "public=false", "target='x86_64-unknown-linux-gnu'"] $ \declaration ->
+                for_ unstableTables $ \(header, kind, target) -> do
+                    let metadata = object ["deps" .= [object ["name" .= ("unstable" :: Text), "version_req" .= ("^1" :: Text), "features" .= ([] :: [Text]), "optional" .= False, "default_features" .= True, "registry" .= cratesIoIndex, "kind" .= kind, "target" .= target]], "features" .= object []]
+                    stable <- expectRight (parse (basic <> header <> "\nunstable={version='1'}\n"))
+                    checkUploadAgreement defaultLimits selectedRegistry stable metadata `shouldBe` Right ()
+                    manifest <- expectRight (parse (basic <> header <> "\nunstable={version='1'," <> declaration <> "}\n"))
+                    checkUploadAgreement defaultLimits selectedRegistry manifest metadata
+                        `shouldBe` Left (ParseError "Cargo manifest dependency 'unstable' carries an unstable artifact, target, lib or public key")
+
     describe "checkDependencyRegistries" $ do
-        it "refuses a dependency of every kind from a registry other than crates.io or this proxy, naming its package" $
-            for_ ["normal", "dev", "build"] $ \kind ->
-                for_ ["sparse+https://foreign.test/index/", "https://foreign.test/index", "sparse+https://proxy.test/other/", "sparse+https://proxy.test/cargo/private/", "sparse+https://proxy.test/cargo/private/extra/", "sparse+http://proxy.test/cargo/", "https://proxy.test/cargo/private"] $ \source ->
+        it "refuses a normal or build dependency from a registry other than crates.io or this proxy, naming its package" $
+            for_ foreignSources $ \source -> do
+                for_ ["normal", "build"] $ \kind ->
                     checkDependencyRegistries ecluseRegistries (registryUpload kind (String source)) `shouldBe` Left (ParseError cargoForeignRegistryRefusal)
+                checkDependencyRegistries ecluseRegistries (object ["deps" .= [object ["name" .= ("original" :: Text), "kind" .= Null, "registry" .= source]]]) `shouldBe` Left (ParseError cargoForeignRegistryRefusal)
+                checkDependencyRegistries ecluseRegistries (object ["deps" .= [object ["name" .= ("original" :: Text), "registry" .= source]]]) `shouldBe` Left (ParseError cargoForeignRegistryRefusal)
+        it "accepts a dev-dependency from any registry, which no consumer resolves" $
+            for_ foreignSources $ \source ->
+                checkDependencyRegistries ecluseRegistries (registryUpload "dev" (String source)) `shouldBe` Right ()
+        it "refuses a foreign normal dependency beside a foreign dev-dependency" $
+            checkDependencyRegistries ecluseRegistries (object ["deps" .= [object ["name" .= ("helper" :: Text), "kind" .= ("dev" :: Text), "registry" .= foreignIndex], object ["name" .= ("original" :: Text), "kind" .= ("normal" :: Text), "registry" .= foreignIndex]]])
+                `shouldBe` Left (ParseError cargoForeignRegistryRefusal)
         it "accepts crates.io in either spelling, this proxy's index, and a null or absent source" $
             for_ ["normal", "dev", "build"] $ \kind -> do
                 for_ [String cratesIoIndex, String "https://github.com/rust-lang/crates.io-index.git", String "sparse+https://index.crates.io/", String "sparse+https://proxy.test/cargo", String "sparse+https://proxy.test/cargo/", Null] $ \source ->
@@ -347,6 +380,10 @@ spec = do
             manifest <- expectRight (decodeManifest defaultLimits "fixture" "1.0.0" cargoForeignRegistryManifest)
             checkUploadAgreement defaultLimits selectedRegistry manifest cargoForeignRegistryMetadata `shouldBe` Right ()
             checkDependencyRegistries ecluseRegistries cargoForeignRegistryMetadata `shouldBe` Left (ParseError cargoForeignRegistryRefusal)
+        it "accepts an agreeing upload whose only foreign source is a dev-dependency" $ do
+            manifest <- expectRight (decodeManifest defaultLimits "fixture" "1.0.0" cargoForeignDevManifest)
+            checkUploadAgreement defaultLimits selectedRegistry manifest cargoForeignDevMetadata `shouldBe` Right ()
+            checkDependencyRegistries ecluseRegistries cargoForeignDevMetadata `shouldBe` Right ()
         it "refuses non-object uploads and dependency entries" $ do
             checkDependencyRegistries ecluseRegistries Null `shouldBe` Left (ParseError "Cargo upload metadata is not an object")
             checkDependencyRegistries ecluseRegistries (object ["deps" .= [Null]]) `shouldBe` Left (ParseError "Cargo upload dependency is not an object")
@@ -365,6 +402,17 @@ selectedRegistry = "sparse+https://proxy.test/cargo/"
 -- The one registry that replaces crates.io and receives publication.
 ecluseRegistries :: [Text]
 ecluseRegistries = [selectedRegistry]
+
+-- Each dependency table header, with the kind and platform target the upload states for it.
+unstableTables :: [(ByteString, Text, Maybe Text)]
+unstableTables = [("[dependencies]", "normal", Nothing), ("[dev-dependencies]", "dev", Nothing), ("[build-dependencies]", "build", Nothing), ("[target.'cfg(unix)'.dependencies]", "normal", Just "cfg(unix)")]
+
+-- Registries other than crates.io and this proxy's index, in sparse and git spellings.
+foreignSources :: [Text]
+foreignSources = [foreignIndex, "https://foreign.test/index", "sparse+https://proxy.test/other/", "sparse+https://proxy.test/cargo/private/", "sparse+https://proxy.test/cargo/private/extra/", "sparse+http://proxy.test/cargo/", "https://proxy.test/cargo/private"]
+
+foreignIndex :: Text
+foreignIndex = "sparse+https://foreign.test/index/"
 
 registryUpload :: Text -> Value -> Value
 registryUpload kind source = object ["deps" .= [object ["name" .= ("original" :: Text), "explicit_name_in_toml" .= ("renamed" :: Text), "kind" .= kind, "registry" .= source]]]

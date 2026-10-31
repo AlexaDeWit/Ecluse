@@ -38,7 +38,7 @@ import Ecluse.Test.Package (hexSha256Of)
 import Ecluse.Test.Port (passthroughTracingPort)
 import Ecluse.Test.Registry.Cargo.Fixtures (CargoRelease (releaseArchive, releaseChecksum), cargoCrateArchive, cargoIndexRecord, cargoUpload, cargoUploadMetadata, cargoUploadWithMetadata)
 import Ecluse.Test.Registry.Cargo.Metadata (cargoTestName)
-import Ecluse.Test.Registry.Cargo.Publish (cargoForeignRegistryArchive, cargoForeignRegistryMetadata, cargoForeignRegistryRefusal, cargoPublicationFixture, cargoResolverAgreements, cargoResolverArchive, cargoResolverContradictions, cargoResolverDependencyField, cargoResolverMetadata, cargoSourceVersion)
+import Ecluse.Test.Registry.Cargo.Publish (cargoForeignDevArchive, cargoForeignDevMetadata, cargoForeignRegistryArchive, cargoForeignRegistryMetadata, cargoForeignRegistryRefusal, cargoPublicationFixture, cargoResolverAgreements, cargoResolverArchive, cargoResolverContradictions, cargoResolverDependencyField, cargoResolverMetadata, cargoSourceVersion, cargoUnstableManifestArchive, cargoUnstableManifestRefusal)
 import Ecluse.Test.Registry.Cargo.Reference (UploadFrame (..), referenceUpload)
 import Ecluse.Test.Registry.Publish (publishOnlyFile)
 import Ecluse.Test.Stub (Captured (..), allCaptured, headerValue, stubBaseUrl, withRoutedStub)
@@ -276,6 +276,16 @@ spec = do
             bytes <- expectRight (cargoUploadWithMetadata cargoForeignRegistryMetadata archive)
             uploadClaims defaultLimits (const (pure ())) "https://proxy.test/cargo" (PublishRequestBody bytes Nothing NoPublishExtras)
                 `shouldReturn` Left (PublishMalformed (ParseError cargoForeignRegistryRefusal))
+        it "refuses an archived manifest dependency carrying an unstable key the upload omits" $
+            for_ ["artifact='bin'", "lib=true", "public=true", "target='x86_64-unknown-linux-gnu'"] $ \declaration -> do
+                archive <- cargoUnstableManifestArchive declaration
+                bytes <- expectRight (cargoUploadWithMetadata cargoResolverMetadata archive)
+                uploadClaims defaultLimits (const (pure ())) "https://proxy.test/cargo" (PublishRequestBody bytes Nothing NoPublishExtras)
+                    `shouldReturn` Left (PublishMalformed (ParseError (cargoUnstableManifestRefusal "tool")))
+        it "accepts a dev-dependency on another registry, as npm accepts devDependencies" $ do
+            archive <- cargoForeignDevArchive
+            bytes <- expectRight (cargoUploadWithMetadata cargoForeignDevMetadata archive)
+            uploadClaims defaultLimits (const (pure ())) "https://proxy.test/cargo" (PublishRequestBody bytes Nothing NoPublishExtras) `shouldReturn` Right ["fixture"]
         it "rejects malformed members before either claims or relay can contact the destination" $
             withRoutedStub (targetReply "/registry") $ \stub -> do
                 release <- cargoPublicationFixture

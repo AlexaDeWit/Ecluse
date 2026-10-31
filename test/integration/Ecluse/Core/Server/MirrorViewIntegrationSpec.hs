@@ -22,17 +22,18 @@ import Ecluse.Core.Ecosystem (Ecosystem (Cargo, PyPI, RubyGems), ecosystemName)
 import Ecluse.Core.Mirror.Documents (MirrorDocuments)
 import Ecluse.Core.Mirror.State
 import Ecluse.Core.Mirror.State.Codec (chargedDecodeProjectRecord)
+import Ecluse.Core.Mirror.State.Format (MirrorStateFormat)
 import Ecluse.Core.Mirror.State.Internal (StateRevision (StateRevision), VerifiedCompanionBytes (VerifiedCompanionBytes))
 import Ecluse.Core.Package (HashAlg (SHA512), mkPackageName)
 import Ecluse.Core.Package.Integrity (mkMinIntegrity)
 import Ecluse.Core.Queue (MirrorJob (jobPackage, jobTriggerFilename, jobVersion), MirrorQueue (enqueue))
 import Ecluse.Core.Registry.Adapter (RegistryAdapter)
-import Ecluse.Core.Registry.Cargo.Mirror (cargoMirrorDocuments)
+import Ecluse.Core.Registry.Cargo.Mirror (cargoMirrorDocuments, cargoStateFormat)
 import Ecluse.Core.Registry.MirrorUpload (MirrorReadData (..), inventoryFiles, inventoryReadData)
 import Ecluse.Core.Registry.PyPI.Adapter (pypiAdapter)
 import Ecluse.Core.Registry.PyPI.Document (simpleEnvelope, simpleFiles)
-import Ecluse.Core.Registry.PyPI.Mirror (pypiMirrorDocuments)
-import Ecluse.Core.Registry.RubyGems.Mirror (rubyGemsMirrorDocuments)
+import Ecluse.Core.Registry.PyPI.Mirror (pypiMirrorDocuments, pypiStateFormat)
+import Ecluse.Core.Registry.RubyGems.Mirror (rubyGemsMirrorDocuments, rubyGemsStateFormat)
 import Ecluse.Core.Rules (prepare)
 import Ecluse.Core.Rules.Types (DenyIfCveParams (DenyIfCveParams), FailureAlignment (FailDeny), Rule (AllowByIdentity, DenyByIdentity, DenyIfCve), RuleVerdict (Deny))
 import Ecluse.Core.Security (defaultLimits)
@@ -69,7 +70,7 @@ pypiReads :: Spec
 pypiReads = describe "managed PyPI mirror reads" $ do
     it (caseLabel "integration/mirror-view/native-001" "keeps the admitted project envelope on cold and hot reads through public outage") $ do
         inventory <- mirrorSample [1, 2] False "https://public.test/" "source" >>= withMirrorEnvelope sourceEnvelope
-        record <- expectRight (extendProjectRecord defaultLimits target inventory Nothing)
+        record <- expectRight (extendProjectRecord pypiStateFormat defaultLimits target inventory Nothing)
         absent <- testView (pure (Right StateAbsent))
         rules <- prepare inertRuleDeps [atDefaultPrecedence (AllowByIdentity "demo")]
         queue <- newTestMemoryQueue
@@ -81,7 +82,7 @@ pypiReads = describe "managed PyPI mirror reads" $ do
         -- The store answers a read that names its revision as unchanged, as the production store does,
         -- so the second read serves the record the first one retained.
         stateReads <- newIORef []
-        present <- mirrorViewWith pypiMirrorDocuments target $ \_ held -> do
+        present <- mirrorViewWith pypiStateFormat pypiMirrorDocuments target $ \_ held -> do
             modifyIORef' stateReads (<> [held])
             pure $ Right $ case held of
                 Just seen | seen == revision -> StateUnchanged revision
@@ -95,7 +96,7 @@ pypiReads = describe "managed PyPI mirror reads" $ do
 
     it (caseLabel "integration/mirror-view/native-002" "keeps the private project envelope when an unmanaged private version is present") $ do
         inventory <- mirrorSample [1, 2] False "https://public.test/" "source" >>= withMirrorEnvelope sourceEnvelope
-        record <- expectRight (extendProjectRecord defaultLimits target inventory Nothing)
+        record <- expectRight (extendProjectRecord pypiStateFormat defaultLimits target inventory Nothing)
         absent <- testView (pure (Right StateAbsent))
         control <- withManagedProxy absent False (projectWithEnvelope privateEnvelope True) (native status503 []) $ \app -> do
             response <- getPath "/pypi/simple/demo/" app
@@ -150,7 +151,7 @@ pypiReads = describe "managed PyPI mirror reads" $ do
 
     it (caseLabel "integration/mirror-view/native-007" "serves completed artifacts without public reads, policy evaluation, or enqueue after fresh proxy construction") $ do
         inventory <- mirrorSample [1, 2, 3] False "https://public.test/" "original"
-        record <- expectRight (extendProjectRecord defaultLimits target inventory Nothing)
+        record <- expectRight (extendProjectRecord pypiStateFormat defaultLimits target inventory Nothing)
         calls <- newIORef (0 :: Int)
         publicCalls <- newIORef (0 :: Int)
         view <- testView (modifyIORef' calls (+ 1) $> Right (StateLoaded revision record))
@@ -176,7 +177,7 @@ pypiReads = describe "managed PyPI mirror reads" $ do
 
     it (caseLabel "integration/mirror-view/native-009" "serves retained companions with HEAD and validators after the native target drops the declaration") $ do
         inventory <- mirrorSample [1] True "https://public.test/" "source"
-        initial <- expectRight (extendProjectRecord defaultLimits target inventory Nothing)
+        initial <- expectRight (extendProjectRecord pypiStateFormat defaultLimits target inventory Nothing)
         let expected :| _ = inventoryFiles inventory
         verified <- expectRight (verifyCompanionBytes defaultLimits expected "retained metadata")
         let VerifiedCompanionBytes _ reference _ = verified
@@ -199,7 +200,7 @@ pypiReads = describe "managed PyPI mirror reads" $ do
 
     it (caseLabel "integration/mirror-view/native-010" "returns explicit unavailability when a native file disappears") $ do
         inventory <- mirrorSample [1, 2, 3] False "https://public.test/" "original"
-        record <- expectRight (extendProjectRecord defaultLimits target inventory Nothing)
+        record <- expectRight (extendProjectRecord pypiStateFormat defaultLimits target inventory Nothing)
         view <- testView (pure (Right (StateLoaded revision record)))
         for_ [status503, status404] $ \publicStatus ->
             withManagedProxy view False (native status200 [1, 2]) (native publicStatus []) $ \app -> do
@@ -210,7 +211,7 @@ pypiReads = describe "managed PyPI mirror reads" $ do
 
     it (caseLabel "integration/mirror-view/native-011" "admits a later filename from public even when an unrecorded private copy exists") $ do
         old <- mirrorSample [1, 2] False "https://public.test/" "original"
-        record <- expectRight (extendProjectRecord defaultLimits target old Nothing)
+        record <- expectRight (extendProjectRecord pypiStateFormat defaultLimits target old Nothing)
         view <- testView (pure (Right (StateLoaded revision record)))
         rules <- prepare inertRuleDeps [atDefaultPrecedence (AllowByIdentity "demo")]
         queued <- newIORef []
@@ -231,13 +232,13 @@ pypiReads = describe "managed PyPI mirror reads" $ do
         map jobVersion jobs `shouldBe` [mirrorVersion]
         map (fmap unFilename . jobTriggerFilename) jobs `shouldBe` [Just (mirrorFilename 3)]
         later <- mirrorSample [2, 3] False "https://public.test/" "later"
-        extended <- expectRight (extendProjectRecord defaultLimits target later (Just record))
+        extended <- expectRight (extendProjectRecord pypiStateFormat defaultLimits target later (Just record))
         fmap (Map.keys . versionFiles) (recordVersion mirrorVersion record) `shouldBe` Just (map mirrorFilename [1, 2])
         fmap (Map.keys . versionFiles) (recordVersion mirrorVersion extended) `shouldBe` Just (map mirrorFilename [1, 2, 3])
 
     it (caseLabel "integration/mirror-view/native-012" "does not trust an unrecorded private filename when public lacks it") $ do
         old <- mirrorSample [1, 2] False "https://public.test/" "original"
-        record <- expectRight (extendProjectRecord defaultLimits target old Nothing)
+        record <- expectRight (extendProjectRecord pypiStateFormat defaultLimits target old Nothing)
         view <- testView (pure (Right (StateLoaded revision record)))
         rules <- prepare inertRuleDeps [atDefaultPrecedence (AllowByIdentity "demo")]
         queue <- newTestMemoryQueue
@@ -247,7 +248,7 @@ pypiReads = describe "managed PyPI mirror reads" $ do
 
     it (caseLabel "integration/mirror-view/native-013" "denies a later artifact while serving its declared companion") $ do
         old <- mirrorSample [1, 2] False "https://public.test/" "original"
-        record <- expectRight (extendProjectRecord defaultLimits target old Nothing)
+        record <- expectRight (extendProjectRecord pypiStateFormat defaultLimits target old Nothing)
         view <- testView (pure (Right (StateLoaded revision record)))
         withManagedProxy view False (nativeWith True "private" status200 [1, 2, 3]) (nativeWith True "public" status200 [1, 2, 3]) $ \app -> do
             let path = "/pypi/simple/demo/" <> encodeUtf8 (mirrorFilename 3)
@@ -264,7 +265,7 @@ pypiReads = describe "managed PyPI mirror reads" $ do
         $ \(identifier, label, policy) ->
             it (caseLabel ("integration/mirror-view/native-014/" <> identifier) ("serves the sibling of a denied missing version " <> label)) $ do
                 inventory <- mirrorSample [1, 2] False "https://public.test/" "source"
-                record <- expectRight (extendProjectRecord defaultLimits target inventory Nothing)
+                record <- expectRight (extendProjectRecord pypiStateFormat defaultLimits target inventory Nothing)
                 view <- testView (pure (Right (StateLoaded revision record)))
                 rules <- prepare inertRuleDeps (map atDefaultPrecedence policy)
                 queue <- newTestMemoryQueue
@@ -289,7 +290,7 @@ pypiReads = describe "managed PyPI mirror reads" $ do
         $ \(identifier, label, policy, public) ->
             it (caseLabel ("integration/mirror-view/native-015/" <> identifier) ("keeps missing recorded versions unavailable with " <> label)) $ do
                 inventory <- mirrorSample [1, 2] False "https://public.test/" "source"
-                record <- expectRight (extendProjectRecord defaultLimits target inventory Nothing)
+                record <- expectRight (extendProjectRecord pypiStateFormat defaultLimits target inventory Nothing)
                 view <- testView (pure (Right (StateLoaded revision record)))
                 rules <- prepare inertRuleDeps (map atDefaultPrecedence policy)
                 queue <- newTestMemoryQueue
@@ -299,7 +300,7 @@ pypiReads = describe "managed PyPI mirror reads" $ do
 
     it (caseLabel "integration/mirror-view/native-016" "requires integrity-admitted evidence before a named denial releases mirror coverage") $ do
         inventory <- mirrorSample [1, 2] False "https://public.test/" "source"
-        record <- expectRight (extendProjectRecord defaultLimits target inventory Nothing)
+        record <- expectRight (extendProjectRecord pypiStateFormat defaultLimits target inventory Nothing)
         view <- testView (pure (Right (StateLoaded revision record)))
         rules <- prepare inertRuleDeps [atDefaultPrecedence (DenyByIdentity "demo@1")]
         integrityFloor <- expectRight (mkMinIntegrity SHA512)
@@ -311,7 +312,7 @@ pypiReads = describe "managed PyPI mirror reads" $ do
     for_ [("incomplete", [1], 1), ("later-file", [1, 2, 3], 3)] $ \(identifier, privateFiles, number) ->
         it (caseLabel ("integration/mirror-view/native-017/" <> identifier) "serves managed public companions without policy reads or queue writes") $ do
             old <- mirrorSample [1, 2] False "https://public.test/" "original"
-            record <- expectRight (extendProjectRecord defaultLimits target old Nothing)
+            record <- expectRight (extendProjectRecord pypiStateFormat defaultLimits target old Nothing)
             view <- testView (pure (Right (StateLoaded revision record)))
             advisoryReads <- newIORef (0 :: Int)
             policyReads <- newIORef (0 :: Int)
@@ -345,7 +346,7 @@ pypiReads = describe "managed PyPI mirror reads" $ do
     for_ [("partial", nativeWith True "public" status200 [1]), ("absent", native status404 []), ("unavailable", native status503 [])] $ \(identifier, public) ->
         it (caseLabel ("integration/mirror-view/native-018/" <> identifier) "refuses a companion without complete public coverage") $ do
             inventory <- mirrorSample [1, 2] False "https://public.test/" "original"
-            record <- expectRight (extendProjectRecord defaultLimits target inventory Nothing)
+            record <- expectRight (extendProjectRecord pypiStateFormat defaultLimits target inventory Nothing)
             view <- testView (pure (Right (StateLoaded revision record)))
             withManagedProxy view False (nativeWith True "private" status200 [1]) public $ \app -> do
                 response <- getPath (artifactPath <> ".metadata") app
@@ -353,7 +354,7 @@ pypiReads = describe "managed PyPI mirror reads" $ do
 
     it (caseLabel "integration/mirror-view/native-021" "refuses a failing private origin before reading retained state, even when public covers the record") $ do
         inventory <- mirrorSample [1, 2] False "https://public.test/" "source"
-        record <- expectRight (extendProjectRecord defaultLimits target inventory Nothing)
+        record <- expectRight (extendProjectRecord pypiStateFormat defaultLimits target inventory Nothing)
         calls <- newIORef (0 :: Int)
         view <- testView (modifyIORef' calls (+ 1) $> Right (StateLoaded revision record))
         rules <- prepare inertRuleDeps [atDefaultPrecedence (AllowByIdentity "demo")]
@@ -378,7 +379,7 @@ cargoReads = describe "managed Cargo mirror reads" $
         -- A backport recorded after 1.10.0. The index order differs from version-text order, its
         -- reverse, semver order and the private origin's order.
         record <- cargoMirrorRecord crateTarget name (Cargo.releaseArchive (release "1.9.0")) [(0, original "1.9.0"), (1, original "1.10.0"), (2, original "1.9.1")]
-        view <- testViewAt cargoMirrorDocuments crateTarget (pure (Right (StateLoaded (StateRevision crateTarget name "complete") record)))
+        view <- testViewAt cargoStateFormat cargoMirrorDocuments crateTarget (pure (Right (StateLoaded (StateRevision crateTarget name "complete") record)))
         adapter <- requiredAdapter Cargo
         withMountProxy Cargo adapter (\deps -> deps{pdEgressUrl = Right . loopbackRegistryUrl}) view (crateIndex (map republished [original "1.9.1", original "1.10.0", original "1.9.0"])) unavailable $ \app -> do
             response <- getPath "/cargo/th/in/thing" app
@@ -396,8 +397,8 @@ rubyGemsReads = describe "managed RubyGems mirror reads" $
         fixture <- rubyStateProbeFixture
         let gemTarget = rubyStateTarget fixture
             name = rubyStatePackage fixture
-        record <- chargedDecodeProjectRecord (const pass) defaultLimits gemTarget name (rubyStateEncodedRecord fixture) >>= expectRight
-        view <- testViewAt rubyGemsMirrorDocuments gemTarget (pure (Right (StateLoaded (StateRevision gemTarget name "complete") record)))
+        record <- chargedDecodeProjectRecord rubyGemsStateFormat (const pass) defaultLimits gemTarget name (rubyStateEncodedRecord fixture) >>= expectRight
+        view <- testViewAt rubyGemsStateFormat rubyGemsMirrorDocuments gemTarget (pure (Right (StateLoaded (StateRevision gemTarget name "complete") record)))
         original <- readFileBS "test/fixtures/rubygems/info/ecluse-fixture-platform"
         let republished = encodeUtf8 (T.replace "created_at:2020-" "created_at:2026-" (decodeUtf8 original))
         adapter <- requiredAdapter RubyGems
@@ -488,18 +489,18 @@ testView :: IO (Either MirrorStateFault StateRead) -> IO MirrorView
 testView readState = testViewWith readState (\_ -> pure (Left StateMissingCompanion))
 
 testViewWith :: IO (Either MirrorStateFault StateRead) -> (CompanionRef -> IO (Either MirrorStateFault ByteString)) -> IO MirrorView
-testViewWith = viewAt pypiMirrorDocuments target
+testViewWith = viewAt pypiStateFormat pypiMirrorDocuments target
 
 -- A view over another state target that retains no companion bytes.
-testViewAt :: MirrorDocuments -> StateTarget -> IO (Either MirrorStateFault StateRead) -> IO MirrorView
-testViewAt documents viewTarget readState = viewAt documents viewTarget readState (\_ -> pure (Left StateMissingCompanion))
+testViewAt :: MirrorStateFormat -> MirrorDocuments -> StateTarget -> IO (Either MirrorStateFault StateRead) -> IO MirrorView
+testViewAt format documents viewTarget readState = viewAt format documents viewTarget readState (\_ -> pure (Left StateMissingCompanion))
 
-viewAt :: MirrorDocuments -> StateTarget -> IO (Either MirrorStateFault StateRead) -> (CompanionRef -> IO (Either MirrorStateFault ByteString)) -> IO MirrorView
-viewAt documents viewTarget readState companion = do
+viewAt :: MirrorStateFormat -> MirrorDocuments -> StateTarget -> IO (Either MirrorStateFault StateRead) -> (CompanionRef -> IO (Either MirrorStateFault ByteString)) -> IO MirrorView
+viewAt format documents viewTarget readState companion = do
     pool <- newLocalPool 20 10_000_000
     cache <- newMirrorRetention pool 60 (StoreBudget 0 0)
     let store = MirrorState (\_ _ _ -> readState) (\_ _ _ _ -> pure (Left (StateInvalid "unexpected state write"))) (\_ _ -> pure (Left StateMissingCompanion)) (const companion)
-    pure (newMirrorView defaultLimits viewTarget store cache documents)
+    pure (newMirrorView defaultLimits viewTarget store cache format documents)
 
 withManagedProxy :: MirrorView -> Bool -> Application -> Application -> (Application -> IO a) -> IO a
 withManagedProxy view firstParty private public action = do

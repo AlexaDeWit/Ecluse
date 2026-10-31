@@ -82,6 +82,9 @@ rubygems_versions=(
   1.0.0.pre 1.0.0.pre.1 1.0.0.pre.2 1.0.0.rc1 1.0.0.rc.1 1.2.0.rc1 1.0.0.dev
   # Gem::Version rewrites a hyphen to ".pre.".
   1.0.0-1 1.2.3-4
+  # Zero runs in a prerelease tail: Gem::Version drops only the first run of
+  # zero segments that precedes a letter, so 1.a.0.b == 1.a.b < 1.0.a.0.b.
+  1.a.b 1.a.0.b 1.a.0b 1.a0b 1.0.a.0.b 1.2.pre.0.rc 0.a0a
   # Real gem versions (rails, rake, a beta, a 4-segment patch).
   6.1.4 3.0.0 2.7.0 5.0.0.beta3 4.2.11.3 1.16.0 0.1.0
 )

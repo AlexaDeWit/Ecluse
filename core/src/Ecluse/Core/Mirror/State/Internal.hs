@@ -53,13 +53,13 @@ import Data.Traversable (for)
 
 import Ecluse.Core.Ecosystem (ecosystemName)
 import Ecluse.Core.Fault (TransportFault)
+import Ecluse.Core.Mirror.State.Format (MirrorStateFormat (msfCompanions, msfEnvelope), ProjectEnvelope (envelopeSplit))
 import Ecluse.Core.Package
 import Ecluse.Core.Package.Hash (sha256Hex)
 import Ecluse.Core.Package.Integrity (IntegrityResult (..), verifyIntegrity)
 import Ecluse.Core.Registry (CompanionRequirement (DeclaredCompanions, NativeCompanions))
 import Ecluse.Core.Registry.MirrorUpload
 import Ecluse.Core.Registry.MirrorUpload.Internal (restoreMirrorFragment)
-import Ecluse.Core.Registry.PyPI.Document (simpleDocument, simpleEnvelope, simpleFiles)
 import Ecluse.Core.Security (LimitError, Limits (..), checkArtifactCount, checkVersionCountOf)
 import Ecluse.Core.Version (Version, renderVersion)
 
@@ -169,26 +169,22 @@ versionVerifiedIdentities :: MirrorVersion -> Map Text Hash
 versionVerifiedIdentities = storedIdentities
 
 -- | Add only new filenames, retaining the old read fields for every unchanged physical identity.
-extendProjectRecord :: Limits -> StateTarget -> MirrorInventory -> Maybe ProjectMirrorRecord -> Either MirrorStateFault ProjectMirrorRecord
-extendProjectRecord limits target inventory previous = do
+extendProjectRecord :: MirrorStateFormat -> Limits -> StateTarget -> MirrorInventory -> Maybe ProjectMirrorRecord -> Either MirrorStateFault ProjectMirrorRecord
+extendProjectRecord format limits target inventory previous = do
     let name = inventoryPackage inventory
         initial = ProjectMirrorRecord target name mempty Map.empty
         record = fromMaybe initial previous
         key = renderVersion (inventoryVersion inventory)
     unless (recordTarget record == target && recordPackage record == name) (Left StateIdentityMismatch)
-    updated <- extendVersion inventory (Map.lookup key (recordVersions record))
-    let envelope = case inventoryReadData inventory of
-            PyPIMirrorRead document -> simpleEnvelope document
-            NpmMirrorRead _ -> mempty
-            CargoMirrorRead _ -> mempty
-            RubyGemsMirrorRead _ -> mempty
+    updated <- extendVersion format inventory (Map.lookup key (recordVersions record))
+    let (envelope, _) = envelopeSplit (msfEnvelope format) (inventoryReadData inventory)
         result = record{projectEnvelope = envelope, projectVersions = Map.insert key updated (recordVersions record)}
     first StateBound (checkVersionCountOf limits (Map.size (recordVersions result)))
     first StateBound (checkArtifactCount limits (sum (map (Map.size . versionFiles) (Map.elems (recordVersions result)))))
     pure result
 
-extendVersion :: MirrorInventory -> Maybe MirrorVersion -> Either MirrorStateFault MirrorVersion
-extendVersion inventory previous = do
+extendVersion :: MirrorStateFormat -> MirrorInventory -> Maybe MirrorVersion -> Either MirrorStateFault MirrorVersion
+extendVersion format inventory previous = do
     let oldFiles = maybe Map.empty versionFiles previous
         incoming = Map.fromList [(artFilename (expectedArtifact file), file) | file <- toList (inventoryFiles inventory)]
     for_ (Map.toList incoming) $ \(name, file) -> for_ (Map.lookup name oldFiles) $ \old ->
@@ -200,14 +196,10 @@ extendVersion inventory previous = do
             (details, source) <-
                 maybeToRight (StateInvalid "cannot retain paired source fragment") $
                     splitMirrorInventory (Map.keysSet additions) inventory
-            let ownedSource = case source of
-                    PyPIMirrorRead document -> PyPIMirrorRead (simpleDocument mempty (simpleFiles document))
-                    NpmMirrorRead _ -> source
-                    CargoMirrorRead _ -> source
-                    RubyGemsMirrorRead _ -> source
+            let (_, ownedSource) = envelopeSplit (msfEnvelope format) source
             files <- first (const (StateInvalid "invalid source fragment")) (restoreMirrorFragment details ownedSource)
             let fragment = StoredMirrorFragment details ownedSource files
-                companions = Map.fromList [(name, CompanionPending) | (name, file) <- Map.toList additions, declaredSourceCompanion ownedSource (expectedArtifact file)]
+                companions = Map.fromList [(name, CompanionPending) | (name, file) <- Map.toList additions, declaredSourceCompanion (msfCompanions format) (expectedArtifact file)]
             pure $ case previous of
                 Nothing -> MirrorVersion (fragment :| []) Map.empty companions
                 Just old -> old{storedFragments = versionFragments old <> (fragment :| []), storedCompanions = versionCompanions old <> companions}
@@ -331,14 +323,14 @@ declaredCompanion artifact = case artCoreMetadata artifact of
     Nothing -> False
 
 -- | Native source payloads can require metadata beyond artifact-advertised sidecars.
-declaredSourceCompanion :: MirrorReadData -> Artifact -> Bool
-declaredSourceCompanion source artifact = case readDataCompanions source of
+declaredSourceCompanion :: CompanionRequirement -> Artifact -> Bool
+declaredSourceCompanion requirement artifact = case requirement of
     NativeCompanions -> True
     DeclaredCompanions -> declaredCompanion artifact
 
 -- | The native codec checks meaning before this step binds its bytes to the declared parent.
-verifySourceCompanionBytes :: Limits -> MirrorReadData -> ExpectedMirrorFile -> ByteString -> Either MirrorStateFault VerifiedCompanionBytes
-verifySourceCompanionBytes limits source file bytes = case readDataCompanions source of
+verifySourceCompanionBytes :: Limits -> CompanionRequirement -> ExpectedMirrorFile -> ByteString -> Either MirrorStateFault VerifiedCompanionBytes
+verifySourceCompanionBytes limits requirement file bytes = case requirement of
     NativeCompanions -> do
         when (BS.length bytes > maxMetadataBytes limits) (Left (StateInvalid "companion exceeds metadata byte bound"))
         digest <- first StateInvalid (mkHash SHA256 (sha256Hex bytes))

@@ -139,8 +139,8 @@ checkGemArchive coordinate checksum archive = do
     unless (T.toLower checksum == gemArchiveSha256 archive) (parseRefusal "gem archive disagrees with its admitted SHA-256")
     pure archive
 
-{- | Refuse an outer tar that names any member through an extended header or a ustar prefix.
-RubyGems' reader yields extended headers as ordinary members, so a Ruby store could register another gem.
+{- | Refuse an outer tar that names any member through an extended header, a ustar prefix, or bytes after a NUL.
+RubyGems' reader yields extended headers as members and keeps those bytes, so a Ruby store could register another gem.
 -}
 checkRawEnvelope :: GemArchive -> Either ParseError GemArchive
 checkRawEnvelope archive = do

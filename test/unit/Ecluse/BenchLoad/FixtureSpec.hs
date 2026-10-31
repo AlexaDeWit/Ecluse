@@ -2,7 +2,7 @@
 --
 -- SPDX-License-Identifier: MIT
 
--- | How the load fixtures read the corpus as a private upstream's cut copy, and weight a listing mix.
+-- | How the load fixtures serve their stubs, read the corpus as a private upstream's cut copy, and weight a listing mix.
 module Ecluse.BenchLoad.FixtureSpec (spec) where
 
 import Data.Aeson (Value, encode, toJSON)
@@ -11,13 +11,17 @@ import Data.Map.Strict qualified as Map
 import Data.Ratio ((%))
 import Data.Set qualified as Set
 import Data.Text qualified as T
+import Network.HTTP.Types (status204)
+import Network.Socket (AddrInfo (addrAddress, addrFamily, addrSocketType), SocketType (Stream), close, connect, defaultHints, defaultProtocol, getAddrInfo, socket)
+import Network.Wai (responseLBS)
 import System.IO.Error (ioeGetErrorString, isUserError)
 import Test.Hspec
-import UnliftIO (throwIO)
+import UnliftIO (bracket, throwIO)
 
 import Ecluse.BenchLoad.Error (BenchLoadError (BenchLoadError))
-import Ecluse.BenchLoad.Fixture (delayUpstream, loadCorpusBodies, loadCorpusCuts, preflightDistinct, probeBaseline, weightedMix)
+import Ecluse.BenchLoad.Fixture (delayUpstream, loadCorpusBodies, loadCorpusCuts, preflightDistinct, probeBaseline, weightedMix, withLoopbackStub)
 import Ecluse.BenchLoad.Normalise (BaselineSource (InjectedFallback, MeasuredRtt))
+import Ecluse.BenchLoad.ProxyProcess (privateStubHost, publicStubHost)
 import Ecluse.Core.Package (PackageDetails (pkgPublishedAt), PackageInfo (infoVersions), PackageName, renderPackageName)
 import Ecluse.Core.Registry.Metadata (MetadataError)
 import Ecluse.Core.Security (Limits, defaultLimits)
@@ -34,6 +38,12 @@ spec = do
         it "returns without scheduling a wait for nonpositive latency" $ do
             delayUpstream 0 `shouldReturn` ()
             delayUpstream (-1) `shouldReturn` ()
+    describe "loopback stub" $
+        it "accepts at the first address each stub host resolves to, which http-client dials 250 ms before the next" $
+            withLoopbackStub (\_ respond -> respond (responseLBS status204 [] "")) $ \port ->
+                for_ [publicStubHost, privateStubHost] $ \host -> do
+                    dialled :| _ <- getAddrInfo (Just defaultHints{addrSocketType = Stream}) (Just (toString host)) (Just (show port))
+                    bracket (socket (addrFamily dialled) Stream defaultProtocol) close (`connect` addrAddress dialled)
     describe "listing preflight" $ do
         it "checks each distinct URL before invoking the measurement callback" $ do
             calls <- newIORef ([] :: [Text])

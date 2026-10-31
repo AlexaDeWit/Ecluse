@@ -29,7 +29,7 @@ import Ecluse.Core.Registry.RubyGems.CompactSpec (GemSpecification (specificatio
 import Ecluse.Core.Registry.RubyGems.Project (mkCoordinate, projectName, unGemPlatform)
 import Ecluse.Core.Security.Limits (Limits (..), defaultLimits)
 import Ecluse.Core.Version (renderVersion)
-import Ecluse.Test.Registry.Archive (pax, paxAt, paxRecord, regular, tarBytes, tarEntries)
+import Ecluse.Test.Registry.Archive (patchFirstHeader, pax, paxAt, paxRecord, regular, tarBytes, tarEntries)
 import Ecluse.Test.Registry.RubyGems.Reference (runRubyReference)
 import Ecluse.Test.Support (expectRight)
 
@@ -184,6 +184,15 @@ spec = describe "native gem validation" $ do
             _ -> fail "native archive reference is not an object"
         fmap (renderPackageName . gemArchiveName) <$> inspect defaultLimits crafted `shouldReturn` Right "ecluse-fixture-root"
         void <$> published crafted `shouldReturn` Left extendedRefusal
+    it "refuses an outer member whose name or prefix field holds bytes after its first NUL" $ do
+        bytes <- readFileBS fixture
+        named <- fmap gemArchiveName <$> inspect defaultLimits bytes
+        -- metadata.gz comes first and fills 11 bytes of its name field. The prefix field starts at byte 345.
+        -- RubyGems unpacks both fields with A100 and A155, which keep those bytes, so it reads another name.
+        for_ [11, 345] $ \offset -> do
+            let changed = patchFirstHeader offset "\NULx" bytes
+            fmap gemArchiveName <$> inspect defaultLimits changed `shouldReturn` named
+            void <$> published changed `shouldReturn` Left extendedRefusal
     it "binds the checked archive to an exact admitted coordinate and digest" $ do
         bytes <- readFileBS fixture
         archive <- inspect defaultLimits bytes >>= expectRight
@@ -198,7 +207,7 @@ spec = describe "native gem validation" $ do
 fixture :: FilePath
 fixture = "test/fixtures/rubygems/gems/ecluse-fixture-root-1.0.0.gem"
 
--- RubyGems' reader yields extended headers as ordinary members, so publication refuses them and any name prefix.
+-- RubyGems' reader yields extended headers as members and keeps bytes after a NUL, so publication and mirroring refuse both and any name prefix.
 extendedRefusal :: ParseError
 extendedRefusal = ParseError "gem envelope carries an extended or prefixed tar header"
 
@@ -211,7 +220,7 @@ fixtureMember name members = maybe (fail ("native fixture has no " <> toString n
 inspect :: Limits -> ByteString -> IO (Either ParseError GemArchive)
 inspect limits = inspectGemArchive limits (const (pure ()))
 
--- Inspection followed by the envelope check that first-party publication adds.
+-- Inspection followed by the envelope check that publication and mirroring add.
 published :: ByteString -> IO (Either ParseError GemArchive)
 published bytes = (>>= checkRawEnvelope) <$> inspect defaultLimits bytes
 

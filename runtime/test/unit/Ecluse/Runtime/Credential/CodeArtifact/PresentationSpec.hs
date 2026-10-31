@@ -21,10 +21,10 @@ spec =
             [(eco, operation, codeArtifactAuthMechanism eco operation) | eco <- [Npm, PyPI, Cargo, RubyGems], operation <- [StoreRead, StoreWrite]]
                 `shouldBe` [ (Npm, StoreRead, AuthBearer)
                            , (Npm, StoreWrite, AuthBearer)
-                           , (PyPI, StoreRead, AuthBasic)
-                           , (PyPI, StoreWrite, AuthBasic)
+                           , (PyPI, StoreRead, AuthBasic "aws")
+                           , (PyPI, StoreWrite, AuthBasic "aws")
                            , (Cargo, StoreRead, AuthRawKey)
                            , (Cargo, StoreWrite, AuthRawKey)
-                           , (RubyGems, StoreRead, AuthBasic)
+                           , (RubyGems, StoreRead, AuthBasic "aws")
                            , (RubyGems, StoreWrite, AuthBearer)
                            ]
