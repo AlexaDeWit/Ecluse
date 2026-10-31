@@ -6,7 +6,8 @@
 
 -- | PyPI full and selected Simple-index reads for "Ecluse.Core.Registry.Metadata.Fetch".
 module Ecluse.Core.Registry.PyPI.Metadata (
-    pypiRead,
+    pypiReadWith,
+    preparePyPIRead,
     pypiMirrorRead,
     pypiChargeFactors,
     pypiIndexWalk,
@@ -19,6 +20,7 @@ module Ecluse.Core.Registry.PyPI.Metadata (
 import Control.Monad.ST (ST, stToIO)
 import Data.JsonStream.Lexer (Cursor)
 import Data.Map.Strict qualified as Map
+import Data.Primitive.PrimVar (PrimVar)
 import Data.Set qualified as Set
 
 import Ecluse.Core.Package (Artifact (artEntryKey), PackageDetails (pkgArtifacts), PackageInfo (infoVersions), PackageName)
@@ -26,37 +28,45 @@ import Ecluse.Core.Package.Filter (enforceArtifactLocations, enforceArtifactLoca
 import Ecluse.Core.Registry.CachedDocument (CachedDoc, pypiPacked, pypiSimpleCached)
 import Ecluse.Core.Registry.Json.Intern (InternTable, tableTexts)
 import Ecluse.Core.Registry.Json.Packed (docTable)
-import Ecluse.Core.Registry.Json.Walk (Step, Steps, Walked (..), pureStep, readJsonWalk, readJsonWalkST)
+import Ecluse.Core.Registry.Json.Walk (Step, Steps, Walked (..), readJsonWalk)
 import Ecluse.Core.Registry.Json.Writer (Writer, newWriter)
 import Ecluse.Core.Registry.JsonStream (StreamResult (..))
 import Ecluse.Core.Registry.Metadata (MetadataError, VersionDoc (..), VersionRead (..))
+import Ecluse.Core.Registry.Metadata.EntryFloor (countingEntries, readFlooredWalk)
+import Ecluse.Core.Registry.Metadata.Fetch.Preparation (PrepareRead (PrepareRead))
 import Ecluse.Core.Registry.Metadata.Fetch.Types (DocumentWalk, EcosystemRead (..))
 import Ecluse.Core.Registry.Metadata.Projection (streamError)
+import Ecluse.Core.Registry.Origin (OriginClient (ocChargeFullReadWorkspace))
 import Ecluse.Core.Registry.PyPI.Document (PackedSimple, SimpleDocument, restrictSimpleFiles)
 import Ecluse.Core.Registry.PyPI.FileWriter (FileWriter, fileWriter)
 import Ecluse.Core.Registry.PyPI.Reader (fileUniqueFields, pypiFullWalk, pypiWalk)
 import Ecluse.Core.Registry.PyPI.Request (pypiArtifactHosts, simpleIndexRequestUnder)
 import Ecluse.Core.Registry.PyPI.Streaming (PyPIRead (..))
-import Ecluse.Core.Registry.PyPI.StreamingProjection (PyPIProjection, collectField, emptyProjection, finishPackedProjection, finishProjection, keepsFile, packedFileStep)
+import Ecluse.Core.Registry.PyPI.StreamingProjection (PyPIProjection, claimsEnvelope, collectField, emptyProjection, finishPackedProjection, finishProjection, keepsFile, packedFileStep, retainedEntries)
 import Ecluse.Core.Security (AllowedHostPorts, Limits, ecosystemArtifactAuthorities, maxNestingDepth)
 import Ecluse.Core.Server.Admission.Types (ChargeFactors (..))
 import Ecluse.Core.Version (Version, renderVersion)
 
--- | Full and selected reads share the Simple-index request and field policy.
-pypiRead :: EcosystemRead
-pypiRead = pypiReadWith SelectedRead (const (const Nothing))
+-- | Full and selected reads share the Simple-index request and field policy, with the full read's absolute workspace payer.
+pypiReadWith :: (Int -> IO ()) -> EcosystemRead
+pypiReadWith pay = pypiReadOf pay SelectedRead (const (const Nothing))
+
+-- | 'pypiReadWith' under the selected origin's full-read workspace, which pays the per-entry floor.
+preparePyPIRead :: PrepareRead
+preparePyPIRead = PrepareRead (pure . Right . pypiReadWith . ocChargeFullReadWorkspace)
 
 -- | Workers retain the supported envelope beside selected files without changing ordinary serve reads.
 pypiMirrorRead :: EcosystemRead
-pypiMirrorRead = pypiReadWith MirrorRead (\details -> Just . mirrorDocument details)
+pypiMirrorRead = pypiReadOf (const pass) MirrorRead (\details -> Just . mirrorDocument details)
 
-pypiReadWith :: (PackageName -> Text -> PyPIRead) -> (PackageDetails -> SimpleDocument -> Maybe CachedDoc) -> EcosystemRead
-pypiReadWith mode retain =
+pypiReadOf :: (Int -> IO ()) -> (PackageName -> Text -> PyPIRead) -> (PackageDetails -> SimpleDocument -> Maybe CachedDoc) -> EcosystemRead
+pypiReadOf pay mode retain =
     EcosystemRead
         { erRequest = simpleIndexRequestUnder
         , erUniqueFields = fileUniqueFields
-        , erWalkFull = \limits name _ -> readPyPIFull limits name
+        , erWalkFull = \limits name _ -> readPyPIFull pay limits name
         , erFinishFull = finishPyPIFull
+        , erRetainedEntries = \(Walked _ acc) -> retainedEntries acc
         , erWalkSelected = \limits name version -> readPyPIIndex limits name (mode name (renderVersion version))
         , erFinishSelected = finishPyPIVersion retain
         }
@@ -70,21 +80,25 @@ readPyPIIndex limits name mode bound table = readJsonWalk bound (pypiIndexWalk l
 
 -- | The production Simple-index walk over a caller's intern table.
 pypiIndexWalk :: Limits -> PackageName -> PyPIRead -> InternTable -> Cursor -> Step PyPIProjection
-pypiIndexWalk limits name mode table = pypiWalk (maxNestingDepth limits) mode (collectField limits mode) keepsFile table (emptyProjection name)
+pypiIndexWalk limits name mode table = pypiWalk (maxNestingDepth limits) mode (collectField limits) keepsFile claimsEnvelope table (emptyProjection name)
 
 -- | The packed read returns its final table beside the typed projection and supported files.
 type PyPIFullRead = Walked PyPIProjection
 
-readPyPIFull :: Limits -> PackageName -> DocumentWalk PyPIFullRead
-readPyPIFull limits name bound table readChunk = do
+readPyPIFull :: (Int -> IO ()) -> Limits -> PackageName -> DocumentWalk PyPIFullRead
+readPyPIFull pay limits name bound table readChunk = do
     writer <- stToIO (newWriter Nothing)
     build <- stToIO (fileWriter writer)
-    readJsonWalkST stToIO bound (pypiPackedWalk writer build limits name table) readChunk
+    readFlooredWalk pay (cfFullReadPermille pypiChargeFactors) bound (\owed -> pypiPackedWalk owed writer build limits name table) readChunk
 
--- | Full reads use the supplied table and writer without materialising file trees.
-pypiPackedWalk :: Writer st -> FileWriter st -> Limits -> PackageName -> InternTable -> Cursor -> ST st (Steps (ST st) PyPIFullRead)
-pypiPackedWalk writer build limits name table =
-    pypiFullWalk build (maxNestingDepth limits) (pureStep (collectField limits FullRead)) keepsFile (packedFileStep writer limits) table (emptyProjection name)
+-- | Full reads use the supplied table and writer without materialising file trees, publishing the floors their retained entries owe.
+pypiPackedWalk :: PrimVar st Int -> Writer st -> FileWriter st -> Limits -> PackageName -> InternTable -> Cursor -> ST st (Steps (ST st) PyPIFullRead)
+pypiPackedWalk owed writer build limits name table =
+    pypiFullWalk build (maxNestingDepth limits) step keepsFile claimsEnvelope fileStep table (emptyProjection name)
+  where
+    counted = countingEntries owed retainedEntries
+    step acc field next = counted next (collectField limits acc field)
+    fileStep acc position value next = packedFileStep writer limits acc position value (counted next)
 {-# INLINE pypiPackedWalk #-}
 
 -- | Finish packed full reads without rebuilding file trees for their typed facts.

@@ -7,6 +7,7 @@ module Ecluse.Core.Registry.PyPI.MetadataSpec (spec) where
 
 import Data.Aeson (Value (Array, Bool, Null, Number, Object, String), object, (.=))
 import Data.Aeson.KeyMap qualified as KeyMap
+import Data.ByteString qualified as BS
 import Data.Map.Strict qualified as Map
 import Data.Time (UTCTime (UTCTime), fromGregorian, nominalDay)
 import Test.Hspec
@@ -19,27 +20,36 @@ import Ecluse.Core.Package (
  )
 import Ecluse.Core.Package.Admission (ArtifactAdmission (AdmissionAdmit, AdmissionDenied))
 import Ecluse.Core.Package.Entry (EntryKey (ArrayEntry))
+import Ecluse.Core.Registry.Adapter.Capability (AdapterMetadata (metadataRead))
+import Ecluse.Core.Registry.Adapter.Types (RegistryAdapter (adapterMetadata))
 import Ecluse.Core.Registry.Metadata (
-    Manifest (manifestInfo),
+    Manifest (manifestInfo, manifestRetainedEntries),
     MetadataError (MetadataBoundExceeded, MetadataUndecodable),
  )
+import Ecluse.Core.Registry.Metadata.EntryFloor (RetainedEntries (RetainedEntries), entryFloorBytes, entryFloorCharge)
+import Ecluse.Core.Registry.Publish (PublishCodec (pcTargetRead))
+import Ecluse.Core.Registry.PyPI.Adapter (pypiAdapter)
 import Ecluse.Core.Registry.PyPI.Document (simpleEnvelope)
-import Ecluse.Core.Registry.PyPI.Metadata (projectPyPIStream, pypiRead)
+import Ecluse.Core.Registry.PyPI.Metadata (projectPyPIStream, pypiChargeFactors, pypiRead)
+import Ecluse.Core.Registry.PyPI.Publish (pypiPublishCodec)
 import Ecluse.Core.Registry.PyPI.Streaming (PyPIRead (..))
+import Ecluse.Core.Registry.Request (nativePresentation)
 import Ecluse.Core.Rules (prepare)
 import Ecluse.Core.Rules.Types (EvalContext (EvalContext), Rule (AllowByIdentity, AllowIfOlderThan), completeEvidence)
 import Ecluse.Core.Security (
-    LimitError (TooManyArtifacts, TooManyVersions),
-    Limits (maxArtifactCount, maxVersionCount),
+    LimitError (TooManyVersions),
+    Limits (maxVersionCount),
     defaultLimits,
  )
+import Ecluse.Core.Server.Admission.Budget (scaleCharge)
+import Ecluse.Core.Server.Admission.Types (ChargeFactors (cfFullReadPermille, cfKeptPermille))
 import Ecluse.Test.Contract.Metadata.Projection (MetadataFraming (SingleDocument), ProjectionDriver (..), metadataProjectionContract)
-import Ecluse.Test.Corpus (CaptureUpstream (upstreamOrigin), pypiCaptureUpstream)
+import Ecluse.Test.Corpus (CaptureUpstream (upstreamOrigin), CorpusPackage (cpPackage, cpPath), pypiCaptureUpstream, pypiCorpusPackages)
 import Ecluse.Test.Json (encodeStrict)
-import Ecluse.Test.Package (defaultMinIntegrity, pypiVersion, requestsName, unsafeFilename)
+import Ecluse.Test.Package (defaultMinIntegrity, pypiVersion, requestsName, unsafeFilename, unscopedPyPI)
 import Ecluse.Test.Package.Admission (admitArtifactWithEvidence)
-import Ecluse.Test.Registry.Metadata.Fetch (heldManifest, heldVersion)
-import Ecluse.Test.Registry.PyPI (filesNamed, simpleFile, simpleIndex, simpleIndexWith, withFileKeys)
+import Ecluse.Test.Registry.Metadata.Fetch (captureChunks, heldManifest, heldVersion, heldWorkspacePayments, heldWorkspacePeak)
+import Ecluse.Test.Registry.PyPI (denseIndex, filesNamed, minimalIndex, simpleFile, simpleIndex, simpleIndexWith, withFileKeys)
 import Ecluse.Test.Registry.PyPI.Metadata (projectPyPIChunks, projectPyPIIndex, projectPyPIVersion, simpleValue)
 import Ecluse.Test.Rules (admittedBy, atDefaultPrecedence, evalRules, inertRuleDeps)
 import Ecluse.Test.Snapshot (readDetails)
@@ -63,6 +73,77 @@ spec = do
     paritySpec
     protocolSpec
     releaseAgeSpec
+    entryFloorSpec
+
+-- Files pay the release floor, and dropped version entries and alternate-locations and tracks items the
+-- entry floor, that their bytes leave uncovered, through the wiring serve and publication use.
+entryFloorSpec :: Spec
+entryFloorSpec = describe "the full-read entry floor" $ do
+    it "charges the workspace for files that name no release and dropped versions beyond their per-byte charge" $ do
+        (result, peak) <- heldWorkspacePeak adapterRead pypiBase requestsName [denseBody]
+        void result `shouldSatisfy` isRight
+        peak `shouldBe` denseShortfall
+
+    it "charges the workspace for minimal-body files at the release floor" $ do
+        let body = minimalIndex 300
+        (result, peak) <- heldWorkspacePeak adapterRead pypiBase (unscopedPyPI "thing") [body]
+        void result `shouldSatisfy` isRight
+        peak `shouldBe` releaseFloor * 300 - scaleCharge (cfFullReadPermille pypiChargeFactors) (BS.length body)
+
+    it "counts every file, dropped version entry and envelope item, which the finished document keeps" $ do
+        (dense, _) <- heldWorkspacePeak adapterRead pypiBase requestsName [denseBody]
+        manifestRetainedEntries <$> expectRight dense `shouldReturn` RetainedEntries files drops
+        let items = BS.intercalate "," (replicate 30 "0")
+            body = "{\"meta\":{\"api-version\":\"1.1\",\"tracks\":[" <> items <> "]},\"name\":\"requests\",\"alternate-locations\":[" <> items <> "],\"files\":[]}"
+        (envelope, _) <- heldWorkspacePeak adapterRead pypiBase requestsName [body]
+        manifestRetainedEntries <$> expectRight envelope `shouldReturn` RetainedEntries 0 60
+
+    it "charges no workspace for files whose source bytes cover the floor" $ do
+        (result, peak) <- heldWorkspacePeak adapterRead pypiBase requestsName [indexOf ["requests-2.34.2.tar.gz", "requests-2.34.1.tar.gz"]]
+        void result `shouldSatisfy` isRight
+        peak `shouldBe` 0
+
+    it "charges a publication target's full read the same floor" $ do
+        (result, peak) <- heldWorkspacePeak (pcTargetRead (pypiPublishCodec nativePresentation)) pypiBase requestsName [denseBody]
+        void result `shouldSatisfy` isRight
+        peak `shouldBe` denseShortfall
+
+    it "charges the workspace for the alternate-locations and tracks items a dense listing keeps" $ do
+        let locations = 300
+            tracks = 200
+            items count = BS.intercalate "," (replicate count "0")
+            body = "{\"meta\":{\"api-version\":\"1.1\",\"tracks\":[" <> items tracks <> "]},\"name\":\"requests\",\"alternate-locations\":[" <> items locations <> "],\"alternate-locations\":[" <> items 100 <> "],\"files\":[]}"
+        (result, peak) <- heldWorkspacePeak adapterRead pypiBase requestsName [body]
+        void result `shouldSatisfy` isRight
+        peak `shouldBe` entryFloorBytes * (locations + tracks) - scaleCharge (cfFullReadPermille pypiChargeFactors) (BS.length body)
+
+    it "charges the alternate-locations and tracks items read before their array closes, and nothing for a repeat" $ do
+        let items count = BS.intercalate "," (replicate count "\"0\"")
+            pieces =
+                [ "{\"meta\":{\"api-version\":\"1.1\",\"tracks\":[" <> items 200 <> ","
+                , items 100 <> "],\"tracks\":[" <> items 50 <> "]},\"name\":\"requests\",\"alternate-locations\":[" <> items 300 <> ","
+                , items 50 <> "],\"meta\":{\"tracks\":[" <> items 50 <> "]},\"files\":[]}"
+                ]
+            shortfall retained parsed = entryFloorBytes * retained - scaleCharge (cfFullReadPermille pypiChargeFactors) (sum (map BS.length parsed))
+        (result, payments) <- heldWorkspacePayments adapterRead pypiBase requestsName pieces
+        void result `shouldSatisfy` isRight
+        payments `shouldBe` [shortfall 200 (take 1 pieces), shortfall 600 (take 2 pieces), shortfall 650 pieces]
+
+    forM_ pypiCorpusPackages $ \package ->
+        it ("keeps only the per-byte kept charge once it reads the capture " <> cpPath package) $ do
+            bytes <- readFileBS (cpPath package)
+            (result, _) <- heldWorkspacePeak adapterRead pypiBase (cpPackage package) (captureChunks bytes)
+            manifest <- expectRight result
+            entryFloorCharge (manifestRetainedEntries manifest) `shouldSatisfy` (<= scaleCharge (cfKeptPermille pypiChargeFactors) (BS.length bytes))
+  where
+    adapterRead = metadataRead (adapterMetadata pypiAdapter)
+    pypiBase = "https://pypi.org/simple"
+    files = 150
+    drops = 400
+    denseBody = denseIndex files drops
+    denseShortfall = releaseFloor * files + entryFloorBytes * drops - scaleCharge (cfFullReadPermille pypiChargeFactors) (BS.length denseBody)
+    -- The floor each file pays, which the release floor's measurement sets.
+    releaseFloor = 1152
 
 indexSpec :: Spec
 indexSpec = describe "projectPyPIIndex" $ do
@@ -74,16 +155,16 @@ indexSpec = describe "projectPyPIIndex" $ do
                 simpleValue raw `shouldBe` simpleIndex "requests" (filesNamed ["requests-2.34.2.tar.gz", "requests-2.34.1.tar.gz"])
             other -> expectationFailure ("expected a projection, got: " <> show other)
 
-    it "counts artifacts separately from distinct releases on full reads" $ do
+    it "counts every file position of one release toward the version ceiling on full reads" $ do
         let body = indexOf ["requests-2.34.2.tar.gz", "requests-2.34.2-py3-none-any.whl"]
-        projectPyPIIndex defaultLimits{maxVersionCount = 1} requestsName body `shouldSatisfy` isRight
-        projectPyPIIndex defaultLimits{maxArtifactCount = 1} requestsName body
-            `shouldBe` Left (MetadataBoundExceeded (TooManyArtifacts 2 1))
-        projectPyPIIndex defaultLimits{maxArtifactCount = 2} requestsName body `shouldSatisfy` isRight
+        projectPyPIIndex defaultLimits{maxVersionCount = 1} requestsName body
+            `shouldBe` Left (MetadataBoundExceeded (TooManyVersions 2 1))
+        projectPyPIIndex defaultLimits{maxVersionCount = 2} requestsName body `shouldSatisfy` isRight
 
-    it "counts only the files that name a release toward the artifact ceiling" $ do
+    it "counts files that name no release toward the version ceiling" $ do
         let body = encodeStrict (simpleIndex "requests" (filesNamed ["requests-2.34.2.tar.gz"] <> [simpleFile "not-a-distribution"]))
-        projectPyPIIndex defaultLimits{maxArtifactCount = 1} requestsName body `shouldSatisfy` isRight
+        projectPyPIIndex defaultLimits{maxVersionCount = 1} requestsName body
+            `shouldBe` Left (MetadataBoundExceeded (TooManyVersions 2 1))
 
 versionSpec :: Spec
 versionSpec = describe "projectPyPIVersion" $ do
@@ -91,11 +172,10 @@ versionSpec = describe "projectPyPIVersion" $ do
         artifactNames (projectPyPIVersion defaultLimits requestsName (pypiVersion "2.34.2") (indexOf ["requests-2.34.2.tar.gz", "requests-2.34.2-py3-none-any.whl", "requests-2.34.1.tar.gz"]))
             `shouldBe` Right (Just ["requests-2.34.2.tar.gz", "requests-2.34.2-py3-none-any.whl"])
 
-    it "counts unselected and unusable files without adding a selected-artifact ceiling" $ do
+    it "counts unselected and unusable files toward the version ceiling on selected reads" $ do
         let body = encodeStrict (simpleIndex "requests" [Number 7, simpleFile "requests-2.0.tar.gz", simpleFile "requests-1.0.tar.gz", simpleFile "requests-1.0-py3-none-any.whl"])
         projectPyPIVersion defaultLimits{maxVersionCount = 3} requestsName (pypiVersion "1") body
             `shouldBe` Left (MetadataBoundExceeded (TooManyVersions 4 3))
-        projectPyPIVersion defaultLimits{maxArtifactCount = 1} requestsName (pypiVersion "1") body `shouldSatisfy` isRight
 
 paritySpec :: Spec
 paritySpec = describe "the two decode paths agree on what they serve" $ do
@@ -131,11 +211,14 @@ protocolSpec = describe "protocol envelope parity" $ do
         it ("refuses a non-object meta value " <> show meta) $
             assertProtocolRefusal (protocolIndex (Just meta))
 
-    it "checks the protocol before the name mismatch and file count" $ do
+    it "checks the protocol before the name mismatch, and refuses a file past the ceiling before both" $ do
         let body = encodeStrict (simpleIndexWith "urllib3" ["meta" .= object ["api-version" .= ("2.0" :: Text)]] [simpleFile "urllib3-2.34.2.tar.gz"])
             limits = defaultLimits{maxVersionCount = 0}
-        projectPyPIIndex limits requestsName body `shouldBe` Left MetadataUndecodable
-        projectPyPIVersion limits requestsName (pypiVersion "2.34.2") body `shouldBe` Left MetadataUndecodable
+            refused = Left (MetadataBoundExceeded (TooManyVersions 1 0))
+        projectPyPIIndex defaultLimits requestsName body `shouldBe` Left MetadataUndecodable
+        projectPyPIVersion defaultLimits requestsName (pypiVersion "2.34.2") body `shouldBe` Left MetadataUndecodable
+        projectPyPIIndex limits requestsName body `shouldBe` refused
+        projectPyPIVersion limits requestsName (pypiVersion "2.34.2") body `shouldBe` refused
 
     for_ [("{\"api-version\":\"1.0\",\"api-version\":\"2.0\"}", True), ("{\"api-version\":\"2.0\",\"api-version\":\"1.0\"}", False), ("null,\"meta\":{\"api-version\":\"2.0\"}", True), ("{\"api-version\":\"2.0\"},\"meta\":null", False)] $ \(meta, accepted) ->
         it ("keeps the first protocol keys in " <> show meta) $ do

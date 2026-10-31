@@ -30,7 +30,6 @@ import Ecluse.Core.Registry.Maintenance.Protocol (ProtocolRead (..), ProtocolSto
 import Ecluse.Core.Registry.Metadata (MetadataError (MetadataAbsent), VersionDoc (..), VersionRead (vrVersion))
 import Ecluse.Core.Registry.Metadata.Fetch (fetchManifest, fetchVersion)
 import Ecluse.Core.Registry.Npm.Maintenance (npmMaintenance)
-import Ecluse.Core.Registry.Npm.Metadata (npmRead)
 import Ecluse.Core.Registry.Npm.Publish (npmPublishCodec)
 import Ecluse.Core.Registry.Npm.Request (artifactRequestByUrl)
 import Ecluse.Core.Registry.Origin (OriginClient (..), ocBaseUrl)
@@ -43,7 +42,7 @@ import Ecluse.Test.Contract.PackageStore.Provider
 import Ecluse.Test.Package (npmVersion, sriSha512Of, unscopedNpm)
 import Ecluse.Test.Port (passthroughTracingPort)
 import Ecluse.Test.Registry.Npm (mirrorWriteToken, writeTokenNpmConfig)
-import Ecluse.Test.Registry.Npm.Metadata (projectNpmVersion)
+import Ecluse.Test.Registry.Npm.Metadata (npmRead, projectNpmVersion)
 import Ecluse.Test.Registry.Publish (publishOnlyFile)
 import Ecluse.Test.Stub (Captured (..), headerValue)
 

@@ -33,14 +33,14 @@ import Ecluse.Core.Package.Entry (EntryKey (..))
 import Ecluse.Core.Registry (FetchFault (FetchTransport))
 import Ecluse.Core.Registry.CachedDocument (CachedDoc, npmCached)
 import Ecluse.Core.Registry.Metadata (
-    Manifest (Manifest, manifestBodyBytes, manifestDigest, manifestInfo, manifestRaw),
+    Manifest (Manifest, manifestBodyBytes, manifestDigest, manifestInfo, manifestRaw, manifestRetainedEntries),
     MetadataClient (fetchFullManifest, fetchVersionMetadata),
     MetadataError (MetadataAbsent, MetadataAuthorisationFailure, MetadataFetch, MetadataHttpFailure, MetadataUndecodable),
     VersionDoc (VersionDoc, vdDetails, vdRaw),
     VersionRead (VersionRead, vrBodyBytes, vrUpstreamLatest, vrVersion),
  )
+import Ecluse.Core.Registry.Metadata.EntryFloor (noRetainedEntries)
 import Ecluse.Core.Registry.Metadata.Fetch.Preparation (PrepareRead (..))
-import Ecluse.Core.Registry.Npm.Metadata (npmRead)
 import Ecluse.Core.Registry.Origin (OriginClient (ocToken), OriginFor, Public, anonymousOrigin, perCallerOrigin)
 import Ecluse.Core.Registry.Request (mkBaseRequest)
 import Ecluse.Core.Security (defaultLimits, mkProgressFloor)
@@ -56,6 +56,7 @@ import Ecluse.Core.Version (Version)
 import Ecluse.Test.Deadline (untracedClient, withExchangeClient, withSweeper)
 import Ecluse.Test.Package (npmVersion, pypiVersion, requestsName, sampleManifest, unscopedNpm)
 import Ecluse.Test.Port (noopMetricsPort, passthroughTracingPort)
+import Ecluse.Test.Registry.Npm.Metadata (npmRead)
 import Ecluse.Test.Server.Cache (cachedMetadata, defaultCacheConfig, externalOperations, newMetadataCache)
 import Ecluse.Test.Snapshot (digestOf, readDetails)
 import Ecluse.Test.Stub (allCaptured, headerValue, stubBaseUrl, withStub)
@@ -529,7 +530,7 @@ stubUrl = loopbackRegistryUrl "http://localhost:1"
 countingFull :: IORef Int -> PackageInfo -> PackageName -> IO (Either MetadataError Manifest)
 countingFull calls info _name = do
     atomicModifyIORef' calls (\n -> (n + 1, ()))
-    pure (Right Manifest{manifestInfo = info, manifestRaw = fst npmCached packument, manifestBodyBytes = 9, manifestDigest = digestOf "raw-bytes"})
+    pure (Right Manifest{manifestInfo = info, manifestRaw = fst npmCached packument, manifestBodyBytes = 9, manifestRetainedEntries = noRetainedEntries, manifestDigest = digestOf "raw-bytes"})
   where
     packument :: Value
     packument = object ["versions" .= object [Key.fromText v .= object ["marker" .= v] | v <- Map.keys (infoVersions info)]]

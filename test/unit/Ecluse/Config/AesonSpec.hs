@@ -355,6 +355,11 @@ spec = describe "decodeDocument" $ do
         fmap ((limProgressWindow &&& limMinProgressBytes) . cfgLimits) (expectAppConfig [] (Just "{\"limits\":{\"progressWindow\":0,\"minProgressBytes\":-1}}"))
             `shouldReturn` (0, -1)
 
+    it "refuses the removed limits.maxArtifactCount as an unknown key, through both layers" $
+        for_ ["5", "null"] $ \value -> do
+            loadConfig [] (Just ("{\"limits\":{\"maxArtifactCount\":" <> value <> "}}")) `shouldSatisfy` decodeErrorMentions "maxArtifactCount"
+            loadConfig [("ECLUSE_LIMITS__MAX_ARTIFACT_COUNT", "5")] Nothing `shouldSatisfy` decodeErrorMentions "maxArtifactCount"
+
     it "rejects a non-positive limits.maxAdvisoryDatabaseBytes" $
         loadConfig [] (Just "{\"limits\":{\"maxAdvisoryDatabaseBytes\":0}}")
             `shouldSatisfy` decodeErrorMentions "limits.maxAdvisoryDatabaseBytes"

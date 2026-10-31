@@ -25,7 +25,6 @@ import Ecluse.Core.Registry.Metadata (MetadataError (MetadataFetch, MetadataUnde
 import Ecluse.Core.Registry.Metadata.Fetch.Preparation (PrepareRead (..), staticRead)
 import Ecluse.Core.Registry.Metadata.Fetch.Types (EcosystemRead (erRequest))
 import Ecluse.Core.Registry.MirrorUpload (inventoryFiles, verifyMirrorBytes)
-import Ecluse.Core.Registry.Npm.Metadata (npmRead)
 import Ecluse.Core.Registry.Npm.Publish (npmPublishCodec, prepareNpmSource, prepareNpmUpload)
 import Ecluse.Core.Registry.Origin (OriginClient (ocChargeFullRead, ocToken), originBaseUrl)
 import Ecluse.Core.Registry.Publish (
@@ -45,6 +44,7 @@ import Ecluse.Test.Package (v1_0_0)
 import Ecluse.Test.Port (passthroughTracingPort)
 import Ecluse.Test.Registry (isBoundExceededPublish, isTransportFetch, isUrlUnformableFetch, isUrlUnformablePublish)
 import Ecluse.Test.Registry.Npm (dummyArtifact, isOdd, isOddVersionDoc, mirrorVersionDoc)
+import Ecluse.Test.Registry.Npm.Metadata (npmRead)
 import Ecluse.Test.Registry.Publish (anonymousPublishAt, publishOnlyFile)
 import Ecluse.Test.Stub (
     Captured (capMethod, capPath),

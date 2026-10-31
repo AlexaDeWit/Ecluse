@@ -64,14 +64,13 @@ import Ecluse.Core.Registry.Cargo.Serving (assembleCargoDocument, serialiseCargo
 import Ecluse.Core.Registry.Json.Walk (readJsonWalk)
 import Ecluse.Core.Registry.JsonStream (StreamResult (..))
 import Ecluse.Core.Registry.Metadata (Manifest (..), MetadataError (MetadataUndecodable), VersionDoc (..), VersionRead (vrBodyBytes, vrVersion))
+import Ecluse.Core.Registry.Metadata.EntryFloor (noRetainedEntries)
 import Ecluse.Core.Registry.Metadata.Fetch (readManifest, readVersion)
 import Ecluse.Core.Registry.Metadata.Fetch.Types (Body, EcosystemRead, ReadTerms (..))
 import Ecluse.Core.Registry.Npm.Adapter (npmAdapter)
-import Ecluse.Core.Registry.Npm.Metadata (npmRead)
 import Ecluse.Core.Registry.Npm.Project qualified as Npm
 import Ecluse.Core.Registry.Npm.VersionListReader (npmVersionListWalk)
 import Ecluse.Core.Registry.PyPI.Adapter (pypiAdapter)
-import Ecluse.Core.Registry.PyPI.Metadata (pypiRead)
 import Ecluse.Core.Registry.PyPI.Project qualified as PyPI
 import Ecluse.Core.Registry.RubyGems.Metadata (gemReadWith)
 import Ecluse.Core.Registry.RubyGems.Project qualified as RubyGemsProject
@@ -98,7 +97,9 @@ import Ecluse.Test.Registry.Cargo.Metadata (cargoRead)
 import Ecluse.Test.Registry.Metadata.Fetch (captureManifest, heldBody, sourceBody)
 import Ecluse.Test.Registry.Metadata.Projection (projectMetadata)
 import Ecluse.Test.Registry.Metadata.Rendering (MetadataRendering (..), renderingOf)
+import Ecluse.Test.Registry.Npm.Metadata (npmRead)
 import Ecluse.Test.Registry.Npm.Project (parsePackageInfoFromValue)
+import Ecluse.Test.Registry.PyPI.Metadata (pypiRead)
 import Ecluse.Test.Registry.PyPI.Project (projectSimpleIndexFromValue)
 import Ecluse.Test.Server.Cache (diagnosticDocumentValue, weighCacheEntry)
 import Ecluse.Test.Snapshot (digestOf, untaggedRead)
@@ -221,7 +222,7 @@ residencyFor = \case
                 , residencyFigures = npmFigures
                 , residencyEntryBelowSource = True
                 , residencyLegacyRead = \limits name -> projectMetadata (parsePackageInfoFromValue name) limits
-                , residencyLegacyHeld = \info raw size digest -> HeldShared (CacheEntry info (fst npmCached raw) size digest)
+                , residencyLegacyHeld = \info raw size digest -> HeldShared (CacheEntry info (fst npmCached raw) size noRetainedEntries digest)
                 , residencyIdentity = \name version -> (,mkVersion Npm (toText version)) <$> either (fail . show) pure (Npm.projectName (toText name))
                 , residencyVersionList = readVersionList
                 }
@@ -537,7 +538,7 @@ prepare shape package = do
         Shared -> do
             (info, document) <- project package bytes
             -- The probe's own size and digest: the read's digest keeps a 4 KiB pinned block the gate omits.
-            let entry = CacheEntry info document (BS.length bytes) (digestOf bytes)
+            let entry = CacheEntry info document (BS.length bytes) noRetainedEntries (digestOf bytes)
             _ <- forceShown entry
             compact <- evaluate (LBS.length (encode (diagnosticDocumentValue document)))
             weight <- evaluate (weighCacheEntry entry)
@@ -671,7 +672,7 @@ sourceTerms :: Limits -> CaptureUpstream -> ReadTerms
 sourceTerms limits upstream = ReadTerms{rtLimits = limits, rtBaseUrl = upstreamOrigin upstream, rtChargeFullRead = const pass}
 
 manifestEntry :: Manifest -> CacheEntry
-manifestEntry manifest = CacheEntry (manifestInfo manifest) (manifestRaw manifest) (manifestBodyBytes manifest) (manifestDigest manifest)
+manifestEntry manifest = CacheEntry (manifestInfo manifest) (manifestRaw manifest) (manifestBodyBytes manifest) (manifestRetainedEntries manifest) (manifestDigest manifest)
 
 heldEntry :: CacheEntry -> (Held, Int, Maybe ContentDigest)
 heldEntry entry = (HeldShared entry, entryBodyBytes entry, Just (entryDigest entry))

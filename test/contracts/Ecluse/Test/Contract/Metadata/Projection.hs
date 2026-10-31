@@ -17,7 +17,7 @@ import Test.Hspec
 
 import Ecluse.Core.Package (PackageDetails, PackageInfo (infoInvalidEntries, infoName, infoVersions), renderPackageName)
 import Ecluse.Core.Registry.Metadata (MetadataError (MetadataBoundExceeded, MetadataNameMismatch, MetadataUndecodable))
-import Ecluse.Core.Security (LimitError (TooManyArtifacts, TooManyVersions), Limits (maxArtifactCount, maxVersionCount), defaultLimits)
+import Ecluse.Core.Security (LimitError (TooManyVersions), Limits (maxVersionCount), defaultLimits)
 import Ecluse.Test.Contract.Catalogue (caseLabel)
 import Ecluse.Test.Support (expectRight)
 
@@ -109,9 +109,6 @@ projectionCountAndSelectionContract provider driver = do
         fmap void (full limits document) `shouldReturn` expected
         for_ versions $ \version ->
             fmap void (selected limits version document) `shouldReturn` expected
-    contractExample "artifact-bound" "bounds full-read artifacts and accepts the exact ceiling" $ do
-        fmap void (full defaultLimits{maxArtifactCount = 1} document) `shouldReturn` Left (MetadataBoundExceeded (TooManyArtifacts 2 1))
-        full defaultLimits{maxArtifactCount = 2} document >>= (`shouldSatisfy` isRight)
     contractExample "missing-version" "returns no details for a missing version" $
         selected defaultLimits "9.9.9" document `shouldReturn` Right Nothing
     contractExample "selected-parity" "projects every selected version identically to the full document" $ do

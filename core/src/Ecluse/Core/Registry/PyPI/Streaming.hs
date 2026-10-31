@@ -32,6 +32,8 @@ data PyPIRead = FullRead | SelectedRead PackageName Text | MirrorRead PackageNam
 -- | File events carry original positions, including items that yield no retained payload.
 data PyPIField
     = EnvelopeField Text Value
+    | -- | An item of the named envelope field's array, as it is read and before the field arrives.
+      EnvelopeItem Text
     | FilesShape Bool
     | FileField Int (Maybe Value)
     | VersionsShape Bool

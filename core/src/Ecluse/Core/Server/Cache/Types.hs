@@ -28,6 +28,7 @@ import Ecluse.Core.Ecosystem (ecosystemName)
 import Ecluse.Core.Package (PackageInfo, PackageName, pkgCanonical, pkgEcosystem, pkgNamespace, unScope)
 import Ecluse.Core.Registry.CachedDocument (CachedDoc)
 import Ecluse.Core.Registry.Metadata (ContentDigest)
+import Ecluse.Core.Registry.Metadata.EntryFloor (RetainedEntries)
 import Ecluse.Core.Server.Conditional (ETag, renderETag)
 import Ecluse.Core.Server.Framing (frameComponents)
 import Ecluse.Core.Telemetry.Metrics (CacheStore (AssembledStore, DirectoryStore, FullStore, VersionStore))
@@ -68,6 +69,8 @@ data CacheEntry = CacheEntry
     -- ^ The source representation from which the adapter builds the served body.
     , entryBodyBytes :: Int
     -- ^ Decompressed source bytes, retained independently of the cache weight.
+    , entryRetainedEntries :: RetainedEntries
+    -- ^ The entries the finished document keeps, which the per-entry floors charge once the read completes.
     , entryDigest :: ContentDigest
     }
     deriving stock (Eq, Show)

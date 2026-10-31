@@ -96,7 +96,8 @@ import Ecluse.Core.Package.Integrity (
     mkMinTrustedIntegrity,
  )
 import Ecluse.Core.Registry.CachedDocument (npmCached)
-import Ecluse.Core.Registry.Metadata (Manifest (Manifest, manifestBodyBytes, manifestDigest, manifestInfo, manifestRaw))
+import Ecluse.Core.Registry.Metadata (Manifest (Manifest, manifestBodyBytes, manifestDigest, manifestInfo, manifestRaw, manifestRetainedEntries))
+import Ecluse.Core.Registry.Metadata.EntryFloor (noRetainedEntries)
 import Ecluse.Core.Security.Egress (RegistryUrl, mkRegistryUrl)
 import Ecluse.Core.Server.Path (Filename, mkFilename)
 import Ecluse.Core.Version (Version, mkVersion, renderVersion)
@@ -284,5 +285,6 @@ sampleManifest name versions =
                 }
         , manifestRaw = fst npmCached (Object mempty)
         , manifestBodyBytes = 0
+        , manifestRetainedEntries = noRetainedEntries
         , manifestDigest = digestOf ""
         }

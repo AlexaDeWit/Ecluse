@@ -27,7 +27,7 @@ import Ecluse.Core.Registry.Json.Writer (packTree)
 import Ecluse.Core.Registry.JsonStream (Steps (..), isJsonSpace, readStepsWithEnd)
 import Ecluse.Core.Registry.Metadata.Fetch.Types (DocumentWalk)
 import Ecluse.Core.Registry.Metadata.RecordStream (finishRecordSteps, recordFragmentCharge, recordSteps)
-import Ecluse.Core.Security (Limits (maxNestingDepth), checkArtifactCount, checkVersionCountOf)
+import Ecluse.Core.Security (Limits (maxNestingDepth), checkVersionCountOf)
 import Ecluse.Core.Server.MemoryModel (saturatingCharge)
 import Ecluse.Core.Strict (strictElements)
 import Ecluse.Core.Version (Version, renderVersion)
@@ -51,7 +51,6 @@ data NativeRecord = PackedRecord !Packed | SelectedRecord !Value
 data Scan = Scan
     { scanOrdinal :: !Int
     , scanCount :: !Int
-    , scanArtifacts :: !Int
     , scanSeen :: !(Map Text Int)
     , scanRows :: ![NativeRow]
     , scanInvalid :: ![InvalidEntry]
@@ -67,7 +66,7 @@ readCargoIndexCharged pay discovery limits name mode bound _ =
 cargoIndexSteps :: (Monad m) => (Int -> m ()) -> CargoDiscovery -> Limits -> PackageName -> CargoRead -> Steps m CargoIndexResult
 cargoIndexSteps pay discovery limits name mode = recordSteps reserve consume (Finished . complete) initial
   where
-    initial = Scan 0 0 0 Map.empty [] [] 0
+    initial = Scan 0 0 Map.empty [] [] 0
     requestedIdentity = case mode of
         FullRead -> Nothing
         SelectedRead version -> cargoUniquenessKey <$> parseCargo (renderVersion version)
@@ -103,8 +102,6 @@ cargoIndexSteps pay discovery limits name mode = recordSteps reserve consume (Fi
                     case projectCargoRecord name key discovery value of
                         Left invalid -> Right (rememberInvalid invalid observed)
                         Right details -> do
-                            let artifacts = scanArtifacts observed + 1
-                            checkArtifactCount limits artifacts
                             let raw = renderVersion (pkgVersion details)
                                 selected = case mode of FullRead -> True; SelectedRead version -> renderVersion version == raw
                                 rows = case nativeIdentity of
@@ -114,7 +111,7 @@ cargoIndexSteps pay discovery limits name mode = recordSteps reserve consume (Fi
                                                 !row = NativeRow unique raw key details retained
                                              in row : scanRows observed
                                     _ -> scanRows observed
-                            pure observed{scanArtifacts = artifacts, scanRows = rows, scanKeptCharge = case mode of SelectedRead _ | null (scanRows observed) && not (null rows) -> rowCharge; _ -> scanKeptCharge observed}
+                            pure observed{scanRows = rows, scanKeptCharge = case mode of SelectedRead _ | null (scanRows observed) && not (null rows) -> rowCharge; _ -> scanKeptCharge observed}
     dropRecord key reason = rememberInvalid (mkInvalidEntry InvalidVersionManifest (show key) Null reason)
     complete scan =
         let (rows, duplicates) = foldl' (finishRow (scanSeen scan)) ([], []) (scanRows scan)

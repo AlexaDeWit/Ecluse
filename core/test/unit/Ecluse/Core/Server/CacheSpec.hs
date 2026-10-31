@@ -23,6 +23,7 @@ import Ecluse.Core.Package (Artifact (artEntryKey), PackageDetails (pkgArtifacts
 import Ecluse.Core.Package.Entry (EntryKey (ObjectEntry))
 import Ecluse.Core.Registry.CachedDocument (CachedDoc, npmCached)
 import Ecluse.Core.Registry.Metadata (MetadataError (MetadataUndecodable), VersionRead)
+import Ecluse.Core.Registry.Metadata.EntryFloor (noRetainedEntries)
 import Ecluse.Core.Registry.RubyGems.Directory (GemDirectory (GemDirectory))
 import Ecluse.Core.Security (defaultLimits)
 import Ecluse.Core.Server.Cache (
@@ -84,7 +85,7 @@ info name =
         }
 
 entry :: PackageName -> Text -> CacheEntry
-entry name marker = CacheEntry{entryInfo = info name, entryRaw = cachedRaw marker, entryBodyBytes = BS.length (encodeUtf8 marker), entryDigest = digestOf (encodeUtf8 marker)}
+entry name marker = CacheEntry{entryInfo = info name, entryRaw = cachedRaw marker, entryBodyBytes = BS.length (encodeUtf8 marker), entryRetainedEntries = noRetainedEntries, entryDigest = digestOf (encodeUtf8 marker)}
 
 cachedRaw :: Text -> CachedDoc
 cachedRaw = fst npmCached . String

@@ -33,20 +33,20 @@ spec = describe "Ruby Marshal data" $ do
             decodeMarshal defaultLimits bytes `shouldBe` Left (ParseError "unsupported Marshal tag")
     it "rejects malformed class-name chains before recursing or exhausting the node budget" $ do
         let chain = BS.replicate 100000 111
-            limits = defaultLimits{maxArtifactCount = 2, maxNestingDepth = 1}
+            limits = defaultLimits{inertNodeCeiling = 2, maxNestingDepth = 1}
         for_ [111, 117, 85] $ \tag ->
             decodeMarshal limits ("\x04\x08" <> BS.singleton tag <> chain) `shouldBe` Left (ParseError "Marshal class or field name is not a symbol")
-        decodeMarshal limits{maxArtifactCount = 3} ("\x04\x08o:\x06X\x06" <> chain) `shouldBe` Left (ParseError "Marshal class or field name is not a symbol")
+        decodeMarshal limits{inertNodeCeiling = 3} ("\x04\x08o:\x06X\x06" <> chain) `shouldBe` Left (ParseError "Marshal class or field name is not a symbol")
     it "resolves completed native references without accepting cycles" $ do
         decodeMarshal defaultLimits "\x04\x08[\x07\x22\x06x@\x06" `shouldBe` Right (MArray [MString "x", MString "x"])
     it "counts expanded reference work and depth at the reference position" $ do
-        decodeMarshal defaultLimits{maxArtifactCount = 7} "\x04\x08[\x07[\x07\x30\x30@\x06" `shouldBe` Left (ParseError "Marshal reference work exceeds its bound")
+        decodeMarshal defaultLimits{inertNodeCeiling = 7} "\x04\x08[\x07[\x07\x30\x30@\x06" `shouldBe` Left (ParseError "Marshal reference work exceeds its bound")
         decodeMarshal defaultLimits{maxNestingDepth = 3} "\x04\x08[\x07[\x06\x30[\x06[\x06@\x06" `shouldBe` Left (ParseError "Marshal referenced depth exceeds its bound")
     it "refuses body, depth, node, collection and string bounds" $ do
         let nested = "\x04\x08[\x06[\x06\x30"
         decodeMarshal defaultLimits{maxNestingDepth = 1} nested `shouldSatisfy` isLeft
-        decodeMarshal defaultLimits{maxArtifactCount = 1} nested `shouldSatisfy` isLeft
+        decodeMarshal defaultLimits{inertNodeCeiling = 1} nested `shouldSatisfy` isLeft
         decodeMarshal defaultLimits{maxMetadataBytes = 2} nested `shouldSatisfy` isLeft
         decodeMarshal defaultLimits "\x04\x08[\x7f" `shouldSatisfy` isLeft
-        decodeMarshal defaultLimits{maxArtifactCount = 2} "\x04\x08[\x08\x30\x30\x30" `shouldBe` Left (ParseError "Marshal collection count exceeds its bound")
+        decodeMarshal defaultLimits{inertNodeCeiling = 2} "\x04\x08[\x08\x30\x30\x30" `shouldBe` Left (ParseError "Marshal collection count exceeds its bound")
         decodeMarshal defaultLimits{maxMetadataBytes = 16} "\x04\x08\x22\x01\xc8" `shouldBe` Left (ParseError "Marshal strings exceed their byte bound")

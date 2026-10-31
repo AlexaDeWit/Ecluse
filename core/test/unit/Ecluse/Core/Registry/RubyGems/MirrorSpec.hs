@@ -19,7 +19,6 @@ import Ecluse.Core.Registry.RubyGems.Mirror
 import Ecluse.Core.Registry.RubyGems.Project (projectName)
 import Ecluse.Core.Registry.RubyGems.Projection (projectGemRows)
 import Ecluse.Core.Registry.RubyGems.Wire (decodeInfoRow)
-import Ecluse.Core.Security (defaultLimits)
 import Ecluse.Test.Support (expectRight)
 
 spec :: Spec
@@ -27,7 +26,7 @@ spec = describe "RubyGems mirror companions" $ do
     it "keeps a configured source prefix and preserves the exact platform suffix" $ do
         name <- expectRight (projectName "fixture")
         row <- expectRight (decodeInfoRow name (RecordEntry 7) "1.0.0-x86_64-linux-musl |checksum:0000000000000000000000000000000000000000000000000000000000000000")
-        info <- expectRight (projectGemRows defaultLimits name "https://source.test/prefix" [row])
+        info <- expectRight (projectGemRows name "https://source.test/prefix" [row])
         details <- maybe (fail "missing fixture version") pure (Map.lookup "1.0.0" (infoVersions info))
         let source = GemDocument name "---\n" [row]
         inventory <- expectRight (checkedMirrorInventory name (pkgVersion details) (VersionDoc details (Just (fst rubyGemsCached source))) (RubyGemsMirrorRead source))

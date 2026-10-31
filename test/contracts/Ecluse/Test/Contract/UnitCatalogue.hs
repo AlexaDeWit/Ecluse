@@ -117,7 +117,7 @@ projectionCases ecosystem =
 
 -- | Projection requirements stay independent of each ecosystem's registered examples.
 metadataProjectionLaws :: [Text]
-metadataProjectionLaws = ["malformed", "missing-name", "name-mismatch", "version-bound", "artifact-bound", "missing-version", "selected-parity"]
+metadataProjectionLaws = ["malformed", "missing-name", "name-mismatch", "version-bound", "missing-version", "selected-parity"]
 
 -- | Every registered ecosystem owes the same fetch transport and bound observations.
 metadataFetchLaws :: [Text]

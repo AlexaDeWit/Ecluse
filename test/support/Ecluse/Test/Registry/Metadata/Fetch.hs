@@ -13,12 +13,14 @@ module Ecluse.Test.Registry.Metadata.Fetch (
     -- * Reads
     heldManifest,
     heldVersion,
+    heldWorkspacePeak,
+    heldWorkspacePayments,
     captureManifest,
     captureVersion,
 ) where
 
 import Data.ByteString qualified as BS
-import Network.HTTP.Client (Request, Response (responseStatus), brRead, responseBody)
+import Network.HTTP.Client (Request, Response (responseStatus), brRead, defaultManagerSettings, newManager, responseBody)
 import Network.HTTP.Types.Status (statusCode)
 
 import Ecluse.Core.Package (PackageName)
@@ -27,10 +29,14 @@ import Ecluse.Core.Registry.Exchange (runExchange)
 import Ecluse.Core.Registry.Exchange.Types (ExchangeClient)
 import Ecluse.Core.Registry.Metadata (Manifest, MetadataError, VersionRead)
 import Ecluse.Core.Registry.Metadata.Fetch (readManifest, readVersion)
+import Ecluse.Core.Registry.Metadata.Fetch.Preparation (PrepareRead, prepareRead)
 import Ecluse.Core.Registry.Metadata.Fetch.Types (Body (Body), EcosystemRead, ReadTerms (..))
+import Ecluse.Core.Registry.Origin (OriginClient (ocChargeFullReadWorkspace), originClient)
 import Ecluse.Core.Security (BodyLimit, LimitError, Limits (maxMetadataBytes), ProgressFloor, boundedRead, defaultLimits)
 import Ecluse.Core.Version (Version)
 import Ecluse.Test.Corpus (CaptureUpstream (upstreamOrigin))
+import Ecluse.Test.Deadline (withExchangeClient)
+import Ecluse.Test.Package (unsafeRegistryUrl)
 import Ecluse.Test.Port (passthroughTracingPort)
 import Ecluse.Test.Registry.JsonStream (heldChunks, sliceChunks)
 
@@ -60,6 +66,20 @@ captureChunks = sliceChunks 32768
 -- | The production full read of held chunks from the base URL, under a body limit that admits them and with no memory charge.
 heldManifest :: EcosystemRead -> Limits -> Text -> PackageName -> [ByteString] -> IO (Either MetadataError Manifest)
 heldManifest eco limits base name chunks = readManifest eco passthroughTracingPort (heldTerms limits base chunks) name (heldBody chunks)
+
+-- | 'heldWorkspacePayments' with only the highest full-read workspace the read paid.
+heldWorkspacePeak :: PrepareRead -> Text -> PackageName -> [ByteString] -> IO (Either MetadataError Manifest, Int)
+heldWorkspacePeak factory base name chunks = second (foldl' max 0) <$> heldWorkspacePayments factory base name chunks
+
+-- | 'heldManifest' through a reader prepared under an origin at the base URL, with each full-read workspace it paid, in order.
+heldWorkspacePayments :: PrepareRead -> Text -> PackageName -> [ByteString] -> IO (Either MetadataError Manifest, [Int])
+heldWorkspacePayments factory base name chunks = do
+    paid <- newIORef []
+    withExchangeClient (newManager defaultManagerSettings) $ \client -> do
+        let origin = (originClient defaultLimits client (unsafeRegistryUrl base) Nothing){ocChargeFullReadWorkspace = \amount -> modifyIORef' paid (amount :)}
+        nativeRead <- prepareRead factory origin >>= either (fail . show) pure
+        result <- heldManifest nativeRead defaultLimits base name chunks
+        (result,) . reverse <$> readIORef paid
 
 -- | 'heldManifest' of a capture, under the default limits and against the registry it came from.
 captureManifest :: EcosystemRead -> CaptureUpstream -> PackageName -> [ByteString] -> IO (Either MetadataError Manifest)

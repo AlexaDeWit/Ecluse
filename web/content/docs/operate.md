@@ -41,6 +41,10 @@ A PyPI `publicationTarget` now reads from `url` and writes to `uploadUrl`. The [
 
 An npm or RubyGems `mirrorTarget` or `publicationTarget` that sets `uploadUrl` now refuses at load, because those protocols derive the upload address from `url`. Remove the key, and check that `url` names the registry you write to.
 
+`limits.maxVersionCount` now counts every file of a PyPI listing and every row of a RubyGems `/info` document, so a pin below a package's file or row count refuses that package. A PyPI listing refuses as soon as its read passes the pin, rather than after reading the whole document.
+
+`limits.maxArtifactCount` is removed, and no key replaces it. A config document or an `ECLUSE_LIMITS__MAX_ARTIFACT_COUNT` environment variable that still sets it refuses at load, so remove both ([Upgrade existing limits and admission pins](@/docs/operations.md#upgrade-existing-limits-and-admission-pins)).
+
 The npm mount ships a second admission-only default, `deny-external-dependencies`. A public npm version whose `dependencies`, `optionalDependencies` or `peerDependencies` name a git source, a remote tarball URL or an unsupported scheme such as `jsr:` stops resolving, and npm publication refuses such a release with `400`. Copies your stores already hold keep serving. Pin a package you still need with an `AllowByIdentity` rule at precedence above 300, or disable the default under `mounts.npm.rules` ([Rule policy](@/docs/configuration.md#rule-policy)).
 
 A rollback must account for queued messages and advisory data, as well as the container image.

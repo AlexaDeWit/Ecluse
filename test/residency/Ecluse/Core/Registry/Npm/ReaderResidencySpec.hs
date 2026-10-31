@@ -21,6 +21,7 @@ import Ecluse.Core.Security (defaultLimits)
 import Ecluse.Test.Contract.Catalogue (caseLabel)
 import Ecluse.Test.Contract.Retention (boundedRetention)
 import Ecluse.Test.Package (unscopedNpm)
+import Ecluse.Test.Registry.JsonBytes (commas, render)
 import Ecluse.Test.Registry.JsonStream (testTable)
 import Ecluse.Test.Registry.Npm.Metadata (npmFullTestWalk)
 
@@ -71,9 +72,3 @@ release index =
         <> ".js\",\"dependencies\":{\"dep-"
         <> Builder.intDec index
         <> "\":\"^1\"},\"dist\":{\"tarball\":\"https://registry.npmjs.org/thing/-/thing-1.0.0.tgz\"}}"
-
-commas :: [Builder.Builder] -> Builder.Builder
-commas = mconcat . intersperse ","
-
-render :: Builder.Builder -> ByteString
-render = toStrict . Builder.toLazyByteString
