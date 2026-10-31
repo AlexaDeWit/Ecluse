@@ -13,6 +13,7 @@ module Ecluse.Test.Registry.RubyGems.Fixtures (
     rubyRelease,
     writeRubyRegistry,
     rubyVersions,
+    rubyVersionsWith,
     loadFixtureInfo,
 ) where
 
@@ -116,12 +117,16 @@ writeRubyRegistry destination = do
 
 -- | Blank info hints force supported clients to revalidate their cached rows.
 rubyVersions :: [RubyRelease] -> Text
-rubyVersions releases =
+rubyVersions = rubyVersionsWith (const "")
+
+-- | Discovery rows ending in each name's info-file hint, which rubygems.org fills with the info body's MD5.
+rubyVersionsWith :: (Text -> Text) -> [RubyRelease] -> Text
+rubyVersionsWith hint releases =
     "created_at: 2026-01-01T00:00:00Z\n---\n" <> T.unlines (map directoryRow names)
   where
     names = sort (ordNub (map releaseName releases))
     directoryRow name =
-        name <> " " <> T.intercalate "," [T.takeWhile (/= ' ') (releaseInfoRow release) | release <- releases, releaseName release == name] <> " "
+        name <> " " <> T.intercalate "," [T.takeWhile (/= ' ') (releaseInfoRow release) | release <- releases, releaseName release == name] <> " " <> hint name
 
 -- | A committed info file's rows, each non-empty line after the header at its position from 1.
 loadFixtureInfo :: Text -> IO (PackageName, [GemRow])
