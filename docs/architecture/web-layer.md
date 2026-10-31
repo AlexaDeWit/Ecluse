@@ -360,8 +360,9 @@ wins:
 
 Never `404`: the versions existed and Écluse withheld them, and a genuinely absent package is a
 separate upstream miss. A name that both the private and the public upstream answer `404` for is
-that miss, and it answers `404` before any merge. (`packumentStatus` in `Ecluse.Core.Server.Response`
-is the counterpart of `artifactStatus`.)
+that miss, and it answers `404` before any merge, unless the mirror state records the name (see
+[settled absence](registry-model.md#packument-merge-across-upstreams)). (`packumentStatus` in
+`Ecluse.Core.Server.Response` is the counterpart of `artifactStatus`.)
 
 The serve-outcome model decides the status, not the body shape: an ecosystem's route contract
 supplies the matching response constructor and codec. A request matching no mount is a neutral
