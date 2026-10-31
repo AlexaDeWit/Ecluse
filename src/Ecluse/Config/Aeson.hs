@@ -27,18 +27,14 @@ import Ecluse.Config.Types
 
 import Ecluse.Core.BuildIdentity (parseOperatorContact)
 import Ecluse.Core.Credential (Secret, mkSecret)
-import Ecluse.Core.Ecosystem (Ecosystem (..), parseEcosystem)
+import Ecluse.Core.Ecosystem (Ecosystem (..), ecosystemName, parseEcosystem)
 import Ecluse.Core.Osv.Provenance (SourcePathRecording (FingerprintSourcePath, RecordSourcePath))
 import Ecluse.Core.Osv.Publication (Percent, mkPercent)
-import Ecluse.Core.Package (Scope)
 import Ecluse.Core.Package.Integrity (parseMinIntegrity, parseMinTrustedIntegrity)
-import Ecluse.Core.Registry.Adapter (uploadEndpointFor)
+import Ecluse.Core.Registry.Adapter (firstPartyFor, uploadEndpointFor)
 import Ecluse.Core.Registry.Adapter.Capability (UploadEndpointRequirement (ExplicitUploadEndpoint))
-import Ecluse.Core.Registry.Cargo.FirstParty qualified as Cargo
+import Ecluse.Core.Registry.FirstParty (FirstPartyDeclaration (FirstPartyDeclaration), FirstPartyNames (..))
 import Ecluse.Core.Registry.Maintenance.Budget (parseQuotaDimension, parseRequestKind)
-import Ecluse.Core.Registry.Npm.Project (projectScope)
-import Ecluse.Core.Registry.PyPI.FirstParty (PyPIFirstParty, projectFirstPartyEntry)
-import Ecluse.Core.Registry.RubyGems.FirstParty qualified as RubyGems
 import Ecluse.Core.Security (parseBlockedRange)
 import Ecluse.Core.Security.Egress (RegistryUrl)
 import Ecluse.Core.Server.Encoding (MetadataCompression (GzipWhenAccepted, IdentityOnly))
@@ -307,19 +303,17 @@ parseSecret :: String -> Value -> Parser Secret
 parseSecret field = expectString field (pure . mkSecret)
 
 -- An entry no scope, name or prefix can equal (an empty one, a wrong separator) fails the load,
--- so a typo cannot seed a privilege that covers nothing.
+-- so a typo cannot seed a privilege that covers nothing. The mount's adapter reads each entry.
 parseFirstParty :: Ecosystem -> String -> Value -> Parser FirstParty
-parseFirstParty eco field v = case eco of
-    Npm -> FirstPartyNpmScopes <$> parseNpmScopes field v
-    PyPI -> FirstPartyPyPI <$> parsePyPIFirstParty field v
-    Cargo -> FirstPartyCargo <$> nonEmptyCommaSeparated field (projectedEntry "invalid Cargo entry in firstParty" Cargo.projectFirstPartyEntry) (field <> " must name at least one crate or prefix") v
-    RubyGems -> FirstPartyRubyGems <$> nonEmptyCommaSeparated field (projectedEntry "invalid RubyGems entry in firstParty" RubyGems.projectFirstPartyEntry) (field <> " must name at least one gem or prefix") v
-
-parseNpmScopes :: String -> Value -> Parser (NonEmpty Scope)
-parseNpmScopes field = nonEmptyCommaSeparated field (projectedEntry "invalid scope in firstParty" projectScope) (field <> " must name at least one scope")
-
-parsePyPIFirstParty :: String -> Value -> Parser (NonEmpty PyPIFirstParty)
-parsePyPIFirstParty field = nonEmptyCommaSeparated field (projectedEntry ("invalid entry in " <> field) projectFirstPartyEntry) (field <> " must name at least one distribution or prefix")
+parseFirstParty eco field v = case firstPartyFor eco of
+    Nothing -> fail (field <> ": this build reads no first-party entries for " <> toString (ecosystemName eco))
+    Just (FirstPartyDeclaration names) ->
+        FirstParty names
+            <$> nonEmptyCommaSeparated
+                field
+                (projectedEntry ("invalid " <> toString (namesEntryNoun names) <> " in " <> field) (namesEntry names))
+                (field <> " must name at least one " <> toString (namesListNoun names))
+                v
 
 parseBlockedRanges :: String -> Value -> Parser [IPRange]
 parseBlockedRanges field = commaSeparated field parseBlockedRangeEntry

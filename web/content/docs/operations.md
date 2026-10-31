@@ -93,9 +93,10 @@ document, and a store such as Verdaccio applies it over its own. The route retur
 that cannot be read, is not a JSON object, or repeats a key, and for a version filed under a key
 that differs from its own `version` field. It also returns `400`, naming the dependency and its
 field, for a version whose `dependencies`, `optionalDependencies` or `peerDependencies` name a git
-source or a remote tarball URL, the specs `deny-external-dependencies` denies on public versions.
-`devDependencies` and local specs publish. Publish the dependency to a registry Écluse serves, then
-depend on that version. The PyPI upload route returns `501` for an `:action`
+source, a remote tarball URL or an unsupported scheme such as `jsr:`, the specs
+`deny-external-dependencies` denies on public versions. `devDependencies`, registry ranges and tags,
+`npm:` aliases, and `file:`, `link:`, `workspace:` and local path specs publish. Publish the
+dependency to a registry Écluse serves, then depend on that version. The PyPI upload route returns `501` for an `:action`
 other than `file_upload`. It returns `400` for an upload without exactly one `version` field and
 one `content` file part. It also returns `400` when the `content` file name does not name the
 declared project and `version` as a build tool spells them. A source distribution must be named

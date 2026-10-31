@@ -8,19 +8,22 @@ names the store.
 -}
 module Ecluse.Runtime.Credential.CodeArtifact.Presentation (
     codeArtifactAuthMechanism,
+    codeArtifactUsername,
 ) where
 
 import Ecluse.Core.Ecosystem (Ecosystem (..))
 import Ecluse.Core.Registry.Request (AuthMechanism (AuthBasic, AuthBearer, AuthRawKey), StoreOperation (StoreRead, StoreWrite))
 
-{- | The mechanism CodeArtifact's client configuration for each package format uses. A Basic row
-renders the credential's own username, which the store sets to @aws@.
--}
+-- | The mechanism CodeArtifact's client configuration for each package format uses. Every Basic row carries the store's username.
 codeArtifactAuthMechanism :: Ecosystem -> StoreOperation -> AuthMechanism
 codeArtifactAuthMechanism = \case
     Npm -> const AuthBearer
-    PyPI -> const AuthBasic
+    PyPI -> const (AuthBasic codeArtifactUsername)
     Cargo -> const AuthRawKey
     RubyGems -> \case
-        StoreRead -> AuthBasic
+        StoreRead -> AuthBasic codeArtifactUsername
         StoreWrite -> AuthBearer
+
+-- | The username CodeArtifact accepts beside a token on Basic. Configuration may name no other.
+codeArtifactUsername :: Text
+codeArtifactUsername = "aws"

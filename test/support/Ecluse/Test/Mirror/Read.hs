@@ -51,7 +51,7 @@ import Ecluse.Core.Registry.MirrorUpload.Internal (restoreMirrorInventory)
 import Ecluse.Core.Registry.PyPI.Adapter (pypiAdapter)
 import Ecluse.Core.Registry.PyPI.Document (simpleDocument, simpleEnvelope, simpleFiles)
 import Ecluse.Core.Registry.PyPI.Metadata (projectPyPIPacked)
-import Ecluse.Core.Registry.PyPI.Mirror (pypiMirrorDocuments)
+import Ecluse.Core.Registry.PyPI.Mirror (pypiMirrorDocuments, pypiStateFormat)
 import Ecluse.Core.Security (Limits (maxMetadataBytes), defaultLimits)
 import Ecluse.Core.Server.Admission.Budget (scaleCharge)
 import Ecluse.Core.Server.Admission.Meter (MemoryMeter, charge, takeLargestCharge, withMemoryEntry)
@@ -107,15 +107,15 @@ makeReadFixtureFor target count = do
     inventories <- traverse (uncurry inventory) [(version, file) | version <- [1 .. count], file <- [1 .. 3]]
     previous <- foldM add Nothing inventories >>= maybe (fail "empty fixture") pure
     addition <- inventory 1 4
-    updated <- expectRight (extendProjectRecord readLimits target addition (Just previous))
+    updated <- expectRight (extendProjectRecord pypiStateFormat readLimits target addition (Just previous))
     unmanaged <- traverse (inventory (count + 1)) [1 .. 3]
-    old <- expectRight (encodeProjectRecord readLimits previous)
-    new <- expectRight (encodeProjectRecord readLimits updated)
+    old <- expectRight (encodeProjectRecord pypiStateFormat readLimits previous)
+    new <- expectRight (encodeProjectRecord pypiStateFormat readLimits updated)
     let fields = concatMap nativeFields (inventories <> [addition] <> unmanaged)
         private = LBS.toStrict (encode (object ["name" .= ("demo" :: Text), "meta" .= object ["api-version" .= ("1.0" :: Text)], "files" .= fields]))
     evaluate (BS.length old + BS.length new + BS.length private) $> ReadFixture target old new private
   where
-    add previous value = Just <$> expectRight (extendProjectRecord readLimits target value previous)
+    add previous value = Just <$> expectRight (extendProjectRecord pypiStateFormat readLimits target value previous)
 
 inventory :: Int -> Int -> IO MirrorInventory
 inventory version file = do
@@ -151,8 +151,8 @@ loadReadFixture directory = ReadFixture defaultTarget <$> BS.readFile (directory
 -- | Compute the old record's retention allowance outside the measured request.
 readRetainedCharge :: ReadFixture -> IO Int
 readRetainedCharge fixture = do
-    decoded <- chargedDecodeProjectRecord (const (pure ())) readLimits (fixtureTarget fixture) mirrorPackage (fixtureOld fixture)
-    expectRight (decoded >>= projectRecordWeight readLimits)
+    decoded <- chargedDecodeProjectRecord pypiStateFormat (const (pure ())) readLimits (fixtureTarget fixture) mirrorPackage (fixtureOld fixture)
+    expectRight (decoded >>= projectRecordWeight pypiStateFormat readLimits)
 
 -- | The backend decodes only loaded revisions and records every conditional state exchange.
 newReadSession :: ReadFixture -> IO ReadSession
@@ -185,7 +185,7 @@ newSession target limits privateBytes load = do
     (info, packed) <- expectRight (projectPyPIPacked readLimits mirrorPackage streamed)
     let private = Manifest info (fst pypiPacked packed) (BS.length privateBytes) noRetainedEntries (digestFromContext (hashUpdate hashInit privateBytes))
         store = MirrorState (fetch changed exchanges) (\_ _ _ _ -> pure (Left StateRetryExhausted)) (\_ _ -> pure (Left StateMissingCompanion)) (\_ _ -> pure (Left StateMissingCompanion))
-    pure (ReadSession (newMirrorView limits target store retention pypiMirrorDocuments) meter private changed exchanges)
+    pure (ReadSession (newMirrorView limits target store retention pypiStateFormat pypiMirrorDocuments) meter private changed exchanges)
   where
     fetch changed exchanges pay name held = do
         modifyIORef' exchanges $ \(count, history) ->
@@ -199,7 +199,7 @@ newSession target limits privateBytes load = do
             then pure (Right (StateUnchanged revision))
             else do
                 bytes <- load pay newer
-                fmap (StateLoaded revision) <$> chargedDecodeProjectRecord pay limits target name bytes
+                fmap (StateLoaded revision) <$> chargedDecodeProjectRecord pypiStateFormat pay limits target name bytes
 
 -- | Observe validation alone so the 304 accounting contract excludes listing output work.
 validateManagedProject :: ReadSession -> IO Int

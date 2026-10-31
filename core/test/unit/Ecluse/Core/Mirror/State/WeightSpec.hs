@@ -26,7 +26,9 @@ import Ecluse.Core.Mirror.State.Weight
 import Ecluse.Core.Package
 import Ecluse.Core.Registry.MirrorUpload (MirrorReadData (RubyGemsMirrorRead), inventoryDetails)
 import Ecluse.Core.Registry.MirrorUpload.Internal (restoreMirrorInventory)
+import Ecluse.Core.Registry.PyPI.Mirror (pypiStateFormat)
 import Ecluse.Core.Registry.RubyGems.Document (GemDocument (gemRows), GemRow (grSource))
+import Ecluse.Core.Registry.RubyGems.Mirror (rubyGemsStateFormat)
 import Ecluse.Core.Security (defaultLimits)
 import Ecluse.Core.Server.Cache.Types (Source (Source), fullKey)
 import Ecluse.Core.Server.MemoryModel (saturatingCharge)
@@ -42,11 +44,11 @@ spec = describe "durable graph accounting" $ do
     it "grows with admitted files and fragments but leaves repeated admission unchanged" $ do
         initialInventory <- mirrorSample [1] False "https://first.test/" "original"
         next <- mirrorSample [2] False "https://first.test/" "original"
-        previousRecord <- expectRight (extendProjectRecord defaultLimits target initialInventory Nothing)
-        repeated <- expectRight (extendProjectRecord defaultLimits target initialInventory (Just previousRecord))
-        added <- expectRight (extendProjectRecord defaultLimits target next (Just previousRecord))
-        retainedRecordWeight repeated `shouldBe` retainedRecordWeight previousRecord
-        retainedRecordWeight added `shouldSatisfy` (> retainedRecordWeight previousRecord)
+        previousRecord <- expectRight (extendProjectRecord pypiStateFormat defaultLimits target initialInventory Nothing)
+        repeated <- expectRight (extendProjectRecord pypiStateFormat defaultLimits target initialInventory (Just previousRecord))
+        added <- expectRight (extendProjectRecord pypiStateFormat defaultLimits target next (Just previousRecord))
+        retainedRecordWeight pypiStateFormat repeated `shouldBe` retainedRecordWeight pypiStateFormat previousRecord
+        retainedRecordWeight pypiStateFormat added `shouldSatisfy` (> retainedRecordWeight pypiStateFormat previousRecord)
 
     it "charges repeated expected descriptors even when their complete payloads alias" $ do
         record <- sampleRecord
@@ -54,7 +56,7 @@ spec = describe "durable graph accounting" $ do
         let fragment = NE.head (storedFragments version)
             StoredMirrorFragment details source expected = fragment
             repeated = StoredMirrorFragment details source (expected <> expected)
-        retainedFragmentWeight repeated - retainedFragmentWeight fragment `shouldSatisfy` (> 512)
+        retainedFragmentWeight pypiStateFormat repeated - retainedFragmentWeight pypiStateFormat fragment `shouldSatisfy` (> 512)
 
     it "counts every verified hash, companion reference and repeated backing allocation" $ do
         record <- sampleRecord
@@ -62,8 +64,8 @@ spec = describe "durable graph accounting" $ do
         let withHashes n = record{projectVersions = fmap (\version -> version{storedIdentities = Map.fromList [(show k, digest) | k <- [1 .. n :: Int]]}) (projectVersions record)}
             pendingRecord = record{projectVersions = fmap (\version -> version{storedCompanions = Map.singleton "file" CompanionPending}) (projectVersions record)}
             retained = record{projectVersions = fmap (\version -> version{storedCompanions = Map.singleton "file" (CompanionRetained (CompanionRef digest 5))}) (projectVersions record)}
-        retainedRecordWeight (withHashes 2) - retainedRecordWeight (withHashes 1) `shouldSatisfy` (>= 65536)
-        retainedRecordWeight retained - retainedRecordWeight pendingRecord `shouldSatisfy` (>= 65536)
+        retainedRecordWeight pypiStateFormat (withHashes 2) - retainedRecordWeight pypiStateFormat (withHashes 1) `shouldSatisfy` (>= 65536)
+        retainedRecordWeight pypiStateFormat retained - retainedRecordWeight pypiStateFormat pendingRecord `shouldSatisfy` (>= 65536)
 
     it "charges one envelope per project and the full backing of JSON keys and values" $ do
         record <- sampleRecord
@@ -73,22 +75,22 @@ spec = describe "durable graph accounting" $ do
             small = Object (fields (T.copy sliced))
         valueBackingExcess large - valueBackingExcess small `shouldBe` 2 * 65535
         let changed = record{projectEnvelope = fields sliced}
-        retainedRecordWeight changed `shouldSatisfy` (>= retainedRecordWeight record + 65536)
+        retainedRecordWeight pypiStateFormat changed `shouldSatisfy` (>= retainedRecordWeight pypiStateFormat record + 65536)
 
     it "keeps the parsed-version allowance beyond the retained raw spelling" $ do
         record <- sampleRecord
         version <- maybe (fail "missing fixture version") pure (recordVersion mirrorVersion record)
         let original@(StoredMirrorFragment details source expected) = NE.head (storedFragments version)
             expanded = StoredMirrorFragment details{pkgVersion = mkVersion PyPI (T.intercalate "." (replicate 512 "1"))} source expected
-        retainedFragmentWeight expanded - retainedFragmentWeight original `shouldSatisfy` (>= 256 * 1022)
+        retainedFragmentWeight pypiStateFormat expanded - retainedFragmentWeight pypiStateFormat original `shouldSatisfy` (>= 256 * 1022)
 
     it "charges UTF-8 backing growth" $ do
         initialInventory <- mirrorSample [1] False "https://first.test/" "original"
         let details = inventoryDetails initialInventory
             withNote note = restoreMirrorInventory details (mirrorSource (pkgArtifacts details) note)
-        ascii <- expectRight (withNote (T.replicate 1024 "a")) >>= \inventory -> expectRight (extendProjectRecord defaultLimits target inventory Nothing)
-        unicode <- expectRight (withNote (T.replicate 1024 "\x1f600")) >>= \inventory -> expectRight (extendProjectRecord defaultLimits target inventory Nothing)
-        retainedRecordWeight unicode `shouldSatisfy` (> retainedRecordWeight ascii + 3072)
+        ascii <- expectRight (withNote (T.replicate 1024 "a")) >>= \inventory -> expectRight (extendProjectRecord pypiStateFormat defaultLimits target inventory Nothing)
+        unicode <- expectRight (withNote (T.replicate 1024 "\x1f600")) >>= \inventory -> expectRight (extendProjectRecord pypiStateFormat defaultLimits target inventory Nothing)
+        retainedRecordWeight pypiStateFormat unicode `shouldSatisfy` (> retainedRecordWeight pypiStateFormat ascii + 3072)
 
     it "saturates nonnegative arithmetic monotonically" $
         hedgehog $ do
@@ -128,7 +130,7 @@ nativeStateWeightSpec = describe "genuine RubyGems state" $ beforeAll rubyStateP
         let versions = Map.elems (recordVersions record)
             sourceBytes = sum [BS.length (grSource row) | version <- versions, StoredMirrorFragment _ (RubyGemsMirrorRead source) _ <- toList (versionFragments version), row <- gemRows source]
             companionCount = sum [Map.size (versionCompanions version) | version <- versions]
-            actual = retainedRecordWeight record
+            actual = retainedRecordWeight rubyGemsStateFormat record
         sourceBytes `shouldSatisfy` (> 0)
         companionCount `shouldBe` 4
         actual - rubyStateSourceOmissionCharge record `shouldSatisfy` (>= toInteger sourceBytes)
@@ -139,9 +141,9 @@ nativeStateWeightSpec = describe "genuine RubyGems state" $ beforeAll rubyStateP
         paddedFixture <- padRubyStateProbeSource 1024 fixture
         padded <- reopenNative paddedFixture
         rubyStateCompanionObjects paddedFixture `shouldBe` rubyStateCompanionObjects fixture
-        retainedRecordWeight padded - retainedRecordWeight original `shouldSatisfy` (>= 4 * 1024)
-        let originalSource = retainedRecordWeight original - rubyStateSourceOmissionCharge original
-            paddedSource = retainedRecordWeight padded - rubyStateSourceOmissionCharge padded
+        retainedRecordWeight rubyGemsStateFormat padded - retainedRecordWeight rubyGemsStateFormat original `shouldSatisfy` (>= 4 * 1024)
+        let originalSource = retainedRecordWeight rubyGemsStateFormat original - rubyStateSourceOmissionCharge original
+            paddedSource = retainedRecordWeight rubyGemsStateFormat padded - rubyStateSourceOmissionCharge padded
         paddedSource - originalSource `shouldSatisfy` (>= 4 * 1024)
 
     it "keeps external compact-object lengths out of the retained record heap" $ \fixture -> do
@@ -149,15 +151,15 @@ nativeStateWeightSpec = describe "genuine RubyGems state" $ beforeAll rubyStateP
         let expand (CompanionRetained (CompanionRef digest size)) = CompanionRetained (CompanionRef digest (size + 1024 * 1024))
             expand CompanionPending = CompanionPending
             counterfact = record{projectVersions = fmap (\version -> version{storedCompanions = fmap expand (storedCompanions version)}) (projectVersions record)}
-        retainedRecordWeight counterfact `shouldBe` retainedRecordWeight record
+        retainedRecordWeight rubyGemsStateFormat counterfact `shouldBe` retainedRecordWeight rubyGemsStateFormat record
 
 reopenNative :: RubyStateProbeFixture -> IO ProjectMirrorRecord
-reopenNative fixture = chargedDecodeProjectRecord (const pass) defaultLimits (rubyStateTarget fixture) (rubyStatePackage fixture) (rubyStateEncodedRecord fixture) >>= expectRight
+reopenNative fixture = chargedDecodeProjectRecord rubyGemsStateFormat (const pass) defaultLimits (rubyStateTarget fixture) (rubyStatePackage fixture) (rubyStateEncodedRecord fixture) >>= expectRight
 
 sampleRecord :: IO ProjectMirrorRecord
 sampleRecord = do
     inventory <- mirrorSample [1] False "https://first.test/" "original"
-    expectRight (extendProjectRecord defaultLimits target inventory Nothing)
+    expectRight (extendProjectRecord pypiStateFormat defaultLimits target inventory Nothing)
 
 target :: StateTarget
 target = stateTarget "https://private.test"

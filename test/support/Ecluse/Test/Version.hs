@@ -44,12 +44,14 @@ genPyPI = do
     dev <- Gen.maybe ((".dev" <>) <$> numSeg)
     pure (release <> fromMaybe "" pre <> fromMaybe "" post <> fromMaybe "" dev)
 
--- | @Gem::Version@: dot-separated numbers and an optional letter-led prerelease segment, as in @1.2.3.beta1@.
+{- | @Gem::Version@: dot-separated numbers and an optional prerelease tail that starts with a letter
+segment, as in @1.2.3.beta1@ or @1.a.0.b@.
+-}
 genGem :: Gen Text
 genGem = do
     nums <- Gen.list (Range.linear 1 4) numSeg
-    pre <- Gen.maybe gemPreSeg
-    pure (T.intercalate "." (nums <> maybeToList pre))
+    pre <- Gen.maybe ((:) <$> gemPreSeg <*> Gen.list (Range.linear 0 2) (Gen.choice [numSeg, gemPreSeg]))
+    pure (T.intercalate "." (nums <> fromMaybe [] pre))
   where
     gemPreSeg = do
         c <- Gen.element ['a' .. 'z']

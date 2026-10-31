@@ -486,8 +486,10 @@ mounts:
     # Both defaults refuse at admission, at precedence 300, and keep stored copies.
     # deny-scripts refuses npm install scripts. deny-external-dependencies refuses a version
     # whose dependencies, optionalDependencies or peerDependencies name a git source
-    # (git+https:, git:, github:, user/repo and the like) or a remote tarball URL, which a
-    # client would fetch from outside Écluse. It reads the specs the packument already holds.
+    # (git+https:, git:, github:, user/repo and the like), a remote tarball URL, or any other
+    # scheme such as jsr:, which a client would fetch from outside Écluse. Registry ranges and
+    # tags, npm: aliases, file:, link:, workspace: and local paths pass. It reads the specs the
+    # packument already holds.
     rules:
       deny-scripts:
         type: DenyInstallTimeExecution
@@ -575,11 +577,17 @@ mounts:
     # firstParty: "acme-tools,acme-*"
     # cargo blocks these rule types at boot, even through shared rules:
     # DenyInstallTimeExecution: Cargo's sparse index does not declare build scripts or procedural macros. This rule is unsupported for the ecosystem.
-    # DenyExternalDependencies: The Cargo adapter does not project where a public crate's dependencies install from into rule evidence.
     # DenyIfDeprecated: Cargo's sparse index supplies no deprecation flag.
     # AllowScope: Cargo package names have no scope.
     # Move supported types from shared rules into mounts.npm.rules, or disable its configured
     # entry with enabled: false under mounts.cargo.rules (ECLUSE_MOUNTS__CARGO__RULES).
+    # Optional external-dependency deny, disabled unless added. No parameters. Default precedence: 300.
+    # It denies a public crate whose normal or build dependency names a registry other than
+    # crates.io in its index row. crates.io refuses such crates, so it acts on another publicUpstream.
+    # rules:
+    #   deny-external-dependencies:
+    #     type: DenyExternalDependencies
+    #     appliesTo: [admission]
   # Bundler 2.6.9 and 4.0.23 use /versions discovery and on-demand /info metadata.
   # Compact specifications and .gem downloads stay under this mount. No full specification index is served.
   # Native publication posts the original built .gem to /api/v1/gems below the target root.

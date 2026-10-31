@@ -6,7 +6,6 @@
 module Ecluse.Core.Registry.MirrorUpload.Internal (
     MirrorReadData (..),
     mirrorReadDocument,
-    readDataCompanions,
     MirrorInventory,
     ExpectedMirrorFile,
     VerifiedArtifactBytes,
@@ -47,16 +46,16 @@ import Ecluse.Core.Package (Artifact (..), Hash, HashAlg (SHA256), PackageDetail
 import Ecluse.Core.Package.Entry (EntryKey, validEntryKey)
 import Ecluse.Core.Package.Hash (canonicalHashValue, computeDigest, hexDigestText)
 import Ecluse.Core.Package.Integrity (IntegrityResult (..), assertedAlg, authoritativeDigest, verifyIntegrity)
-import Ecluse.Core.Registry (CompanionRequirement (DeclaredCompanions), MirrorArtifact (..), PublishFault (PublishIntegrityMismatch, PublishSourceUnavailable))
+import Ecluse.Core.Registry (MirrorArtifact (..), PublishFault (PublishIntegrityMismatch, PublishSourceUnavailable))
 import Ecluse.Core.Registry.CachedDocument (CachedDoc, cargoCached, npmCached, pypiSimpleCached, rubyGemsCached)
 import Ecluse.Core.Registry.Cargo.Document (CargoDocument)
-import Ecluse.Core.Registry.Cargo.SourceState (cargoSourceCompanions, restrictCargoDocument, validateCargoSource)
+import Ecluse.Core.Registry.Cargo.SourceState (restrictCargoDocument, validateCargoSource)
 import Ecluse.Core.Registry.Metadata (VersionDoc (..))
-import Ecluse.Core.Registry.PyPI.Document (SimpleDocument, restrictSimpleFiles, simpleEnvelope, simpleFiles, simpleSourceCompanions)
+import Ecluse.Core.Registry.PyPI.Document (SimpleDocument, restrictSimpleFiles, simpleEnvelope, simpleFiles)
 import Ecluse.Core.Registry.PyPI.Project (fileCoordinate, projectFile, projectName, projectSimpleIndex)
 import Ecluse.Core.Registry.PyPI.Wire (IndexFile (ifEntryKey, ifFilename))
 import Ecluse.Core.Registry.RubyGems.Document (GemDocument, restrictGemDocument)
-import Ecluse.Core.Registry.RubyGems.SourceState (gemSourceCompanions, validateGemSource)
+import Ecluse.Core.Registry.RubyGems.SourceState (validateGemSource)
 import Ecluse.Core.Registry.ServedDocument (uniqueEntries)
 import Ecluse.Core.Server.Path (mkFilename, unFilename)
 import Ecluse.Core.Version (Version, renderVersion)
@@ -77,14 +76,6 @@ mirrorReadDocument = \case
     PyPIMirrorRead document -> fst pypiSimpleCached document
     CargoMirrorRead document -> fst cargoCached document
     RubyGemsMirrorRead document -> fst rubyGemsCached document
-
--- | Which files need a retained metadata companion. A durable format's declaration names the same value.
-readDataCompanions :: MirrorReadData -> CompanionRequirement
-readDataCompanions = \case
-    NpmMirrorRead _ -> DeclaredCompanions
-    PyPIMirrorRead _ -> simpleSourceCompanions
-    CargoMirrorRead _ -> cargoSourceCompanions
-    RubyGemsMirrorRead _ -> gemSourceCompanions
 
 -- | Membership comes from the complete paired version snapshot, never a requested-file subset.
 data MirrorInventory = MirrorInventory

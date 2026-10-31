@@ -23,9 +23,9 @@ import Ecluse.Core.Ecosystem (Ecosystem (Cargo))
 import Ecluse.Core.Mirror.State (ProjectMirrorRecord, StateRead (..), StateTarget, stateTarget)
 import Ecluse.Core.Mirror.State.Internal (StateRevision (..))
 import Ecluse.Core.Package (PackageName, mkPackageName)
-import Ecluse.Core.Registry.Cargo.Mirror (cargoMirrorDocuments)
+import Ecluse.Core.Registry.Cargo.Mirror (cargoMirrorDocuments, cargoStateFormat)
 import Ecluse.Core.Rules (prepare)
-import Ecluse.Core.Rules.Types (Rule (AllowIfOlderThan))
+import Ecluse.Core.Rules.Types (Rule (AllowIfOlderThan, DenyExternalDependencies))
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Core.Server.Admission.Meter (MemoryMeter, meterSnapshot, steerMeter, takeLargestCharge)
 import Ecluse.Core.Server.Admission.Types (BrakeLevel (Calm), MeterSnapshot (snChargedBytes))
@@ -253,7 +253,7 @@ isolationSpec = describe "native source isolation" $ do
             publicCalls proxy >>= (`shouldSatisfy` (not . null))
     native "017" "serves unrecorded private rows as trusted content when no project source state exists" $
         withCargoProxy defaultReply (const (status404, [], "")) $ \proxy -> do
-            view <- mirrorViewWith cargoMirrorDocuments (proxyTarget proxy) (\_ _ -> pure (Right StateAbsent))
+            view <- mirrorViewWith cargoStateFormat cargoMirrorDocuments (proxyTarget proxy) (\_ _ -> pure (Right StateAbsent))
             let app = proxyWith proxy (\deps -> deps{pdMirrorState = Just view})
             listing <- getPath indexPath app
             observedRows listing `shouldReturn` [nativeRecord "1.2.3"]
@@ -266,7 +266,7 @@ isolationSpec = describe "native source isolation" $ do
                 | otherwise = defaultReply captured
         for_ [methodGet, methodHead] $ \method ->
             withCargoProxy defaultReply unavailableIndex $ \proxy -> do
-                view <- mirrorViewWith cargoMirrorDocuments (proxyTarget proxy) (\_ _ -> pure (Right StateAbsent))
+                view <- mirrorViewWith cargoStateFormat cargoMirrorDocuments (proxyTarget proxy) (\_ _ -> pure (Right StateAbsent))
                 let app = proxyWith proxy (\deps -> deps{pdMirrorState = Just view})
                 listing <- requestAt method indexPath Wai.defaultRequest app
                 simpleStatus listing `shouldBe` status200
@@ -280,7 +280,7 @@ isolationSpec = describe "native source isolation" $ do
     native "018" "serves a completed managed version beside an unrecorded private sibling" $
         withCargoProxy (indexReply (row "1.2.3" <> "\n" <> row "2.3.4")) (const (status404, [], "")) $ \proxy -> do
             record <- nativeState (proxyTarget proxy) "2.3.4"
-            view <- mirrorViewWith cargoMirrorDocuments (proxyTarget proxy) (\_ _ -> pure (Right (StateLoaded (StateRevision (proxyTarget proxy) packageName "complete") record)))
+            view <- mirrorViewWith cargoStateFormat cargoMirrorDocuments (proxyTarget proxy) (\_ _ -> pure (Right (StateLoaded (StateRevision (proxyTarget proxy) packageName "complete") record)))
             let app = proxyWith proxy (\deps -> deps{pdMirrorState = Just view})
             listing <- getPath indexPath app
             rows <- observedRows listing
@@ -291,7 +291,7 @@ isolationSpec = describe "native source isolation" $ do
     native "019" "refuses a recorded version when the target checksum does not prove completion" $
         withCargoProxy (indexReply (toStrict (encode (Object (KeyMap.insert "cksum" (String (hexSha256Of "wrong target")) (nativeRecord "1.2.3")))))) (const (status404, [], "")) $ \proxy -> do
             record <- nativeState (proxyTarget proxy) "1.2.3"
-            view <- mirrorViewWith cargoMirrorDocuments (proxyTarget proxy) (\_ _ -> pure (Right (StateLoaded (StateRevision (proxyTarget proxy) packageName "incomplete") record)))
+            view <- mirrorViewWith cargoStateFormat cargoMirrorDocuments (proxyTarget proxy) (\_ _ -> pure (Right (StateLoaded (StateRevision (proxyTarget proxy) packageName "incomplete") record)))
             let app = proxyWith proxy (\deps -> deps{pdMirrorState = Just view})
             for_ [indexPath, archivePath] $ \path -> do
                 response <- getPath path app
@@ -358,6 +358,10 @@ nativeRecord version = case Fixture.cargoIndexRecord (Fixture.minimalCargoReleas
 
 row :: Text -> ByteString
 row = toStrict . encode . Object . nativeRecord
+
+-- A native row whose one dependency, of the given kind, names a registry other than crates.io.
+dependencyRow :: Text -> Text -> ByteString
+dependencyRow version kind = toStrict (encode (Object (KeyMap.insert "deps" (Array (fromList [object ["name" .= ("foreign-leaf" :: Text), "req" .= ("^1.0" :: Text), "features" .= ([] :: [Text]), "optional" .= False, "default_features" .= True, "target" .= Null, "kind" .= kind, "registry" .= ("sparse+https://foreign.test/index/" :: Text)]])) (KeyMap.insert "features2" (object []) (nativeRecord version)))))
 
 observedRows :: SResponse -> IO [KeyMap.KeyMap Value]
 observedRows response = do
@@ -434,10 +438,16 @@ admissionSpec = describe "Cargo selected admission" $ do
                         peak `shouldSatisfy` (>= 12 * size)
                         pure peak
                 zipWith (<) peaks (drop 1 peaks) `shouldBe` [True]
+    native "028" "denies a public crate whose normal or build dependency names another registry, and admits a foreign dev-dependency" $ do
+        let body = BS.intercalate "\n" [row "1.2.3", dependencyRow "2.0.0" "normal", dependencyRow "2.1.0" "build", dependencyRow "2.2.0" "dev"]
+        withCargoProxy privateMiss (indexReply body) $ \proxy -> do
+            rules <- prepare inertRuleDeps [atDefaultPrecedence DenyExternalDependencies, atDefaultPrecedence (AllowIfOlderThan (7 * nominalDay))]
+            response <- getPath indexPath (proxyWith proxy (\deps -> (withPrivateBaseUrl Nothing deps){pdRules = rules}))
+            map (KeyMap.lookup "vers") <$> observedRows response `shouldReturn` [Just (String "1.2.3"), Just (String "2.2.0")]
     native "025" "reads no durable mirror state for a declared first-party name" $
         withCargoProxy defaultReply defaultReply $ \proxy -> do
             stateReads <- newIORef (0 :: Int)
-            mirror <- mirrorViewWith cargoMirrorDocuments (proxyTarget proxy) (\_ _ -> modifyIORef' stateReads (+ 1) $> Right StateAbsent)
+            mirror <- mirrorViewWith cargoStateFormat cargoMirrorDocuments (proxyTarget proxy) (\_ _ -> modifyIORef' stateReads (+ 1) $> Right StateAbsent)
             let app = proxyWith proxy (\deps -> deps{pdFirstParty = const True, pdMirrorState = Just mirror})
             listing <- getPathWith [("Authorization", "caller-token")] indexPath app
             observedRows listing `shouldReturn` [nativeRecord "1.2.3"]

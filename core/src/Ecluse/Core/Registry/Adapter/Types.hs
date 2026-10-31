@@ -21,6 +21,7 @@ import Ecluse.Core.Registry.Adapter.Capability (
     AdapterPublish,
     ProjectName,
  )
+import Ecluse.Core.Registry.FirstParty (FirstPartyDeclaration)
 import Ecluse.Core.Registry.Request (CredentialMapping)
 import Ecluse.Core.Rules.Types (RuleType)
 import Ecluse.Core.Server.Context (MountRouter)
@@ -44,6 +45,8 @@ data RegistryAdapter = RegistryAdapter
     {- ^ The ecosystem's own name parser, which every caller that turns a raw string into a
     'Ecluse.Core.Package.PackageName' reads.
     -}
+    , adapterFirstParty :: FirstPartyDeclaration
+    -- ^ How the mount's @firstParty@ entries read and which names they own.
     , adapterPublish :: Maybe AdapterPublish
     {- ^ 'Nothing' for an ecosystem this build writes nothing for, whose publish route then
     answers @405@ and whose declared write destination refuses the boot.

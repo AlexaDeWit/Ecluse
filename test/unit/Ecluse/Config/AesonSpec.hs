@@ -21,7 +21,7 @@ import Ecluse.Config (
     Config (..),
     ConfigError,
     EgressSettings (..),
-    FirstParty (FirstPartyCargo, FirstPartyNpmScopes, FirstPartyPyPI, FirstPartyRubyGems),
+    FirstParty (FirstParty),
     LimitsSettings (..),
     MountConfig (mntFirstParty),
     ObservabilitySettings (..),
@@ -43,8 +43,10 @@ import Ecluse.Core.Ecosystem (Ecosystem (..))
 import Ecluse.Core.Osv.Provenance (SourcePathRecording (FingerprintSourcePath, RecordSourcePath))
 import Ecluse.Core.Osv.Publication (renderPercent)
 import Ecluse.Core.Package (mkScope)
-import Ecluse.Core.Registry.Cargo.FirstParty (projectFirstPartyEntry)
-import Ecluse.Core.Registry.PyPI.FirstParty (PyPIFirstParty (PyPIOwnedName, PyPIOwnedPrefix), mkPyPIPrefix)
+import Ecluse.Core.Registry.Cargo.FirstParty (cargoFirstPartyNames, projectFirstPartyEntry)
+import Ecluse.Core.Registry.Npm.Adapter (npmFirstPartyNames)
+import Ecluse.Core.Registry.PyPI.FirstParty (PyPIFirstParty (PyPIOwnedName, PyPIOwnedPrefix), mkPyPIPrefix, pypiFirstPartyNames)
+import Ecluse.Core.Registry.RubyGems.FirstParty (rubyGemsFirstPartyNames)
 import Ecluse.Core.Registry.RubyGems.FirstParty qualified as RubyGems
 import Ecluse.Core.Server.Encoding (MetadataCompression (GzipWhenAccepted, IdentityOnly))
 import Ecluse.Runtime.Log (LogLevel (DebugLevel, ErrorLevel, InfoLevel, WarnLevel))
@@ -188,7 +190,7 @@ spec = describe "decodeDocument" $ do
             Right [name, prefix] -> do
                 config <- expectConfig (pubUrlEnv <> [("ECLUSE_MOUNTS__RUBYGEMS__FIRST_PARTY", "Acme_Tools, acme-*")]) Nothing
                 (mntFirstParty <$> Map.lookup RubyGems (cfgMounts (configApp config)))
-                    `shouldBe` Just (Just (FirstPartyRubyGems (name :| [prefix])))
+                    `shouldBe` Just (Just (FirstParty rubyGemsFirstPartyNames (name :| [prefix])))
             Right _ -> expectationFailure "expected two RubyGems declarations"
 
     it "rejects an empty RubyGems ownership declaration" $
@@ -213,7 +215,8 @@ spec = describe "decodeDocument" $ do
                 (mntFirstParty <$> Map.lookup PyPI (cfgMounts (configApp doc)))
                     `shouldBe` Just
                         ( Just
-                            ( FirstPartyPyPI
+                            ( FirstParty
+                                pypiFirstPartyNames
                                 (PyPIOwnedName (unscopedPyPI "Acme_Tools") :| [PyPIOwnedPrefix prefix])
                             )
                         )
@@ -225,7 +228,7 @@ spec = describe "decodeDocument" $ do
                 Right [name, prefix] -> do
                     config <- expectConfig (pubUrlEnv <> [("ECLUSE_MOUNTS__CARGO__FIRST_PARTY", "Acme_Tools, widgets-*")]) Nothing
                     (mntFirstParty <$> Map.lookup Cargo (cfgMounts (configApp config)))
-                        `shouldBe` Just (Just (FirstPartyCargo (name :| [prefix])))
+                        `shouldBe` Just (Just (FirstParty cargoFirstPartyNames (name :| [prefix])))
                 Right _ -> expectationFailure "expected two Cargo declarations"
         for_ (["@acme", "acme*", "acme.*", "acme/tools", "acme,,widgets"] :: [Text]) $ \entry ->
             it ("refuses " <> show entry) $
@@ -266,7 +269,7 @@ spec = describe "decodeDocument" $ do
                 Nothing
         Map.keys (configMounts config) `shouldBe` [Npm]
         (mntFirstParty <$> Map.lookup Npm (cfgMounts (configApp config)))
-            `shouldBe` Just (Just (FirstPartyNpmScopes (mkScope "acme" :| [mkScope "beta"])))
+            `shouldBe` Just (Just (FirstParty npmFirstPartyNames (mkScope "acme" :| [mkScope "beta"])))
 
     it "reports every incomplete mirrored mount in one load, not only the first" $ do
         let doc =

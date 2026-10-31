@@ -22,6 +22,7 @@ import Ecluse.Core.Registry.Origin (originClientOf)
 import Ecluse.Core.Registry.Publish (MirrorTransport (..), newMirrorPublish)
 import Ecluse.Core.Registry.PyPI.Adapter (pypiAdapter)
 import Ecluse.Core.Registry.PyPI.Metadata (pypiMirrorRead)
+import Ecluse.Core.Registry.PyPI.Mirror (pypiStateFormat)
 import Ecluse.Core.Registry.PyPI.Publish (pypiPublishCodec)
 import Ecluse.Core.Registry.Request (nativePresentation)
 import Ecluse.Core.Security (defaultLimits)
@@ -49,6 +50,7 @@ boot knobs use = do
                 { nwSourceApp = sourceApp latency fixture
                 , nwTargetApp = targetApp latency fixture
                 , nwStateApp = stateApp latency fixture
+                , nwStateFormat = pypiStateFormat
                 , nwPolicy = pypiPolicy
                 , nwJob = MirrorJob fixturePackage fixtureVersion (Just (unsafeFilename fixtureTrigger)) Nothing
                 , nwExpectedFiles = 4
@@ -73,6 +75,7 @@ pypiPolicy environment =
             , wpEgressUrl = Right . loopbackRegistryUrl
             , wpArtifact = adapterArtifact pypiAdapter
             , wpPublish = publish
+            , wpMirrorFormat = pypiStateFormat
             , wpArtifactLimits = defaultLimits
             , wpMirrorState = Just (weMirrorState environment)
             , wpNow = pure benchNow

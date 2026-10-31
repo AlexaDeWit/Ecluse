@@ -22,6 +22,7 @@ import Ecluse.Core.Mirror.State.Internal (CompanionRef (..), projectKey)
 import Ecluse.Core.Package (Artifact (..), HashAlg (SHA256), PackageDetails (..), mkHash)
 import Ecluse.Core.Registry.MirrorUpload (inventoryDetails, inventoryFiles)
 import Ecluse.Core.Registry.MirrorUpload.Internal (restoreMirrorInventory)
+import Ecluse.Core.Registry.PyPI.Mirror (pypiStateFormat)
 import Ecluse.Core.Security (Limits (..), defaultLimits)
 import Ecluse.Core.Version (mkVersion)
 import Ecluse.Integration.Ministack (MinistackPool, endpointFor, withMinistack)
@@ -41,12 +42,12 @@ spec pool = aroundAll (withMinistack pool) $ describe "durable project mirror st
         let endpoint = Just (endpointFor container)
             bucket = "mirror-state-recovery"
             target = stateTarget "https://private.test/simple"
-            fresh = newS3MirrorState endpoint deadlines defaultLimits bucket "recovery" target
+            fresh = newS3MirrorState endpoint deadlines defaultLimits pypiStateFormat bucket "recovery" target
         env <- buildS3Env endpoint
         retryingIO 21 500_000 (void (runResourceT (AWS.send env (S3.newCreateBucket (S3.BucketName bucket)))))
         store <- fresh
         inventory <- mirrorSample [1, 2, 3] True "https://original.test/" "original"
-        (_, initial) <- recordExpectedInventory defaultLimits (const pass) target store inventory >>= expectRight
+        (_, initial) <- recordExpectedInventory pypiStateFormat defaultLimits (const pass) target store inventory >>= expectRight
         restarted <- fresh
         (_, observed) <- loaded restarted
         observed `shouldBe` initial
@@ -62,7 +63,7 @@ spec pool = aroundAll (withMinistack pool) $ describe "durable project mirror st
         withoutReference `shouldBe` initial
         msReadCompanion afterObject (const pass) reference `shouldReturn` Right "metadata"
         reduced <- mirrorSample [1, 2] True "https://changed.test/" "changed"
-        (_, retained) <- recordExpectedInventory defaultLimits (const pass) target afterObject reduced >>= expectRight
+        (_, retained) <- recordExpectedInventory pypiStateFormat defaultLimits (const pass) target afterObject reduced >>= expectRight
         retained `shouldBe` initial
         additions <- mirrorSample [1, 2, 3, 4] True "https://changed.test/" "changed"
         another <- mirrorSample [1] False "https://second.test/" "second"
@@ -77,9 +78,9 @@ spec pool = aroundAll (withMinistack pool) $ describe "durable project mirror st
         companionStore <- firstWriteBarrier arrivals conflicts afterObject
         (added, (versionAdded, companionAdded)) <-
             concurrently
-                (recordExpectedInventory defaultLimits (const pass) target additionStore additions)
+                (recordExpectedInventory pypiStateFormat defaultLimits (const pass) target additionStore additions)
                 ( concurrently
-                    (recordExpectedInventory defaultLimits (const pass) target versionStore nextVersion)
+                    (recordExpectedInventory pypiStateFormat defaultLimits (const pass) target versionStore nextVersion)
                     (retainProjectCompanion defaultLimits (const pass) companionStore mirrorPackage mirrorVersion verified)
                 )
         traverse_ expectRight [added, versionAdded, companionAdded]
@@ -110,7 +111,7 @@ spec pool = aroundAll (withMinistack pool) $ describe "durable project mirror st
         let endpoint = Just (endpointFor container)
             bucket = "mirror-state-faults"
             target = stateTarget "https://private.test/simple"
-            fresh prefix limits = newS3MirrorState endpoint deadlines limits bucket prefix target
+            fresh prefix limits = newS3MirrorState endpoint deadlines limits pypiStateFormat bucket prefix target
         env <- buildS3Env endpoint
         retryingIO 21 500_000 (void (runResourceT (AWS.send env (S3.newCreateBucket (S3.BucketName bucket)))))
         store <- fresh "lost" defaultLimits
@@ -128,7 +129,7 @@ spec pool = aroundAll (withMinistack pool) $ describe "durable project mirror st
                             _ -> pure result
                     }
         inventory <- mirrorSample [1, 2, 3] False "https://original.test/" "original"
-        (_, persisted) <- recordExpectedInventory defaultLimits (const pass) target uncertain inventory >>= expectRight
+        (_, persisted) <- recordExpectedInventory pypiStateFormat defaultLimits (const pass) target uncertain inventory >>= expectRight
         readIORef writes `shouldReturn` 1
         restarted <- fresh "lost" defaultLimits
         snd <$> loaded restarted `shouldReturn` persisted

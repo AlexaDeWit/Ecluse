@@ -16,7 +16,6 @@ import Data.Traversable (for)
 import Ecluse.Core.Mirror.State (MirrorVersion, ProjectMirrorRecord, fragmentDetails, fragmentReadData, versionFragments)
 import Ecluse.Core.Package (Artifact (..), PackageDetails (pkgArtifacts))
 import Ecluse.Core.Package.Entry (EntryKey)
-import Ecluse.Core.Registry (CompanionRequirement)
 import Ecluse.Core.Registry.CachedDocument (CachedDoc)
 import Ecluse.Core.Registry.Metadata (VersionDoc)
 import Ecluse.Core.Registry.MirrorUpload (MirrorReadData)
@@ -33,8 +32,6 @@ data MirrorDocuments = MirrorDocuments
     -- ^ Rewrite a restored document's entry coordinates.
     , mdAssemble :: ProjectMirrorRecord -> [VersionDoc] -> CachedDoc
     -- ^ Assemble the managed listing from rebased versions in listing order.
-    , mdCompanions :: CompanionRequirement
-    -- ^ Must name the value mirror state applies to the format's read data. Boot checks the codec's native preparation against it.
     }
 
 -- | Pair each fragment's retained entries with the current target file of the same name, numbering artifacts across fragments.

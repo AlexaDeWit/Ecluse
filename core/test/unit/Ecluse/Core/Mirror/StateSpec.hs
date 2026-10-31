@@ -23,6 +23,7 @@ import Ecluse.Core.Package.Entry (EntryKey (ArrayEntry))
 import Ecluse.Core.Registry.MirrorUpload
 import Ecluse.Core.Registry.MirrorUpload.Internal (restoreMirrorInventory)
 import Ecluse.Core.Registry.PyPI.Document (simpleEnvelope, simpleFiles)
+import Ecluse.Core.Registry.PyPI.Mirror (pypiStateFormat)
 import Ecluse.Core.Security (Limits (..), defaultLimits)
 import Ecluse.Core.Server.Admission.Meter (newChargeRegion)
 import Ecluse.Core.Server.MemoryModel (bufferedChunkCharge, decodedDocumentCharge)
@@ -36,30 +37,30 @@ spec = describe "durable mirror expectations" $ do
     it "charges repeated same-size state rewrites once and grows with the largest live encoding" $ do
         inventory <- mirrorSample [1] False "https://first.test/" "original"
         added <- mirrorSample [1, 2] False "https://first.test/" "original"
-        small <- expectRight (extendProjectRecord defaultLimits target inventory Nothing)
-        large <- expectRight (extendProjectRecord defaultLimits target added (Just small))
+        small <- expectRight (extendProjectRecord pypiStateFormat defaultLimits target inventory Nothing)
+        large <- expectRight (extendProjectRecord pypiStateFormat defaultLimits target added (Just small))
         paid <- newIORef (0 :: Int)
         charge <- newChargeRegion (\cost -> modifyIORef' paid (+ cost))
-        replicateM_ 3 (chargedEncodeProjectRecord charge defaultLimits small >>= expectRight)
+        replicateM_ 3 (chargedEncodeProjectRecord pypiStateFormat charge defaultLimits small >>= expectRight)
         smallPaid <- readIORef paid
-        void (chargedEncodeProjectRecord charge defaultLimits large >>= expectRight)
+        void (chargedEncodeProjectRecord pypiStateFormat charge defaultLimits large >>= expectRight)
         largePaid <- readIORef paid
         largePaid `shouldSatisfy` (> smallPaid)
         freshPaid <- newIORef (0 :: Int)
         freshCharge <- newChargeRegion (\cost -> modifyIORef' freshPaid (+ cost))
-        void (chargedEncodeProjectRecord freshCharge defaultLimits large >>= expectRight)
+        void (chargedEncodeProjectRecord pypiStateFormat freshCharge defaultLimits large >>= expectRight)
         readIORef freshPaid `shouldReturn` largePaid
 
     it "bases decode charges on the actual body rather than the configured maximum" $ do
         inventory <- mirrorSample [1] False "https://first.test/" "original"
-        record <- expectRight (extendProjectRecord defaultLimits target inventory Nothing)
-        bytes <- expectRight (encodeProjectRecord defaultLimits record)
+        record <- expectRight (extendProjectRecord pypiStateFormat defaultLimits target inventory Nothing)
+        bytes <- expectRight (encodeProjectRecord pypiStateFormat defaultLimits record)
         payments <- newIORef ([] :: [Int])
-        chargedDecodeProjectRecord (\cost -> modifyIORef' payments (cost :)) defaultLimits target mirrorPackage bytes `shouldReturn` Right record
+        chargedDecodeProjectRecord pypiStateFormat (\cost -> modifyIORef' payments (cost :)) defaultLimits target mirrorPackage bytes `shouldReturn` Right record
         observed <- readIORef payments
         observed `shouldSatisfy` all (< maxMetadataBytes defaultLimits)
         observed `shouldSatisfy` all (>= bufferedChunkCharge (BS.length bytes) + decodedDocumentCharge bytes)
-        projectRecordWeight defaultLimits{maxNestingDepth = 1} record `shouldSatisfy` isRight
+        projectRecordWeight pypiStateFormat defaultLimits{maxNestingDepth = 1} record `shouldSatisfy` isRight
 
     it "prepays typed restoration separately when long version keys outweigh the JSON tree model" $ do
         original <- mirrorSample [1] False "https://first.test/" "original"
@@ -67,11 +68,11 @@ spec = describe "durable mirror expectations" $ do
             details = inventoryDetails original
             artifacts = fmap (\artifact -> artifact{artFilename = T.replace "1.0" versionText (artFilename artifact), artUrl = T.replace "1.0" versionText (artUrl artifact)}) (pkgArtifacts details)
         inventory <- expectRight (restoreMirrorInventory details{pkgVersion = mkVersion PyPI versionText, pkgArtifacts = artifacts} (mirrorSource artifacts "original"))
-        record <- expectRight (extendProjectRecord defaultLimits target inventory Nothing)
-        bytes <- expectRight (encodeProjectRecord defaultLimits record)
-        retained <- expectRight (projectRecordWeight defaultLimits record)
+        record <- expectRight (extendProjectRecord pypiStateFormat defaultLimits target inventory Nothing)
+        bytes <- expectRight (encodeProjectRecord pypiStateFormat defaultLimits record)
+        retained <- expectRight (projectRecordWeight pypiStateFormat defaultLimits record)
         payments <- newIORef ([] :: [Int])
-        chargedDecodeProjectRecord (\cost -> modifyIORef' payments (cost :)) defaultLimits target mirrorPackage bytes `shouldReturn` Right record
+        chargedDecodeProjectRecord pypiStateFormat (\cost -> modifyIORef' payments (cost :)) defaultLimits target mirrorPackage bytes `shouldReturn` Right record
         readIORef payments >>= \case
             [domainPaid, treePaid] -> do
                 treePaid `shouldSatisfy` (< retained)
@@ -81,8 +82,8 @@ spec = describe "durable mirror expectations" $ do
     it "preserves old files when a later admitted source removes them" $ do
         a <- mirrorSample [1, 2] False "https://first.test/" "original"
         b <- mirrorSample [2, 3] False "https://later.test/" "changed"
-        old <- expectRight (extendProjectRecord defaultLimits target a Nothing)
-        updated <- expectRight (extendProjectRecord defaultLimits target b (Just old))
+        old <- expectRight (extendProjectRecord pypiStateFormat defaultLimits target a Nothing)
+        updated <- expectRight (extendProjectRecord pypiStateFormat defaultLimits target b (Just old))
         version <- getVersion updated
         Map.keys (versionFiles version) `shouldBe` map mirrorFilename [1, 2, 3]
         length (versionFragments version) `shouldBe` 2
@@ -94,18 +95,18 @@ spec = describe "durable mirror expectations" $ do
     it "keeps equal ArrayEntry coordinates in separate admitted fragments" $ do
         a <- mirrorSample [1] False "https://first.test/" "original"
         b <- mirrorSample [2] False "https://later.test/" "added"
-        old <- expectRight (extendProjectRecord defaultLimits target a Nothing)
-        updated <- expectRight (extendProjectRecord defaultLimits target b (Just old))
+        old <- expectRight (extendProjectRecord pypiStateFormat defaultLimits target a Nothing)
+        updated <- expectRight (extendProjectRecord pypiStateFormat defaultLimits target b (Just old))
         version <- getVersion updated
         map (map artEntryKey . toList . pkgArtifacts . fragmentDetails) (toList (versionFragments version)) `shouldBe` [[ArrayEntry 0], [ArrayEntry 0]]
-        encoded <- expectRight (encodeProjectRecord defaultLimits updated)
-        chargedDecodeProjectRecord (const (pure ())) defaultLimits target mirrorPackage encoded `shouldReturn` Right updated
+        encoded <- expectRight (encodeProjectRecord pypiStateFormat defaultLimits updated)
+        chargedDecodeProjectRecord pypiStateFormat (const (pure ())) defaultLimits target mirrorPackage encoded `shouldReturn` Right updated
 
     it "does not replace original fields when only source URLs change" $ do
         a <- mirrorSample [1] False "https://first.test/" "original"
         b <- mirrorSample [1] False "https://later.test/" "withdrawn"
-        old <- expectRight (extendProjectRecord defaultLimits target a Nothing)
-        extendProjectRecord defaultLimits target b (Just old) `shouldBe` Right old
+        old <- expectRight (extendProjectRecord pypiStateFormat defaultLimits target a Nothing)
+        extendProjectRecord pypiStateFormat defaultLimits target b (Just old) `shouldBe` Right old
 
     it "refuses a conflicting hash without mutating the old record" $ do
         a <- mirrorSample [1] False "https://first.test/" "original"
@@ -114,20 +115,20 @@ spec = describe "durable mirror expectations" $ do
         let changed = fmap (\artifact -> artifact{artHashes = [otherHash]}) (pkgArtifacts details)
             source = mirrorSource changed "changed"
         b <- expectRight (restoreMirrorInventory details{pkgArtifacts = changed} source)
-        old <- expectRight (extendProjectRecord defaultLimits target a Nothing)
-        extendProjectRecord defaultLimits target b (Just old) `shouldBe` Left (StateFileConflict (mirrorFilename 1))
+        old <- expectRight (extendProjectRecord pypiStateFormat defaultLimits target a Nothing)
+        extendProjectRecord pypiStateFormat defaultLimits target b (Just old) `shouldBe` Left (StateFileConflict (mirrorFilename 1))
 
     it "retains one source entry per filename through repeated incremental admissions" $ do
         inventories <- traverse (\n -> mirrorSample [1 .. n] False "https://first.test/" "original") [1 .. 20]
         records <-
             foldM
                 ( \records inventory -> do
-                    record <- expectRight (extendProjectRecord defaultLimits target inventory (viaNonEmpty NE.head records))
+                    record <- expectRight (extendProjectRecord pypiStateFormat defaultLimits target inventory (viaNonEmpty NE.head records))
                     pure (record : records)
                 )
                 []
                 inventories
-        sizes <- traverse (fmap BS.length . expectRight . encodeProjectRecord defaultLimits) records
+        sizes <- traverse (fmap BS.length . expectRight . encodeProjectRecord pypiStateFormat defaultLimits) records
         case nonEmpty sizes of
             Nothing -> expectationFailure "missing incremental records"
             Just (value :| values) -> foldl' max value values `shouldSatisfy` (<= 25 * foldl' min value values)
@@ -137,14 +138,14 @@ spec = describe "durable mirror expectations" $ do
 
     it "refuses a project or target identity mismatch" $ do
         inventory <- mirrorSample [1] False "https://first.test/" "original"
-        record <- expectRight (extendProjectRecord defaultLimits target inventory Nothing)
-        bytes <- expectRight (encodeProjectRecord defaultLimits record)
-        chargedDecodeProjectRecord (const (pure ())) defaultLimits (stateTarget "https://other.test") mirrorPackage bytes `shouldReturn` Left StateIdentityMismatch
-        chargedDecodeProjectRecord (const (pure ())) defaultLimits target (mkPackageName PyPI Nothing "other") bytes `shouldReturn` Left StateIdentityMismatch
+        record <- expectRight (extendProjectRecord pypiStateFormat defaultLimits target inventory Nothing)
+        bytes <- expectRight (encodeProjectRecord pypiStateFormat defaultLimits record)
+        chargedDecodeProjectRecord pypiStateFormat (const (pure ())) defaultLimits (stateTarget "https://other.test") mirrorPackage bytes `shouldReturn` Left StateIdentityMismatch
+        chargedDecodeProjectRecord pypiStateFormat (const (pure ())) defaultLimits target (mkPackageName PyPI Nothing "other") bytes `shouldReturn` Left StateIdentityMismatch
 
     it "requires all current target identities and rejects digestless target presence" $ do
         inventory <- mirrorSample [1, 2] False "https://first.test/" "original"
-        record <- expectRight (extendProjectRecord defaultLimits target inventory Nothing)
+        record <- expectRight (extendProjectRecord pypiStateFormat defaultLimits target inventory Nothing)
         version <- getVersion record
         let files = map expectedArtifact (toList (inventoryFiles inventory))
         checkMirrorCompletion version files `shouldBe` MirrorComplete
@@ -154,7 +155,7 @@ spec = describe "durable mirror expectations" $ do
 
     it "does not let a matching target entry hide a conflicting or unproved duplicate" $ do
         inventory <- mirrorSample [1] False "https://first.test/" "original"
-        record <- expectRight (extendProjectRecord defaultLimits target inventory Nothing)
+        record <- expectRight (extendProjectRecord pypiStateFormat defaultLimits target inventory Nothing)
         version <- getVersion record
         wrong <- expectRight (mkHash SHA256 (T.replicate 64 "b"))
         let file :| _ = inventoryFiles inventory
@@ -173,13 +174,13 @@ spec = describe "durable mirror expectations" $ do
         inventory <- expectRight (restoreMirrorInventory details{pkgArtifacts = files} (mirrorSource files "original"))
         let file :| _ = inventoryFiles inventory
             targetFile = (expectedArtifact file){artHashes = [sha256], artUrl = "https://private.test/file"}
-        record <- expectRight (extendProjectRecord defaultLimits target inventory Nothing)
+        record <- expectRight (extendProjectRecord pypiStateFormat defaultLimits target inventory Nothing)
         unverifiedVersion <- getVersion record
         checkMirrorCompletion unverifiedVersion [targetFile] `shouldBe` MirrorIncomplete (MissingMirrorProof (mirrorFilename 1) :| [])
         verified <- expectRight (verifyMirrorBytes file "wheel")
         retainVerifiedIdentity (mkVersion PyPI "2") verified record `shouldBe` Left (StateInvalid "missing expected version")
         anotherInventory <- mirrorSample [2] False "https://first.test/" "other"
-        anotherRecord <- expectRight (extendProjectRecord defaultLimits target anotherInventory Nothing)
+        anotherRecord <- expectRight (extendProjectRecord pypiStateFormat defaultLimits target anotherInventory Nothing)
         retainVerifiedIdentity mirrorVersion verified anotherRecord `shouldBe` Left (StateFileConflict (mirrorFilename 1))
         updated <- expectRight (retainVerifiedIdentity mirrorVersion verified record)
         retainVerifiedIdentity mirrorVersion verified updated `shouldBe` Right updated
@@ -192,8 +193,8 @@ spec = describe "durable mirror expectations" $ do
         checkMirrorCompletion verifiedVersion [targetFile{artHashes = [sha256, conflictingSource]}] `shouldBe` MirrorIncomplete (ConflictingMirrorFile (mirrorFilename 1) :| [])
         checkMirrorCompletion verifiedVersion [targetFile{artHashes = [wrong]}] `shouldBe` MirrorIncomplete (ConflictingMirrorFile (mirrorFilename 1) :| [])
         recordEnvelope updated `shouldBe` recordEnvelope record
-        encoded <- expectRight (encodeProjectRecord defaultLimits updated)
-        chargedDecodeProjectRecord (const (pure ())) defaultLimits target mirrorPackage encoded `shouldReturn` Right updated
+        encoded <- expectRight (encodeProjectRecord pypiStateFormat defaultLimits updated)
+        chargedDecodeProjectRecord pypiStateFormat (const (pure ())) defaultLimits target mirrorPackage encoded `shouldReturn` Right updated
 
     it "updates one project envelope across versions without replacing earlier file fields" $ do
         let firstEnvelope = KeyMap.singleton "project-status" (object ["status" .= ("active" :: Text)])
@@ -203,8 +204,8 @@ spec = describe "durable mirror expectations" $ do
             newVersion = mkVersion PyPI "2"
             renamed = fmap (\artifact -> artifact{artFilename = T.replace "1.0" "2.0" (artFilename artifact), artUrl = T.replace "1.0" "2.0" (artUrl artifact)}) (pkgArtifacts details)
         nextInventory <- expectRight (restoreMirrorInventory details{pkgVersion = newVersion, pkgArtifacts = renamed} (mirrorSource renamed "second")) >>= withMirrorEnvelope nextEnvelope
-        old <- expectRight (extendProjectRecord defaultLimits target initialInventory Nothing)
-        updated <- expectRight (extendProjectRecord defaultLimits target nextInventory (Just old))
+        old <- expectRight (extendProjectRecord pypiStateFormat defaultLimits target initialInventory Nothing)
+        updated <- expectRight (extendProjectRecord pypiStateFormat defaultLimits target nextInventory (Just old))
         recordEnvelope old `shouldBe` firstEnvelope
         recordEnvelope updated `shouldBe` nextEnvelope
         for_ (Map.elems (recordVersions updated)) $ \version ->
@@ -213,21 +214,21 @@ spec = describe "durable mirror expectations" $ do
                 NpmMirrorRead _ -> expectationFailure "unexpected npm fragment"
                 CargoMirrorRead _ -> expectationFailure "unexpected Cargo fragment"
                 RubyGemsMirrorRead _ -> expectationFailure "unexpected RubyGems fragment"
-        encoded <- expectRight (encodeProjectRecord defaultLimits updated)
-        chargedDecodeProjectRecord (const (pure ())) defaultLimits target mirrorPackage encoded `shouldReturn` Right updated
+        encoded <- expectRight (encodeProjectRecord pypiStateFormat defaultLimits updated)
+        chargedDecodeProjectRecord pypiStateFormat (const (pure ())) defaultLimits target mirrorPackage encoded `shouldReturn` Right updated
         Map.keys (recordVersions updated) `shouldBe` ["1", "2"]
         recordVersion mirrorVersion updated `shouldBe` recordVersion mirrorVersion old
 
     it "blocks completion while a declared companion remains pending" $ do
         inventory <- mirrorSample [1] True "https://first.test/" "original"
-        record <- expectRight (extendProjectRecord defaultLimits target inventory Nothing)
+        record <- expectRight (extendProjectRecord pypiStateFormat defaultLimits target inventory Nothing)
         version <- getVersion record
         checkMirrorCompletion version (map expectedArtifact (toList (inventoryFiles inventory))) `shouldBe` MirrorIncomplete (PendingMirrorCompanion (mirrorFilename 1) :| [])
         Map.lookup (mirrorFilename 1) (versionCompanions version) `shouldBe` Just CompanionPending
 
     it "writes companion bytes before referencing them and verifies retained content" $ do
         inventory <- mirrorSample [1] True "https://first.test/" "original"
-        record <- expectRight (extendProjectRecord defaultLimits target inventory Nothing)
+        record <- expectRight (extendProjectRecord pypiStateFormat defaultLimits target inventory Nothing)
         let file :| _ = inventoryFiles inventory
         verified@(VerifiedCompanionBytes _ reference _) <- expectRight (verifyCompanionBytes defaultLimits file "metadata")
         verifyRetainedCompanion reference "metadata" `shouldBe` Right "metadata"
@@ -248,8 +249,8 @@ spec = describe "durable mirror expectations" $ do
         recordEnvelope updated `shouldBe` recordEnvelope record
         version <- getVersion updated
         checkMirrorCompletion version [expectedArtifact file] `shouldBe` MirrorComplete
-        bytes <- expectRight (encodeProjectRecord defaultLimits updated)
-        chargedDecodeProjectRecord (const (pure ())) defaultLimits target mirrorPackage bytes `shouldReturn` Right updated
+        bytes <- expectRight (encodeProjectRecord pypiStateFormat defaultLimits updated)
+        chargedDecodeProjectRecord pypiStateFormat (const (pure ())) defaultLimits target mirrorPackage bytes `shouldReturn` Right updated
 
     it "refuses undeclared and oversized companion retention" $ do
         inventory <- mirrorSample [1] False "https://first.test/" "original"
@@ -261,27 +262,27 @@ spec = describe "durable mirror expectations" $ do
 
     it "checks dimensions before retaining the source tree" $ do
         inventory <- mirrorSample [1, 2] False "https://first.test/" "original"
-        record <- expectRight (extendProjectRecord defaultLimits target inventory Nothing)
-        bytes <- expectRight (encodeProjectRecord defaultLimits record)
-        chargedDecodeProjectRecord (const (pure ())) defaultLimits{mirrorStateFileCeiling = 1} target mirrorPackage bytes >>= (`shouldSatisfy` isLeft)
-        chargedDecodeProjectRecord (const (pure ())) defaultLimits{maxVersionCount = 0} target mirrorPackage bytes >>= (`shouldSatisfy` isLeft)
+        record <- expectRight (extendProjectRecord pypiStateFormat defaultLimits target inventory Nothing)
+        bytes <- expectRight (encodeProjectRecord pypiStateFormat defaultLimits record)
+        chargedDecodeProjectRecord pypiStateFormat (const (pure ())) defaultLimits{mirrorStateFileCeiling = 1} target mirrorPackage bytes >>= (`shouldSatisfy` isLeft)
+        chargedDecodeProjectRecord pypiStateFormat (const (pure ())) defaultLimits{maxVersionCount = 0} target mirrorPackage bytes >>= (`shouldSatisfy` isLeft)
 
     it "round trips every admission fact and original source field" $ do
         inventory <- mirrorSample [1, 2] True "https://first.test/" "original"
-        record <- expectRight (extendProjectRecord defaultLimits target inventory Nothing)
-        bytes <- expectRight (encodeProjectRecord defaultLimits record)
-        chargedDecodeProjectRecord (const (pure ())) defaultLimits target mirrorPackage bytes `shouldReturn` Right record
+        record <- expectRight (extendProjectRecord pypiStateFormat defaultLimits target inventory Nothing)
+        bytes <- expectRight (encodeProjectRecord pypiStateFormat defaultLimits record)
+        chargedDecodeProjectRecord pypiStateFormat (const (pure ())) defaultLimits target mirrorPackage bytes `shouldReturn` Right record
 
     it "rejects unsupported schema, malformed JSON, and excessive nesting" $ do
-        chargedDecodeProjectRecord (const (pure ())) defaultLimits target mirrorPackage "{\"schema\":999}" >>= (`shouldSatisfy` isLeft)
-        chargedDecodeProjectRecord (const (pure ())) defaultLimits target mirrorPackage "{" >>= (`shouldSatisfy` isLeft)
-        chargedDecodeProjectRecord (const (pure ())) defaultLimits{maxNestingDepth = 2} target mirrorPackage "{\"a\":{\"b\":{}}}" >>= (`shouldSatisfy` isLeft)
+        chargedDecodeProjectRecord pypiStateFormat (const (pure ())) defaultLimits target mirrorPackage "{\"schema\":999}" >>= (`shouldSatisfy` isLeft)
+        chargedDecodeProjectRecord pypiStateFormat (const (pure ())) defaultLimits target mirrorPackage "{" >>= (`shouldSatisfy` isLeft)
+        chargedDecodeProjectRecord pypiStateFormat (const (pure ())) defaultLimits{maxNestingDepth = 2} target mirrorPackage "{\"a\":{\"b\":{}}}" >>= (`shouldSatisfy` isLeft)
 
     it "rejects trailing non-JSON data" $
-        chargedDecodeProjectRecord (const (pure ())) defaultLimits target mirrorPackage "{}trailing" >>= (`shouldSatisfy` isLeft)
+        chargedDecodeProjectRecord pypiStateFormat (const (pure ())) defaultLimits target mirrorPackage "{}trailing" >>= (`shouldSatisfy` isLeft)
 
     it "rejects a response above its byte cap before record decoding" $
-        chargedDecodeProjectRecord (const (pure ())) defaultLimits{maxMetadataBytes = 2} target mirrorPackage "{broken" >>= (`shouldSatisfy` isLeft)
+        chargedDecodeProjectRecord pypiStateFormat (const (pure ())) defaultLimits{maxMetadataBytes = 2} target mirrorPackage "{broken" >>= (`shouldSatisfy` isLeft)
 
     it "reconciles an ambiguous successful write by rereading its union" $ do
         inventory <- mirrorSample [1] False "https://first.test/" "original"
@@ -296,7 +297,7 @@ spec = describe "durable mirror expectations" $ do
                         writeIORef held (Just record)
                         pure (Left (StateInvalid "lost reply"))
                     }
-        result <- recordExpectedInventory defaultLimits (const pass) target store inventory >>= expectRight
+        result <- recordExpectedInventory pypiStateFormat defaultLimits (const pass) target store inventory >>= expectRight
         fst result `shouldBe` revision
         readIORef writes `shouldReturn` 1
 
@@ -305,7 +306,7 @@ spec = describe "durable mirror expectations" $ do
             competing = KeyMap.singleton "project-status" (object ["status" .= ("archived" :: Text)])
         a <- mirrorSample [1] False "https://first.test/" "original" >>= withMirrorEnvelope committed
         b <- mirrorSample [2] False "https://later.test/" "new" >>= withMirrorEnvelope competing
-        other <- expectRight (extendProjectRecord defaultLimits target b Nothing)
+        other <- expectRight (extendProjectRecord pypiStateFormat defaultLimits target b Nothing)
         held <- newIORef Nothing
         collision <- newIORef True
         let revision = StateRevision target mirrorPackage "one"
@@ -321,7 +322,7 @@ spec = describe "durable mirror expectations" $ do
                                     pure (Right StateConflict)
                                 else writeIORef held (Just record) $> Right (StateStored revision)
                     }
-        (_, record) <- recordExpectedInventory defaultLimits (const pass) target store a >>= expectRight
+        (_, record) <- recordExpectedInventory pypiStateFormat defaultLimits (const pass) target store a >>= expectRight
         recordEnvelope record `shouldBe` committed
         version <- getVersion record
         Map.keys (versionFiles version) `shouldBe` map mirrorFilename [1, 2]
@@ -330,7 +331,7 @@ spec = describe "durable mirror expectations" $ do
         inventory <- mirrorSample [1] True "https://first.test/" "original"
         otherInventory <- mirrorSample [2] True "https://first.test/" "original"
         changedInventory <- mirrorSample [1] True "https://other.test/" "original"
-        record <- expectRight (extendProjectRecord defaultLimits target inventory Nothing)
+        record <- expectRight (extendProjectRecord pypiStateFormat defaultLimits target inventory Nothing)
         let file :| _ = inventoryFiles inventory
             otherFile :| _ = inventoryFiles otherInventory
             changedFile :| _ = inventoryFiles changedInventory
@@ -359,10 +360,10 @@ spec = describe "durable mirror expectations" $ do
             verified@(VerifiedCompanionBytes _ reference _) <- expectRight (verifyCompanionBytes defaultLimits file "metadata")
             companionBody verified `shouldBe` "metadata"
             companionDigest reference `shouldBe` hexSha256Of "metadata"
-            record <- expectRight (extendProjectRecord defaultLimits target inventory Nothing)
+            record <- expectRight (extendProjectRecord pypiStateFormat defaultLimits target inventory Nothing)
             retained <- expectRight (retainCompanionReference mirrorVersion verified reference record)
-            encoded <- expectRight (encodeProjectRecord defaultLimits retained)
-            chargedDecodeProjectRecord (const pass) defaultLimits target mirrorPackage encoded `shouldReturn` Right retained
+            encoded <- expectRight (encodeProjectRecord pypiStateFormat defaultLimits retained)
+            chargedDecodeProjectRecord pypiStateFormat (const pass) defaultLimits target mirrorPackage encoded `shouldReturn` Right retained
             verifyRetainedCompanion reference "Metadata" `shouldBe` Left (StateInvalid "retained companion identity mismatch")
             let CompanionRef digest size = reference
             verifyRetainedCompanion (CompanionRef digest (size + 1)) "metadata" `shouldBe` Left (StateInvalid "retained companion identity mismatch")
@@ -371,7 +372,7 @@ spec = describe "durable mirror expectations" $ do
         it ("keeps the committed inventory when conditional writes exhaust retries: " <> show expectedFault) $ do
             original <- mirrorSample [1] False "https://first.test/" "original"
             addition <- mirrorSample [1, 2] False "https://first.test/" "original"
-            record <- expectRight (extendProjectRecord defaultLimits target original Nothing)
+            record <- expectRight (extendProjectRecord pypiStateFormat defaultLimits target original Nothing)
             readCount <- newIORef (0 :: Int)
             writes <- newIORef (0 :: Int)
             let revision = StateRevision target mirrorPackage "committed"
@@ -390,7 +391,7 @@ spec = describe "durable mirror expectations" $ do
                             modifyIORef' writes (+ 1)
                             pure writeResult
                         }
-            recordExpectedInventory defaultLimits (const pass) target store addition `shouldReturn` Left expectedFault
+            recordExpectedInventory pypiStateFormat defaultLimits (const pass) target store addition `shouldReturn` Left expectedFault
             readIORef readCount `shouldReturn` 8
             readIORef writes `shouldReturn` 8
             msReadProject store (const pass) mirrorPackage Nothing `shouldReturn` Right (StateLoaded revision record)
@@ -404,7 +405,7 @@ spec = describe "durable mirror expectations" $ do
                         { msReadProject = \_ _ _ -> pure readResult
                         , msWriteProject = \_ _ _ _ -> fail "must not write after an uncertain read"
                         }
-            recordExpectedInventory defaultLimits (const pass) target store inventory `shouldReturn` Left expectedFault
+            recordExpectedInventory pypiStateFormat defaultLimits (const pass) target store inventory `shouldReturn` Left expectedFault
 
     it "does not reference a companion when its durable write fails" $ do
         inventory <- mirrorSample [1] True "https://first.test/" "original"

@@ -60,7 +60,7 @@ import Ecluse.Service (mountBindingFor)
 import Ecluse.Test.Contract.Catalogue (caseLabel)
 import Ecluse.Test.Deadline (withSweeper)
 import Ecluse.Test.Registry.Cargo.Fixtures (CargoRelease (releaseArchive), cargoUpload, cargoUploadMetadata, cargoUploadWithMetadata)
-import Ecluse.Test.Registry.Cargo.Publish (cargoForeignRegistryArchive, cargoForeignRegistryMetadata, cargoForeignRegistryRefusal, cargoPublicationFixture, cargoResolverAgreements, cargoResolverArchive, cargoResolverContradictions, cargoResolverDependencyField)
+import Ecluse.Test.Registry.Cargo.Publish (cargoForeignDevArchive, cargoForeignDevMetadata, cargoForeignRegistryArchive, cargoForeignRegistryMetadata, cargoForeignRegistryRefusal, cargoPublicationFixture, cargoResolverAgreements, cargoResolverArchive, cargoResolverContradictions, cargoResolverDependencyField, cargoResolverMetadata, cargoUnstableManifestArchive, cargoUnstableManifestRefusal)
 import Ecluse.Test.Registry.Npm.Publish (npmDependentRelease, npmDeprecateDocument, npmExternalDependencyRefusal, npmMisfiledVersion, npmReleaseDocument, npmRepeatedAttachments, npmTaggedRelease)
 import Ecluse.Test.Server.Mount (inertDepsFor, inertPackumentDeps)
 import Ecluse.Test.Stub (Captured (capBody, capHeaders, capMethod, capPath), Stub, allCaptured, headerValue, stubBaseUrl, stubPort, withRoutedStub, withStubHeaders)
@@ -658,6 +658,26 @@ cargoPublishSpec = describe "first-party Cargo publication relay" $ do
             reply <- cargoPut (fromStrict bytes) app
             status reply `shouldBe` 400
             decodeUtf8 (simpleBody reply) `shouldBe` cargoForeignRegistryRefusal
+            allCaptured stub `shouldReturn` []
+    it (caseLabel "integration/publication/cargo-007" "relays a crate whose only dependency on another registry is a dev-dependency") $ do
+        archive <- cargoForeignDevArchive
+        bytes <- expectRight (cargoUploadWithMetadata cargoForeignDevMetadata archive)
+        withRoutedStub cargoTargetReply $ \stub -> withSweeper $ \deadlines -> do
+            app <- cargoProxy deadlines stub
+            reply <- cargoPut (fromStrict bytes) app
+            status reply `shouldBe` 200
+            captures <- allCaptured stub
+            map capPath captures `shouldBe` ["/index/config.json", "/registry/api/v1/crates/new"]
+            map capBody (filter ((== "PUT") . capMethod) captures) `shouldBe` [bytes]
+    it (caseLabel "integration/publication/cargo-008" "refuses an archived manifest dependency carrying an unstable key with 400 before any upstream request") $
+        withRoutedStub cargoTargetReply $ \stub -> withSweeper $ \deadlines -> do
+            app <- cargoProxy deadlines stub
+            for_ ["artifact='bin'", "lib=true", "public=true", "target='x86_64-unknown-linux-gnu'"] $ \declaration -> do
+                archive <- cargoUnstableManifestArchive declaration
+                bytes <- expectRight (cargoUploadWithMetadata cargoResolverMetadata archive)
+                reply <- cargoPut (fromStrict bytes) app
+                status reply `shouldBe` 400
+                decodeUtf8 (simpleBody reply) `shouldBe` cargoUnstableManifestRefusal "tool"
             allCaptured stub `shouldReturn` []
   where
     uploadRefusal captured

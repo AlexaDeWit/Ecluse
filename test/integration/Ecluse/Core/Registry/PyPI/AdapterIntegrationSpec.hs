@@ -30,7 +30,7 @@ import Ecluse.Core.Mirror.State (StateRead (StateAbsent), stateTarget)
 import Ecluse.Core.Package (HashAlg (SHA512))
 import Ecluse.Core.Package.Integrity (mkMinIntegrity, mkMinTrustedIntegrity)
 import Ecluse.Core.Queue (MirrorQueue (enqueue))
-import Ecluse.Core.Registry.PyPI.Mirror (pypiMirrorDocuments)
+import Ecluse.Core.Registry.PyPI.Mirror (pypiMirrorDocuments, pypiStateFormat)
 import Ecluse.Core.Rules (prepare)
 import Ecluse.Core.Rules.Types (Rule (AllowIfOlderThan, DenyIfYanked))
 import Ecluse.Core.Security (Limits (progressFloor), mkProgressFloor)
@@ -542,7 +542,7 @@ privateAdmissionSpec = describe "private index admission scope" $ do
     it (caseLabel "integration/pypi/native-045" "refuses managed selection before reading the private index or mirror state") $
         withPrivatePyPIProxy privateIndexOnItself $ \proxy -> do
             stateReads <- newIORef (0 :: Int)
-            mirror <- mirrorViewWith pypiMirrorDocuments (stateTarget "https://private.example.test") (\_ _ -> modifyIORef' stateReads (+ 1) $> Right StateAbsent)
+            mirror <- mirrorViewWith pypiStateFormat pypiMirrorDocuments (stateTarget "https://private.example.test") (\_ _ -> modifyIORef' stateReads (+ 1) $> Right StateAbsent)
             steerMeter (proxyMemory proxy) 0 Calm
             response <- getPathWith [clientCredential] sdistPath (proxyWithDeps proxy (\deps -> deps{pdMirrorState = Just mirror}))
             simpleStatus response `shouldBe` status503

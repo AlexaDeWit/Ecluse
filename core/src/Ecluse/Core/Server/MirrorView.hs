@@ -28,6 +28,7 @@ import UnliftIO (evaluate, tryAny)
 
 import Ecluse.Core.Mirror.Documents (MirrorDocuments (..))
 import Ecluse.Core.Mirror.State
+import Ecluse.Core.Mirror.State.Format (MirrorStateFormat)
 import Ecluse.Core.Mirror.State.Internal (StateRevision (..), targetKey)
 import Ecluse.Core.Package (Artifact (..), PackageDetails (..), PackageInfo (..), PackageName)
 import Ecluse.Core.Registry.CachedDocument (weighCachedDoc)
@@ -48,15 +49,15 @@ import Ecluse.Core.Version (Version)
 type MirrorRetention = RetentionOperations CacheKey (StateRevision, ProjectMirrorRecord, Int)
 
 -- | One configured target partitions a bounded store from every other target.
-data MirrorView = MirrorView Limits StateTarget MirrorState MirrorRetention MirrorDocuments
+data MirrorView = MirrorView Limits StateTarget MirrorState MirrorRetention MirrorStateFormat MirrorDocuments
 
--- | Bind a store dedicated to this target and its adapter's document operations. Its pool must share the metadata retention budget.
-newMirrorView :: Limits -> StateTarget -> MirrorState -> MirrorRetention -> MirrorDocuments -> MirrorView
+-- | Bind a store dedicated to this target and its adapter's state format and document operations. Its pool must share the metadata retention budget.
+newMirrorView :: Limits -> StateTarget -> MirrorState -> MirrorRetention -> MirrorStateFormat -> MirrorDocuments -> MirrorView
 newMirrorView = MirrorView
 
 -- | The bound adapter's operations for restoring and assembling managed documents.
 mirrorViewDocuments :: MirrorView -> MirrorDocuments
-mirrorViewDocuments (MirrorView _ _ _ _ documents) = documents
+mirrorViewDocuments (MirrorView _ _ _ _ _ documents) = documents
 
 -- | TTL controls retention only. Every request still validates the retained revision.
 newMirrorRetention :: LocalPool -> NominalDiffTime -> StoreBudget -> IO MirrorRetention
@@ -64,7 +65,7 @@ newMirrorRetention pool ttl budget = newPooledRetention pool ttl budget (\(_, _,
 
 -- | Call only after private authorisation. A cached absence or an unsolicited 304 cannot prove state.
 validateMirrorProject :: MirrorView -> MemoryTicket -> PackageName -> IO (Either MirrorStateFault (Maybe (StateRevision, ProjectMirrorRecord)))
-validateMirrorProject (MirrorView limits target store cache _) ticket name = do
+validateMirrorProject (MirrorView limits target store cache format _) ticket name = do
     let key = fullKey (Source (show target)) name
     attempted <- tryAny $ do
         held <- roLookup cache (const pass) RefreshRecency key
@@ -78,7 +79,7 @@ validateMirrorProject (MirrorView limits target store cache _) ticket name = do
                 _ -> pure (Left StateRevisionMismatch)
             Right (StateLoaded revision record)
                 | recordTarget record /= target || recordPackage record /= name -> pure (Left StateIdentityMismatch)
-                | otherwise -> case projectRecordWeight limits record of
+                | otherwise -> case projectRecordWeight format limits record of
                     Left fault -> pure (Left fault)
                     Right weight -> do
                         let StateRevision revisionTarget revisionName bytes = revision
@@ -153,7 +154,7 @@ publicMirrorCoverage expected info = all covered (Map.toList expected)
 
 -- | Read a retained declared companion only after the parent version passed current private proof.
 readMirrorCompanion :: MirrorView -> MemoryTicket -> ProjectMirrorRecord -> Version -> Text -> IO (Either MirrorStateFault ByteString)
-readMirrorCompanion (MirrorView _ _ store _ _) ticket record version filename =
+readMirrorCompanion (MirrorView _ _ store _ _ _) ticket record version filename =
     case recordVersion version record >>= Map.lookup filename . versionCompanions of
         Just (CompanionRetained reference) -> do
             stateCharge <- newChargeRegion (charge ticket)

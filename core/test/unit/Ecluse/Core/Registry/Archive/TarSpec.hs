@@ -16,7 +16,7 @@ import Test.Hspec
 import Ecluse.Core.Registry (ParseError (..))
 import Ecluse.Core.Registry.Archive.Tar (scanTar, tarContents, tarRawNames)
 import Ecluse.Core.Security.Limits (Limits (..), defaultLimits)
-import Ecluse.Test.Registry.Archive (pax, paxRecord, regular, tarBytes)
+import Ecluse.Test.Registry.Archive (patchFirstHeader, pax, paxRecord, regular, tarBytes)
 
 spec :: Spec
 spec = describe "scanTar" $ do
@@ -62,6 +62,12 @@ spec = describe "scanTar" $ do
         let long = replicate 120 'a' <> "/data"
         prefixed <- regular long payload
         evidence (BSL.toStrict (Tar.write [prefixed])) `shouldReturn` Right (Map.singleton (toText long) payload, False)
+    it "records bytes after a NUL in a name or prefix field without changing the member it reads" $ do
+        plain <- BSL.toStrict <$> tarBytes [("example-1/data", payload)]
+        -- The name fills the first 14 bytes of its field, and the ustar prefix field starts at byte 345.
+        evidence (patchFirstHeader 14 "\NUL\NUL" plain) `shouldReturn` Right (selected, True)
+        for_ [14, 345] $ \offset ->
+            evidence (patchFirstHeader offset "\NULx" plain) `shouldReturn` Right (selected, False)
 
 -- | Select every regular file, so each bound is checked against retained content.
 scan :: Limits -> [ByteString] -> IO (Either ParseError (Map Text ByteString))

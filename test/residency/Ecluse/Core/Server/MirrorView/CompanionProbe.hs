@@ -24,7 +24,7 @@ import Ecluse.Core.Registry.Exchange (boundedChargedRead)
 import Ecluse.Core.Registry.MirrorUpload (ExpectedMirrorFile, MirrorInventory, expectedArtifact, inventoryFiles)
 import Ecluse.Core.Registry.MirrorUpload.Internal (restoreMirrorInventory)
 import Ecluse.Core.Registry.Publish (MirrorCompanion (mcValidate))
-import Ecluse.Core.Registry.RubyGems.Mirror (rubyGemsMirrorDocuments, rubyMirrorCompanion)
+import Ecluse.Core.Registry.RubyGems.Mirror (rubyGemsMirrorDocuments, rubyGemsStateFormat, rubyMirrorCompanion)
 import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), defaultLimits)
 import Ecluse.Core.Server.Admission.Meter (MemoryMeter, MemoryTicket, charge, meterSnapshot, newChargeRegion, takeLargestCharge, withMemoryEntry)
 import Ecluse.Core.Server.Admission.Types (MeterSnapshot (snChargedBytes))
@@ -154,7 +154,7 @@ newContext deadlines directory = do
                 observe cost = modifyIORef' requested (max cost) >> pay cost >> sample
             first StateBound . fmap snd <$> boundedChargedRead observe (MetadataBodyLimit (companionSize ref)) next
         store = MirrorState (\_ _ _ -> pure (Left StateMissingCompanion)) (\_ _ _ _ -> pure (Left StateRetryExhausted)) (\_ _ -> pure (Left StateMissingCompanion)) load
-    pure (Context (newMirrorView defaultLimits target store retention rubyGemsMirrorDocuments) record (mkVersion RubyGems rawVersion) filename reference inventory file meter mode consumed chunks requested peak baseline reached blocked deadlines)
+    pure (Context (newMirrorView defaultLimits target store retention rubyGemsStateFormat rubyGemsMirrorDocuments) record (mkVersion RubyGems rawVersion) filename reference inventory file meter mode consumed chunks requested peak baseline reached blocked deadlines)
 
 corrupt :: ByteString -> ByteString
 corrupt bytes = case BS.uncons bytes of

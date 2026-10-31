@@ -5,8 +5,10 @@
 -- | Check native policies and endpoint capabilities for each boot role.
 module Ecluse.Composition.ValidateSpec (spec) where
 
+import Data.List (lookup)
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
+import Network.HTTP.Client qualified as Client
 import Test.Hspec
 
 import Ecluse.Composition.BootError (
@@ -38,7 +40,6 @@ import Ecluse.Composition.BootError (
 import Ecluse.Composition.Endpoints (publicationTargetUrl)
 import Ecluse.Composition.Support (
     cargoCodeArtifactEnv,
-    cargoDependencyRefusal,
     cargoDeprecationRefusal,
     cargoGateEnv,
     cargoInstallRefusal,
@@ -70,7 +71,7 @@ import Ecluse.Composition.Types (BootRole (..), MirrorRole (..), RegistryRole (M
 import Ecluse.Composition.Validate (
     ValidatedPlan (vpMirrorStores, vpMounts, vpPrivateCaches, vpProgressFloor, vpPublications, vpSettings),
     VettedMount (vmEcosystem, vmMount),
-    VettedPublication (vpubFirstParty, vpubStaticCredential, vpubTarget),
+    VettedPublication (vpubFirstParty, vpubStaticCredential, vpubStaticPresentation, vpubTarget),
     vetBoot,
     vetBootWith,
     vetMirrorCapabilities,
@@ -79,7 +80,7 @@ import Ecluse.Composition.Vet (runVet)
 import Ecluse.Config (
     AppConfig (cfgMirrorState, cfgMounts),
     Config (configApp),
-    FirstParty (FirstPartyNpmScopes),
+    FirstParty (FirstParty),
     MirrorEndpoint (meUsername),
     MountConfig (mntMirrorTarget, mntPublicationTarget),
     PublicationEndpoint (peUsername),
@@ -91,12 +92,16 @@ import Ecluse.Core.Ecosystem (Ecosystem (Cargo, Npm, PyPI, RubyGems))
 import Ecluse.Core.Package (mkScope)
 import Ecluse.Core.Registry.Adapter (RegistryAdapter (adapterPublish), adapterFor)
 import Ecluse.Core.Registry.Adapter.Capability (AdapterPublish (publishCodec))
+import Ecluse.Core.Registry.Npm.Adapter (npmFirstPartyNames)
 import Ecluse.Core.Registry.Publish (MirrorCompanion, PublishCodec (pcMirrorCompanion))
+import Ecluse.Core.Registry.PyPI.Credential (pypiCredential)
+import Ecluse.Core.Registry.Request (StoreOperation (StoreWrite), attachCredential, presentedMapping)
 import Ecluse.Core.Registry.RubyGems.Mirror (rubyMirrorCompanion)
 import Ecluse.Core.Registry.Sweep.Types (minimumChunkPause)
 import Ecluse.Core.Rules.Types (PrecededRule (prRule), RuleType (AllowScopeType, DenyExternalDependenciesType, DenyIfYankedType, DenyInstallTimeExecutionType), ruleName)
 import Ecluse.Core.Security (mkProgressFloor, serveCapSeconds)
 import Ecluse.Core.Security.Egress (registryUrlText)
+import Ecluse.Test.Support (parseRequestOrFail)
 
 -- | Check accumulated refusals and the plans cleared for each registry role.
 spec :: Spec
@@ -224,9 +229,13 @@ cargoRuleBlocksSpec = describe "resolved Cargo rule blocks" $
             plan <- expectVetted role cargoGateEnv
             map vmEcosystem (vpMounts plan) `shouldBe` [Cargo]
             map (ruleName . prRule) (concatMap (mountPolicy . vmMount) (vpMounts plan)) `shouldBe` ["AllowIfOlderThan"]
-        for_ [(scopeRule, cargoScopeRefusal), (deprecatedRule, cargoDeprecationRefusal), (installRule, cargoInstallRefusal), (dependencyRule, cargoDependencyRefusal)] $ \(rules, refusal) ->
+        for_ [(scopeRule, cargoScopeRefusal), (deprecatedRule, cargoDeprecationRefusal), (installRule, cargoInstallRefusal)] $ \(rules, refusal) ->
             it ("refuses the shared " <> show refusal) $
                 refusalsFor role (overrideEnv "ECLUSE_RULES" rules cargoGateEnv) `shouldReturn` [refusal]
+        it "clears a shared external-dependency deny on the Cargo mount" $ do
+            refusalsFor role (overrideEnv "ECLUSE_RULES" dependencyRule cargoGateEnv) `shouldReturn` []
+            plan <- expectVetted role (overrideEnv "ECLUSE_RULES" dependencyRule cargoGateEnv)
+            map (ruleName . prRule) (concatMap (mountPolicy . vmMount) (vpMounts plan)) `shouldMatchList` ["AllowIfOlderThan", "DenyExternalDependencies"]
         it "refuses aliased Cargo blocks below a higher allow with an admission-only deny" $ do
             errors <- refusalsFor role (overrideEnv "ECLUSE_MOUNTS__CARGO__RULES" "{\"alias-scope\":{\"type\":\"AllowScope\",\"scope\":\"acme\",\"precedence\":1},\"alias-deprecated\":{\"type\":\"DenyIfDeprecated\",\"precedence\":1,\"appliesTo\":[\"admission\"]},\"alias-install\":{\"type\":\"DenyInstallTimeExecution\",\"precedence\":1,\"appliesTo\":[\"admission\"]},\"pin\":{\"type\":\"AllowByIdentity\",\"identity\":\"fixture@1.0.0\",\"precedence\":999}}" cargoGateEnv)
             errors `shouldMatchList` [cargoScopeRefusal, cargoDeprecationRefusal, cargoInstallRefusal]
@@ -353,9 +362,9 @@ ruleBlocksSpec = describe "vetBoot -- ecosystem rule blocks" $ do
         it "ignores a disabled PyPI mount's blocked declaration" $
             refusalsFor role (overrideEnv "ECLUSE_MOUNTS__PYPI__ENABLED" "false" (overrideEnv "ECLUSE_RULES" installRule bothMounts))
                 `shouldReturn` []
-        it "refuses a shared external-dependency deny on the PyPI, Cargo and RubyGems mounts" $
+        it "refuses a shared external-dependency deny on the PyPI and RubyGems mounts, and not on Cargo" $
             refusalsFor role (overrideEnv "ECLUSE_MOUNTS__CARGO__ENABLED" "true" (overrideEnv "ECLUSE_MOUNTS__RUBYGEMS__ENABLED" "true" (overrideEnv "ECLUSE_RULES" "{\"no-external\":{\"type\":\"DenyExternalDependencies\"}}" bothMounts)))
-                >>= (`shouldMatchList` [pypiDependencyBlock, cargoDependencyRefusal, rubyDependencyRefusal])
+                >>= (`shouldMatchList` [pypiDependencyBlock, rubyDependencyRefusal])
         it "clears the external-dependency deny when it lives under npm alone" $
             refusalsFor role (overrideEnv "ECLUSE_MOUNTS__NPM__RULES" "{\"no-external\":{\"type\":\"DenyExternalDependencies\"}}" bothMounts)
                 `shouldReturn` []
@@ -482,6 +491,19 @@ firstPartyAuthoritySpec = describe "first-party authority" $
                     plan <- expectVetted role (overrideEnv (key "ENABLED") "false" ownedEnv)
                     map vmEcosystem (vpMounts plan) `shouldBe` []
 
+-- A PyPI mount publishing to CodeArtifact under a static token, behind an authenticated edge.
+codeArtifactPublishEnv :: [(String, String)]
+codeArtifactPublishEnv =
+    [ ("ECLUSE_SERVER__AUTH_TOKEN", "edge-token")
+    , ("ECLUSE_MOUNTS__PYPI__ENABLED", "true")
+    , ("ECLUSE_MOUNTS__PYPI__FIRST_PARTY", "acme-*")
+    , ("ECLUSE_MOUNTS__PYPI__PRIVATE_UPSTREAM__REGISTRY__URL", "https://private.example.test/pypi/")
+    , ("ECLUSE_MOUNTS__PYPI__PUBLICATION_TARGET__CODE_ARTIFACT__URL", codeArtifactDomain <> "/pypi/internal/")
+    , ("ECLUSE_MOUNTS__PYPI__PUBLICATION_TARGET__CODE_ARTIFACT__UPLOAD_URL", codeArtifactDomain <> "/pypi/internal/")
+    , ("ECLUSE_MOUNTS__PYPI__PUBLICATION_TARGET__CODE_ARTIFACT__TOKEN", "publish-token")
+    ]
+        <> publicGateEnv
+
 clearedSpec :: Spec
 clearedSpec = describe "vetBoot -- what a cleared configuration reifies" $ do
     it "clears the active mounts and leaves the raw settings on the plan beside them" $ do
@@ -496,8 +518,15 @@ clearedSpec = describe "vetBoot -- what a cleared configuration reifies" $ do
             Just publication -> do
                 registryUrlText (publicationTargetUrl (vpubTarget publication))
                     `shouldBe` "https://publish.example.test"
-                vpubFirstParty publication `shouldBe` FirstPartyNpmScopes (pure (mkScope "acme"))
+                vpubFirstParty publication `shouldBe` FirstParty npmFirstPartyNames (pure (mkScope "acme"))
                 fmap (unSecret . credSecret) (vpubStaticCredential publication) `shouldBe` Just "publish-write-token"
+
+    it "renders a static CodeArtifact publication token under its store's Basic username" $ do
+        plan <- expectVetted MirrorWriter codeArtifactPublishEnv
+        publication <- maybe (fail "expected the PyPI publication to clear") pure (Map.lookup PyPI (vpPublications plan))
+        request <- parseRequestOrFail (codeArtifactDomain <> "/pypi/internal/")
+        lookup "Authorization" (Client.requestHeaders (attachCredential (presentedMapping (vpubStaticPresentation publication) StoreWrite pypiCredential) (vpubStaticCredential publication) request))
+            `shouldBe` Just "Basic YXdzOnB1Ymxpc2gtdG9rZW4="
 
     it "clears no publication for a mount that declares no target, so PUT stays a 405" $ do
         plan <- expectVetted MirrorWriter staticEnvVars

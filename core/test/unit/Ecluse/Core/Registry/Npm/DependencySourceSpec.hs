@@ -30,6 +30,10 @@ classificationSpec = describe "externalSource" $ do
     for_ urlSpecs $ \written ->
         it ("reads " <> show written <> " as a remote URL") $
             externalSource written `shouldBe` Just RemoteUrl
+    for_ unsupportedSchemeSpecs $ \written ->
+        it ("reads " <> show written <> " as an unsupported scheme") $
+            renderExternalDependency <$> externalDependencyOf (release ["dependencies" .= object ["left-pad" .= written]])
+                `shouldBe` Just "dependency 'left-pad' in dependencies names an unsupported scheme"
     for_ inRegistrySpecs $ \written ->
         it ("reads " <> show written <> " as fetching nothing from outside the registry") $
             externalSource written `shouldBe` Nothing
@@ -86,13 +90,14 @@ asMembers dependencies =
     spellingOf = \case
         GitSource -> "github:acme/left-pad"
         RemoteUrl -> "https://example.test/left-pad.tgz"
+        UnsupportedScheme -> "jsr:@std/left-pad@^1"
 
 genDependency :: Gen ExternalDependency
 genDependency =
     ExternalDependency
         <$> Gen.element Universe.universe
         <*> Gen.element ["alpha", "beta", "left-pad", "@acme/thing", "zeta"]
-        <*> Gen.element [GitSource, RemoteUrl]
+        <*> Gen.element Universe.universe
 
 gitSpecs :: [Text]
 gitSpecs =
@@ -126,6 +131,24 @@ gitSpecs =
     , "\\x@github.com/acme/left-pad"
     ]
 
+-- Schemes outside the registry and the local specs, so a scheme a client adds later fails closed.
+unsupportedSchemeSpecs :: [Text]
+unsupportedSchemeSpecs =
+    [ "jsr:@std/path@^1"
+    , "JSR:@std/path@^1"
+    , " jsr:@std/path@^1"
+    , "catalog:"
+    , "catalog:default"
+    , "patch:left-pad@npm%3A1.0.0#./left-pad.patch"
+    , "portal:../left-pad"
+    , "exec:./build.js"
+    , "ftp://example.test/left-pad.tgz"
+    , "svn+ssh://example.test/left-pad"
+    , "data:application/gzip;base64,AAAA"
+    , "left-pad:1.0.0"
+    , "x1:left-pad"
+    ]
+
 urlSpecs :: [Text]
 urlSpecs = ["https://example.test/left-pad-1.0.0.tgz", "http://example.test/left-pad-1.0.0.tgz", "HTTPS://example.test/left-pad.tgz", "https://github.com/acme/left-pad"]
 
@@ -153,8 +176,11 @@ inRegistrySpecs =
     , "link:../left-pad"
     , "workspace:*"
     , "workspace:left-pad@*"
-    , "catalog:"
-    , "jsr:@std/path@^1"
+    , "LINK:../left-pad"
+    , " workspace:*"
+    , " npm:left-pad@^1"
+    , " file:../left-pad"
+    , " C:\\left-pad"
     , "a/b/c"
     , "packages/@acme/widget"
     , "@acme/widget"

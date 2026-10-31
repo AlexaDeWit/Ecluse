@@ -26,6 +26,7 @@ import Ecluse.Core.Mirror.State (StateTarget, recordVersions, stateTarget)
 import Ecluse.Core.Mirror.State.Codec (chargedDecodeProjectRecord)
 import Ecluse.Core.Mirror.State.Internal (projectKey)
 import Ecluse.Core.Package (PackageName, mkPackageName)
+import Ecluse.Core.Registry.Cargo.Mirror (cargoStateFormat)
 import Ecluse.Core.Security (defaultLimits)
 import Ecluse.Test.Corpus (CorpusPackage, cargoCorpusPackages, cpName)
 import Ecluse.Test.Corpus.Cargo (cargoVersionKeys)
@@ -50,7 +51,7 @@ withCopyStateSpec = describe "withCopyState" $ do
             (psPublicHost settings, psPrivateHost settings) `shouldBe` (Just "localhost", Just "127.0.0.1")
             void (primeETag stateUrl)
             response <- fetchChecked status200 [] stateUrl
-            record <- expectRight =<< chargedDecodeProjectRecord (const pass) defaultLimits target tokio (toStrict (HTTP.responseBody response))
+            record <- expectRight =<< chargedDecodeProjectRecord cargoStateFormat (const pass) defaultLimits target tokio (toStrict (HTTP.responseBody response))
             Map.keysSet (recordVersions record) `shouldBe` Set.fromList cutVersions
     it "gives an unmatched private overlay no record" $ do
         public <- indexStub =<< loadCorpusBodies tokioCapture

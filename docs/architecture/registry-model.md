@@ -100,11 +100,12 @@ Content-Type, including its boundary. It does not rebuild the client's distribut
   `400` for the same reason. An unreadable body, or a missing or repeated `:action`, is also a
   `400`. The check reads the parsed document, never the attachment data.
 - **No dependency from outside Écluse.** An npm version whose installable dependencies name a git
-  source or a remote tarball URL is a `400` before any relay, because every consumer's client would
-  fetch that dependency directly, past the quarantine, the advisories and the mirror. The publish
-  refusal and the public-version rule share one classifier, so a spec a first-party release cannot
-  carry is also one a public version cannot carry. Cargo refuses a dependency on another registry
-  for the same reason.
+  source, a remote tarball URL, or any scheme Écluse does not know to resolve through the registry
+  or locally is a `400` before any relay, because a consumer's client would fetch that dependency
+  directly, past the quarantine, the advisories and the mirror. An unknown scheme fails closed, so
+  one a client adds later is refused too. The publish refusal and the public-version rule share one
+  classifier, so a spec a first-party release cannot carry is also one a public version cannot
+  carry. Cargo refuses a dependency on another registry for the same reason.
 
 - **Credential.** See [Credential flow and authority](#credential-flow-and-authority).
 - **No read-back role.** Write-only from the proxy's view. Published packages read back through
@@ -407,7 +408,7 @@ consumes. Adapters map their protocols into this shared model. Four principles g
 | **Install-time code execution** | `CodeExecSignal = NoCodeOnInstall \| RunsCodeOnInstall reason \| CodeExecUnknown`. | Unifies npm install scripts, PyPI sdist builds, and RubyGems native extensions. Cargo and RubyGems retain `CodeExecUnknown` and block the unsupported execution-denial rule at boot. |
 | **Availability** | `Availability = Available \| Deprecated \| Yanked`, a flag with no text. | npm deprecates whole versions. npm and RubyGems drop a removed or yanked version from their metadata instead of flagging it, so both block the yank deny at boot. PyPI yanks individual files, so a release reads as `Yanked` only when every file of it is. |
 | **Artifacts** | A version owns `NonEmpty Artifact`. Each carries its entry key, file name, location, algorithm-tagged `Hash`es, and size. | npm has one tarball, PyPI an sdist plus many wheels, and RubyGems one gem per platform. |
-| **Dependency sources** | `DependencySources = RegistryDependencies \| FetchesOutsideRegistry reason \| DependencySourcesUnknown`. | A git or URL dependency installs straight from its source and never receives a verdict of its own, so the deny judges the version that names it. npm reads `dependencies`, `optionalDependencies` and `peerDependencies` in both read forms. PyPI, Cargo and RubyGems retain `DependencySourcesUnknown` and block the dependency deny at boot. |
+| **Dependency sources** | `DependencySources = RegistryDependencies \| FetchesOutsideRegistry reason \| DependencySourcesUnknown`. | A git or URL dependency installs straight from its source and never receives a verdict of its own, so the deny judges the version that names it. npm reads `dependencies`, `optionalDependencies` and `peerDependencies` in both read forms. Cargo reads each index row's normal and build dependency registries. PyPI and RubyGems retain `DependencySourcesUnknown` and block the dependency deny at boot. |
 | **Dependencies** | The relationships themselves are retained for installation, outside the typed policy model. | Each dependency receives its own verdict when the client fetches it. npm retains supported dependency relationships in its installation representation. Only where a dependency installs from enters the rules vocabulary, as its dependency sources. |
 
 The types live in [`Ecluse.Core.Package`](../../core/src/Ecluse/Core/Package.hs),
@@ -485,7 +486,9 @@ Both passes charge their work.
 Resolver disagreement can change the package description used for resolution without changing archive bytes.
 First-party validation therefore compares upload claims, including native-library uniqueness constraints, with the retained effective manifest before target discovery.
 It also refuses the unstable dependency fields that mirroring refuses, so both paths take one stance on nightly-only resolver features.
-After agreement, every dependency must come from crates.io or Écluse, because a dependency on another registry would send every consumer's Cargo to that registry directly.
+It refuses their manifest keys in the archived dependency tables too, since the upload cannot carry them, so the index row and the archive never describe different dependencies.
+After agreement, every normal and build dependency must come from crates.io or Écluse, because a dependency on another registry would send every consumer's Cargo to that registry directly.
+A development dependency is exempt, as npm's `devDependencies` are, because no consumer resolves it.
 Écluse knows its own Cargo index from `server.publicUrl` and the mount path, so this check needs no configuration of its own.
 Shared bounded target parsing and logical source identities account for native formatting without changing source rows or upload bytes.
 The relay preserves validated upload bytes. Mirror publication derives required upload fields from the verified effective manifest.
@@ -498,11 +501,19 @@ protocol adapter, and its store contributes the backend the mount's private pack
 supplies.
 
 The two sides share only the vocabulary above: `Ecosystem`, `PackageName`, and `Version`, plus the
-abstract mechanism a store declares for a service credential. Neither imports the other, and a
-store that needs an ecosystem fact reads it off the `Ecosystem` value, as the CodeArtifact format
-token and its credential presentation table do. A backend matrix therefore costs one adapter per
-ecosystem plus one backend per store, never a cell per pair. npm, PyPI, Cargo, and RubyGems ship read and native publication capabilities in this build. Their stores
+abstract mechanism a store declares for a service credential. Neither imports the other, and a store
+that needs an ecosystem fact reads it off the `Ecosystem` value, as the CodeArtifact format token
+and its credential presentation table do. Every credential Écluse owns renders through that table,
+the Dredger's store reads included. A Basic row carries the store's own username. A backend matrix
+therefore costs one adapter per ecosystem plus one backend per store, never a cell per pair. npm,
+PyPI, Cargo, and RubyGems ship read and native publication capabilities in this build. Their stores
 are CodeArtifact, any host that speaks the protocol, and Verdaccio for development.
+
+Shared code reads what it needs from an adapter's declarations instead of branching on its
+ecosystem. Durable mirror state stores, weighs and rechecks a mount's retained read data through the
+state format its adapter declares, so a new ecosystem extends no switch in mirror state. The
+adapter's first-party declaration reads a mount's `firstParty` entries and decides which names they
+own, so the configuration format stays the same while the parser names no ecosystem.
 
 ### Incremental npm extraction
 

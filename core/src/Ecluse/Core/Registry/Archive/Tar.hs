@@ -4,7 +4,7 @@
 {-# LANGUAGE RankNTypes #-}
 
 {- | Complete PAX-aware tar traversal with bounded inventory and selected payload retention.
-The scan also records whether every member took its name from its raw ustar name field.
+The scan also records whether every member took its name from its raw ustar name field alone.
 -}
 module Ecluse.Core.Registry.Archive.Tar (
     TarDecode,
@@ -78,8 +78,8 @@ tarMembers = tsMembers
 tarContents :: TarScan -> Map Text ByteString
 tarContents = tsCaptured
 
-{- | Whether every member was named by its raw ustar name field alone.
-False after any PAX or GNU extended header, or a member whose name carries a ustar prefix.
+{- | Whether every member was named by its raw ustar name field alone. False after any PAX or GNU
+extended header, a ustar prefix, or bytes after the first NUL of a name or prefix field.
 -}
 tarRawNames :: TarScan -> Bool
 tarRawNames = tsRawNames
@@ -212,7 +212,7 @@ ordinaryEntry limits charge select header content tarState = do
             , tsLocal = Map.empty
             , tsPending = False
             , tsCaptured = retained
-            , tsRawNames = tsRawNames tarState && BS.null (headerPrefix header)
+            , tsRawNames = tsRawNames tarState && rawHeaderName header
             }
 
 memberOf :: Text -> Map ByteString ByteString -> ByteString -> Tar.EntryContent -> Either ParseError TarMember
@@ -249,10 +249,21 @@ headerPath header
     | otherwise = headerPrefix header <> "/" <> headerName header
 
 headerName :: ByteString -> ByteString
-headerName = BS.takeWhile (/= 0) . BS.take 100
+headerName = BS.takeWhile (/= 0) . nameField
 
 headerPrefix :: ByteString -> ByteString
-headerPrefix = BS.takeWhile (/= 0) . BS.take 155 . BS.drop 345
+headerPrefix = BS.takeWhile (/= 0) . prefixField
+
+{- Whether the name field alone names the member: nothing follows the name's first NUL, and the
+prefix field holds only NULs. A reader that strips only trailing NULs would see any other byte. -}
+rawHeaderName :: ByteString -> Bool
+rawHeaderName header = BS.all (== 0) (BS.dropWhile (/= 0) (nameField header)) && BS.all (== 0) (prefixField header)
+
+nameField :: ByteString -> ByteString
+nameField = BS.take 100
+
+prefixField :: ByteString -> ByteString
+prefixField = BS.take 155 . BS.drop 345
 
 parsePax :: ByteString -> Either ParseError (Map ByteString ByteString)
 parsePax = go Map.empty

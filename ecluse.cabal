@@ -178,6 +178,7 @@ library ecluse-core
     Ecluse.Core.Mirror.State
     Ecluse.Core.Mirror.State.Internal
     Ecluse.Core.Mirror.State.Codec
+    Ecluse.Core.Mirror.State.Format
     Ecluse.Core.Mirror.State.Weight
     Ecluse.Core.Registry.PyPI.Archive
     Ecluse.Core.Registry.Archive.Path
@@ -282,6 +283,7 @@ library ecluse-core
     Ecluse.Core.Registry.Npm.Maintenance
     Ecluse.Core.Registry.Npm.Maintenance.Listing
     Ecluse.Core.Registry.Npm.Metadata
+    Ecluse.Core.Registry.Npm.Mirror
     Ecluse.Core.Registry.Npm.Project
     Ecluse.Core.Registry.Npm.Reader
     Ecluse.Core.Registry.Npm.VersionListReader
@@ -1789,6 +1791,7 @@ test-suite ecluse-unit
     , mtl               ^>=2.3
     , network           ^>=3.2
     , retry             ^>=0.9
+    , streaming-commons ^>=0.2.3
     , text              ^>=2.1
     , time              ^>=1.12
     , universe-base     ^>=1.1

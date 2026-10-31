@@ -1296,14 +1296,16 @@ pipe buffers (at most 64 KiB per pipe) but not for the log's page cache. On CI t
 just built or restored the executable, so its text pages are already cached when the proxy starts
 and are not charged to it. The harness does not enforce that.
 
-The proxy dials the private and mirror target stubs at `127.0.0.1`, the address they listen on,
-and the public stub at `localhost`. Boot refuses a mirror target on the public upstream's host, so
-the two names differ. After a private miss the proxy closes that connection, so an onboarding row
-connects to the private stub again on each request. Over plain HTTP, `http-client` starts each
-further address of a name 250 ms after the one before, even when that one refused. While the
-harness named the private stubs `localhost`, which resolves to `::1` first, every onboarding request
-waited those 250 ms. An HTTPS deployment connects through `crypton-connection`, which tries the
-next address as soon as one refuses.
+The proxy dials the private and mirror target stubs at `127.0.0.1` and the public stub at
+`localhost`. Boot refuses a mirror target on the public upstream's host, so the two names differ.
+The public leg keeps a name because the internal-range block refuses a public artifact URL whose
+host is a literal loopback address. Over plain HTTP, `http-client` starts each further address of a
+name 250 ms after the one before, even when that one refused, and `localhost` resolves to `::1`
+first. So each stub listens on one port at both `127.0.0.1` and `::1`, or at `127.0.0.1` alone on a
+host without an IPv6 loopback. After a miss the proxy closes that connection, so a row whose stub
+misses connects to it again on each request. While the stubs listened at `127.0.0.1` alone, each of
+those requests on a leg dialled by name waited 250 ms. An HTTPS deployment connects through
+`crypton-connection`, which tries the next address as soon as one refuses.
 
 Every load proxy runs with native metadata gzip off. The shared environment builder sets
 `ECLUSE_SERVER__METADATA_GZIP=false` for every scenario, ecosystem and pod shape, and drops an
@@ -2270,7 +2272,8 @@ Upstream discovery runs after caller or service credentials exist, never at boot
 Authority negatives cover public, neighbouring, read, upload, and artifact coordinates without sending credentials to refused destinations.
 Publication cases bind native metadata, body lengths, manifest, archive root, digest, and first-party authority before writes.
 They preserve distinct read and upload roots and bound charged archive/TOML work.
-Policy cases prove that boot and `check-config` refuse active `DenyInstallTimeExecution`, `DenyExternalDependencies`, `DenyIfDeprecated`, and `AllowScope` rules with the adapter's reasons.
+Policy cases prove that boot and `check-config` refuse active `DenyInstallTimeExecution`, `DenyIfDeprecated`, and `AllowScope` rules with the adapter's reasons.
+They also prove that an active `DenyExternalDependencies` entry boots and denies a public row whose normal or build dependency names another registry.
 
 Mirror cases require exact source rows, SHA-256 archive proof, retry, lost replies, restart, and public outage.
 Yank and timestamp controls change target metadata and verify retained original-source facts with fresh client state.
