@@ -306,9 +306,10 @@ task check
 
 It runs three tiers:
 
-- `cabal-checks` runs `build`, `coverage`, `test-residency`, `doctest`, and `cabal-check`, in that
-  order. `coverage` runs the three unit suites and the integration suite instrumented, so
-  `task check` needs a running Docker daemon and starts the integration containers.
+- `cabal-checks` runs `build`, `coverage`, `test-residency`, `test-smoke-obligations`, `doctest`,
+  and `cabal-check`, in that order. `coverage` runs the three unit suites and the integration
+  suite instrumented, so `task check` needs a running Docker daemon and starts the integration
+  containers.
 - `static-checks` runs beside it: format-check, the vendored-source check, hlint, Semgrep, the
   workflow, script, and SPDX lints, the script tests, and the site build over placeholder
   fragments.
