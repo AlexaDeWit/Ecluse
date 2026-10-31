@@ -56,7 +56,7 @@ spec = describe "pypiWalk" $ do
             Right (_, Right fields) -> fields `shouldContain` [EnvelopeField "meta" (object ["api-version" .= ("1.1" :: Text)])]
             other -> expectationFailure ("large-key read did not complete: " <> show other)
 
-    it "builds no value for a repeated alternate-locations array, meta object or tracks member" $ do
+    it "emits fields and items only for the first alternate-locations array, meta object and tracks member" $ do
         let items = "0,0,0"
             body = "{\"meta\":{\"api-version\":\"1.1\",\"tracks\":[" <> items <> "],\"tracks\":[" <> items <> ",0]},\"name\":\"thing\",\"alternate-locations\":[],\"alternate-locations\":[" <> items <> "],\"meta\":{\"tracks\":[" <> items <> "]},\"files\":[]}"
             envelopes key events = [value | EnvelopeField named value <- events, named == key]
@@ -64,6 +64,7 @@ spec = describe "pypiWalk" $ do
         events <- reverse <$> expectRight (streamValue streamed)
         envelopes "alternate-locations" events `shouldBe` [toJSON ([] :: [Int])]
         envelopes "meta" events `shouldBe` [object ["api-version" .= ("1.1" :: Text), "tracks" .= ([0, 0, 0] :: [Int])]]
+        [key | EnvelopeItem key <- events] `shouldBe` replicate 3 "meta"
 
     it "fails a number past json-stream's digit limit across pieces, as json-stream does" $ do
         let body = "{\"name\":" <> BS.replicate 300000 0x31 <> "}"
