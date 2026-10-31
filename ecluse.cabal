@@ -1181,8 +1181,6 @@ test-suite ecluse-core-unit
   other-modules:
     SpecHook
     Ecluse.Core.StreamBench.Sink
-    Ecluse.Test.EnvSpec
-    Ecluse.Test.PollSpec
     Ecluse.Core.Mirror.StateSpec
     Ecluse.Core.Mirror.State.WeightSpec
     Ecluse.Core.Mirror.State.CodecSpec
@@ -1454,10 +1452,7 @@ test-suite ecluse-core-unit
     Ecluse.Rules.Support
     Ecluse.Security.Support
     Ecluse.Server.Admission.Support
-    Ecluse.Test.CollectorSpec
-    Ecluse.Test.Container.ImageSpec
     Ecluse.Test.LogSpec
-    Ecluse.Test.MaintenanceSpec
     Ecluse.Worker.Support
     Ecluse.Worker.Support.Fixtures
     Ecluse.Worker.Support.Runtime
@@ -1537,8 +1532,6 @@ test-suite ecluse-unit
   main-is:            Spec.hs
   hs-source-dirs:     test/unit bench/load
   other-modules:
-    Ecluse.Test.ContainersSpec
-    Ecluse.Test.ExpositionSpec
     Ecluse.Report.MarkdownSpec
     Ecluse.Report.BenchLabelsSpec
     Ecluse.AcceptanceSpec
@@ -1687,7 +1680,6 @@ test-suite ecluse-unit
     Ecluse.Site.MarkdownSpec
     Ecluse.Site.OpenApiSpec
     Ecluse.Site.SearchSpec
-    Ecluse.Test.InstalledTreeSpec
     Paths_ecluse
 
   autogen-modules:    Paths_ecluse

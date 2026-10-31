@@ -11,7 +11,6 @@ pre-pull steps in @.github/workflows/ci.yml@ repeat each pin, so a bump edits bo
 module Ecluse.Test.Container.Image (
     -- * A pinned reference
     PinnedImageRef,
-    mkPinnedImageRef,
     renderPinnedImageRef,
 
     -- * Either pinned-external or locally-built
@@ -32,7 +31,7 @@ import Data.Text qualified as T
 newtype PinnedImageRef = PinnedImageRef Text
     deriving stock (Eq, Show)
 
--- | Validate a raw reference as @\<name\>\@sha256:\<64 lowercase hex\>@, refusing a bare tag, an empty name, or a malformed digest.
+-- Validate a raw reference as @\<name\>\@sha256:\<64 lowercase hex\>@, refusing a bare tag, an empty name, or a malformed digest.
 mkPinnedImageRef :: Text -> Either Text PinnedImageRef
 mkPinnedImageRef raw =
     case T.breakOn digestMarker raw of

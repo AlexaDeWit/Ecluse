@@ -5,7 +5,6 @@
 -- | Container ownership shared by the harnesses and the invocation reaper.
 module Ecluse.Test.Containers (
     ContainerOwnershipMissing (..),
-    containerLabels,
     testContainerLabels,
     dockerLabelArgs,
 ) where
@@ -19,7 +18,7 @@ data ContainerOwnershipMissing = ContainerOwnershipMissing
 instance Exception ContainerOwnershipMissing where
     displayException _ = "Container ownership is missing. Use task test-integration or task test-e2e."
 
--- | Labels identify a worktree, invocation and shard without merging their ownership.
+-- Labels identify a worktree, invocation and shard without merging their ownership.
 containerLabels :: Text -> Text -> Text -> Text -> [(Text, Text)]
 containerLabels suite scope run shard =
     [ ("com.ecluse.test", suite)

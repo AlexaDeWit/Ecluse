@@ -794,8 +794,6 @@ The cases of one telemetry group share a collector, and each install emits the s
 span assertion therefore reads whole spans through `exportedSpans` and keys on an attribute of its
 own case, such as the coordinate of the package that the case installs. The private-leg case owns
 a separate coordinate, its public install, the mirror wait, and its second fresh install.
-`Ecluse.Test.CollectorSpec` in the core unit gate checks the shared parser and matching predicates
-against unrelated spans, signals, coordinates, events, links, and malformed attributes.
 
 Each declared group owns a complete data-plane lifecycle. Its cases cannot read another group's mutable store state.
 Profiles declare npm, PyPI, or mixed mounts and acquire the clients and services their cases need.

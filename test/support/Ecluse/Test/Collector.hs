@@ -10,10 +10,8 @@ module Ecluse.Test.Collector (
     exportedSpans,
     PrintedSpan (..),
     printedSpans,
-    detailedSpan,
     datadogIds,
     loggedDatadogIds,
-    spanCarries,
     spanFor,
     linkedMirrorTraces,
     privateArtifactAnswers,
@@ -132,27 +130,6 @@ printedSpans = spansIn . lines
         value <- T.stripPrefix ": " printed
         pure (key, attributeValue value)
 
-{- | A span in the debug exporter's detailed layout, as 'printedSpans' reads it: name, kind, trace ID,
-span ID, attributes as printed, and each link's trace and span IDs.
--}
-detailedSpan :: Text -> Text -> Text -> Text -> [(Text, Text)] -> [(Text, Text)] -> Text
-detailedSpan name kind traceKey spanKey attributes links =
-    "Span #0\n    Trace ID       : "
-        <> traceKey
-        <> "\n    Parent ID      : \n    ID             : "
-        <> spanKey
-        <> "\n    Name           : "
-        <> name
-        <> "\n    Kind           : "
-        <> kind
-        <> "\nAttributes:\n"
-        <> T.concat ["     -> " <> key <> ": " <> value <> "\n" | (key, value) <- attributes]
-        <> (if null links then "" else "Links:\n")
-        <> T.concat
-            [ "SpanLink #" <> show index <> "\n     -> Trace ID: " <> linkTrace <> "\n     -> ID: " <> linkSpan <> "\n     -> TraceState: \n     -> DroppedAttributesCount: 0\n"
-            | (index, (linkTrace, linkSpan)) <- zip [0 :: Int ..] links
-            ]
-
 {- | A printed span's IDs as Datadog logs them: the low 64 bits of the trace ID and the span ID,
 each as an unsigned decimal.
 -}
@@ -174,7 +151,7 @@ attributeValue printed =
   where
     tagged tag = T.stripPrefix (tag <> "(") printed >>= T.stripSuffix ")"
 
--- | Whether a span carries every one of the given attributes.
+-- Whether a span carries every one of the given attributes.
 spanCarries :: [(Text, AttributeValue)] -> ExportedSpan -> Bool
 spanCarries attributes exported = all (`elem` esAttributes exported) attributes
 
