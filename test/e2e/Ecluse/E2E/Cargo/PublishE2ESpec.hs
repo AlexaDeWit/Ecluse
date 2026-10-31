@@ -15,6 +15,8 @@ module Ecluse.E2E.Cargo.PublishE2ESpec (
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import System.Exit (ExitCode (ExitSuccess))
+import System.FilePath ((</>))
+import Test.Hspec (expectationFailure, shouldBe, shouldReturn)
 
 import Ecluse.E2E.Cargo.InstallE2ESpec (assertCargoAssets, assertCargoOriginRouting)
 import Ecluse.E2E.Fixtures.Cargo
@@ -33,6 +35,13 @@ import Ecluse.Test.Registry.Cargo.Fixtures
 cargoPublishName, cargoRetainedName :: Text
 cargoPublishName = "ecluse-e2e-build"
 cargoRetainedName = "ecluse-e2e-macro"
+
+{- | Undeclared, and held by the public index at 1.0.0 only: Cargo's duplicate check passes and the upload reaches Écluse.
+A name in no index cannot serve here, because the sparse index answers it 503 before Cargo uploads.
+-}
+cargoRefusedName, cargoRefusedVersion :: Text
+cargoRefusedName = "ecluse-e2e-extra"
+cargoRefusedVersion = "1.0.1"
 
 -- | Read and upload authority share one declared native registry, with the API base set explicitly.
 cargoPublicationConfig :: E2EConfig
@@ -58,7 +67,7 @@ cargoPublicationFamily = concreteFamily (cargoWriteFixture "publish" ["read", "p
                     ( PublicationFixture
                         cargoVersion
                         (publicationDriver observed registry cargoPublishName)
-                        (publicationDriver observed registry "ecluse-e2e-extra")
+                        (refusedDriver observed registry)
                         (yankDriver observed registry)
                     )
 
@@ -78,6 +87,26 @@ publicationDriver observed registry name =
         }
   where
     proxy = observedProxy observed
+
+-- | The guard itself answers the upload: one 403 that names the guard, and no write at the target.
+refusedDriver :: ObservedNativeProxy -> CargoRegistry -> PublicationDriver
+refusedDriver observed registry =
+    (publicationDriver observed registry cargoRefusedName)
+        { publicationRun = do
+            before <- nativeTraffic observed
+            received <- length <$> readTVarIO (registryRequests registry)
+            uploads <- readTVarIO (registryUploads registry)
+            result <- cargoPublishAt (observedProxy observed) currentCargo cargoRefusedName cargoRefusedVersion
+            traffic <- nativeTraffic observed >>= nativeTrafficSince before
+            let sent = [(nativeRequestPath request, nativeRequestStatus request) | request <- nativeClientRequests traffic, nativeRequestMethod request == "PUT"]
+                refuse reason = expectationFailure (toString (clientReport result reason))
+            unless (sent == [("/cargo/api/v1/crates/new", 403)]) (refuse ("sent the uploads " <> show sent <> ", where the guard refuses one with 403"))
+            unless ("outside the first-party namespaces" `T.isInfixOf` (crStdout result <> crStderr result)) (refuse "omitted the first-party guard's refusal")
+            readTVarIO (registryUploads registry) `shouldReturn` uploads
+            writes <- filter ((`notElem` ["GET", "HEAD"]) . nativeRequestMethod) . drop received <$> readTVarIO (registryRequests registry)
+            writes `shouldBe` []
+            pure result
+        }
 
 yankDriver :: ObservedNativeProxy -> CargoRegistry -> NonUploadDriver
 yankDriver observed registry =
@@ -99,10 +128,17 @@ yankDriver observed registry =
 
 -- | Publish repository-owned leaf sources with the real client's verification and native framing.
 cargoPublishFixture :: E2E -> CargoToolchain -> Text -> IO ClientResult
-cargoPublishFixture proxy toolchain name = do
+cargoPublishFixture proxy toolchain name = cargoPublishAt proxy toolchain name cargoVersion
+
+-- | Publish one owned fixture's sources under the given native version.
+cargoPublishAt :: E2E -> CargoToolchain -> Text -> Text -> IO ClientResult
+cargoPublishAt proxy toolchain name version = do
     spec <- maybe (fail "owned Cargo publication fixture is absent") pure (find (\crate -> crateName crate == name && crateVersion crate == cargoVersion) cargoCrates)
     withCargoProject toolchain CargoPublisher proxy ("sparse+" <> e2eBaseUrl proxy <> "/cargo/") (Just cargoRegistryToken) $ \project -> do
         cargoUseFixture project "test/fixtures/cargo/graph" spec
+        let manifest = cargoDirectory project </> "Cargo.toml"
+        original <- decodeUtf8 <$> readFileBS manifest
+        writeFileText manifest (T.replace ("\nversion = \"" <> cargoVersion <> "\"\n") ("\nversion = \"" <> version <> "\"\n") original)
         cargoRestrictPublication project
         cargoPublish project
 
