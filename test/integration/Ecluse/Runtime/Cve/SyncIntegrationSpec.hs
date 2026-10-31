@@ -227,7 +227,6 @@ artifactPlaceholder :: Text
 artifactPlaceholder = "http://localhost:1"
 
 -- The private upstream resolves with no versions, so the public leg and the rules decide.
--- A 404 would turn a total public denial into a retryable 503, hiding the 403 this test pins.
 withPrivateUpstream :: (Text -> IO a) -> IO a
 withPrivateUpstream k = withStub status200 (encode emptyPackument) (k . stubLocalhostUrl)
 
