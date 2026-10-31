@@ -8,6 +8,8 @@ module Ecluse.Test.Collector (
     ExportedSpan (..),
     AttributeValue (..),
     exportedSpans,
+    PrintedSpan (..),
+    printedSpans,
     spanCarries,
     spanFor,
     privateArtifactAnswers,
@@ -50,13 +52,20 @@ data AttributeValue
 exportedSpans :: Text -> [ExportedSpan]
 exportedSpans = map psSpan . printedSpans
 
+-- | One printed span with the identifiers a correlation check reads.
 data PrintedSpan = PrintedSpan
     { psSpan :: ExportedSpan
     , psTraceId :: Maybe Text
+    -- ^ The 32-hex trace ID, when the span printed a valid one.
+    , psSpanId :: Maybe Text
+    -- ^ The 16-hex span ID, when the span printed a valid one.
     , psParentId :: Maybe Text
     , psKind :: Maybe Text
+    , psLinkTraceIds :: [Text]
+    -- ^ The valid trace ID of each span link, in printed order.
     }
 
+-- | Every span in the collector's output with its identifiers and links, in printed order.
 printedSpans :: Text -> [PrintedSpan]
 printedSpans = spansIn . lines
   where
@@ -64,7 +73,14 @@ printedSpans = spansIn . lines
         [] -> []
         _ : rest ->
             let (own, later) = span ownLine rest
-             in [ PrintedSpan (ExportedSpan name (mapMaybe attribute own)) (printedTraceId own) (uniqueField "Parent ID" own) (uniqueField "Kind" own)
+             in [ PrintedSpan
+                    { psSpan = ExportedSpan name (mapMaybe attribute own)
+                    , psTraceId = uniqueField "Trace ID" own >>= validId 32
+                    , psSpanId = uniqueField "ID" own >>= validId 16
+                    , psParentId = uniqueField "Parent ID" own
+                    , psKind = uniqueField "Kind" own
+                    , psLinkTraceIds = linkTraceIds (takeWhile (not . spanBoundary) later)
+                    }
                 | Just name <- [fieldNamed "Name" own]
                 ]
                     <> spansIn later
@@ -80,10 +96,20 @@ printedSpans = spansIn . lines
         [value] -> Just value
         _ -> Nothing
 
-    printedTraceId own = do
-        value <- uniqueField "Trace ID" own
-        guard (T.length value == 32 && T.all isHexDigit value && T.any (/= '0') value)
-        pure value
+    validId width value = value <$ guard (T.length value == width && T.all isHexDigit value && T.any (/= '0') value)
+
+    -- The exporter prints a span's events, then its links: a @Links:@ label, then one
+    -- @SpanLink #n@ block of indented @-> Trace ID:@ style fields per link.
+    linkTraceIds trailer = case break ((== "Links:") . T.stripEnd) trailer of
+        (_, _ : links) ->
+            [ traceKey
+            | line <- takeWhile (\entry -> "SpanLink #" `T.isPrefixOf` entry || " " `T.isPrefixOf` entry) links
+            , Just value <- [T.stripPrefix "-> Trace ID:" (T.strip line)]
+            , Just traceKey <- [validId 32 (T.strip value)]
+            ]
+        _ -> []
+
+    spanBoundary line = any (`T.isPrefixOf` line) ["Span #", "ScopeSpans #", "ResourceSpans #", "Metric #", "LogRecord #"]
 
     attribute line = do
         entry <- T.stripPrefix "-> " (T.strip line)

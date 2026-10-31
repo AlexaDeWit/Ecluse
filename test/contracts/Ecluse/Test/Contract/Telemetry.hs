@@ -25,8 +25,11 @@ module Ecluse.Test.Contract.Telemetry (
     hasPopulatedTraceId,
 ) where
 
+import Data.Aeson (Value (Object, String), decodeStrict)
+import Data.Aeson.KeyMap qualified as KeyMap
 import Data.Char (isDigit)
 import Data.Text qualified as T
+import Numeric (readHex)
 import Test.Hspec (Expectation, SpecWith, it, shouldBe, shouldReturn, shouldSatisfy)
 
 import Ecluse.Test.Contract.Catalogue (caseLabel)
@@ -148,7 +151,9 @@ exportsSignals package traffic collector = do
   where
     signals logs = "ecluse.serve.decision" `T.isInfixOf` logs && "Span #" `T.isInfixOf` logs
 
--- | All domain spans must identify this scenario's own coordinate.
+{- | All domain spans must identify this scenario's own coordinate. The rule evaluation and the
+enqueue share one trace, and the worker's job span links back to that trace.
+-}
 exportsDomainSpans :: Text -> Text -> TrafficDriver -> MirrorTelemetryDriver -> CollectorDriver -> Expectation
 exportsDomainSpans package version traffic mirror collector = do
     void (telemetryInstall traffic package >>= shouldSucceed)
@@ -158,9 +163,16 @@ exportsDomainSpans package version traffic mirror collector = do
     logs `shouldSatisfy` emitted
   where
     emitted logs =
-        all
-            (\name -> any (spanFor package version name) (exportedSpans logs))
-            ["ecluse.rule.eval", "ecluse.mirror.enqueue", "ecluse.mirror.job"]
+        let spans = printedSpans logs
+            named name = filter (spanFor package version name . psSpan) spans
+         in not $
+                null
+                    [ traceKey
+                    | enqueue <- named "ecluse.mirror.enqueue"
+                    , Just traceKey <- [psTraceId enqueue]
+                    , any ((== Just traceKey) . psTraceId) (named "ecluse.rule.eval")
+                    , any (elem traceKey . psLinkTraceIds) (named "ecluse.mirror.job")
+                    ]
 
 -- | A fresh second install records a successful private fetch after the initial miss.
 exportsPrivateFetch :: PrivateFetchKind -> Text -> Text -> Text -> Text -> TrafficDriver -> MirrorTelemetryDriver -> CollectorDriver -> Expectation
@@ -196,33 +208,49 @@ servesAfterExportFailure firstPackage secondPackage traffic logs = do
     telemetryReadiness traffic `shouldReturn` 200
     void (telemetryInstall traffic secondPackage >>= shouldSucceed)
 
--- | Configured resource identity and populated log correlation reach both outputs.
+{- | Configured resource identity reaches the collector, and a log line under that identity
+carries the Datadog form of an exported span's trace and span IDs.
+-}
 exportsIdentity :: Text -> TelemetryIdentity -> TrafficDriver -> LogDriver -> CollectorDriver -> Expectation
 exportsIdentity package expectedIdentity traffic logs collector = do
     void (telemetryInstall traffic package >>= shouldSucceed)
-    collected <- telemetryCollected collector carriesIdentity 80
-    collected `shouldSatisfy` carriesIdentity
-    logged <- telemetryLogs logs correlated 80
-    logged `shouldSatisfy` correlated
+    logged <- loggedSpans <$> telemetryLogs logs (not . null . loggedSpans) 80
+    logged `shouldSatisfy` (not . null)
+    collected <- telemetryCollected collector (correlated logged) 80
+    collected `shouldSatisfy` correlated logged
   where
+    correlated logged output = carriesIdentity output && any (`elem` logged) (mapMaybe datadogIds (printedSpans output))
     carriesIdentity output =
         all
             (`T.isInfixOf` output)
-            [ "service.name"
-            , telemetryService expectedIdentity
-            , "deployment.environment"
-            , telemetryEnvironment expectedIdentity
-            , "service.version"
-            , telemetryVersion expectedIdentity
+            [ "-> service.name: Str(" <> telemetryService expectedIdentity <> ")"
+            , "-> deployment.environment.name: Str(" <> telemetryEnvironment expectedIdentity <> ")"
+            , "-> service.version: Str(" <> telemetryVersion expectedIdentity <> ")"
             ]
-    correlated output =
-        hasPopulatedTraceId output
-            && all
-                (`T.isInfixOf` output)
-                [ "\"service\":\"" <> telemetryService expectedIdentity <> "\""
-                , "\"env\":\"" <> telemetryEnvironment expectedIdentity <> "\""
-                , "\"version\":\"" <> telemetryVersion expectedIdentity <> "\""
-                ]
+    loggedSpans output =
+        [ (traceKey, spanKey)
+        | line <- lines output
+        , Just (Object fields) <- [decodeStrict (encodeUtf8 (T.dropWhile (/= '{') line))]
+        , all (\(key, expected) -> KeyMap.lookup key fields == Just (String expected)) identityFields
+        , Just (Object dd) <- [KeyMap.lookup "dd" fields]
+        , Just (String traceKey) <- [KeyMap.lookup "trace_id" dd]
+        , Just (String spanKey) <- [KeyMap.lookup "span_id" dd]
+        ]
+    identityFields =
+        [ ("service", telemetryService expectedIdentity)
+        , ("env", telemetryEnvironment expectedIdentity)
+        , ("version", telemetryVersion expectedIdentity)
+        ]
+
+{- | A printed span's IDs as Datadog logs them: the low 64 bits of the trace ID and the span ID,
+each as an unsigned decimal.
+-}
+datadogIds :: PrintedSpan -> Maybe (Text, Text)
+datadogIds printed = (,) <$> (decimal . T.takeEnd 16 =<< psTraceId printed) <*> (decimal =<< psSpanId printed)
+  where
+    decimal hex = case readHex (toString hex) of
+        [(value, "")] -> Just (show (value :: Word64))
+        _ -> Nothing
 
 -- | A trace identifier must contain a leading digit rather than an absent or empty value.
 hasPopulatedTraceId :: Text -> Bool
