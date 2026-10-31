@@ -72,7 +72,7 @@ RubyGems runs the caller-bound variant, with name-binding and origin-binding in 
 | version-bound | Native full and selected version/release/file count examples remain TooManyVersions 2 1. Both selected present versions now run |
 | artifact-bound | npm full artifact-count breach and exact ceiling. PyPI counterpart added alongside its unchanged file-grouping bound test |
 | missing-version | Both native missing-release examples remain Right Nothing |
-| selected-parity | Exact domain PackageDetails equality with full map lookup, nonempty expected two-version map. Native rich/corpus and grouping parity remain |
+| selected-parity | Exact domain PackageDetails equality between the production full read and the production selected read, nonempty expected two-version map. Native rich/corpus and grouping parity remain |
 
 Ten npm and eight PyPI duplicate example bodies are removed. Fourteen shared projection examples run.
 Native raw-document identity and exact filename observations remain in both specs.
@@ -92,11 +92,11 @@ Each suffix expands to integration.serving.npm, integration.serving.pypi, integr
 | --- | --- |
 | default-denial | Listing and artifact denial without allow rules, added paired coverage. The listing answers 404 for GET and HEAD and the artifact 403, beside a private origin that holds nothing, one that answers 404, and none |
 | identity-precedence | Explicit identity permits a young release, explicit deny defeats allow on listing and artifact, added paired coverage |
-| authorised-union | npm, PyPI, Cargo and RubyGems combine trusted-private and gated-public versions. |
+| authorised-union | npm, PyPI, Cargo and RubyGems combine trusted-private and gated-public versions. The private origin alone holds one version and its own copy of a shared one, so the listing and that copy's digest show each origin's share. |
 | quarantine-private-authority | Shared private young-release authority with old public survivor and rejected young public version. npm native latest-tag assertion remains in its existing gate case |
 | private-divergence | Shared private digest and exact bytes on same-version divergence. npm native latest-tag/divergence cases remain |
-| private-availability | An unavailable private origin (HTTP 429, 500 or 503, a closed connection) refuses listing and artifact with 503, and an invalid private reply (HTTP 302 or 400) refuses them with 502. A private 404 serves the gated public release, a private 401 or 403 refuses, and a public 503 serves the private release alone. A private 404 beside a public 404 answers listing and artifact with 404, and beside a public 503 with 503. With no private origin configured, a public 404 answers listing and artifact with 404. New in every provider |
-| public-integrity | npm "filters a hashless public version out of the served listing" moves here, with PyPI counterpart |
+| private-availability | An unavailable private origin (HTTP 429, 500 or 503, a closed connection) refuses listing and artifact with 503, and an invalid private reply (HTTP 302 or 400) refuses them with 502. A private 404 serves the gated public release, a private 401 or 403 refuses, and a public 503 serves the private release alone. New in every provider |
+| public-integrity | npm "filters a hashless public version out of the served listing" moves here, with PyPI counterpart. A SHA-512 public floor then filters every SHA-256 fixture release from the listing and refuses its artifact with 403, so the floor itself runs for Cargo and RubyGems, whose parsers refuse a hashless row |
 | trusted-integrity | npm "drops a hashless trusted-private version from the listing by default" moves here, with PyPI counterpart |
 | artifact-integrity | PyPI exact distribution bytes and advertised sha256 checks move here, with npm counterpart. Require fixture bytes, advertised digest and digest of actual response bytes |
 | artifact-head | Successful artifact HEAD returns 200, an empty body and a positive Content-Length for both npm and PyPI. The PyPI instance is new. |
@@ -133,7 +133,7 @@ Its independent Aeson readers inspect native wire version and artifact digest fi
 | Core Queue.MemorySpec enqueue/receive/ack round trip and every payload field | queue/memory/payload | Same production memory handle, exact job, every field, acknowledgement and empty follow-up poll |
 | Core Queue.MemorySpec terminal drop | queue/memory/terminal-drop | Same production terminal action and empty follow-up poll |
 | New memory profile distinction | queue/memory/destructive-receive | Receipt itself removes a job without acknowledgement, first delivery count |
-| SqsIntegrationSpec enqueue/receive/ack | queue/sqs/payload | Same canonical body as memory, real emulator and production SQS handle |
+| SqsIntegrationSpec enqueue/receive/ack | queue/sqs/payload | Same canonical body as memory, including a job that carries a trace context, real emulator and production SQS handle |
 | SqsIntegrationSpec unacknowledged redelivery and ApproximateReceiveCount | queue/sqs/redelivery | Exact payload on both deliveries and counts 1 then 2, acknowledgement cleanup |
 | Core CredentialSpec static token, repeated token and expiry | credential/static/permanent/token and credential/static/expiring/token | Two independent expected reads, expiry and secret preservation, token Show redaction |
 | Runtime Credential.CodeArtifactSpec token and expiry | credential/codeartifact-stub/token | Same shared token law over real mint request/parser with HTTP stub, no claim of live mint coverage |
@@ -142,7 +142,7 @@ Its independent Aeson readers inspect native wire version and artifact digest fi
 | ProtocolSpec consent granted/classification and consent withheld/classification | maintenance/protocol/consented/consent and maintenance/protocol/withheld/consent | Exact verdict and provider reason retained |
 | CodeArtifactSpec granted consent/classification | maintenance/codeartifact/consented/consent | Shared law over the production handle and typed control plane, original request sequencing cases retained |
 | ProtocolSpec served versions | maintenance/protocol/inventory/versions | Exact versions, presence and revision. The old check omitted revision |
-| Protocol exact package listing and new shared CodeArtifact inventory | maintenance/protocol/inventory/packages, maintenance/codeartifact/inventory/packages, maintenance/codeartifact/inventory/versions | Full inventory against independent names/versions, pagination remains native too |
+| Protocol exact package listing and new shared CodeArtifact inventory | maintenance/protocol/inventory/packages, maintenance/codeartifact/inventory/packages, maintenance/codeartifact/inventory/versions | Full inventory against independent names/versions, pagination remains native too. The CodeArtifact pages carry a revised published version and an archived one, so presence and revision both reach the law |
 | Additional successful deletion law | maintenance/protocol/delete/removed and maintenance/codeartifact/delete/removed | Exact submitted version identities, order and one VersionRemoved per version. CodeArtifact crosses its 100-version ceiling |
 | Runtime Cve.SyncSpec refused artifact retains last-good generation | advisory/local/last-good | Full byte, ETag, provenance, install age, remediation and temporary-file snapshot before/after exact epoch refusal |
 | Additional real S3 conformance | advisory/s3/last-good | Same canonical body through a direct operator write (an unconditional SDK PutObject, its ETag the producer identity), real S3 fetch and syncStep |
@@ -158,10 +158,10 @@ from the provider catalogue cannot make its absence pass.
 
 | Family | Case suffixes | Required observation |
 |---|---|---|
-| `reads` | `present`, `absent` | Read both stored versions and distinguish absence from a failed read. |
+| `reads` | `present`, `absent` | Read both stored versions. Read absence, then fail one package-document read with a 503 and require an error before the next read succeeds. |
 | `writes` | `complete`, `idempotent` | Publish a complete release beside a sibling and preserve it on retry. |
 | `inventory` | `exact` | List exactly the published package and versions. |
-| `deletion` | `selected` | Remove one version while its sibling stays readable and listed. |
+| `deletion` | `selected` | Remove one version while its sibling stays readable and listed. Its artifacts answer 404 at their native locations, and the sibling's still serve their bytes. |
 | `integrity` | `bytes-and-digests` | Preserve all artifact bytes and their verified digests. |
 | `recovery` | `publish-retry`, `reopen`, `delete-retry` | Report failed work, finish a later attempt, and read completed work from a fresh handle. |
 
@@ -186,7 +186,7 @@ The npm and PyPI integrity controls alter successful production reads to change 
 A PyPI control also removes distribution files.
 Each control requires an assertion failure and proves that the altered read ran.
 
-`Ecluse.Test.Contract.QueueSpec` runs the same `queuePayloadLaw` with the real memory driver, an empty-delivery driver and a corrupted-payload driver. Wrong drivers must fail.
+`Ecluse.Test.Contract.QueueSpec` runs the same `queuePayloadLaw` with the real memory driver, an empty-delivery driver, a corrupted-payload driver and a driver that drops the trace carrier. Wrong drivers must fail.
 
 Ecluse.Test.Poll.runUntil replaces discarded timeout/poll results in Integration.WorkerLoop. It throws TestContractEscape on progress timeout or early normal worker exit, propagates worker errors, and cancels the worker after progress. Ecluse.Test.PollSpec covers all four outcomes including cleanup.
 
@@ -527,7 +527,7 @@ The native modules retain scenario providers. The fixed suite declarations regis
 | `npm/dredger/inventory` | walks the seeded store through listPackagesIn, including scoped base-name buckets | `Sweep.Identity`: Exact seeded snapshot, listing matches names, empty and matching prefix inventories, absent prefix empty. |
 | `npm/dredger/admission-only` | keeps every version an identity deny limited to admission names, and states the phase at boot | `Sweep.Identity`: Successful role exit, admission-only phase at boot, exact examined/deleted/kept/guard tally, both complete snapshots unchanged. |
 | `npm/dredger/denied-versions` | deletes every denied version and preserves all other versions, including first-party versions | `Sweep.Identity`: Successful exit and exact fixture version, deletion reason, no-generation audit and cycle tally. Denied inventory empty, retained snapshot/listing exact, cache unchanged. |
-| `npm/dredger/dry-run` | previews distinct real inventories without writes and preserves first-party versions | `Sweep.Identity`: Distinct cache versions, first-party publication and listing readiness. Non-success preview exit, both store diagnostics, cache-only preview and deletion count. Partial-evidence and non-authority messages. No first-party deletion and both snapshots unchanged. |
+| `npm/dredger/dry-run` | previews distinct real inventories without writes and preserves first-party versions | `Sweep.Identity`: Distinct cache versions, first-party publication and listing readiness. Successful preview exit, both store diagnostics, one store-labelled preview line per copy in each store, and the exact cycle tally over both inventories, with first-party versions guard-skipped. Partial-evidence and non-authority messages. No first-party deletion and both snapshots unchanged. |
 | `npm/dredger/consent-refusal` | refuses missing consent, names the key, and leaves every version intact | `Sweep.Identity`: Non-success exit, exact native consent key diagnostic, no sweep events, both snapshots unchanged. |
 | `npm/dredger/first-party` | protects every first-party version even when an identity deny names one | `Sweep.Identity`: Successful exit, exact zero-work/guard-skipped tally across both stores, exact protected versions and unchanged mirror snapshot. |
 | `npm/dredger/two-stores` | deletes shared and cache-only versions while preserving each store's other contents | `Sweep.Identity`: Cache-only publication and original bounded presence probes: present in cache, absent in mirror. Successful exit. Each snapshot loses only the condemned name. Both name inventories empty. |
