@@ -1338,6 +1338,7 @@ test-suite ecluse-core-unit
     Ecluse.Core.Registry.Npm.WireSpec
     Ecluse.Core.Registry.NpmSpec
     Ecluse.Core.Registry.MirrorUpload.InternalSpec
+    Ecluse.Core.Registry.FirstPartySpec
     Ecluse.Core.Registry.PublishSpec
     Ecluse.Core.Registry.PyPI.AdapterSpec
     Ecluse.Core.Registry.PyPI.CredentialSpec
