@@ -16,7 +16,7 @@ import Ecluse.BenchLoad.Normalise (
         attrUpstreamFraction,
         attrUpstreamMs
     ),
-    BaselineSource (InjectedFallback, MeasuredRtt),
+    LiveFetch (LiveFetch, NoLiveFetch),
     NormalisedRow (NormalisedRow),
     Saturation (satQueuingDelayMs, satQueuingDominates, satQueuingFraction),
     SaturationInput (SaturationInput),
@@ -86,24 +86,24 @@ spec = do
             satQueuingDominates s `shouldBe` False
 
     describe "renderNormalised" $ do
-        it "names a measured baseline and renders the absolute and percentage split" $ do
-            let rendered = renderNormalised (MeasuredRtt 150 8) [NormalisedRow "merge-cold" (Just 255) Nothing Nothing]
-            rendered `shouldSatisfy` T.isInfixOf "measured public RTT 150.0 ms"
-            rendered `shouldSatisfy` T.isInfixOf "merge-cold"
-            rendered `shouldSatisfy` T.isInfixOf "105.0 ms (41%)"
+        it "subtracts the injected latency, names the live fetch time, and renders the absolute and percentage split" $ do
+            let rendered = renderNormalised 20 (LiveFetch 150 8) [NormalisedRow "merge-cold" (Just 255) Nothing Nothing]
+            rendered `shouldSatisfy` T.isInfixOf "Baseline = the injected upstream latency, 20.0 ms"
+            rendered `shouldSatisfy` T.isInfixOf "Live public fetch time: 150.0 ms, the mean of 8 live samples."
+            rendered `shouldSatisfy` T.isInfixOf "| merge-cold | 255.0 ms | 20.0 ms (8%) | 235.0 ms (92%) | n/a | n/a | n/a | 385.0 ms | available |"
 
-        it "labels the fallback baseline when the live probe was unavailable" $ do
-            let rendered = renderNormalised (InjectedFallback 5) [NormalisedRow "merge-cold" Nothing Nothing Nothing]
-            rendered `shouldSatisfy` T.isInfixOf "injected fallback 5.0 ms"
-            rendered `shouldSatisfy` T.isInfixOf "n/a"
+        it "says the live fetch time is unavailable when the probe gave none" $ do
+            let rendered = renderNormalised 20 NoLiveFetch [NormalisedRow "merge-cold" Nothing Nothing Nothing]
+            rendered `shouldSatisfy` T.isInfixOf "Live public fetch time: unavailable, because the probe was off or no fetch succeeded."
+            T.lines rendered `shouldSatisfy` elem "| merge-cold | n/a | n/a | n/a | n/a | n/a | n/a | n/a | available |"
 
         it "retains private-hit totals without a public-baseline subtraction" $ do
-            let rendered = renderNormalised (InjectedFallback 17) [NormalisedRow "private relay" (Just 2.5) (Just 4) (Just "no public leg")]
-            T.lines rendered `shouldSatisfy` elem "| private relay | 2.5 ms | n/a | n/a | 4.0 ms | n/a | n/a | unavailable: no public leg |"
+            let rendered = renderNormalised 17 (LiveFetch 150 8) [NormalisedRow "private relay" (Just 2.5) (Just 4) (Just "no public leg")]
+            T.lines rendered `shouldSatisfy` elem "| private relay | 2.5 ms | n/a | n/a | 4.0 ms | n/a | n/a | n/a | unavailable: no public leg |"
 
         it "retains the private-hit reason even when no successful latency exists" $ do
-            let rendered = renderNormalised (InjectedFallback 17) [NormalisedRow "private relay" Nothing Nothing (Just "no public leg")]
-            T.lines rendered `shouldSatisfy` elem "| private relay | n/a | n/a | n/a | n/a | n/a | n/a | unavailable: no public leg |"
+            let rendered = renderNormalised 17 NoLiveFetch [NormalisedRow "private relay" Nothing Nothing (Just "no public leg")]
+            T.lines rendered `shouldSatisfy` elem "| private relay | n/a | n/a | n/a | n/a | n/a | n/a | n/a | unavailable: no public leg |"
 
     describe "renderSaturation" $ do
         it "reports no usable comparison for an empty result" $ do

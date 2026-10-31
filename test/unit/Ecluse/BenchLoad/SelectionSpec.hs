@@ -28,7 +28,7 @@ spec = do
                 `shouldBe` ["", "npm load scenarios\n\nnpm load\nnpm service\nnpm saturation", "pypi load scenarios\n\npypi load\npypi service\npypi saturation"]
     describe "measurement identity" $
         it "versions shared conditions independently of scenario names" $
-            measurementConditionVersion `shouldBe` "unified-v2"
+            measurementConditionVersion `shouldBe` "unified-v3"
     describe "the eviction cache" $ do
         it "forces churn for the three-project corpus at the default and larger bounds" $ do
             evictionEntries 3 3 `shouldBe` Right 2

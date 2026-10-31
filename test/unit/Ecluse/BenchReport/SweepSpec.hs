@@ -13,7 +13,7 @@ import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Test.Hspec
 
-import Ecluse.BenchLoad.Floors (PassSelection (LoadedPassOnly))
+import Ecluse.BenchLoad.Floors (Cell (Floored), PassSelection (LoadedPassOnly))
 import Ecluse.BenchLoad.Harness (LoadKnobs (lkDurationSeconds), ProxyFigures (..), ScenarioReport (..))
 import Ecluse.BenchLoad.Pod (CgroupReading (CgroupReading), PodShape (MemoryOnly), ProxyTuning (..), noTuning, parseCpuList)
 import Ecluse.BenchLoad.Report (Section (sectionKnobs), renderReports)
@@ -22,7 +22,7 @@ import Ecluse.BenchLoad.Selection (fixtureSection)
 import Ecluse.BenchLoad.Support (floorsAtTwoCores, loadedSection, placedWindow, proxyWithPeak, scenarioReport, twoCores)
 import Ecluse.BenchLoad.Sweep (Arm (..), BootValues (..), Phase (..), Sweep (..), SweepJob (..))
 import Ecluse.BenchLoad.Verdict (ProxyEnding (HeapOverflow))
-import Ecluse.BenchReport.Sweep (ArmResult (..), Failure (MemoryHighEvents), JobComparison (..), ReferenceFloor (NotApplicable), ReferenceFloors (ReferenceFloors), ScenarioResult (scrFailures, scrFloor), SlotResult (..), compareJob, renderComparison, slotVoid)
+import Ecluse.BenchReport.Sweep (ArmResult (..), Failure (MemoryHighEvents), JobComparison (..), ReferenceFloor (NotApplicable), ReferenceFloors (ReferenceFloors, rfUpstreamLatencyMs), ScenarioResult (scrFailures, scrFloor), SlotResult (..), compareJob, renderComparison, slotVoid)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 
 spec :: Spec
@@ -57,7 +57,11 @@ spec = do
             let short = rows [Right (shortReport [arm "pypi/index-cold" 4000]), Right (shortReport [arm "pypi/index-cold" 900]), Right (shortReport [arm "pypi/index-cold" 4000])]
             short `shouldSatisfy` elem "Commit `abc123`, 100 connections x 5 s windows."
             short `shouldSatisfy` elem "| 2 | `test` | as expected | clean | held | 0.225 |"
-            short `shouldSatisfy` elem "| pypi/index-cold | 900 | 4000.0 | 0.225 | 964, not applicable to this window | 100.00 ms | 200.00 ms | 300.0 MiB | clean shutdown |"
+            short `shouldSatisfy` elem "| pypi/index-cold | 900 | 4000.0 | 0.225 | 964, not applicable to this window or latency | 100.00 ms | 200.00 ms | 300.0 MiB | clean shutdown |"
+        it "holds no count to a floor calibrated at another injected latency" $ do
+            let elsewhere = T.lines (renderComparison (compareJob commit reference{rfUpstreamLatencyMs = 20} sweep job [anchorOf 1000 4000, Right (armReport [arm "pypi/index-cold" 900]), anchorOf 1000 4000]))
+            elsewhere `shouldSatisfy` elem "| pypi/index-cold | 900 | 4000.0 | 0.225 | 964, not applicable to this window or latency | 100.00 ms | 200.00 ms | 300.0 MiB | clean shutdown |"
+            elsewhere `shouldSatisfy` elem "| 2 | `test` | as expected | clean | held | 0.225 |"
         it "voids an arm whose report could not be read, and still compares the rest" $ do
             let missing = rows [anchorOf 1000 4000, Left "could not read slot-2.md", anchorOf 1000 4000]
             missing `shouldSatisfy` any (T.isInfixOf "| 2 | `test` | n/a | **void**: the report could not be read. could not read slot-2.md")
@@ -108,9 +112,13 @@ element index = \case
     Array values -> toList values !!? index
     _ -> Nothing
 
--- The floors at their calibrated 100 connections x 30 s, and the commit the job names.
+-- The floors at their calibrated 100 connections x 30 s and 5 ms, the latency the arm reports inject, and the commit the job names.
 reference :: ReferenceFloors
-reference = ReferenceFloors 100 30 (Map.singleton twoCores floorsAtTwoCores)
+reference = ReferenceFloors 100 30 5 (Map.singleton twoCores (Map.mapMaybe floorOf floorsAtTwoCores))
+  where
+    floorOf = \case
+        Floored least _ _ -> Just least
+        _ -> Nothing
 
 commit :: Maybe Text
 commit = Just "abc123"

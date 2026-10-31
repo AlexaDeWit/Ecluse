@@ -5,7 +5,7 @@
 -- | The floors file's reader, what holds a run to the floors or keeps it off them, and what a held run fails closed on.
 module Ecluse.BenchLoad.FloorsSpec (spec) where
 
-import Data.Aeson (Value (Null), encode, object, (.=))
+import Data.Aeson (Key, Value (Null), encode, object, (.=))
 import Data.Aeson.Types (Pair)
 import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
@@ -14,10 +14,10 @@ import Test.Hspec
 import Ecluse.BenchLoad.Floors (
     Calibration (..),
     CalibrationRun (CalibrationRun),
+    Cell (Floored, Uncalibrated),
     Enforcement (Enforced, NotHeld),
-    FloorCheck (AtLeast, NoFloor, Unchecked),
+    FloorCheck (AtLeast, NoFloor, ReportOnly, Unchecked),
     Floors (..),
-    LatencyCeiling (LatencyCeiling),
     OperatingPoint (..),
     Pass (ConcurrencyOne, Loaded),
     PassSelection (EveryPass, LoadedPassOnly),
@@ -25,26 +25,28 @@ import Ecluse.BenchLoad.Floors (
     RunnerKind (RunnerKind),
     RunnerReading (RunnerReading),
     Trigger (OnDemand, Scheduled),
-    Unheld (ConditionsDiffer, LatencyAboveCeiling, MissingNativeLatency, MissingNativeObservation, OtherRunner, SettingsDiffer, ShapeNotCalibrated, ThrashProbe),
+    Unheld (ConditionsDiffer, OtherRunner, SettingsDiffer, ShapeNotCalibrated, ThrashProbe),
+    checkedFloor,
     decodeFloors,
     describeEnforcement,
     enforce,
     floorCheck,
-    latencyCeilingMs,
+    floorFromMedian,
+    medianCount,
     patternOverridesIn,
+    renderFloorsFile,
     runnerIn,
     staleFloorViolations,
     triggerIn,
     unheldViolations,
  )
 import Ecluse.BenchLoad.Pod (PodShape (Unlimited), ProxyTuning (..), noTuning, parseCpuList)
-import Ecluse.BenchLoad.Support (floorsAtTwoCores, slowNetwork, twoCores)
-import Ecluse.Core.Ecosystem (Ecosystem (Cargo, Npm, PyPI, RubyGems))
+import Ecluse.BenchLoad.Support (calibrationRunIds, floorsAtTwoCores, slowNetwork, twoCores)
 
 spec :: Spec
 spec = do
     describe "decodeFloors" $ do
-        it "reads the calibration, and each floor by pod shape, scenario, and pass" $
+        it "reads the calibration, and each cell by pod shape, scenario, and pass" $
             decodeFloors (document (calibrationValue []) twoCoreFloors) `shouldBe` Right sample
         it "reads a null bound as the proxy's computed default, and lists as a scenario subset and pattern overrides" $
             (calOperatingPoint . floorsCalibration <$> decodeFloors (document (calibrationValue ["operatingPoint" .= operatingPointValue ["serveMaxInFlight" .= (30 :: Int), "scenarios" .= ["pypi/index-cold" :: Text], "patternOverrides" .= ["BENCH_PATTERN_NAMES" :: Text]]]) twoCoreFloors))
@@ -55,47 +57,60 @@ spec = do
         it "refuses a calibration that leaves any key out" $
             for_ (map fst calibrationPairs) $ \missing ->
                 decodeFloors (document (object (filter ((/= missing) . fst) calibrationPairs)) twoCoreFloors) `shouldSatisfy` isLeft
-        it "refuses a calibration without its rule, its runner, or its runs" $
-            for_ [["rule" .= ("" :: Text)], ["runner" .= ("" :: Text)], ["runnerOs" .= ("" :: Text)], ["runnerArch" .= ("" :: Text)], ["runs" .= ([] :: [Text])]] $ \override ->
+        it "refuses a calibration without its measurement conditions or its runner, a floor fraction outside (0, 1], and negative confirmation re-runs" $
+            for_ [["measurementConditions" .= ("" :: Text)], ["runner" .= ("" :: Text)], ["runnerOs" .= ("" :: Text)], ["runnerArch" .= ("" :: Text)], ["floorFraction" .= (0 :: Int)], ["floorFraction" .= (1.1 :: Double)], ["confirmationReruns" .= (-1 :: Int)]] $ \override ->
                 decodeFloors (document (calibrationValue override) twoCoreFloors) `shouldSatisfy` isLeft
-        it "refuses a run without its URL or its commit" $
-            for_ [object ["url" .= ("" :: Text), "commit" .= commit], object ["url" .= firstRun, "commit" .= ("" :: Text)], object ["url" .= firstRun]] $ \run ->
-                decodeFloors (document (calibrationValue ["runs" .= [run]]) twoCoreFloors) `shouldSatisfy` isLeft
-        it "refuses a latency ceiling that is not what the rule gives for the highest latencies" $
-            for_ [(135, 200), (135, 250), (0, 0)] $ \(highest, most) ->
-                decodeFloors (document (calibrationValue ["npmInjectedLatency" .= latencyValue [("2cpu-1gib", highest)] most]) twoCoreFloors) `shouldSatisfy` isLeft
-        it "refuses highest latencies for other pod shapes than the floors hold, and for none" $
-            for_ [[("4cpu-1gib", 135)], [("2cpu-1gib", 135), ("4cpu-1gib", 141)], [("2CPU-1GIB", 135)], []] $ \highest ->
-                decodeFloors (document (calibrationValue ["npmInjectedLatency" .= latencyValue highest 210]) twoCoreFloors) `shouldSatisfy` isLeft
+        it "refuses a run without its ID, its URL, its commit, or its event, and a run listed twice" $ do
+            for_ [runValue 0 firstRun, object ["id" .= (1 :: Int), "url" .= ("" :: Text), "commit" .= commit, "event" .= event], object ["id" .= (1 :: Int), "url" .= firstRun, "event" .= event], object ["id" .= (1 :: Int), "url" .= firstRun, "commit" .= commit, "event" .= ("" :: Text)]] $ \run ->
+                decodeFloors (document (calibrationValue ["runs" .= (run : drop 1 runValues)]) twoCoreFloors) `shouldSatisfy` isLeft
+            decodeFloors (document (calibrationValue ["runs" .= (runValues <> take 1 runValues)]) twoCoreFloors) `shouldSatisfy` isLeft
         it "refuses a pod shape it cannot read, and one not in its rendered form" $
-            for_ ["2cpu", "2CPU-1GIB", "2cpu-1024mib"] $ \shape ->
-                decodeFloors (document (calibrationValue []) [shape .= object ["npm/merge-cold" .= object ["loaded" .= (1 :: Int)]]]) `shouldSatisfy` isLeft
-        it "requires a PyPI ceiling when calibration names the unified conditions" $
-            decodeFloors (document (calibrationValue ["measurementConditions" .= ("unified-v2" :: Text)]) twoCoreFloors) `shouldSatisfy` isLeft
-        it "checks native PyPI ceiling arithmetic and pod identities" $
-            for_ [latencyValue [("2cpu-1gib", 100)] 151, latencyValue [("4cpu-1gib", 100)] 150] $ \latencyRecord ->
-                decodeFloors (document (calibrationValue ["measurementConditions" .= ("unified-v2" :: Text), "pypiInjectedLatency" .= latencyRecord]) twoCoreFloors) `shouldSatisfy` isLeft
-        it "refuses Cargo floor rows without a native ceiling" $
-            decodeFloors (document (calibrationValue []) ["2cpu-1gib" .= object ["cargo/index-cold" .= object ["loaded" .= (1 :: Int)]]]) `shouldSatisfy` isLeft
-        it "refuses RubyGems floors without independent native ceiling provenance" $
-            decodeFloors (document (calibrationValue []) ["2cpu-1gib" .= object ["rubygems/info-cold" .= object ["loaded" .= (1 :: Int)]]]) `shouldSatisfy` isLeft
-        it "checks native RubyGems ceiling arithmetic and pod identities" $
-            for_ [latencyValue [("2cpu-1gib", 20)] 31, latencyValue [("4cpu-1gib", 20)] 30] $ \latencyRecord ->
-                decodeFloors (document (calibrationValue ["rubygemsInjectedLatency" .= latencyRecord]) twoCoreFloors) `shouldSatisfy` isLeft
-        it "checks native Cargo ceiling arithmetic and pod identities" $
-            for_ [latencyValue [("2cpu-1gib", 20)] 31, latencyValue [("4cpu-1gib", 20)] 30] $ \latencyRecord ->
-                decodeFloors (document (calibrationValue ["cargoInjectedLatency" .= latencyRecord]) twoCoreFloors) `shouldSatisfy` isLeft
-        it "reads each ecosystem ceiling and retained row provenance without changing counts" $ do
-            let changed = ["measurementConditions" .= ("unified-v2" :: Text), "pypiInjectedLatency" .= latencyValue [("2cpu-1gib", 100)] 150, "retainedFloorConditions" .= Map.singleton ("npm/herd" :: Text) ("legacy-v1" :: Text)]
-            fmap floorsByShape (decodeFloors (document (calibrationValue changed) twoCoreFloors)) `shouldBe` Right (floorsByShape sample)
+            for_ ["2 cpus", "2CPU-1GIB", "2cpu-1024mib"] $ \shape ->
+                decodeFloors (document (calibrationValue ["runs" .= ([] :: [Value])]) [shape .= object ["npm/merge-cold" .= object ["loaded" .= object ["floor" .= Null]]]]) `shouldSatisfy` isLeft
         it "refuses an unknown pass" $
-            decodeFloors (document (calibrationValue []) ["2cpu-1gib" .= object ["pypi/index-cold" .= object ["warm" .= (1 :: Int)]]]) `shouldSatisfy` isLeft
+            decodeFloors (document (calibrationValue []) (withCell "pypi/index-cold" "warm" (floorValue 964 1607))) `shouldSatisfy` isLeft
         it "refuses a floor below 1" $
-            decodeFloors (document (calibrationValue []) ["2cpu-1gib" .= object ["npm/merge-cold" .= object ["loaded" .= (0 :: Int)]]]) `shouldSatisfy` isLeft
+            for_ [(0, 0), (0, 1)] $ \(least, median) ->
+                decodeFloors (document (calibrationValue []) (withCell "npm/merge-cold" "loaded" (floorValue least median))) `shouldSatisfy` isLeft
+        it "refuses a floor that is not 60% of its median, rounded down" $
+            for_ [(339, 564), (337, 564), (338, 565)] $ \(least, median) ->
+                decodeFloors (document (calibrationValue []) (withCell "npm/merge-cold" "loaded" (floorValue least median))) `shouldSatisfy` isLeft
+        it "reads each floor at the calibration's floor fraction" $ do
+            let atHalf = calibrationValue ["floorFraction" .= (0.5 :: Double)]
+            fmap (Map.lookup ("npm/merge-cold", Loaded) <=< Map.lookup twoCores . floorsByShape) (decodeFloors (document atHalf [twoCoreKey .= object ["npm/merge-cold" .= object ["loaded" .= floorValue 282 564]]]))
+                `shouldSatisfy` either (const False) (== Just (Floored 282 564 calibrationRunIds))
+            decodeFloors (document atHalf twoCoreFloors) `shouldSatisfy` isLeft
+        it "refuses a floor without its median or its runs, and a cell with a floor and a report-only reason"
+            $ for_
+                [ object ["floor" .= (338 :: Int), "from" .= calibrationRunIds]
+                , object ["floor" .= (338 :: Int), "median" .= (564 :: Int)]
+                , object ["floor" .= (338 :: Int), "median" .= (564 :: Int), "from" .= ([] :: [Int])]
+                , object ["floor" .= (338 :: Int), "median" .= (564 :: Int), "from" .= calibrationRunIds, "reportOnly" .= ("noisy" :: Text)]
+                , object ["floor" .= Null, "median" .= (677 :: Int)]
+                , object []
+                ]
+            $ \cell -> decodeFloors (document (calibrationValue []) (withCell "npm/merge-cold" "loaded" cell)) `shouldSatisfy` isLeft
+        it "refuses a floor that names a run the calibration does not list, or a run twice, and a listed run no floor names" $ do
+            decodeFloors (document (calibrationValue []) (withCell "npm/merge-cold" "loaded" (object ["floor" .= (338 :: Int), "median" .= (564 :: Int), "from" .= [1, 2, 4 :: Int]]))) `shouldSatisfy` isLeft
+            decodeFloors (document (calibrationValue []) (withCell "npm/merge-cold" "loaded" (object ["floor" .= (338 :: Int), "median" .= (564 :: Int), "from" .= [1, 2, 2 :: Int]]))) `shouldSatisfy` isLeft
+            decodeFloors (document (calibrationValue ["runs" .= (runValues <> [runValue 4 "https://example.test/runs/4"])]) twoCoreFloors) `shouldSatisfy` isLeft
+        it "refuses a report-only cell without its reason" $
+            decodeFloors (document (calibrationValue []) (withCell "npm/herd" "loaded" (object ["floor" .= Null, "reportOnly" .= ("" :: Text)]))) `shouldSatisfy` isLeft
+        it "reads uncalibrated cells with no calibration run" $
+            fmap floorsByShape (decodeFloors (document (calibrationValue ["runs" .= ([] :: [Value])]) [twoCoreKey .= object ["npm/merge-cold" .= object ["loaded" .= object ["floor" .= Null]]]]))
+                `shouldBe` Right (Map.singleton twoCores (Map.singleton ("npm/merge-cold", Loaded) Uncalibrated))
 
-    describe "latencyCeilingMs" $
-        it "is one and a half times the lowest of the pod shapes' highest latencies, rounded up to 10 ms" $
-            map latencyCeilingMs [137 :| [135, 141, 165], 165 :| [], 200 :| [160], 161 :| [], 100 :| [100]] `shouldBe` [210, 250, 240, 250, 150]
+    describe "floorFromMedian" $ do
+        it "is 60% of the median count, rounded down, and at least 1" $
+            map (floorFromMedian 0.6) [564, 677, 1000, 2, 1] `shouldBe` [338, 406, 600, 1, 1]
+        it "takes the floor fraction it is given" $
+            map (floorFromMedian (1 / 2)) [677, 1000, 1] `shouldBe` [338, 500, 1]
+        it "takes the middle count of the runs, the lower middle of an even number" $
+            map medianCount [3 :| [1, 2], 2410 :| [1980, 2205], 5 :| [9, 1, 7]] `shouldBe` [2, 2205, 5]
+
+    describe "renderFloorsFile" $
+        it "writes floors that read back as the same floors" $
+            decodeFloors (encodeUtf8 (renderFloorsFile sample)) `shouldBe` Right sample
 
     describe "what a run brings" $ do
         it "reads a scheduled run from GitHub's event name, and any other run as on demand" $ do
@@ -111,41 +126,15 @@ spec = do
                 `shouldBe` ["BENCH_PATTERN_NAMES", "BENCH_PATTERN_ROUNDS"]
 
     describe "enforce" $ do
-        it "holds a run that matches the calibration to its pod shape's floors" $
-            enforce sample held `shouldBe` Enforced twoCores floorsAtTwoCores
-        it "holds a run whose npm fixture injects the ceiling, and not one a millisecond above it" $ do
-            enforce sample held{rfNpmLatencyMs = 210} `shouldBe` Enforced twoCores floorsAtTwoCores
-            enforce sample held{rfNpmLatencyMs = 211} `shouldBe` NotHeld (LatencyAboveCeiling Npm 211 210 :| [])
-        it "does not qualify changed conditions against retained legacy floors" $ do
-            enforce sample held{rfConditions = "unified-v2"} `shouldBe` NotHeld (ConditionsDiffer "legacy-v1" "unified-v2" :| [])
+        it "holds a run that matches the calibration to its pod shape's cells and confirmation re-runs" $
+            enforce sample held `shouldBe` Enforced twoCores 1 floorsAtTwoCores
+        it "does not hold a run at another injected latency, a millisecond away included" $
+            for_ [19, 21, 5] $ \latency ->
+                enforce sample held{rfSettings = calibrated{opUpstreamLatencyMs = latency}} `shouldBe` NotHeld (SettingsDiffer ("upstreamLatencyMs" :| []) :| [])
+        it "does not hold a run under other measurement conditions, and fails it when scheduled" $ do
+            enforce sample held{rfConditions = "unified-v2"} `shouldBe` NotHeld (ConditionsDiffer "unified-v3" "unified-v2" :| [])
             unheldViolations OnDemand (enforce sample held{rfConditions = "unified-v2"}) `shouldBe` []
             unheldViolations Scheduled (enforce sample held{rfConditions = "unified-v2"}) `shouldSatisfy` (not . null)
-        it "requires native Cargo calibration after recording its observed latency" $ do
-            let facts = held{rfCargoLatencyMs = Just 12}
-            enforce sample facts `shouldBe` NotHeld (MissingNativeLatency Cargo :| [])
-            unheldViolations OnDemand (enforce sample facts) `shouldBe` ["no independently measured native latency ceiling for cargo"]
-        it "applies an independent native Cargo ceiling to the whole run" $ do
-            let native = sample{floorsCalibration = calibration{calCargoLatency = Just (LatencyCeiling ceilingRule (Map.singleton twoCores 20) 30)}}
-            enforce native held `shouldBe` NotHeld (MissingNativeObservation Cargo :| [])
-            enforce native held{rfCargoLatencyMs = Just 30} `shouldBe` Enforced twoCores floorsAtTwoCores
-            enforce native held{rfCargoLatencyMs = Just 31} `shouldBe` NotHeld (LatencyAboveCeiling Cargo 31 30 :| [])
-        it "requires native RubyGems calibration after retaining the observed latency" $ do
-            let facts = held{rfRubyGemsLatencyMs = Just 12}
-            enforce sample facts `shouldBe` NotHeld (MissingNativeLatency RubyGems :| [])
-            unheldViolations OnDemand (enforce sample facts) `shouldBe` ["no independently measured native latency ceiling for rubygems"]
-        it "applies the independent RubyGems ceiling to every ecosystem in the run" $ do
-            let native = sample{floorsCalibration = calibration{calRubyGemsLatency = Just (LatencyCeiling ceilingRule (Map.singleton twoCores 20) 30)}}
-            enforce native held `shouldBe` NotHeld (MissingNativeObservation RubyGems :| [])
-            enforce native held{rfRubyGemsLatencyMs = Just 30} `shouldBe` Enforced twoCores floorsAtTwoCores
-            enforce native held{rfRubyGemsLatencyMs = Just 31} `shouldBe` NotHeld (LatencyAboveCeiling RubyGems 31 30 :| [])
-            floorCheck (enforce native held{rfRubyGemsLatencyMs = Just 31}) ("npm/merge-cold", Loaded) `shouldBe` Unchecked
-        it "applies a native PyPI ceiling independently and leaves the whole run unheld" $ do
-            let native = sample{floorsCalibration = calibration{calConditions = "unified-v2", calPypiLatency = Just (LatencyCeiling ceilingRule (Map.singleton twoCores 100) 150)}}
-                matched = held{rfConditions = "unified-v2", rfPypiLatencyMs = 150}
-            enforce native matched `shouldBe` Enforced twoCores floorsAtTwoCores
-            enforce native matched{rfPypiLatencyMs = 151} `shouldBe` NotHeld (LatencyAboveCeiling PyPI 151 150 :| [])
-            floorCheck (enforce native matched{rfPypiLatencyMs = 151}) ("npm/merge-cold", Loaded) `shouldBe` Unchecked
-            enforce native matched{rfPypiLatencyMs = 151, rfNpmLatencyMs = 211} `shouldBe` NotHeld (LatencyAboveCeiling Npm 211 210 :| [LatencyAboveCeiling PyPI 151 150])
         it "does not hold a run that differs in any setting, and names the setting" $
             for_ offCalibration $ \(setting, ran) ->
                 enforce sample held{rfSettings = ran} `shouldBe` NotHeld (SettingsDiffer (setting :| []) :| [])
@@ -155,63 +144,69 @@ spec = do
         it "does not hold a run under a pod shape the floors do not hold, and names the shape once" $
             enforce sample held{rfShape = Unlimited} `shouldBe` NotHeld (ShapeNotCalibrated Unlimited :| [])
         it "names every reason a run is not held" $
-            enforce sample RunFacts{rfSettings = calibrated{opDurationSeconds = 10, opScenarios = Just ["pypi/index-cold"]}, rfRunner = offGitHub, rfShape = Unlimited, rfNpmLatencyMs = 444, rfPypiLatencyMs = 5, rfCargoLatencyMs = Nothing, rfRubyGemsLatencyMs = Nothing, rfConditions = "legacy-v1"}
-                `shouldBe` NotHeld (ShapeNotCalibrated Unlimited :| [SettingsDiffer ("durationSeconds" :| ["scenarios"]), OtherRunner "ubuntu-26.04-arm" calibratedRunner offGitHub, LatencyAboveCeiling Npm 444 210])
+            enforce sample RunFacts{rfSettings = calibrated{opDurationSeconds = 10, opScenarios = Just ["pypi/index-cold"]}, rfRunner = offGitHub, rfShape = Unlimited, rfConditions = "unified-v2"}
+                `shouldBe` NotHeld (ShapeNotCalibrated Unlimited :| [SettingsDiffer ("durationSeconds" :| ["scenarios"]), OtherRunner "ubuntu-26.04-arm" calibratedRunner offGitHub, ConditionsDiffer "unified-v3" "unified-v2"])
 
     describe "floorCheck" $ do
         it "gives a held run each count's floor, for npm and PyPI alike, and none for a count the floors do not cover" $ do
-            floorCheck (Enforced twoCores floorsAtTwoCores) ("npm/merge-cold", Loaded) `shouldBe` AtLeast 338
-            floorCheck (Enforced twoCores floorsAtTwoCores) ("npm/merge-cold", ConcurrencyOne) `shouldBe` AtLeast 46
-            floorCheck (Enforced twoCores floorsAtTwoCores) ("pypi/index-cold", Loaded) `shouldBe` AtLeast 964
-            floorCheck (Enforced twoCores floorsAtTwoCores) ("pypi/index-cold", ConcurrencyOne) `shouldBe` AtLeast 134
-            floorCheck (Enforced twoCores floorsAtTwoCores) ("npm/herd", ConcurrencyOne) `shouldBe` NoFloor ConcurrencyOne
+            floorCheck (Enforced twoCores 1 floorsAtTwoCores) ("npm/merge-cold", Loaded) `shouldBe` AtLeast 338 564
+            floorCheck (Enforced twoCores 1 floorsAtTwoCores) ("npm/merge-cold", ConcurrencyOne) `shouldBe` AtLeast 46 77
+            floorCheck (Enforced twoCores 1 floorsAtTwoCores) ("pypi/index-cold", Loaded) `shouldBe` AtLeast 964 1607
+            floorCheck (Enforced twoCores 1 floorsAtTwoCores) ("pypi/index-cold", ConcurrencyOne) `shouldBe` AtLeast 134 224
+            floorCheck (Enforced twoCores 1 floorsAtTwoCores) ("npm/herd", ConcurrencyOne) `shouldBe` NoFloor ConcurrencyOne
+        it "gives an uncalibrated cell and a report-only cell no floor, and names the report-only reason" $ do
+            floorCheck (Enforced twoCores 1 floorsAtTwoCores) ("pypi/slow-readers", Loaded) `shouldBe` ReportOnly Nothing
+            floorCheck (Enforced twoCores 1 floorsAtTwoCores) ("npm/herd", Loaded) `shouldBe` ReportOnly (Just "its burst successes split between admission levels")
+            map (checkedFloor . floorCheck (Enforced twoCores 1 floorsAtTwoCores)) [("pypi/slow-readers", Loaded), ("npm/herd", Loaded), ("npm/merge-cold", Loaded)] `shouldBe` [Nothing, Nothing, Just 338]
         it "checks nothing for a run that is not held" $
             floorCheck slowNetwork ("pypi/index-cold", Loaded) `shouldBe` Unchecked
 
     describe "staleFloorViolations" $ do
         it "passes floors that match the counts the run checks" $
-            staleFloorViolations (Enforced twoCores floorsAtTwoCores) (Map.keysSet floorsAtTwoCores) `shouldBe` []
+            staleFloorViolations (Enforced twoCores 1 floorsAtTwoCores) (Map.keysSet floorsAtTwoCores) `shouldBe` []
         it "fails a held run on a floor for a count it does not check" $
-            staleFloorViolations (Enforced twoCores floorsAtTwoCores) (Set.delete ("pypi/index-cold", ConcurrencyOne) (Map.keysSet floorsAtTwoCores))
-                `shouldBe` ["bench/load/floors.json: the concurrencyOne floor for pypi/index-cold under 2cpu-1gib names no count this run checks"]
+            staleFloorViolations (Enforced twoCores 1 floorsAtTwoCores) (Set.delete ("pypi/index-cold", ConcurrencyOne) (Map.keysSet floorsAtTwoCores))
+                `shouldBe` ["bench/load/floors.json: the concurrencyOne cell for pypi/index-cold under 2cpu-1gib names no count this run checks"]
         it "checks nothing for a run that is not held" $
             staleFloorViolations slowNetwork Set.empty `shouldBe` []
 
     describe "unheldViolations" $ do
         it "fails a scheduled run that its settings, its runner, or its pod shape keep off the floors, in one line" $
-            unheldViolations Scheduled (NotHeld (ShapeNotCalibrated Unlimited :| [SettingsDiffer ("durationSeconds" :| ["scenarios"]), OtherRunner "ubuntu-26.04-arm" calibratedRunner onX64, LatencyAboveCeiling Npm 444 210]))
+            unheldViolations Scheduled (NotHeld (ShapeNotCalibrated Unlimited :| [SettingsDiffer ("durationSeconds" :| ["scenarios"]), OtherRunner "ubuntu-26.04-arm" calibratedRunner onX64]))
                 `shouldBe` [ "a scheduled run must be held to the success floors, and this one is not: the floors hold no entry for the pod shape unlimited, and it differs from the calibrated operating point in durationSeconds, scenarios, and it does not run on the calibrated runner (ubuntu-26.04-arm: GitHub Actions on Linux ARM64), and the harness read GITHUB_ACTIONS=true, RUNNER_OS=Linux, RUNNER_ARCH=X64"
                            ]
         it "fails a scheduled run of the GC-thrash probe, which is never held" $
             unheldViolations Scheduled (NotHeld (ThrashProbe :| []))
                 `shouldBe` ["a scheduled run must be held to the success floors, and this one is not: it runs the GC-thrash probe in place of the passes"]
-        it "passes a scheduled run that only a slow network keeps off the floors" $
-            unheldViolations Scheduled slowNetwork `shouldBe` []
+        it "fails a scheduled run at another injected latency" $
+            unheldViolations Scheduled slowNetwork
+                `shouldBe` ["a scheduled run must be held to the success floors, and this one is not: it differs from the calibrated operating point in upstreamLatencyMs"]
         it "passes a scheduled run that is held, and any run on demand" $ do
-            unheldViolations Scheduled (Enforced twoCores floorsAtTwoCores) `shouldBe` []
+            unheldViolations Scheduled (Enforced twoCores 1 floorsAtTwoCores) `shouldBe` []
             unheldViolations OnDemand (NotHeld (SettingsDiffer ("concurrency" :| []) :| [])) `shouldBe` []
             unheldViolations OnDemand (NotHeld (ThrashProbe :| [])) `shouldBe` []
 
     describe "describeEnforcement" $ do
-        it "names the file, the runner, the runs, their commits, the rule, and the latency ceiling for a held run" $
-            describeEnforcement calibration (Enforced twoCores floorsAtTwoCores)
-                `shouldBe` "This run is held to the success floors in `bench/load/floors.json`, calibrated on ubuntu-26.04-arm with provenance for 2 runs at abc123. Half the lowest night. Measurement conditions: legacy-v1. npm latency ceiling: 210 ms."
-        it "gives the injected latency and the ceiling for a run a slow network keeps off the floors" $
+        it "names the file, the runner, the conditions, the runs' commits, and the cells under the shape for a held run" $
+            describeEnforcement calibration (Enforced twoCores 1 floorsAtTwoCores)
+                `shouldBe` "This run is held to the success floors in `bench/load/floors.json`, calibrated on ubuntu-26.04-arm under measurement conditions unified-v3, from 3 calibration runs at abc123. Under 2cpu-1gib, 4 cells hold a floor, 1 are uncalibrated, and 1 are report-only."
+        it "says a held run before the first calibration has no calibration run" $
+            describeEnforcement calibration{calRuns = []} (Enforced twoCores 1 (Map.singleton ("npm/merge-cold", Loaded) Uncalibrated))
+                `shouldBe` "This run is held to the success floors in `bench/load/floors.json`, calibrated on ubuntu-26.04-arm under measurement conditions unified-v3, from no calibration run yet. Under 2cpu-1gib, 0 cells hold a floor, 1 are uncalibrated, and 0 are report-only."
+        it "names the setting for a run at another injected latency" $
             describeEnforcement calibration slowNetwork
-                `shouldBe` "This run is not held to the success floors in `bench/load/floors.json`: its npm fixture injects 444 ms of upstream latency, above the ceiling of 210 ms."
+                `shouldBe` "This run is not held to the success floors in `bench/load/floors.json`: it differs from the calibrated operating point in upstreamLatencyMs."
         it "names every reason a run is not held, with what the harness read of the runner" $
             describeEnforcement calibration (NotHeld (SettingsDiffer ("durationSeconds" :| ["scenarios"]) :| [OtherRunner "ubuntu-26.04-arm" calibratedRunner offGitHub]))
                 `shouldBe` "This run is not held to the success floors in `bench/load/floors.json`: it differs from the calibrated operating point in durationSeconds, scenarios, and it does not run on the calibrated runner (ubuntu-26.04-arm: GitHub Actions on Linux ARM64), and the harness read GITHUB_ACTIONS unset, RUNNER_OS unset, RUNNER_ARCH unset."
 
-rule, ceilingRule, commit, firstRun, secondRun :: Text
-rule = "Half the lowest night."
-ceilingRule = "One and a half times the highest."
+commit, event, firstRun :: Text
 commit = "abc123"
+event = "workflow_dispatch"
 firstRun = "https://example.test/runs/1"
-secondRun = "https://example.test/runs/2"
 
 calibrated :: OperatingPoint
-calibrated = OperatingPoint 30 100 363520 5 3 64 Nothing Nothing Nothing Nothing [] EveryPass noTuning
+calibrated = OperatingPoint 30 100 363520 20 3 64 Nothing Nothing Nothing Nothing [] EveryPass noTuning
 
 calibratedRunner :: RunnerKind
 calibratedRunner = RunnerKind "Linux" "ARM64"
@@ -225,25 +220,21 @@ offGitHub = RunnerReading Nothing Nothing Nothing
 calibration :: Calibration
 calibration =
     Calibration
-        { calRule = rule
+        { calConditions = "unified-v3"
         , calRunner = "ubuntu-26.04-arm"
         , calRunnerKind = calibratedRunner
-        , calRuns = CalibrationRun firstRun commit :| [CalibrationRun secondRun commit]
         , calOperatingPoint = calibrated
-        , calNpmLatency = LatencyCeiling ceilingRule (Map.singleton twoCores 135) 210
-        , calCargoLatency = Nothing
-        , calRubyGemsLatency = Nothing
-        , calPypiLatency = Nothing
-        , calConditions = "legacy-v1"
-        , calRetainedConditions = mempty
+        , calFloorFraction = 0.6
+        , calConfirmationReruns = 1
+        , calRuns = [CalibrationRun runNumber ("https://example.test/runs/" <> show runNumber) commit event | runNumber <- toList calibrationRunIds]
         }
 
 sample :: Floors
-sample = Floors calibration (Map.singleton twoCores floorsAtTwoCores)
+sample = Floors "Example floors." calibration (Map.singleton twoCores floorsAtTwoCores)
 
 -- A run that matches the sample's calibration under its one pod shape.
 held :: RunFacts
-held = RunFacts{rfSettings = calibrated, rfRunner = onCalibratedRunner, rfShape = twoCores, rfNpmLatencyMs = 135, rfPypiLatencyMs = 5, rfCargoLatencyMs = Nothing, rfRubyGemsLatencyMs = Nothing, rfConditions = "legacy-v1"}
+held = RunFacts{rfSettings = calibrated, rfRunner = onCalibratedRunner, rfShape = twoCores, rfConditions = "unified-v3"}
 
 -- One run per setting, each differing from the calibrated operating point in that setting alone.
 offCalibration :: [(Text, OperatingPoint)]
@@ -266,15 +257,34 @@ offCalibration =
     , ("proxyAllocAreaMib", calibrated{opProxyTuning = noTuning{ptAllocAreaMib = Just 32}})
     ]
 
+twoCoreKey :: Key
+twoCoreKey = "2cpu-1gib"
+
+-- The sample's cells as the file writes them.
 twoCoreFloors :: [Pair]
-twoCoreFloors =
-    [ "2cpu-1gib"
-        .= object
-            [ "npm/merge-cold" .= object ["loaded" .= (338 :: Int), "concurrencyOne" .= (46 :: Int)]
-            , "npm/herd" .= object ["loaded" .= (10 :: Int)]
-            , "pypi/index-cold" .= object ["loaded" .= (964 :: Int), "concurrencyOne" .= (134 :: Int)]
-            ]
+twoCoreFloors = [twoCoreKey .= object scenarioPairs]
+
+scenarioPairs :: [Pair]
+scenarioPairs =
+    [ "npm/merge-cold" .= object ["loaded" .= floorValue 338 564, "concurrencyOne" .= floorValue 46 77]
+    , "npm/herd" .= object ["loaded" .= object ["floor" .= Null, "reportOnly" .= ("its burst successes split between admission levels" :: Text)]]
+    , "pypi/index-cold" .= object ["loaded" .= floorValue 964 1607, "concurrencyOne" .= floorValue 134 224]
+    , "pypi/slow-readers" .= object ["loaded" .= object ["floor" .= Null]]
     ]
+
+-- The sample's cells with one pass of one scenario in place of its own.
+withCell :: Key -> Key -> Value -> [Pair]
+withCell scenario whichPass cell = [twoCoreKey .= object (scenario .= object [whichPass .= cell] : filter ((/= scenario) . fst) scenarioPairs)]
+
+-- A floor with its median, from the three sample runs.
+floorValue :: Int -> Int -> Value
+floorValue least median = object ["floor" .= least, "median" .= median, "from" .= calibrationRunIds]
+
+runValue :: Int -> Text -> Value
+runValue runNumber url = object ["id" .= runNumber, "url" .= url, "commit" .= commit, "event" .= event]
+
+runValues :: [Value]
+runValues = [runValue runNumber ("https://example.test/runs/" <> show runNumber) | runNumber <- [1, 2, 3]]
 
 -- The sample's calibration record, with each override in place of the field of its key.
 calibrationValue :: [Pair] -> Value
@@ -282,18 +292,15 @@ calibrationValue overrides = overriding overrides calibrationPairs
 
 calibrationPairs :: [Pair]
 calibrationPairs =
-    [ "rule" .= rule
+    [ "measurementConditions" .= ("unified-v3" :: Text)
     , "runner" .= ("ubuntu-26.04-arm" :: Text)
     , "runnerOs" .= ("Linux" :: Text)
     , "runnerArch" .= ("ARM64" :: Text)
-    , "runs" .= [object ["url" .= run, "commit" .= commit] | run <- [firstRun, secondRun]]
     , "operatingPoint" .= operatingPointValue []
-    , "npmInjectedLatency" .= latencyValue [("2cpu-1gib", 135)] 210
+    , "floorFraction" .= (0.6 :: Double)
+    , "confirmationReruns" .= (1 :: Int)
+    , "runs" .= runValues
     ]
-
--- A latency record with these highest latencies by pod shape, and this ceiling.
-latencyValue :: [(Text, Int)] -> Int -> Value
-latencyValue highest most = object ["rule" .= ceilingRule, "highestMs" .= Map.fromList highest, "ceilingMs" .= most]
 
 -- The calibrated operating point, with each override in place of the setting of its key.
 operatingPointValue :: [Pair] -> Value
@@ -304,7 +311,7 @@ operatingPointPairs =
     [ "durationSeconds" .= (30 :: Int)
     , "concurrency" .= (100 :: Int)
     , "payloadBytes" .= (363520 :: Int)
-    , "upstreamLatencyMs" .= (5 :: Int)
+    , "upstreamLatencyMs" .= (20 :: Int)
     , "cacheMaxEntries" .= (3 :: Int)
     , "workingSet" .= (64 :: Int)
     , "serveMaxInFlight" .= Null
@@ -318,4 +325,4 @@ overriding :: [Pair] -> [Pair] -> Value
 overriding overrides base = object (Map.toList (Map.union (Map.fromList overrides) (Map.fromList base)))
 
 document :: Value -> [Pair] -> LByteString
-document calibrationRecord shapes = encode (object ["calibration" .= calibrationRecord, "floors" .= object shapes])
+document calibrationRecord shapes = encode (object ["_note" .= ("Example floors." :: Text), "calibration" .= calibrationRecord, "floors" .= object shapes])
