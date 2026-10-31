@@ -369,7 +369,7 @@ gating jobs are the `needs` of the terminal `gate` job in
 | Gating CI job | Display name (`gh pr checks`) | Local command |
 | --- | --- | --- |
 | `changes` | Classify the change | none, it classifies the PR's changed paths |
-| `build` | Build & compile checks (all targets, residency, doctest) | `task build test-residency doctest cabal-check` |
+| `build` | Build & compile checks (all targets, residency, doctest) | `task build test-residency test-smoke-obligations doctest cabal-check` |
 | `allocation` | Allocation budgets (committed captures) | `task perf-allocation` |
 | `coverage` | Coverage (`<suite>`) for the core unit and integration legs, and Coverage (ecluse-runtime-unit, ecluse-unit) | `task coverage-unit SUITE=<suite>` per suite, or `task coverage-integration` (Docker) for the integration leg |
 | `codecov-notify` | Codecov statuses | none, it only releases the Codecov statuses |

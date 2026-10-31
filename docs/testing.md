@@ -727,6 +727,12 @@ The cases depend on uncontrolled external services, so an occasional failure is 
 and never blocks a merge. The CI `gate` does not depend on them. Treat a failure as a
 prompt to investigate (protocol drift or flakiness?), not a blocker. Run: `task test-smoke`.
 
+The suite's start-up check of its live measurement obligations does gate. The `build` job runs
+`task test-smoke-obligations` on every pull request, which runs the suite under `--dry-run`. Hspec
+still builds the spec tree, so `SpecHook` reads every case label and stops the suite on a missing,
+duplicate, unknown or malformed case, but no example runs and nothing reaches the network.
+`task check` includes it through `cabal-checks`.
+
 The hermetic span and metric assertions run in `ecluse-integration`. A request drives an in-process
 Écluse, and a real Collector container asserts the spans and metrics arrived. The unit tier covers
 config parsing, the denial span-attribute mapping, the JSONL scribe, and the metric-label guard.
@@ -2337,15 +2343,15 @@ the floor in `.stan.toml`. The `analysis` job builds their `.hie` input once and
 own step, and stan also runs after a weeder failure. Any weeder finding, or a stan finding above
 its floor, blocks the merge. The non-gating smoke job runs outside ordinary PR validation.
 
-The Haskell jobs run in parallel where their prerequisites permit it. `build` compiles every
-target and then runs the residency suite, the doctests, and `cabal check`. `coverage` is a matrix
-of three legs. `ecluse-runtime-unit` and `ecluse-unit` share one leg, because `ecluse-unit` reuses
-the instrumented libraries that the runtime suite builds. `allocation`, `docs`, `analysis`, and
-`static-checks` each hold their own runner. E2E preparation feeds the ecosystem and
-shared-system subject jobs, which start without waiting for coverage. One `backend-conformance`
-job runs the Verdaccio package-store subject, then the CodeArtifact one. A job that runs two checks
-runs the second after a failed first, so one failure cannot hide the other. `codecov-notify`
-follows the coverage legs and releases the Codecov statuses.
+The Haskell jobs run in parallel where their prerequisites permit it. `build` compiles every target
+and then runs the residency suite, the smoke suite's start-up check, the doctests, and
+`cabal check`. `coverage` is a matrix of three legs. `ecluse-runtime-unit` and `ecluse-unit` share
+one leg, because `ecluse-unit` reuses the instrumented libraries that the runtime suite builds.
+`allocation`, `docs`, `analysis`, and `static-checks` each hold their own runner. E2E preparation
+feeds the ecosystem and shared-system subject jobs, which start without waiting for coverage. One
+`backend-conformance` job runs the Verdaccio package-store subject, then the CodeArtifact one. A job
+that runs two checks runs the second after a failed first, so one failure cannot hide the other.
+`codecov-notify` follows the coverage legs and releases the Codecov statuses.
 The core unit, runtime unit and integration suites upload their plan and execution reports.
 The `e2e` job waits for the subjects and the coverage legs. It audits every subject report
 against the plan, then runs the npm, PyPI, Cargo, and RubyGems completion audits over all four tiers' reports.

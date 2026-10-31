@@ -85,8 +85,8 @@ jobs:
         run: nix develop .#ci --command task update
 
       # go-task runs several targets in the order given, in one dev shell.
-      - name: Build every target, then residency, doctest, and cabal check
-        run: nix develop .#ci --command task build test-residency doctest cabal-check
+      - name: Build every target, then residency, the smoke obligations, doctest, and cabal check
+        run: nix develop .#ci --command task build test-residency test-smoke-obligations doctest cabal-check
 
       # Only this job writes the cabal caches, on main even if a later target fails.
       # The commit-specific dist key gives each main run a new entry, except a rerun with a cache hit.
