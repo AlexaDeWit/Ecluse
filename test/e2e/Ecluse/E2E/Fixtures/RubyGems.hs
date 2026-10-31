@@ -10,14 +10,19 @@ module Ecluse.E2E.Fixtures.RubyGems (
     rubyPublicationFixture,
     rubyNativeFixture,
     rubyArchiveRoute,
+    rubyReadInfo,
 ) where
+
+import Data.ByteString.Lazy qualified as LBS
 
 import Ecluse.E2E.Fixtures.Contracts (ConcreteFixture (..))
 import Ecluse.E2E.Harness.Docker (withDataPlane)
-import Ecluse.E2E.Harness.Types (Topology (topologyAws), rubyGemsTopology)
+import Ecluse.E2E.Harness.Proxy (proxyGet)
+import Ecluse.E2E.Harness.Types (E2E, Topology (topologyAws), rubyGemsTopology)
 import Ecluse.Test.Contract.Ecosystem (FamilyMetadata (..))
 import Ecluse.Test.Contract.Types
 import Ecluse.Test.Registry.RubyGems.Fixtures (RubyRelease (releaseFilename))
+import Ecluse.Test.Registry.RubyGems.Reference (RubyInfoRow, referenceInfo)
 
 -- | Both pinned clients and their Ruby runtime remain required fixture prerequisites.
 rubyFamilyMetadata :: Text -> Text -> [Text] -> FamilyMetadata
@@ -67,3 +72,10 @@ rubyNativeFixture =
 -- | Artifact identity comes from the native manifest rather than filename splitting.
 rubyArchiveRoute :: RubyRelease -> Text
 rubyArchiveRoute release = "/rubygems/gems/" <> releaseFilename release
+
+-- | The info rows the proxy serves for a gem, read by the reference parser rather than production decoding.
+rubyReadInfo :: E2E -> Text -> IO [RubyInfoRow]
+rubyReadInfo proxy name = do
+    (status, bytes) <- proxyGet proxy ("/rubygems/info/" <> name)
+    unless (status == 200) (fail (toString ("RubyGems info returned " <> show status <> " for " <> name)))
+    either (fail . toString) pure (referenceInfo (LBS.toStrict bytes))

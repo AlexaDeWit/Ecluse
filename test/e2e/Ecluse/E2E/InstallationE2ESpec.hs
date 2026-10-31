@@ -3,7 +3,7 @@
 -- SPDX-License-Identifier: MIT
 
 -- | Native clients and wire readers for the shared installation scenarios.
-module Ecluse.E2E.InstallationE2ESpec (installationFamily, npmInstallationDriver, pypiInstallationDriver, codedArtifact) where
+module Ecluse.E2E.InstallationE2ESpec (installationFamily, npmInstallationDriver, pypiInstallationDriver, codedArtifact, probedArtifact) where
 
 import Data.Aeson qualified as Aeson
 import Data.Aeson.Key qualified as Key
@@ -16,7 +16,7 @@ import Ecluse.E2E.Fixtures.PyPI (pypiDistInfo, pypiProject, pypiVersion, pypiWhe
 import Ecluse.E2E.Harness
 import Ecluse.E2E.Harness.Lifecycle (timedFixtureWith)
 import Ecluse.Test.Contract.Ecosystem (FamilyFixture, FamilyMetadata)
-import Ecluse.Test.Contract.Install (CodedArtifact (..), InstallDriver (..), InstallationDriver (..), UpstreamRead (..))
+import Ecluse.Test.Contract.Install (ArtifactProbe (..), CodedArtifact (..), InstallDriver (..), InstallationDriver (..), UpstreamRead (..))
 import Ecluse.Test.Json (textAtPath)
 import Ecluse.Test.Package (hexSha256Of, sriSha512Of)
 
@@ -36,7 +36,7 @@ npmInstallationDriver e2e =
                 (Nothing, mempty)
         , installationArtifact = (,) <$> advertised <*> proxyGetCoded e2e path
         , installationDigest = sriSha512Of
-        , installationHead = proxyHead e2e path
+        , installationHead = probedArtifact e2e NpmPublic (npmArtifactPath name version) path
         , installationCodedArtifact = codedArtifact e2e NpmPublic (npmArtifactPath name version) path advertised
         }
   where
@@ -66,7 +66,7 @@ pypiInstallationDriver e2e =
                 (False, mempty)
         , installationArtifact = (,) <$> wheelDigest <*> proxyGetCoded e2e path
         , installationDigest = hexSha256Of
-        , installationHead = proxyHead e2e path
+        , installationHead = probedArtifact e2e PyPIPublic upstreamPath path
         , installationCodedArtifact = codedArtifact e2e PyPIPublic upstreamPath path wheelDigest
         }
   where
@@ -85,21 +85,34 @@ artifact sits at @upstreamPath@. The route's earlier reads show whether it gzips
 codedArtifact :: E2E -> StubRoute -> Text -> Text -> IO Text -> IO CodedArtifact
 codedArtifact e2e route upstreamPath proxyPath advertised = do
     digest <- advertised
-    seen <- length <$> stubReadsNow plane
-    response <- proxyGetCoded e2e proxyPath
-    during <- awaitStubReads plane seen (any fetched)
-    answered <- filter ((== route) . srRoute) <$> stubReadsNow plane
+    (response, during) <- upstreamReadsDuring e2e route upstreamPath (proxyGetCoded e2e proxyPath)
+    answered <- filter ((== route) . srRoute) <$> stubReadsNow (e2ePlane e2e)
     pure
         CodedArtifact
             { codedDigest = digest
             , codedResponse = response
-            , codedArtifactReads = map upstreamRead (filter fetched during)
+            , codedArtifactReads = map upstreamRead during
             , codedRouteReads = map upstreamRead answered
             }
   where
+    upstreamRead answer = UpstreamRead (srAcceptEncoding answer) (srContentEncoding answer)
+
+-- | HEAD the artifact at @proxyPath@, keeping the methods of the upstream's reads of @upstreamPath@ meanwhile.
+probedArtifact :: E2E -> StubRoute -> Text -> Text -> IO ArtifactProbe
+probedArtifact e2e route upstreamPath proxyPath = do
+    (response, during) <- upstreamReadsDuring e2e route upstreamPath (proxyHead e2e proxyPath)
+    pure (ArtifactProbe response (map srMethod during))
+
+-- Run a proxy request and collect the upstream's logged reads of one path that it caused.
+upstreamReadsDuring :: E2E -> StubRoute -> Text -> IO a -> IO (a, [StubRead])
+upstreamReadsDuring e2e route upstreamPath request = do
+    seen <- length <$> stubReadsNow plane
+    response <- request
+    during <- awaitStubReads plane seen (any fetched)
+    pure (response, filter fetched during)
+  where
     plane = e2ePlane e2e
     fetched answer = srRoute answer == route && srPath answer == upstreamPath
-    upstreamRead answer = UpstreamRead (srAcceptEncoding answer) (srContentEncoding answer)
 
 deniedConfig :: Text -> E2EConfig
 deniedConfig ecosystem =

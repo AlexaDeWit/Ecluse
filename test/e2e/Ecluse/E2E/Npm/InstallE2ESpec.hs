@@ -9,7 +9,9 @@ module Ecluse.E2E.Npm.InstallE2ESpec (nativeInstallationContract) where
 
 import Data.Aeson (Value (Object, String))
 import Data.Aeson.KeyMap qualified as KeyMap
+import Data.ByteString qualified as BS
 import Data.Text qualified as T
+import System.FilePath ((</>))
 
 import Ecluse.E2E.Fixtures.Contracts (ConcreteFixture (..))
 import Ecluse.Test.Contract.Catalogue (caseLabel)
@@ -21,6 +23,7 @@ import Test.Hspec
 
 import Ecluse.E2E.Fixtures.Npm (
     allowPkg,
+    artifactFile,
     denyPkg,
     deprecatedPkg,
     deprecationNotice,
@@ -40,7 +43,7 @@ import Ecluse.E2E.Harness
 import Ecluse.E2E.Harness.Lifecycle (timedFixtureWith)
 import Ecluse.Test.Contract.Install (InstallDriver (..), RefusalDriver (..), installsObserved, refusesWithoutEffects)
 import Ecluse.Test.Contract.Mirror (MirrorTagDriver (..), preservesLatest)
-import Ecluse.Test.Contract.Serving (artifactHeadCase)
+import Ecluse.Test.Contract.Serving (artifactHeadLengthCase)
 
 -- | Drive the product image with a real npm client and local stores.
 nativeInstallationContract :: ConcreteFixture Group -> DeclaredGroup
@@ -53,6 +56,8 @@ scenarios recorder = do
             it (caseLabel "npm/install/default-denial" "uses the shipped default to block install scripts and never mirrors the package") $ \e2e -> do
                 logs <- proxyContainerLogs e2e
                 logs `shouldSatisfy` T.isInfixOf "rule 2: DenyInstallTimeExecution (precedence 300, applies at admission only)"
+                -- A lockfile fetches the tarball directly, past the hidden packument version.
+                proxyStatus e2e (npmTarballPath (psName denyPkg) (psVersion denyPkg)) `shouldReturn` 403
                 refusesWithoutEffects
                     False
                     RefusalDriver
@@ -108,10 +113,13 @@ scenarios recorder = do
 
         describe "protocol behaviours" $
             it (caseLabel "npm/install/head-no-effect" "answers HEAD on a tarball with its size but no body, and enqueues no mirror") $ \e2e -> do
-                -- Only this case touches headPkg.
-                response <- proxyHead e2e (npmTarballPath (psName headPkg) (psVersion headPkg))
-                artifactHeadCase response
-                mirrored <- verdaccioMirroredWithinWindow e2e (psName headPkg) (psVersion headPkg)
+                -- Only this case touches headPkg, so its size comes from the fixture rather than a GET that would mirror it.
+                let name = psName headPkg
+                    version = psVersion headPkg
+                published <- readFileBS (artifactFile (gdpWorkDir (e2ePlane e2e) </> "html") name version)
+                response <- proxyHead e2e (npmTarballPath name version)
+                artifactHeadLengthCase (toInteger (BS.length published)) response
+                mirrored <- verdaccioMirroredWithinWindow e2e name version
                 mirrored `shouldBe` False
 
         describe "server and worker -- mirror metadata" $ do

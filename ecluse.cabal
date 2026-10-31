@@ -589,6 +589,7 @@ library
     Ecluse.Proxy.Internal
     Ecluse.Mirror
     Ecluse.Service
+    Ecluse.Service.Internal
     Ecluse.Pilot
     Ecluse.Pilot.Plan
     Ecluse.Dredger
@@ -1132,6 +1133,7 @@ library ecluse-runtime-test-support
     Ecluse.Runtime.Test.Cve
     Ecluse.Runtime.Test.PackageStore.FixedPages
     Ecluse.Runtime.Test.S3
+    Ecluse.Runtime.Test.Server
     Ecluse.Runtime.Test.Support
     Ecluse.Runtime.Test.Telemetry
 
@@ -1158,6 +1160,7 @@ library ecluse-runtime-test-support
     , katip             ^>=0.8.8
     , text              ^>=2.1
     , time              ^>=1.12
+    , unix              ^>=2.8
     , unliftio          ^>=0.2.25
     , wai               ^>=3.2
     , warp              ^>=3.4
@@ -1173,56 +1176,11 @@ test-suite ecluse-core-unit
   ghc-options:        -Wno-missing-export-lists -threaded
   type:               exitcode-stdio-1.0
   main-is:            Spec.hs
-  -- Extra roots supply declarations for coverage audits, not discovered executable examples.
   -- The bench root supplies the streaming bench's sink model, which a spec here checks.
-  hs-source-dirs:     core/test/unit test/smoke test/residency bench
+  hs-source-dirs:     core/test/unit bench
   other-modules:
     SpecHook
-    Ecluse.Core.Registry.CargoSmokeSpec
-    Ecluse.Core.Registry.NpmSmokeSpec
-    Ecluse.Core.Registry.PyPISmokeSpec
-    Ecluse.Core.Registry.RubyGemsSmokeSpec
-    Ecluse.Core.Registry.Npm.ReaderResidencySpec
-    Ecluse.Core.Registry.PyPI.ReaderResidencySpec
-    Ecluse.Core.Registry.Cargo.ReaderResidencySpec
-    Ecluse.Core.Registry.RubyGems.ReaderResidencySpec
-    Ecluse.Core.Registry.Json.WalkProbe
-    Ecluse.Core.Server.MemoryModel.HeapSample
     Ecluse.Core.StreamBench.Sink
-    Ecluse.Test.Contract.Artifact.IdentitySpec
-    Ecluse.Test.Contract.Artifact.AttemptSpec
-    Ecluse.Test.Contract.BindingSpec
-    Ecluse.Test.Contract.CatalogueSpec
-    Ecluse.Test.Contract.CompletionSpec
-    Ecluse.Test.Contract.EcosystemSpec
-    Ecluse.Test.Contract.PerformanceSpec
-    Ecluse.Test.Contract.PackageStoreSpec
-    Ecluse.Test.Contract.Fixtures
-    Ecluse.Test.Contract.PhaseSpec
-    Ecluse.Test.Contract.ResultSpec
-    Ecluse.Test.Contract.RegistrySmokeSpec
-    Ecluse.Test.Contract.ServingSpec
-    Ecluse.Test.Contract.InstallSpec
-    Ecluse.Test.Contract.Install.AdvisorySpec
-    Ecluse.Test.Contract.TelemetrySpec
-    Ecluse.Test.Contract.Integration.CatalogueSpec
-    Ecluse.Test.Contract.UnitCatalogueSpec
-    Ecluse.Test.Contract.UnitReportSpec
-    Ecluse.Test.Contract.Sweep.AdvisorySpec
-    Ecluse.Test.Contract.PublicationSpec
-    Ecluse.Test.Contract.QueueSpec
-    Ecluse.Test.Registry.Npm.StoredVersionsSpec
-    Ecluse.Test.Registry.Cargo.FixturesSpec
-    Ecluse.Test.Registry.Cargo.MetadataSpec
-    Ecluse.Test.Contract.RunnerSpec
-    Ecluse.Test.Contract.MeasurementSpec
-    Ecluse.Test.Contract.RetentionSpec
-    Ecluse.Test.CorpusSpec
-    Ecluse.Test.Corpus.OutputsSpec
-    Ecluse.Test.Corpus.CargoSpec
-    Ecluse.Test.EcosystemBenchSpec
-    Ecluse.Test.EnvSpec
-    Ecluse.Test.PollSpec
     Ecluse.Core.Mirror.StateSpec
     Ecluse.Core.Mirror.State.WeightSpec
     Ecluse.Core.Mirror.State.CodecSpec
@@ -1354,7 +1312,6 @@ test-suite ecluse-core-unit
     Ecluse.Core.Registry.RubyGems.ProjectSpec
     Ecluse.Core.Registry.RubyGems.CredentialSpec
     Ecluse.Core.Registry.RubyGems.StreamingSpec
-    Ecluse.Test.Server.CacheSpec
     Ecluse.Core.Registry.RubyGems.Handlers.BudgetSpec
     Ecluse.Core.Registry.RubyGems.HandlersSpec
     Ecluse.Core.Registry.RubyGems.MetadataSpec
@@ -1365,7 +1322,6 @@ test-suite ecluse-core-unit
     Ecluse.Core.Registry.RubyGems.ServingSpec
     Ecluse.Core.Registry.RubyGems.SourceStateSpec
     Ecluse.Core.Server.Pipeline.PublishSpec
-    Ecluse.Test.Corpus.RubyGemsSpec
     Ecluse.Core.Registry.RubyGems.AdapterSpec
     Ecluse.Core.Registry.RubyGems.Archive.MetadataSpec
     Ecluse.Core.Registry.RubyGems.Archive.YamlSpec
@@ -1497,14 +1453,6 @@ test-suite ecluse-core-unit
     Ecluse.Rules.Support
     Ecluse.Security.Support
     Ecluse.Server.Admission.Support
-    Ecluse.Test.CollectorSpec
-    Ecluse.Test.Container.ImageSpec
-    Ecluse.Test.Corpus.SubsetSpec
-    Ecluse.Test.MaintenanceSpec
-    Ecluse.Test.Registry.PyPI.WireSpec
-    Ecluse.Test.Registry.Metadata.ProjectionSpec
-    Ecluse.Test.Registry.RubyGems.WireSpec
-    Ecluse.Test.RegistryCaptureSpec
     Ecluse.Worker.Support
     Ecluse.Worker.Support.Fixtures
     Ecluse.Worker.Support.Runtime
@@ -1584,8 +1532,6 @@ test-suite ecluse-unit
   main-is:            Spec.hs
   hs-source-dirs:     test/unit
   other-modules:
-    Ecluse.Test.ContainersSpec
-    Ecluse.Test.ExpositionSpec
     Ecluse.Report.MarkdownSpec
     Ecluse.Report.BenchLabelsSpec
     Ecluse.AcceptanceSpec
@@ -1648,9 +1594,6 @@ test-suite ecluse-unit
     Ecluse.Site.MarkdownSpec
     Ecluse.Site.OpenApiSpec
     Ecluse.Site.SearchSpec
-    Ecluse.Test.Corpus.AdvisoriesSpec
-    Ecluse.Test.InstalledTreeSpec
-    Ecluse.Test.OsvSpec
     Paths_ecluse
 
   autogen-modules:    Paths_ecluse
@@ -1735,8 +1678,6 @@ test-suite ecluse-runtime-unit
   hs-source-dirs:     runtime/test/unit
   other-modules:
     SpecHook
-    Ecluse.Runtime.Test.Contract.UnitCatalogueSpec
-    Ecluse.Runtime.Test.PackageStoreSpec
     Ecluse.Runtime.Aws.Env.InternalSpec
     Ecluse.Runtime.Aws.FaultSpec
     Ecluse.Runtime.Aws.S3.ConditionalSpec
@@ -1750,6 +1691,7 @@ test-suite ecluse-runtime-unit
     Ecluse.Runtime.Cve.Sync.StepSpec
     Ecluse.Runtime.LogSpec
     Ecluse.Runtime.Maintenance.CodeArtifact.DecideSpec
+    Ecluse.Runtime.Maintenance.CodeArtifact.InternalSpec
     Ecluse.Runtime.Maintenance.CodeArtifact.ReadSpec
     Ecluse.Runtime.Maintenance.CodeArtifact.Support
     Ecluse.Runtime.Maintenance.CodeArtifactSpec
@@ -1818,7 +1760,6 @@ test-suite ecluse-runtime-unit
     , time              ^>=1.12
     , tls               >=2.1 && <2.5
     , unliftio          ^>=0.2.25
-    , unix              ^>=2.8
     , vector            ^>=0.13
     , wai               ^>=3.2
     , wai-extra         ^>=3.1
@@ -1994,6 +1935,7 @@ test-suite ecluse-smoke
     Ecluse.Core.Security.HostSmokeSpec
     Ecluse.Core.VersionSmokeSpec
     Ecluse.PilotSmokeSpec
+    SpecHook
 
   build-tool-depends: hspec-discover:hspec-discover ^>=2.11
   build-depends:

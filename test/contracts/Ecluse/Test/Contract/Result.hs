@@ -12,7 +12,6 @@ module Ecluse.Test.Contract.Result (
     Report (..),
     makePlan,
     auditReports,
-    auditFullReport,
     auditPartitionReport,
     auditSelection,
     auditExactIds,
@@ -179,14 +178,6 @@ auditPartitionReport expected plan report =
         <> ["unknown shard: " <> reportShard report | reportShard report `notElem` planPartitions plan]
         <> ["completion report cannot be a repeat" | reportRepeat report]
         <> auditReportGroups expected (filter ((== reportShard report) . groupPartition) (catalogueGroups $ planCatalogue plan)) report
-
--- | A single primary report must cover the complete plan, regardless of partition assignments.
-auditFullReport :: ExecutionIdentity -> Plan -> Report -> [Text]
-auditFullReport expected plan report =
-    auditPlan expected plan
-        <> ["full-suite report must use shard all" | reportShard report /= "all"]
-        <> ["full-suite report cannot be a repeat" | reportRepeat report]
-        <> auditReportGroups expected (catalogueGroups $ planCatalogue plan) report
 
 auditPlan :: ExecutionIdentity -> Plan -> [Text]
 auditPlan expected plan =

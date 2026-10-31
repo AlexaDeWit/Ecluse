@@ -16,25 +16,23 @@ module Ecluse.Test.Contract.Telemetry (
     PrivateFetchKind (..),
     mirrorTelemetryContract,
     TelemetryIdentity (..),
-    exportsSignals,
-    exportsDomainSpans,
-    exportsPrivateFetch,
     logsWithoutCollector,
-    servesAfterExportFailure,
-    exportsIdentity,
     hasPopulatedTraceId,
 ) where
 
 import Data.Char (isDigit)
 import Data.Text qualified as T
-import Test.Hspec (Expectation, SpecWith, it, shouldBe, shouldReturn, shouldSatisfy)
+import Test.Hspec (Expectation, SpecWith, it, shouldBe, shouldNotSatisfy, shouldReturn, shouldSatisfy)
 
 import Ecluse.Test.Contract.Catalogue (caseLabel)
 
 import Ecluse.Test.Collector
 import Ecluse.Test.Contract.Install (ClientResult, shouldSucceed)
+import Ecluse.Test.Log (lineField, lineMessage)
 
--- | Exporter configurations required for read-only service conformance.
+{- | Exporter configurations required for read-only service conformance. 'DisabledTelemetry' turns
+telemetry off beside a reachable collector, so an ignored switch shows as exported signals.
+-}
 data TelemetryMode = EnabledTelemetry | DisabledTelemetry | FailedExporter | IdentityTelemetry
     deriving stock (Eq, Show)
 
@@ -62,7 +60,7 @@ readTelemetryContract prefix = do
             exportsSignals (readTelemetryPackage driver) (sessionTraffic session) (sessionCollector session)
     it (label "disabled" "serves and logs without a collector") $ \driver ->
         withReadTelemetry driver DisabledTelemetry $ \session ->
-            logsWithoutCollector (readTelemetryPackage driver) (sessionTraffic session) (sessionLogs session)
+            exportsNothingWhenDisabled (readTelemetryPackage driver) (sessionTraffic session) (sessionLogs session) (sessionCollector session)
     it (label "export-failure" "warns and keeps serving after export failure") $ \driver ->
         withReadTelemetry driver FailedExporter $ \session ->
             servesAfterExportFailure (readTelemetryPackage driver) (readTelemetrySecondPackage driver) (sessionTraffic session) (sessionLogs session)
@@ -139,7 +137,7 @@ data TelemetryIdentity = TelemetryIdentity
     , telemetryVersion :: Text
     }
 
--- | Both metric and trace signals must reach the configured collector.
+-- Both metric and trace signals must reach the configured collector.
 exportsSignals :: Text -> TrafficDriver -> CollectorDriver -> Expectation
 exportsSignals package traffic collector = do
     void (telemetryInstall traffic package >>= shouldSucceed)
@@ -148,21 +146,22 @@ exportsSignals package traffic collector = do
   where
     signals logs = "ecluse.serve.decision" `T.isInfixOf` logs && "Span #" `T.isInfixOf` logs
 
--- | All domain spans must identify this scenario's own coordinate.
+{- The coordinate's rule evaluation and enqueue share the serving request's trace, and its mirror
+job links back to that enqueue span.
+-}
 exportsDomainSpans :: Text -> Text -> TrafficDriver -> MirrorTelemetryDriver -> CollectorDriver -> Expectation
 exportsDomainSpans package version traffic mirror collector = do
     void (telemetryInstall traffic package >>= shouldSucceed)
     versions <- telemetryAwaitVersion mirror package version
     (version `elem` versions) `shouldBe` True
-    logs <- telemetryCollected collector emitted 120
-    logs `shouldSatisfy` emitted
+    logs <- telemetryCollected collector (not . null . correlated) 120
+    (correlated logs, [esName exported | exported <- exportedSpans logs, any (\name -> spanFor package version name exported) domainSpans])
+        `shouldSatisfy` (not . null . fst)
   where
-    emitted logs =
-        all
-            (\name -> any (spanFor package version name) (exportedSpans logs))
-            ["ecluse.rule.eval", "ecluse.mirror.enqueue", "ecluse.mirror.job"]
+    correlated = linkedMirrorTraces package version
+    domainSpans = ["ecluse.rule.eval", "ecluse.mirror.enqueue", "ecluse.mirror.job"]
 
--- | A fresh second install records a successful private fetch after the initial miss.
+-- A fresh second install records a successful private fetch after the initial miss.
 exportsPrivateFetch :: PrivateFetchKind -> Text -> Text -> Text -> Text -> TrafficDriver -> MirrorTelemetryDriver -> CollectorDriver -> Expectation
 exportsPrivateFetch kind package version host target traffic mirror collector = do
     versions <- telemetryVersions mirror package
@@ -180,6 +179,23 @@ exportsPrivateFetch kind package version host target traffic mirror collector = 
         ConventionalArtifact -> privateArtifactAnswers host target . exportedSpans
         IndexedLookup -> privateLookupAnswers host target
 
+{- With telemetry off, a fresh client is served, its request is logged, and nothing reaches the
+collector the exporter could have reached, over several export intervals.
+-}
+exportsNothingWhenDisabled :: Text -> TrafficDriver -> LogDriver -> CollectorDriver -> Expectation
+exportsNothingWhenDisabled package traffic logs collector = do
+    void (telemetryInstall traffic package >>= shouldSucceed)
+    logged <- telemetryLogs logs namesPackage 80
+    logged `shouldSatisfy` namesPackage
+    exported <- telemetryCollected collector anySignal 40
+    exported `shouldNotSatisfy` anySignal
+    warned <- telemetryLogs logs exportError 1
+    warned `shouldNotSatisfy` exportError
+  where
+    namesPackage = any (maybe False (T.isInfixOf package) . lineMessage) . lines
+    anySignal output = "Span #" `T.isInfixOf` output || "Metric #" `T.isInfixOf` output
+    exportError = T.isInfixOf "telemetry export error"
+
 -- | Logging and client service remain available without a collector.
 logsWithoutCollector :: Text -> TrafficDriver -> LogDriver -> Expectation
 logsWithoutCollector package traffic logs = do
@@ -187,7 +203,7 @@ logsWithoutCollector package traffic logs = do
     observed <- telemetryLogs logs (T.isInfixOf "\"message\":") 80
     observed `shouldSatisfy` T.isInfixOf "\"message\":"
 
--- | Export failure produces a warning without losing readiness or fresh-client service.
+-- Export failure produces a warning without losing readiness or fresh-client service.
 servesAfterExportFailure :: Text -> Text -> TrafficDriver -> LogDriver -> Expectation
 servesAfterExportFailure firstPackage secondPackage traffic logs = do
     logsWithoutCollector firstPackage traffic logs
@@ -196,33 +212,36 @@ servesAfterExportFailure firstPackage secondPackage traffic logs = do
     telemetryReadiness traffic `shouldReturn` 200
     void (telemetryInstall traffic secondPackage >>= shouldSucceed)
 
--- | Configured resource identity and populated log correlation reach both outputs.
+{- Configured resource identity reaches the collector, and a log line under that identity
+carries the Datadog form of an exported span's trace and span IDs.
+-}
 exportsIdentity :: Text -> TelemetryIdentity -> TrafficDriver -> LogDriver -> CollectorDriver -> Expectation
 exportsIdentity package expectedIdentity traffic logs collector = do
     void (telemetryInstall traffic package >>= shouldSucceed)
-    collected <- telemetryCollected collector carriesIdentity 80
-    collected `shouldSatisfy` carriesIdentity
-    logged <- telemetryLogs logs correlated 80
-    logged `shouldSatisfy` correlated
+    logged <- loggedSpans <$> telemetryLogs logs (not . null . loggedSpans) 80
+    logged `shouldSatisfy` (not . null)
+    collected <- telemetryCollected collector (correlated logged) 80
+    collected `shouldSatisfy` correlated logged
   where
+    correlated logged output = carriesIdentity output && any (`elem` logged) (mapMaybe datadogIds (printedSpans output))
     carriesIdentity output =
         all
             (`T.isInfixOf` output)
-            [ "service.name"
-            , telemetryService expectedIdentity
-            , "deployment.environment"
-            , telemetryEnvironment expectedIdentity
-            , "service.version"
-            , telemetryVersion expectedIdentity
+            [ "-> service.name: Str(" <> telemetryService expectedIdentity <> ")"
+            , "-> deployment.environment.name: Str(" <> telemetryEnvironment expectedIdentity <> ")"
+            , "-> service.version: Str(" <> telemetryVersion expectedIdentity <> ")"
             ]
-    correlated output =
-        hasPopulatedTraceId output
-            && all
-                (`T.isInfixOf` output)
-                [ "\"service\":\"" <> telemetryService expectedIdentity <> "\""
-                , "\"env\":\"" <> telemetryEnvironment expectedIdentity <> "\""
-                , "\"version\":\"" <> telemetryVersion expectedIdentity <> "\""
-                ]
+    loggedSpans output =
+        [ ids
+        | line <- map (T.dropWhile (/= '{')) (lines output)
+        , all (\(key, expected) -> lineField [key] line == Just expected) identityFields
+        , Just ids <- [loggedDatadogIds [] line]
+        ]
+    identityFields =
+        [ ("service", telemetryService expectedIdentity)
+        , ("env", telemetryEnvironment expectedIdentity)
+        , ("version", telemetryVersion expectedIdentity)
+        ]
 
 -- | A trace identifier must contain a leading digit rather than an absent or empty value.
 hasPopulatedTraceId :: Text -> Bool

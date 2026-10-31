@@ -6,8 +6,10 @@
 module Ecluse.Core.Server.Pipeline.PackumentIntegrationSpec (spec) where
 
 import Data.Aeson (Value (String), object, (.=))
+import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as LBS
 import Data.Text qualified as T
+import Ecluse.Config (AppConfig (cfgIntegrity), Config (configApp), IntegritySettings (intMinTrusted), loadConfig)
 import Ecluse.Core.Package (HashAlg (SHA1, SHA512))
 import Ecluse.Core.Package.Integrity (mkMinIntegrity, mkMinTrustedIntegrity)
 import Ecluse.Core.Rules (prepare)
@@ -124,11 +126,14 @@ mergeSpec = describe "multi-upstream merge (not fallback)" $ do
             servedVersions resp `shouldBe` ["1.0.0"]
 
     it (caseLabel "integration/npm-metadata/native-006" "drops a SHA-1-only trusted-private version from the listing by default (trusted floor SHA-256)") $ do
+        -- The floor is the one the shipped configuration decodes to, not a fixture.
+        shippedFloor <- either (fail . show) (pure . intMinTrusted . cfgIntegrity . configApp) (loadConfig [] Nothing)
         privateUp <-
             servingUpstream
                 (encodePackument (privatePackument [("1.0.0", shasumOnlyVersion "1.0.0")] "1.0.0"))
         publicUp <- failingUpstream
-        withProxy privateUp publicUp Nothing $ \app -> do
+        queue <- newTestMemoryQueue
+        withProxyEnvQueueDeps queue privateUp publicUp Nothing (\d -> d{pdMinTrustedIntegrity = shippedFloor}) $ \app _env _port -> do
             resp <- getThing Nothing app
             status resp `shouldBe` 404
 
@@ -167,20 +172,23 @@ mergeSpec = describe "multi-upstream merge (not fallback)" $ do
         privateUp <-
             servingUpstream
                 (encodePackument (privatePackument [("1.0.0", versionObject "1.0.0" (sri256For "private") False)] "1.0.0"))
-        publicUp <-
-            servingUpstream
-                ( encodePackument
-                    ( packument
-                        [("1.0.0", shasumOnlyVersion "1.0.0")]
-                        "1.0.0"
-                        [("1.0.0", publishedDaysAgo 30)]
-                    )
-                )
-        withProxy privateUp publicUp Nothing $ \app -> do
-            resp <- getThing Nothing app
+        offered <- newIORef True
+        publicUp <- servingUpstreamIO $ \_ -> do
+            weakCopy <- readIORef offered
+            pure . encodePackument $
+                if weakCopy
+                    then packument [("1.0.0", shasumOnlyVersion "1.0.0")] "1.0.0" [("1.0.0", publishedDaysAgo 30)]
+                    else packument [] "0.0.0" []
+        withFreshProxies privateUp publicUp $ \newProxy -> do
+            resp <- newProxy >>= getThing Nothing
             status resp `shouldBe` 200
             servedVersions resp `shouldBe` ["1.0.0"]
             servedIntegrity "1.0.0" resp `shouldBe` Just (sri256For "private")
+            -- A dropped copy contributes nothing, so the listing and its validator match those served
+            -- when the public origin never offered it.
+            writeIORef offered False
+            unoffered <- newProxy >>= getThing Nothing
+            (simpleBody resp, header "ETag" resp) `shouldBe` (simpleBody unoffered, header "ETag" unoffered)
 
     it (caseLabel "integration/npm-metadata/native-010" "serves the private copy and latest tag on an integrity divergence") $ do
         privateUp <-
@@ -416,8 +424,9 @@ edgeAuthSpec = describe "inbound ECLUSE_SERVER__AUTH_TOKEN validated at the edge
         privateUp <- servingUpstream (encodePackument (privatePackument [("1.0.0", plainVersion "1.0.0")] "1.0.0"))
         publicUp <- servingUpstream (encodePackument (packument [] "0.0.0" []))
         withProxy privateUp publicUp (Just "edge-secret") $ \app -> do
-            resp <- getThing (Just "wrong-token") app
-            status resp `shouldBe` 401
+            for_ [Nothing, Just "wrong-token"] $ \presented -> do
+                resp <- getThing presented app
+                status resp `shouldBe` 401
             seenAuth privateUp `shouldReturn` []
             seenAuth publicUp `shouldReturn` []
 
@@ -435,7 +444,8 @@ conditionalSpec = describe "own ETag over the served bytes" $ do
         withProxy privateUp publicUp Nothing $ \app -> do
             resp <- getThing Nothing app
             status resp `shouldBe` 200
-            header "ETag" resp `shouldSatisfy` isJust
+            -- A weak validator carries a W/ prefix before its opening quote.
+            header "ETag" resp `shouldSatisfy` maybe False ("\"" `BS.isPrefixOf`)
 
     it (caseLabel "integration/npm-metadata/native-025" "answers 304 when the client echoes our ETag") $ do
         (privateUp, publicUp) <- twoServingUpstreams

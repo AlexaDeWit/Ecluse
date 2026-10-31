@@ -1,7 +1,7 @@
 -- SPDX-FileCopyrightText: 2026 Alexandra de Wit
 --
 -- SPDX-License-Identifier: MIT
--- TupleSections pairs optional media-type values with their header names.
+-- TupleSections pairs header names with optional media types, and a response with its pull count.
 {-# LANGUAGE TupleSections #-}
 
 -- | Publish routing and credentials through the application and a captured target.
@@ -20,6 +20,7 @@ import Network.Wai (
     RequestBodyLength (ChunkedBody, KnownLength),
     consumeRequestBodyStrict,
     responseLBS,
+    setRequestBodyChunks,
  )
 import Network.Wai.Handler.Warp (testWithApplication)
 import Network.Wai.Test (
@@ -30,6 +31,7 @@ import Network.Wai.Test (
     setPath,
     srequest,
  )
+import Network.Wai.Test qualified as WaiTest (request)
 import Test.Hspec
 import UnliftIO (async, timeout, wait)
 import UnliftIO.Concurrent (threadDelay)
@@ -47,7 +49,7 @@ import Ecluse.Core.Registry.Npm.Adapter (npmAdapter, npmPublish)
 import Ecluse.Core.Registry.Npm.Publish qualified as NpmPublish
 import Ecluse.Core.Registry.PyPI.Adapter (pypiAdapter, pypiPublish)
 import Ecluse.Core.Registry.PyPI.Project (canonicalName)
-import Ecluse.Core.Registry.PyPI.Publish.Multipart (pypiFileUploadOnly)
+import Ecluse.Core.Registry.PyPI.Publish.Multipart (pypiFileUploadOnly, pypiSdistNameForm)
 import Ecluse.Core.Registry.Request (nativePresentation)
 import Ecluse.Core.Security (defaultLimits, maxMetadataBytes, maxPublishRequestBytes)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
@@ -110,9 +112,18 @@ cappedProxyWith deadlines cap =
 putPublish :: ByteString -> Maybe Text -> LByteString -> Application -> IO SResponse
 putPublish = putPublishAs ChunkedBody
 
-putPublishKnownLength :: ByteString -> Maybe Text -> LByteString -> Application -> IO SResponse
-putPublishKnownLength path bearer body =
-    putPublishAs (KnownLength (fromIntegral (LBS.length body))) path bearer body
+-- | A known-length publish whose body counts the chunks the route pulls from it.
+putPublishCounted :: ByteString -> LByteString -> Application -> IO (SResponse, Int)
+putPublishCounted path body app = do
+    chunks <- newIORef (LBS.toChunks body)
+    pulls <- newIORef (0 :: Int)
+    let pull = modifyIORef' pulls (+ 1) >> atomicModifyIORef' chunks (\case [] -> ([], mempty); chunk : rest -> (rest, chunk))
+        req =
+            (setPath defaultRequest{requestMethod = methodPut, requestHeaders = [(hAuthorization, "Bearer publisher-token")]} path)
+                { requestBodyLength = KnownLength (fromIntegral (LBS.length body))
+                }
+    resp <- runSession (WaiTest.request (setRequestBodyChunks pull req)) app
+    (resp,) <$> readIORef pulls
 
 putPublishAs :: RequestBodyLength -> ByteString -> Maybe Text -> LByteString -> Application -> IO SResponse
 putPublishAs bodyLen path bearer body =
@@ -185,10 +196,11 @@ npmPublishSpec = describe "first-party npm publication relay" $ do
 
     it (caseLabel "integration/publication/native-003" "answers an over-cap known-length publish with the documented 413 (Content-Length fast-fail)") $ withSweeper $ \deadlines -> do
         -- A declared Content-Length over the cap fails closed before the route reads a byte.
-        -- Both over-cap shapes render the same 413 through the route contract.
+        -- The bounded read renders the same 413, so only the pull count tells the two apart.
         app <- cappedProxyWith deadlines 8
-        resp <- putPublishKnownLength "/npm/@acme/widget" (Just "publisher-token") publishBody app
+        (resp, pulls) <- putPublishCounted "/npm/@acme/widget" publishBody app
         status resp `shouldBe` 413
+        pulls `shouldBe` 0
 
     it (caseLabel "integration/publication/native-004" "relays an in-scope publish with the publisher's forwarded credential and returns the target's response") $
         withTarget 201 "{\"success\":true}" $ \targetPort target -> withSweeper $ \deadlines -> do
@@ -231,25 +243,13 @@ npmPublishSpec = describe "first-party npm publication relay" $ do
             targetSaw target `shouldReturn` []
 
     it (caseLabel "integration/publication/native-008" "refuses an out-of-scope publish with 403 BEFORE any upstream write (anti-shadowing guard)") $
-        withTarget 201 "{\"success\":true}" $ \targetPort target -> withSweeper $ \deadlines -> do
-            app <- proxyWith deadlines (Just (publishDepsAt targetPort Nothing))
-            resp <- putPublish "/npm/@other/widget" (Just "publisher-token") publishBody app
-            status resp `shouldBe` 403
-            targetSaw target `shouldReturn` []
+        refusesOutOfScope "@other/widget"
 
     it (caseLabel "integration/publication/native-009" "refuses an unscoped publish with 403 (an unscoped name is within no scope)") $
-        withTarget 201 "{\"success\":true}" $ \targetPort target -> withSweeper $ \deadlines -> do
-            app <- proxyWith deadlines (Just (publishDepsAt targetPort Nothing))
-            resp <- putPublish "/npm/widget" (Just "publisher-token") publishBody app
-            status resp `shouldBe` 403
-            targetSaw target `shouldReturn` []
+        refusesOutOfScope "widget"
 
     it (caseLabel "integration/publication/native-010" "refuses a scope that only prefixes an allowed one (@acme-evil vs the allowed @acme) -- exact match") $
-        withTarget 201 "{\"success\":true}" $ \targetPort target -> withSweeper $ \deadlines -> do
-            app <- proxyWith deadlines (Just (publishDepsAt targetPort Nothing))
-            resp <- putPublish "/npm/@acme-evil/widget" (Just "publisher-token") publishBody app
-            status resp `shouldBe` 403
-            targetSaw target `shouldReturn` []
+        refusesOutOfScope "@acme-evil/widget"
 
     it (caseLabel "integration/publication/native-011" "sends no Authorization header for an anonymous in-scope publish without a static token") $
         withTarget 201 "{\"success\":true}" $ \targetPort target -> withSweeper $ \deadlines -> do
@@ -382,6 +382,16 @@ npmPublishSpec = describe "first-party npm publication relay" $ do
             status resp `shouldBe` 201
             targetSaw target `shouldReturn` [(Just "Bearer publisher-token", LBS.toStrict body)]
 
+-- The body agrees with the path, so the body-name guard passes and only the scope guard can refuse.
+refusesOutOfScope :: Text -> IO ()
+refusesOutOfScope name =
+    withTarget 201 "{\"success\":true}" $ \targetPort target -> withSweeper $ \deadlines -> do
+        app <- proxyWith deadlines (Just (publishDepsAt targetPort Nothing))
+        resp <- putPublish ("/npm/" <> encodeUtf8 name) (Just "publisher-token") (npmReleaseDocument name name name) app
+        status resp `shouldBe` 403
+        decodeUtf8 (LBS.toStrict (simpleBody resp)) `shouldSatisfy` T.isInfixOf ("refusing to publish '" <> name <> "': its name is outside the first-party namespaces")
+        targetSaw target `shouldReturn` []
+
 pypiProxy :: Deadlines -> Maybe (ByteAdmission -> PublishDeps) -> IO Application
 pypiProxy deadlines build = do
     env <- newTestEnv deadlines
@@ -415,6 +425,10 @@ formBody :: [(ByteString, ByteString)] -> ByteString -> LByteString
 formBody fields archive = fromStrict (foldMap field fields <> archive <> "--relay-boundary--\r\n")
   where
     field (name, value) = "--relay-boundary\r\nContent-Disposition: form-data; name=\"" <> name <> "\"\r\n\r\n" <> value <> "\r\n"
+
+-- Replace the fixture's boundary throughout a body. The fixture bodies are ASCII.
+framedBy :: Text -> LByteString -> LByteString
+framedBy boundary = fromStrict . encodeUtf8 . T.replace "--relay-boundary" ("--" <> boundary) . decodeUtf8 . LBS.toStrict
 
 archivePart :: ByteString -> ByteString
 archivePart file = archiveOf file "original archive bytes"
@@ -464,13 +478,22 @@ pypiPublishSpec = describe "first-party PyPI publication relay" $ do
                 status response `shouldBe` 400
                 targetSaw target `shouldReturn` []
 
-    for_ [("missing", Nothing), ("wrong", Just "multipart/form-data; boundary=wrong"), ("ambiguous", Just "multipart/form-data; boundary=relay-boundary; boundary=other")] $ \(framingCase, contentType) ->
-        it (caseLabel ("integration/publication/native-pypi-004/" <> framingCase) ("refuses missing or ambiguous framing " <> toText (show contentType :: String))) $
-            withTarget 201 "accepted" $ \port target -> withSweeper $ \deadlines -> do
-                app <- pypiProxy deadlines (Just (pypiDeps port))
-                response <- postUpload ChunkedBody (maybeToList (("Content-Type",) <$> contentType)) (multipartBody ["acme-widget"]) app
-                status response `shouldBe` 400
-                targetSaw target `shouldReturn` []
+    -- An ambiguous header is sent with a body framed by each declared boundary, so a reader that
+    -- takes either one alone parses one of the bodies and relays it.
+    for_
+        [ ("missing", Nothing, ["relay-boundary"], "missing multipart Content-Type")
+        , ("wrong", Just "multipart/form-data; boundary=wrong", ["relay-boundary"], "multipart opening boundary is missing")
+        , ("ambiguous", Just "multipart/form-data; boundary=relay-boundary; boundary=other", ["relay-boundary", "other"], "missing, malformed, or ambiguous multipart boundary")
+        ]
+        $ \(framingCase, contentType, framings, refusal) ->
+            it (caseLabel ("integration/publication/native-pypi-004/" <> framingCase) ("refuses missing or ambiguous framing " <> toText (show contentType :: String))) $
+                withTarget 201 "accepted" $ \port target -> withSweeper $ \deadlines -> do
+                    app <- pypiProxy deadlines (Just (pypiDeps port))
+                    for_ framings $ \boundary -> do
+                        response <- postUpload ChunkedBody (maybeToList (("Content-Type",) <$> contentType)) (framedBy boundary (multipartBody ["acme-widget"])) app
+                        status response `shouldBe` 400
+                        simpleBody response `shouldBe` refusal
+                    targetSaw target `shouldReturn` []
 
     for_ [("trailing", "trailing bytes"), ("forbidden-name", "--relay-boundary\r\nContent-Disposition: form-data; name=\"name\"\r\n\r\nvictim\r\n--relay-boundary--\r\n")] $ \(suffixCase, suffix) ->
         it (caseLabel ("integration/publication/native-pypi-005/" <> suffixCase) "refuses trailing data or a forbidden name after the closing delimiter") $
@@ -567,15 +590,20 @@ pypiPublishSpec = describe "first-party PyPI publication relay" $ do
     it (caseLabel "integration/publication/native-pypi-014" "refuses an upload with no :action with 400 before any relay") $
         withTarget 201 "accepted" $ \port target -> withSweeper $ \deadlines -> do
             app <- pypiProxy deadlines (Just (pypiDeps port))
-            response <- postUpload ChunkedBody [("Content-Type", multipartType)] (formBody [("name", "acme-widget")] (archivePart "acme_widget-1.0.tar.gz")) app
+            -- Every other field a release needs is present, so only the :action check can refuse.
+            response <- postUpload ChunkedBody [("Content-Type", multipartType)] (formBody [("name", "acme-widget"), ("version", "1.0")] (archivePart "acme_widget-1.0.tar.gz")) app
             status response `shouldBe` 400
+            simpleBody response `shouldBe` "multipart upload has no :action"
             targetSaw target `shouldReturn` []
 
     it (caseLabel "integration/publication/native-pypi-015" "refuses a file name for another project with 400 before any relay") $
         withTarget 201 "accepted" $ \port target -> withSweeper $ \deadlines -> do
             app <- pypiProxy deadlines (Just (pypiDeps port))
-            response <- postUpload ChunkedBody [("Content-Type", multipartType)] (uploadOf ["acme-widget"] "victim_target-99.0.tar.gz") app
-            status response `shouldBe` 400
+            -- Each file names the declared version, so only the project comparison can refuse it.
+            for_ [("victim_target-1.0.tar.gz", pypiSdistNameForm), ("victim_target-1.0-py3-none-any.whl", "multipart file name does not name the declared project and version")] $ \(file, refusal) -> do
+                response <- postUpload ChunkedBody [("Content-Type", multipartType)] (uploadOf ["acme-widget"] file) app
+                status response `shouldBe` 400
+                simpleBody response `shouldBe` fromStrict (encodeUtf8 refusal)
             targetSaw target `shouldReturn` []
 
     it (caseLabel "integration/publication/native-pypi-016" "refuses a content part hidden after a bare LF with 400 before any relay") $

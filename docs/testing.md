@@ -794,8 +794,6 @@ The cases of one telemetry group share a collector, and each install emits the s
 span assertion therefore reads whole spans through `exportedSpans` and keys on an attribute of its
 own case, such as the coordinate of the package that the case installs. The private-leg case owns
 a separate coordinate, its public install, the mirror wait, and its second fresh install.
-`Ecluse.Test.CollectorSpec` in the core unit gate checks the shared parser and matching predicates
-against unrelated spans, signals, coordinates, events, links, and malformed attributes.
 
 Each declared group owns a complete data-plane lifecycle. Its cases cannot read another group's mutable store state.
 Profiles declare npm, PyPI, or mixed mounts and acquire the clients and services their cases need.
@@ -2091,8 +2089,7 @@ requires reads, writes, inventory, deletion, integrity, and recovery for every b
 An incomplete driver cannot reduce either required list. Discovery is pure, and missing families
 produce named failures without stopping unrelated contracts. A passing full composition defines
 completion only when its lower-tier obligations and execution reports also pass.
-npm, PyPI, Cargo, and RubyGems register the full ecosystem composition. The separately named read-only foundation
-remains an API for incomplete providers and does not establish full ecosystem completion.
+npm, PyPI, Cargo, and RubyGems register the full ecosystem composition.
 CI uploads actual plan and report pairs from the instrumented core unit, runtime unit and
 integration legs. The `e2e` job downloads all three pairs and audits each ecosystem against its subject's E2E report.
 All four tiers share the workflow run and attempt identity and use `arm64` as the architecture name.
@@ -2259,16 +2256,13 @@ Advisory-shaped test data comes from committed OSV JSON, apart from the benchmar
 worst case. The suites read `test/fixtures/osv/`
 (`v1/`, plus the `v2/` delta). The benchmarks' [advisory rule rows](#advisory-rule-rows), the
 [allocation gate](#allocation-budgets-perf-allocation-gating) and the live performance-acceptance
-run, the load harness's advisory scenarios, and `ecluse-unit` (`Ecluse.Test.Corpus.AdvisoriesSpec`)
-read `bench/corpus/advisories/`. A suite derives everything it consumes from those files at test
-time.
+run, and the load harness's advisory scenarios read `bench/corpus/advisories/`. A suite derives
+everything it consumes from those files at test time.
 No `osv.db` is ever committed as a binary, so a fixture cannot drift from the artifact contract
 (`Ecluse.Core.Osv.Schema`). Helpers in `ecluse-test-support` assemble the osv.dev-shaped zip, plus
 *hostile* artifacts for rejection tests. They compile the corpus through the real OSV pipeline
 (`Ecluse.Core.Osv.Compile`, in `ecluse-core`, so `ecluse-core-unit` can link it). The corpus carries
 versions, so shadow-swap tests observe an ETag change and a rule-outcome flip.
-`Ecluse.Test.OsvSpec` pins each version's rows exactly, so editing the corpus updates the pin in the
-same PR.
 
 ## Tests and Docker
 

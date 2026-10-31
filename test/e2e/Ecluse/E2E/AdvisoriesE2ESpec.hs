@@ -28,7 +28,7 @@ import System.FilePath ((</>))
 import Test.Hspec (Expectation, expectationFailure, shouldSatisfy)
 
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI), ecosystemName)
-import Ecluse.E2E.Fixtures.Advisories (maliciousAdvisoryId, maliciousExportBase, npmAdvisoryExportBase, npmAdvisoryId, partialFixAdvisoryId, partialFixExportBase, partialFixRemainingAdvisoryId, pypiAdvisoryExportBase, pypiAdvisoryId)
+import Ecluse.E2E.Fixtures.Advisories (cvssControlExportBase, epssControlExportBase, epssProofExportBase, maliciousAdvisoryId, maliciousExportBase, npmAdvisoryExportBase, npmAdvisoryId, partialFixAdvisoryId, partialFixExportBase, partialFixRemainingAdvisoryId, pypiAdvisoryExportBase, pypiAdvisoryId)
 import Ecluse.E2E.Fixtures.Contracts (ConcreteFixture (..))
 import Ecluse.E2E.Fixtures.Npm (corpusRevokedPkg, psName, psVersion)
 import Ecluse.E2E.Fixtures.PyPI (pypiDistInfoFor, pypiWheelFor)
@@ -125,6 +125,9 @@ scenarioFamily resources ecosystem maliciousTopology scoredSource fixture sessio
                             source
                                 | malicious = maliciousExportBase
                                 | policy `elem` [PartialFix, PartialFixAbstaining] = partialFixExportBase
+                                | policy == CvssBelowThreshold = cvssControlExportBase
+                                | policy == DenyEpss = epssProofExportBase
+                                | policy == EpssBelowThreshold = epssControlExportBase
                                 | otherwise = scoredSource
                          in timedFixture recorder acquire $
                                 timedFixtureWith recorder (withPublishedAdvisories ecosystem source) $ \plane ->
@@ -135,13 +138,18 @@ scenarioFamily resources ecosystem maliciousTopology scoredSource fixture sessio
 
 policyFields :: AdvisoryPolicy -> [Pair]
 policyFields = \case
-    DenyCve -> ["advisory-deny" .= object ["type" .= ("DenyIfCve" :: Text), "minCvss" .= (7.0 :: Double)]]
-    DenyEpss -> ["advisory-deny" .= object ["type" .= ("DenyIfEpss" :: Text), "minEpss" .= (0.5 :: Double)]]
+    DenyCve -> cveDeny
+    CvssBelowThreshold -> cveDeny
+    DenyEpss -> epssDeny
+    EpssBelowThreshold -> epssDeny
     KnownMaliciousDefault -> ["min-age" .= object ["ageSeconds" .= (0 :: Int)]]
     Remediation -> []
     RemediationDisabled -> ["remediation-fast-track" .= object ["enabled" .= False]]
     PartialFix -> []
     PartialFixAbstaining -> ["remediation-fast-track" .= object ["remainingAdvisories" .= ("abstain" :: Text)]]
+  where
+    cveDeny = ["advisory-deny" .= object ["type" .= ("DenyIfCve" :: Text), "minCvss" .= (7.0 :: Double)]]
+    epssDeny = ["advisory-deny" .= object ["type" .= ("DenyIfEpss" :: Text), "minEpss" .= (0.5 :: Double)]]
 
 -- | Await the actual advisory swap before exposing a policy-configured proxy to clients.
 withPolicy :: Ecosystem -> [Pair] -> GlobalDataPlane -> (E2E -> IO ()) -> IO ()

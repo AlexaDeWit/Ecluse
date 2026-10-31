@@ -11,7 +11,6 @@ module Ecluse.Test.Contract.PackageStore (
     FullPackageStoreDriver (..),
     fullPackageStoreContract,
     packageStoreSpec,
-    packageStoreIntegrityLaw,
     packageStoreCatalogue,
     packageStoreCatalogueFor,
     packageStoreCompletion,
@@ -47,6 +46,8 @@ data PackageStoreRelease = PackageStoreRelease
 -- | Operations delegate to production handles. Drivers return evidence without assertions.
 data PackageStoreOperations = PackageStoreOperations
     { psoRead :: Text -> IO (Either Text (Maybe PackageStoreRelease))
+    , psoArtifact :: Text -> Text -> IO (Either Text (Maybe ByteString))
+    -- ^ The bytes at a version's native artifact location, read apart from its metadata. 'Nothing' on a 404.
     , psoWrite :: PackageStoreRelease -> IO (Either Text ())
     , psoInventory :: IO (Either Text [(Text, [Text])])
     , psoDelete :: [Text] -> IO [(Text, Either Text ())]
@@ -56,6 +57,7 @@ data PackageStoreOperations = PackageStoreOperations
 data PackageStoreSession = PackageStoreSession
     { pssOperations :: PackageStoreOperations
     , pssObservedWrites :: IO [PackageStoreRelease]
+    , pssFailNextRead :: IO ()
     , pssFailNextWrite :: IO ()
     , pssFailNextDelete :: IO ()
     , pssReopen :: IO PackageStoreOperations
@@ -86,8 +88,12 @@ packageStoreLaws driver =
             publishBoth session
             psoRead (pssOperations session) primaryVersion `shouldReturn` Right (Just primary)
             psoRead (pssOperations session) siblingVersion `shouldReturn` Right (Just sibling)
-        contractCase "reads" "absent" "distinguishes a missing release from a failed read" $ \session ->
+        contractCase "reads" "absent" "distinguishes a missing release from a failed read" $ \session -> do
             psoRead (pssOperations session) primaryVersion `shouldReturn` Right Nothing
+            psoWrite (pssOperations session) primary `shouldReturn` Right ()
+            pssFailNextRead session
+            psoRead (pssOperations session) primaryVersion >>= (`shouldSatisfy` isLeft)
+            psoRead (pssOperations session) primaryVersion `shouldReturn` Right (Just primary)
     , declare "writes" $ do
         contractCase "writes" "complete" "publishes the complete release and preserves its sibling" $ \session -> do
             publishBoth session
@@ -111,6 +117,10 @@ packageStoreLaws driver =
             psoRead (pssOperations session) primaryVersion `shouldReturn` Right Nothing
             psoRead (pssOperations session) siblingVersion `shouldReturn` Right (Just sibling)
             psoInventory (pssOperations session) `shouldReturn` Right [(psdPackage driver, [siblingVersion])]
+            for_ (psrArtifacts primary) $ \artifact ->
+                psoArtifact (pssOperations session) primaryVersion (psaFilename artifact) `shouldReturn` Right Nothing
+            for_ (psrArtifacts sibling) $ \artifact ->
+                psoArtifact (pssOperations session) siblingVersion (psaFilename artifact) `shouldReturn` Right (Just (psaBytes artifact))
     , declare "integrity" $
         contractCase "integrity" "bytes-and-digests" "preserves every artifact byte and declared verified digest" (packageStoreIntegrityLaw driver)
     , declare "recovery" $ do
@@ -149,7 +159,7 @@ packageStoreLaws driver =
     contractCase family suffix description = it (caseLabel (identifier driver family <> "/" <> suffix) description)
     declare family spec = (family, around (psdWithSession driver) spec)
 
--- | Negative controls execute the same complete-file expectation as the registered integrity case.
+-- Every artifact byte and verified digest survives a write and a read.
 packageStoreIntegrityLaw :: FullPackageStoreDriver -> PackageStoreSession -> Expectation
 packageStoreIntegrityLaw driver session = do
     psoWrite (pssOperations session) primary `shouldReturn` Right ()

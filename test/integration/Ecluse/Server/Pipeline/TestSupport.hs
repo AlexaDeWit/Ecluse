@@ -11,9 +11,10 @@ module Ecluse.Server.Pipeline.TestSupport (
     publishedDaysAgo,
 
     -- * Upstream doubles
-    Upstream,
+    Upstream (upApp),
     recordingUpstream,
     recordingUpstreamIO,
+    recordingApplication,
     upstreamRespondingWith,
     truncatedResponse,
     servingUpstream,
@@ -29,6 +30,7 @@ module Ecluse.Server.Pipeline.TestSupport (
     conditionalArtifactUpstream,
     crossHostPublicUpstream,
     honouredPathUpstream,
+    declaredPathUpstream,
     offConventionPrivateUpstream,
     privateArtifactHit,
     privateArtifactHitWithHeader,
@@ -67,11 +69,15 @@ module Ecluse.Server.Pipeline.TestSupport (
     proxyApplication,
     withProxyOver,
     withProxyOverRuntime,
+    withProxyMounts,
+    withBottomingAssemble,
     withProxyEnvQueueDeps,
     withProxyEnvQueue,
     withProxyEnv,
     withProxy,
     withProxyEffectful,
+    withFreshProxies,
+    withUpstreams,
 
     -- * Request drivers
     getPath,
@@ -116,6 +122,7 @@ import Network.HTTP.Types.Header (hETag, hHost)
 import Network.Wai (Application, Request (rawPathInfo, requestHeaders, requestMethod), Response, responseLBS, responseRaw)
 import Network.Wai.Handler.Warp (testWithApplication)
 import Network.Wai.Test (SResponse, defaultRequest, request, runSession, setPath)
+import UnliftIO.Exception (impureThrow)
 
 import Ecluse.Core.Credential (mkSecret)
 import Ecluse.Core.Deadline (Deadlines)
@@ -127,6 +134,7 @@ import Ecluse.Core.Queue (
     MirrorQueue (enqueue, receive),
     QueueMessage (msgJob),
  )
+import Ecluse.Core.Registry.Adapter.Capability (AdapterMetadata (metadataAssemble))
 import Ecluse.Core.Rules (PreparedRule, prepare)
 import Ecluse.Core.Rules.Types (
     PrecededRule,
@@ -184,11 +192,27 @@ recordingUpstream respondTo = recordingUpstreamIO (pure . respondTo)
 
 -- | Choose each recorded response from mutable test state.
 recordingUpstreamIO :: (Request -> IO Response) -> IO Upstream
-recordingUpstreamIO respondTo = do
+recordingUpstreamIO respondTo = recordingApplication isTarballPath (\req respond -> respondTo req >>= respond)
+
+-- | Record credentials on every request, and methods and validators on the paths the predicate names as artifacts.
+recordingApplication :: (ByteString -> Bool) -> Application -> IO Upstream
+recordingApplication isArtifact app = do
     seen <- newIORef []
-    mkUpstream seen $ \req respond -> do
-        modifyIORef' seen (lookupAuth (requestHeaders req) :)
-        respondTo req >>= respond
+    methods <- newIORef []
+    validators <- newIORef []
+    let recording req respond = do
+            modifyIORef' seen (lookupAuth (requestHeaders req) :)
+            when (isArtifact (rawPathInfo req)) $ do
+                modifyIORef' methods (requestMethod req :)
+                modifyIORef' validators (lookupIfNoneMatch (requestHeaders req) :)
+            app req respond
+    pure
+        Upstream
+            { upApp = recording
+            , upSeenAuth = seen
+            , upSeenArtifactMethods = methods
+            , upSeenArtifactValidators = validators
+            }
 
 -- | An upstream double answering every request with one fixed response.
 upstreamRespondingWith :: Response -> IO Upstream
@@ -239,24 +263,6 @@ seenArtifactMethods up = reverse <$> readIORef (upSeenArtifactMethods up)
 -- | Artifact validators in arrival order, including requests without a validator.
 seenArtifactValidators :: Upstream -> IO [Maybe ByteString]
 seenArtifactValidators up = reverse <$> readIORef (upSeenArtifactValidators up)
-
--- | Preserve credential recording while adding artifact method and validator observations.
-mkUpstream :: IORef [Maybe ByteString] -> Application -> IO Upstream
-mkUpstream seen app = do
-    methods <- newIORef []
-    validators <- newIORef []
-    let recording req respond = do
-            when (isTarballPath (rawPathInfo req)) $ do
-                modifyIORef' methods (requestMethod req :)
-                modifyIORef' validators (lookupIfNoneMatch (requestHeaders req) :)
-            app req respond
-    pure
-        Upstream
-            { upApp = recording
-            , upSeenAuth = seen
-            , upSeenArtifactMethods = methods
-            , upSeenArtifactValidators = validators
-            }
 
 -- | Whether a request path is a tarball slot (@\/…\/-\/….tgz@) rather than a packument, so one double can answer both.
 isTarballPath :: ByteString -> Bool
@@ -376,10 +382,19 @@ crossHostPublicUpstream crossHost version tarballBody =
 
 -- | Declare an off-convention artifact URL while serving any requested @.tgz@ path.
 honouredPathUpstream :: Text -> Text -> LByteString -> IO Upstream
-honouredPathUpstream version filename tarballBody = recordingUpstream answer
+honouredPathUpstream = offConventionPublicUpstream (".tgz" `BS.isSuffixOf`)
+
+-- | Declare an off-convention artifact URL and serve the bytes there alone, so any other @.tgz@ path is a 404.
+declaredPathUpstream :: Text -> Text -> LByteString -> IO Upstream
+declaredPathUpstream version filename = offConventionPublicUpstream (== encodeUtf8 ("/files/" <> filename)) version filename
+
+-- A packument declaring @/files/{filename}@, the bytes at each path @serves@ accepts, and 404 at any other @.tgz@ path.
+offConventionPublicUpstream :: (ByteString -> Bool) -> Text -> Text -> LByteString -> IO Upstream
+offConventionPublicUpstream serves version filename tarballBody = recordingUpstream answer
   where
     answer req
-        | ".tgz" `BS.isSuffixOf` rawPathInfo req = responseLBS status200 [] tarballBody
+        | serves (rawPathInfo req) = responseLBS status200 [] tarballBody
+        | ".tgz" `BS.isSuffixOf` rawPathInfo req = responseLBS status404 [] "not found"
         | otherwise = packumentAt altPackument req
 
     altPackument base =
@@ -554,12 +569,50 @@ withProxyOverRuntime ::
     (PackumentDeps -> PackumentDeps) ->
     (forall a. (Application -> Env -> Int -> IO a) -> IO a)
 withProxyOverRuntime tweakEnv logEnv queue privateUp publicUp inbound tweakDeps k =
-    testWithApplication (pure (upApp privateUp)) $ \privatePort ->
-        testWithApplication (pure (upApp publicUp)) $ \publicPort -> withSweeper $ \deadlines -> do
-            manager <- newManager defaultManagerSettings
-            env <- tweakEnv <$> newTestEnvLogging deadlines logEnv queue (manager, manager) telemetryDisabled
-            baseDeps <- deps privatePort publicPort inbound
-            k (proxyApplication Npm env (tweakDeps baseDeps)) env publicPort
+    withProxyMounts tweakEnv logEnv queue privateUp publicUp inbound (\mount -> k (mount tweakDeps))
+
+{- | Hand the continuation a mount for each dependency change it applies, all over one runtime.
+The mounts share the runtime's caches, so one mount can serve what another assembled.
+-}
+withProxyMounts ::
+    (Env -> Env) ->
+    LogEnv ->
+    MirrorQueue ->
+    Upstream ->
+    Upstream ->
+    Maybe Text ->
+    (forall a. (((PackumentDeps -> PackumentDeps) -> Application) -> Env -> Int -> IO a) -> IO a)
+withProxyMounts tweakEnv logEnv queue privateUp publicUp inbound k =
+    withUpstreams (upApp privateUp) (upApp publicUp) $ \privatePort publicPort deadlines manager -> do
+        env <- tweakEnv <$> newTestEnvLogging deadlines logEnv queue (manager, manager) telemetryDisabled
+        baseDeps <- deps privatePort publicPort inbound
+        k (\tweakDeps -> proxyApplication Npm env (tweakDeps baseDeps)) env publicPort
+
+-- | Build proxies on demand over one pair of upstreams. Unlike 'withProxyMounts', each has its own runtime, so no cache carries between them.
+withFreshProxies :: Upstream -> Upstream -> (IO Application -> IO a) -> IO a
+withFreshProxies privateUp publicUp k =
+    withUpstreams (upApp privateUp) (upApp publicUp) $ \privatePort publicPort deadlines manager ->
+        k $ do
+            env <- newTestMemoryQueue >>= \queue -> newTestEnvWithQueue deadlines queue manager
+            proxyApplication Npm env <$> deps privatePort publicPort Nothing
+
+-- | Serve both origins for the continuation, with their ports, swept deadlines and one HTTP manager.
+withUpstreams :: Application -> Application -> (Int -> Int -> Deadlines -> Manager -> IO a) -> IO a
+withUpstreams privateApp publicApp k =
+    testWithApplication (pure privateApp) $ \privatePort ->
+        testWithApplication (pure publicApp) $ \publicPort -> withSweeper $ \deadlines ->
+            newManager defaultManagerSettings >>= k privatePort publicPort deadlines
+
+-- | A typed exception the bottoming assembly plants: a stand-in for an invariant break inside the pure render.
+newtype AssembleBottom = AssembleBottom Text
+    deriving stock (Show)
+
+instance Exception AssembleBottom
+
+-- | Break the never-throws contract of 'metadataAssemble' on purpose: the render bottoms when forced.
+withBottomingAssemble :: PackumentDeps -> PackumentDeps
+withBottomingAssemble d =
+    d{pdMetadata = (pdMetadata d){metadataAssemble = \_ _ _ _ -> impureThrow (AssembleBottom "simulated render invariant break")}}
 
 -- | Mount one ecosystem over the supplied runtime and native dependencies.
 proxyApplication :: Ecosystem -> Env -> PackumentDeps -> Application

@@ -10,7 +10,10 @@ module Ecluse.Integration.WorkerLoop (
     publishedAtLeast,
 
     -- * Fixtures the loop runs against
+    TargetMemory (..),
     withMirrorTarget,
+    withObservedMirrorTarget,
+    npmAttachment,
     observeAcknowledgement,
     observeDeadLetter,
     mirrorPoliciesAt,
@@ -18,8 +21,10 @@ module Ecluse.Integration.WorkerLoop (
     newQueueEnv,
 ) where
 
-import Data.Aeson (Value (Object), encode)
+import Data.Aeson (Value (Object), encode, object, (.=))
+import Data.Aeson.Key qualified as Key
 import Data.Aeson.KeyMap qualified as KeyMap
+import Data.ByteString.Lazy qualified as LBS
 import Network.HTTP.Client (defaultManagerSettings, newManager)
 import Network.HTTP.Types (Status, status200, status404, statusCode)
 import Network.Wai (Application, rawPathInfo, requestMethod, responseLBS, strictRequestBody)
@@ -43,6 +48,7 @@ import Ecluse.Runtime.Env (Env)
 import Ecluse.Server.Pipeline.TestSupport (newTestEnvWithQueue)
 import Ecluse.Service (runWorker)
 import Ecluse.Test.Deadline (untracedClient)
+import Ecluse.Test.Package (base64Of)
 import Ecluse.Test.Poll (runUntil)
 import Ecluse.Test.Port (passthroughTracingPort)
 import Ecluse.Test.Support (decodeJsonOrFail, expectRightText)
@@ -85,19 +91,28 @@ observeDeadLetter queue = do
     (observed, disposed) <- observeAcknowledgement queue{ack = deadLetter queue}
     pure (queue{deadLetter = ack observed}, disposed)
 
+-- | Whether an accepted publication becomes visible to later inventory probes.
+data TargetMemory = RetainsPublication | ForgetsPublication
+
 -- | Accepted native publication documents become visible to subsequent inventory probes.
 withMirrorTarget :: Status -> (Text -> IORef [ByteString] -> IO a) -> IO a
-withMirrorTarget replyStatus body = do
+withMirrorTarget replyStatus body = withObservedMirrorTarget RetainsPublication replyStatus (\url logRef _ -> body url logRef)
+
+-- | A mirror target that also returns every publication document it was sent, oldest first.
+withObservedMirrorTarget :: TargetMemory -> Status -> (Text -> IORef [ByteString] -> IO [Value] -> IO a) -> IO a
+withObservedMirrorTarget memory replyStatus body = do
     logRef <- newIORef []
+    sent <- newIORef []
     stored <- newIORef Nothing
-    testWithApplication (pure (app logRef stored)) $ \port -> body (localhost port) logRef
+    testWithApplication (pure (app logRef sent stored)) $ \port -> body (localhost port) logRef (reverse <$> readIORef sent)
   where
-    app :: IORef [ByteString] -> IORef (Maybe Value) -> Application
-    app logRef stored request respond
+    app :: IORef [ByteString] -> IORef [Value] -> IORef (Maybe Value) -> Application
+    app logRef sent stored request respond
         | requestMethod request == "PUT" = do
             publication <- decodeJsonOrFail . toStrict =<< strictRequestBody request
             atomicModifyIORef' logRef (\xs -> (rawPathInfo request : xs, ()))
-            when (statusCode replyStatus `elem` [200, 201, 409]) $ do
+            atomicModifyIORef' sent (\xs -> (publication : xs, ()))
+            when (retains && statusCode replyStatus `elem` [200, 201, 409]) $ do
                 let fields = documentObject publication
                     artifactUrl filename = Just (selfBaseUrl request <> decodeUtf8 (rawPathInfo request) <> "/-/" <> filename)
                 nativeVersions <- expectRightText (maybeToRight "publication has no versions object" (objectField "versions" fields))
@@ -108,6 +123,21 @@ withMirrorTarget replyStatus body = do
             readIORef stored >>= \case
                 Nothing -> respond (responseLBS status404 [] "{}")
                 Just publication -> respond (responseLBS status200 [("Content-Type", "application/json")] (encode publication))
+    retains = case memory of
+        RetainsPublication -> True
+        ForgetsPublication -> False
+
+-- | The @_attachments@ object of an npm publication that carries one tarball's bytes.
+npmAttachment :: Text -> LByteString -> Value
+npmAttachment filename bytes =
+    object
+        [ Key.fromText filename
+            .= object
+                [ "content_type" .= ("application/octet-stream" :: Text)
+                , "data" .= base64Of (toStrict bytes)
+                , "length" .= LBS.length bytes
+                ]
+        ]
 
 -- | Admit every version through the npm writer, with an optional artifact fetch cap.
 mirrorPoliciesAt :: Deadlines -> Maybe Int -> Text -> NonEmpty Hash -> IO WorkerPolicies

@@ -15,6 +15,7 @@ import Ecluse.Core.Rules.Types (Rule (AllowIfOlderThan, DenyIfDeprecated))
 import Ecluse.Core.Security.Egress (registryUrlText)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Core.Server.Context (PackumentDeps (..))
+import Ecluse.Core.Server.Stream (UpstreamBodyFailed (UpstreamBodyFailed))
 import Ecluse.Core.Server.Upstream (MirrorServePlan (NoMirrorWrite))
 import Ecluse.Core.Version (mkVersion)
 import Ecluse.Server.Pipeline.TestSupport
@@ -27,7 +28,7 @@ import Ecluse.Test.Wai
 import Network.HTTP.Types (methodGet, methodHead, status200, status401, status403, status404, status503, statusCode)
 import Network.HTTP.Types.Header (hIfNoneMatch)
 import Network.Wai (defaultRequest, requestHeaders, responseLBS)
-import Network.Wai.Test (SResponse (..), simpleBody)
+import Network.Wai.Test (simpleBody)
 import Test.Hspec
 
 -- | Pin artifact responses, origin selection, and mirror jobs.
@@ -366,7 +367,10 @@ tarballSpec = describe "artifact (tarball) path" $ do
         privateUp <- privateArtifactMidStreamFailure
         publicUp <- artifactUpstream "1.0.0" publicTarballBytes
         withProxyEnv privateUp publicUp Nothing $ \app env -> do
-            (_ :: Either SomeException SResponse) <- try (getTarball "1.0.0" (Just "client-token") app)
+            -- The 200 is already committed, so the failure surfaces as the aborted response, never a finished one.
+            try (getTarball "1.0.0" (Just "client-token") app) >>= \case
+                Left (UpstreamBodyFailed _) -> pass
+                Right resp -> expectationFailure ("expected the private body failure to abort the response, got " <> show resp)
             seenAuth publicUp `shouldReturn` []
             drainJobs env `shouldReturn` []
 
@@ -400,7 +404,7 @@ tarballSpec = describe "artifact (tarball) path" $ do
 
     it (caseLabel "integration/npm-artifact/native-031" "honours a non-conventional public dist.tarball path (not a reconstructed /-/ URL)") $ do
         privateUp <- privateArtifactMiss
-        publicUp <- honouredPathUpstream "1.0.0" "thing-1.0.0.tgz" publicTarballBytes
+        publicUp <- declaredPathUpstream "1.0.0" "thing-1.0.0.tgz" publicTarballBytes
         withProxyEnv privateUp publicUp Nothing $ \app _env -> do
             resp <- getTarball "1.0.0" Nothing app
             status resp `shouldBe` 200

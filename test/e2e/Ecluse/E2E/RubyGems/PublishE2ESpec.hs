@@ -15,7 +15,7 @@ import Data.Text qualified as T
 import Network.HTTP.Types.URI (renderSimpleQuery)
 import System.Exit (ExitCode (ExitFailure, ExitSuccess))
 import System.FilePath ((</>))
-import Test.Hspec (shouldBe, shouldReturn)
+import Test.Hspec (shouldBe, shouldReturn, shouldSatisfy)
 
 import Ecluse.E2E.Fixtures.Contracts (concreteFamily)
 import Ecluse.E2E.Fixtures.RubyGems
@@ -46,7 +46,9 @@ rubyPublicationConfig =
 -- | The native command, fresh Bundler install and physical target inventory supply every shared law.
 rubyPublicationFamily :: FamilyFixture PublicationFixture
 rubyPublicationFamily = concreteFamily rubyPublicationFixture $ \recorder action plane ->
-    timedFixture recorder withRubyRegistry $ \registry ->
+    timedFixture recorder withRubyRegistry $ \registry -> do
+        -- No public namesake can answer a first-party read, so only the publication target can supply the install.
+        for_ ["1.0.0", "2.0.0"] (removeRubyRegistryVersion registry "rubygems-upstream" "ecluse-fixture-firstparty")
         withStubFault plane (RubyGemsBackend (rubyRegistryPort registry) False) $
             withObservedNativeProxy rubyPublicationConfig plane $ \observed -> do
                 releases <- loadRubyReleases
@@ -61,10 +63,16 @@ driver observed registry release =
         { publicationRun = publishObserved observed registry release
         , publicationInstall = withRubyProject currentBundler proxy (e2eBaseUrl proxy <> "/rubygems/") (Just ("ruby:" <> rubyRegistryToken)) $ \project -> do
             rubyDependency project (releaseName release) ("= " <> releaseVersion release)
+            before <- length <$> readTVarIO (rubyRegistryRequests registry)
             result <- rubyInstall project False
             when (crExit result == ExitSuccess) $ do
                 value <- rubyEvaluate project "require 'ecluse_fixture_firstparty'; puts EcluseFixtureFirstparty::VALUE" >>= shouldSucceed
                 T.strip (crStdout value) `shouldBe` "ecluse-fixture-firstparty-1.0.0-ruby"
+                named <- filter (T.isInfixOf (releaseName release) . nativeRequestPath) . drop before <$> readTVarIO (rubyRegistryRequests registry)
+                let exchanges = [(nativeRequestHost request, nativeRequestPath request, nativeRequestStatus request) | request <- named]
+                exchanges `shouldSatisfy` elem ("rubygems-private", "/info/" <> releaseName release, 200)
+                exchanges `shouldSatisfy` elem ("rubygems-private", "/gems/" <> releaseFilename release, 200)
+                filter (\(host, _, _) -> host /= "rubygems-private") exchanges `shouldBe` []
             pure result
         , publicationVersions = versions
         , publicationAwait = versions

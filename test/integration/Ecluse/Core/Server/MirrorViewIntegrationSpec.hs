@@ -11,10 +11,8 @@ import Data.List (dropWhileEnd, lookup)
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Data.Time (UTCTime (UTCTime), fromGregorian)
-import Network.HTTP.Client (defaultManagerSettings, newManager)
 import Network.HTTP.Types (Status, methodGet, methodHead, status200, status304, status403, status404, status503)
 import Network.Wai (Application, defaultRequest, pathInfo, rawPathInfo, requestHeaders, responseLBS)
-import Network.Wai.Handler.Warp (testWithApplication)
 import Network.Wai.Test (SResponse (simpleBody, simpleHeaders, simpleStatus))
 import Test.Hspec
 
@@ -45,10 +43,9 @@ import Ecluse.Core.Server.MirrorView
 import Ecluse.Core.Server.Path (unFilename)
 import Ecluse.Core.Server.Upstream (MirrorServePlan (MirrorOnAdmit, NoMirrorWrite))
 import Ecluse.Runtime.Server (application, mkServerConfig)
-import Ecluse.Server.Pipeline.TestSupport (getPath, getPathWith, newTestEnvWithQueue, requestAt)
+import Ecluse.Server.Pipeline.TestSupport (getPath, getPathWith, newTestEnvWithQueue, requestAt, withUpstreams)
 import Ecluse.Service (mountBindingFor)
 import Ecluse.Test.Contract.Catalogue (caseLabel)
-import Ecluse.Test.Deadline (withSweeper)
 import Ecluse.Test.Mirror.RubyGems (RubyStateProbeFixture (..), rubyStateProbeFixture)
 import Ecluse.Test.Mirror.State
 import Ecluse.Test.Queue (newTestMemoryQueue)
@@ -79,12 +76,20 @@ pypiReads = describe "managed PyPI mirror reads" $ do
             simpleStatus response `shouldBe` status200
             responseEnvelope response `shouldBe` Right (KeyMap.insert "versions" (fromListValue [String "1"]) sourceEnvelope)
             pure (responseEnvelope response)
-        present <- testView (pure (Right (StateLoaded revision record)))
+        -- The store answers a read that names its revision as unchanged, as the production store does,
+        -- so the second read serves the record the first one retained.
+        stateReads <- newIORef []
+        present <- mirrorViewWith pypiStateFormat pypiMirrorDocuments target $ \_ held -> do
+            modifyIORef' stateReads (<> [held])
+            pure $ Right $ case held of
+                Just seen | seen == revision -> StateUnchanged revision
+                _ -> StateLoaded revision record
         withManagedProxy present False (projectWithEnvelope privateEnvelope False) (native status503 []) $ \app -> do
             replicateM_ 2 $ do
                 response <- getPath "/pypi/simple/demo/" app
                 simpleStatus response `shouldBe` status200
                 responseEnvelope response `shouldBe` control
+        readIORef stateReads `shouldReturn` [Nothing, Just revision]
 
     it (caseLabel "integration/mirror-view/native-002" "keeps the private project envelope when an unmanaged private version is present") $ do
         inventory <- mirrorSample [1, 2] False "https://public.test/" "source" >>= withMirrorEnvelope sourceEnvelope
@@ -115,11 +120,13 @@ pypiReads = describe "managed PyPI mirror reads" $ do
     it (caseLabel "integration/mirror-view/native-004" "bypasses state entirely for first-party private names") $ do
         calls <- newIORef (0 :: Int)
         view <- testView (modifyIORef' calls (+ 1) $> Left (StateInvalid "unavailable"))
-        withManagedProxy view True (native status200 [1]) (native status503 []) $ \app -> do
+        withManagedProxy view True (nativeWith True "private" status200 [1]) (native status503 []) $ \app -> do
             response <- getPath "/pypi/simple/demo/" app
             simpleStatus response `shouldBe` status200
-            artifact <- getPath artifactPath app
-            simpleStatus artifact `shouldBe` status200
+            for_ [artifactPath, artifactPath <> ".metadata"] $ \path -> do
+                served <- getPath path app
+                simpleStatus served `shouldBe` status200
+                simpleBody served `shouldBe` "private"
         readIORef calls `shouldReturn` 0
 
     it (caseLabel "integration/mirror-view/native-005" "preserves unmanaged private handling on conclusive project absence") $ do
@@ -372,11 +379,11 @@ cargoReads = describe "managed Cargo mirror reads" $ do
     it (caseLabel "integration/mirror-view/native-019" "restores retained Cargo rows in original index order on the merged listing during public outage") $ do
         view <- recordedCrateView
         adapter <- requiredAdapter Cargo
-        withMountProxy Cargo adapter (\deps -> deps{pdEgressUrl = Right . loopbackRegistryUrl}) view (crateIndex (map republished [original "1.10.0", original "1.9.0"])) unavailable $ \app -> do
+        withMountProxy Cargo adapter (\deps -> deps{pdEgressUrl = Right . loopbackRegistryUrl}) view (crateIndex (map republished [original "1.9.1", original "1.10.0", original "1.9.0"])) unavailable $ \app -> do
             response <- getPath "/cargo/th/in/thing" app
             simpleStatus response `shouldBe` status200
             rows <- traverse (expectRight . Reference.indexValue) (Reference.referenceIndex (toStrict (simpleBody response)))
-            map Object rows `shouldBe` [original "1.9.0", original "1.10.0"]
+            map Object rows `shouldBe` [original "1.9.0", original "1.10.0", original "1.9.1"]
     for_ [("absent-public", native status404 [], status404), ("unavailable-public", unavailable, status503)] $ \(identifier, public, expected) ->
         it (caseLabel ("integration/mirror-view/native-023/" <> identifier) "answers a recorded crate 404 only when both origins answer 404 and no recorded version survives") $ do
             view <- recordedCrateView
@@ -388,8 +395,10 @@ cargoReads = describe "managed Cargo mirror reads" $ do
     release = Cargo.minimalCargoRelease "thing"
     original version = Cargo.cargoIndexRecord (release version)
     crateTarget = stateTarget "https://private.test/cargo"
+    -- A backport recorded after 1.10.0. The index order differs from version-text order, its
+    -- reverse, semver order and the private origin's order.
     recordedCrateView = do
-        record <- cargoMirrorRecord crateTarget name (Cargo.releaseArchive (release "1.9.0")) [(0, original "1.9.0"), (1, original "1.10.0")]
+        record <- cargoMirrorRecord crateTarget name (Cargo.releaseArchive (release "1.9.0")) [(0, original "1.9.0"), (1, original "1.10.0"), (2, original "1.9.1")]
         testViewAt cargoStateFormat cargoMirrorDocuments crateTarget (pure (Right (StateLoaded (StateRevision crateTarget name "complete") record)))
     republished = \case
         Object fields -> Object (KeyMap.insert "pubtime" (String "2026-10-01T00:00:00Z") fields)
@@ -541,15 +550,13 @@ withMountProxy eco adapter configure view private public action = do
     withMountOver eco adapter (queue{enqueue = \_ -> fail "unexpected mirror enqueue"}, configure) view False private public action
 
 withMountOver :: Ecosystem -> RegistryAdapter -> (MirrorQueue, PackumentDeps -> PackumentDeps) -> MirrorView -> Bool -> Application -> Application -> (Application -> IO a) -> IO a
-withMountOver eco adapter (queue, configure) view firstParty private public action = do
-    manager <- newManager defaultManagerSettings
-    testWithApplication (pure private) $ \privatePort ->
-        testWithApplication (pure public) $ \publicPort -> withSweeper $ \deadlines -> do
-            env <- newTestEnvWithQueue deadlines queue manager
-            let deps =
-                    (serveDepsFor adapter (Just (loopbackRegistryUrl (localhost privatePort))) (loopbackRegistryUrl (localhost publicPort)) NoMirrorWrite [] (pure (UTCTime (fromGregorian 2026 10 11) 0)))
-                        { pdMirrorState = Just view
-                        , pdFirstParty = const firstParty
-                        , pdMountBaseUrl = "http://ecluse.test/" <> ecosystemName eco
-                        }
-            action (application (mkServerConfig (maybeToList (mountBindingFor eco (configure deps) Nothing))) env)
+withMountOver eco adapter (queue, configure) view firstParty private public action =
+    withUpstreams private public $ \privatePort publicPort deadlines manager -> do
+        env <- newTestEnvWithQueue deadlines queue manager
+        let deps =
+                (serveDepsFor adapter (Just (loopbackRegistryUrl (localhost privatePort))) (loopbackRegistryUrl (localhost publicPort)) NoMirrorWrite [] (pure (UTCTime (fromGregorian 2026 10 11) 0)))
+                    { pdMirrorState = Just view
+                    , pdFirstParty = const firstParty
+                    , pdMountBaseUrl = "http://ecluse.test/" <> ecosystemName eco
+                    }
+        action (application (mkServerConfig (maybeToList (mountBindingFor eco (configure deps) Nothing))) env)

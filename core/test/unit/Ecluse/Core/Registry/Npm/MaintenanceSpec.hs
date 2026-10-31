@@ -2,7 +2,8 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | Request formation and refusal tests for npm maintenance.
+{- | Request formation and refusal tests for npm maintenance, and the full package-store laws over
+npm's production adapters with Verdaccio's protocol profile.
 Invalid package coordinates must not produce deletion requests.
 -}
 module Ecluse.Core.Registry.Npm.MaintenanceSpec (spec) where
@@ -32,6 +33,8 @@ import Ecluse.Core.Registry.Origin (OriginClient)
 import Ecluse.Core.Security (defaultLimits)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Core.Version (Version)
+import Ecluse.Test.Contract.PackageStore (packageStoreSpec)
+import Ecluse.Test.Contract.PackageStore.Protocol (verdaccioDriver)
 import Ecluse.Test.Deadline (untracedClient)
 import Ecluse.Test.Json (encodeStrict, keysAt, objectAt)
 import Ecluse.Test.Package (leftpadName, npmVersion, unscopedNpm)
@@ -45,6 +48,8 @@ spec = do
     listingSpec
     packumentReadSpec
     deleteSequenceSpec
+    -- Each law acquires its stateful store inside its example, never during declaration.
+    packageStoreSpec verdaccioDriver
 
 listingSpec :: Spec
 listingSpec = describe "the package listing verb" $ do

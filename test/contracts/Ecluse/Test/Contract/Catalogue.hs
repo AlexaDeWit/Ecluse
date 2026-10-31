@@ -125,7 +125,7 @@ obligationProblems profiles groups obligation = case obligationSupport obligatio
                     | capability <- obligationCapabilities obligation
                     , capability `notElem` profileCapabilities profile
                     ]
-                        <> [ "required case missing: " <> identifier
+                        <> [ "required case missing: " <> obligationId obligation <> ": " <> identifier
                            | identifier <- obligationCases obligation
                            , identifier `notElem` registered
                            ]

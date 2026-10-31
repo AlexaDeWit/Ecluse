@@ -9,6 +9,7 @@ import Data.Aeson (withObject, (.:))
 import Data.Aeson.Types (parseEither)
 import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as LBS
+import Data.List (lookup)
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import System.Directory (createDirectoryIfMissing)
@@ -27,7 +28,7 @@ import Ecluse.Test.Contract.Phase (timedFixture)
 import Ecluse.Test.Contract.Runner (DeclaredGroup (..))
 import Ecluse.Test.Contract.Serving (ServingResponse (..))
 import Ecluse.Test.Registry.RubyGems.Fixtures
-import Ecluse.Test.Registry.RubyGems.Reference (RubyInfoRow (..), referenceInfo, runRubyReference)
+import Ecluse.Test.Registry.RubyGems.Reference (RubyInfoRow (..), runRubyReference)
 
 -- | Native client observations include isolated installs and retained-cache revalidation.
 rubyNativeContract :: DeclaredGroup
@@ -43,33 +44,12 @@ rubyNativeContract = DeclaredGroup (fixtureMetadata rubyNativeFixture) $ \record
                 for_ [400, 401, 503] $ \status -> compactRequiredCase client True status plane
         it (label "minimum-cache" "revalidates private visibility and checksums with retained Bundler 2.6.9 caches") (retainedCacheCase minimumBundler)
         it (label "current-cache" "revalidates private visibility and checksums with retained Bundler 4.0.23 caches") (retainedCacheCase currentBundler)
-        it (label "compact-replacement" "returns complete personalised discovery and info bodies for Range requests") $ \plane ->
-            withObservedNativeProxy defaultE2EConfig plane $ \observed -> do
-                let proxy = observedProxy observed
-                for_ ["/rubygems/versions", "/rubygems/info/ecluse-fixture-root"] $ \path -> do
-                    ordinary <- proxyRequest "GET" [] "" proxy path
-                    responseStatus ordinary `shouldBe` 200
-                    replacement <- proxyRequest "GET" [("Range", "bytes=7-"), ("If-Range", "\"old-client-view\"")] "" proxy path
-                    responseStatus replacement `shouldBe` 200
-                    responseBody replacement `shouldBe` responseBody ordinary
-                (_, directory) <- proxyGet proxy "/rubygems/versions"
-                let rows = filter (T.isPrefixOf "ecluse-fixture-root ") (T.lines (decodeUtf8 (LBS.toStrict directory)))
-                rows `shouldSatisfy` (not . null)
-                rows `shouldSatisfy` all (T.isSuffixOf " ")
-                (_, info) <- proxyGet proxy "/rubygems/info/ecluse-fixture-root"
-                native <- either (fail . toString) pure (referenceInfo (LBS.toStrict info))
-                native `shouldSatisfy` (not . null)
-                releases <- filter ((== rubyRoot) . releaseName) <$> loadRubyReleases
-                for_ native $ \row -> do
-                    release <- rubyRelease releases rubyRoot (rowVersion row) (rowPlatform row)
-                    rowFields row `shouldSatisfy` elem ("checksum", releaseChecksum release)
+        it (label "compact-replacement" "returns complete personalised discovery and info bodies for Range requests") compactReplacementCase
         it (label "platforms" "retains the Ruby, Java, Linux musl and Darwin variants in a native lockfile") $ \plane -> for_ [minimumBundler, currentBundler] $ \client ->
             withObservedNativeProxy defaultE2EConfig plane $ \observed -> rubyConsumer (observedProxy observed) client $ \project -> do
                 releases <- filter ((== "ecluse-fixture-platform") . releaseName) <$> loadRubyReleases
                 rubyDependency project "ecluse-fixture-platform" "= 1.0.0"
-                (status, body) <- proxyGet (observedProxy observed) "/rubygems/info/ecluse-fixture-platform"
-                status `shouldBe` 200
-                nativeRows <- either (fail . toString) pure (referenceInfo (LBS.toStrict body))
+                nativeRows <- rubyReadInfo (observedProxy observed) "ecluse-fixture-platform"
                 sort [(rowVersion row, rowPlatform row) | row <- nativeRows] `shouldBe` sort [(releaseVersion release, releasePlatform release) | release <- releases]
                 assertRubyPlatformInstall observed releases project
         it (label "checksum-failure" "refuses a wrong lockfile digest against current native metadata") $ \plane ->
@@ -174,38 +154,7 @@ rubyNativeContract = DeclaredGroup (fixtureMetadata rubyNativeFixture) $ \record
                 let requests = nativeUpstreamRequests interval
                 requests `shouldSatisfy` (not . null)
                 map nativeRequestPath requests `shouldSatisfy` all (\path -> path == "/versions" || T.isPrefixOf "/info/" path)
-        it (label "private-authority" "keeps authorised private names available while refusing anonymous and wrong callers") $ \plane -> for_ [minimumBundler, currentBundler] $ \client ->
-            withRubyRegistry $ \registry -> do
-                releases <- loadRubyReleases
-                selected <- traverse (\name -> rubyRelease releases name rubyVersion "ruby") [rubyRoot, rubyLeaf]
-                seedRubyRegistry registry "rubygems-private" selected
-                setRubyRegistryFault registry "rubygems-private" RubyRegistryRequireRead
-                let config = rubyDeniedConfig{ecExtraEnv = ecExtraEnv rubyDeniedConfig <> [("ECLUSE_MOUNTS__RUBYGEMS__PRIVATE_UPSTREAM__REGISTRY__URL", stubUrl RubyGemsPrivate)]}
-                withStubFault plane (RubyGemsBackend (rubyRegistryPort registry) False) $
-                    withObservedNativeProxy config plane $ \observed -> do
-                        let proxy = observedProxy observed
-                        withRubyProject client proxy (e2eBaseUrl proxy <> "/rubygems/") (Just "ruby:read") $ \project -> do
-                            void (rubyInstall project False >>= shouldSucceed)
-                            assertRubyContents project "ecluse-fixture-leaf-1.0.0-ruby|root-1.0.0"
-                        before <- nativeTraffic observed
-                        forM_ [Nothing, Just "ruby:wrong"] $ \credentials ->
-                            withRubyProject client proxy (e2eBaseUrl proxy <> "/rubygems/") credentials $ \project -> do
-                                void (rubyInstall project False >>= shouldFail)
-                                rubyInstalledTree project `shouldReturn` mempty
-                        after <- nativeTraffic observed
-                        interval <- nativeTrafficSince before after
-                        filter (T.isSuffixOf ".gem" . nativeRequestPath) (nativeUpstreamRequests interval) `shouldBe` []
-                        -- A private 401 answers a local 403, and Bundler's fallback reads stay refused.
-                        let clients = nativeClientRequests interval
-                        clients `shouldSatisfy` any (\request -> nativeRequestPath request == "/rubygems/versions" && nativeRequestStatus request == 403)
-                        map nativeRequestStatus clients `shouldSatisfy` notElem 401
-                        map nativeRequestStatus (filter (T.isPrefixOf "/rubygems/api/v1/dependencies" . nativeRequestPath) clients) `shouldSatisfy` all (== 404)
-                        observedCredentials <- readTVarIO (rubyRegistryCredentials registry)
-                        let public = [credential | (host, _, credential) <- observedCredentials, host == "rubygems-upstream"]
-                            private = [credential | (host, _, credential) <- observedCredentials, host == "rubygems-private"]
-                        public `shouldSatisfy` (not . null)
-                        public `shouldSatisfy` all isNothing
-                        private `shouldSatisfy` elem (Just "Basic cnVieTpyZWFk")
+        it (label "private-authority" "keeps authorised private names available while refusing anonymous and wrong callers") privateAuthorityCase
         it (label "native-surface" "serves native info and refuses retired or unsupported index routes without source reads") $ \plane ->
             withObservedNativeProxy defaultE2EConfig plane $ \observed -> do
                 let proxy = observedProxy observed
@@ -301,14 +250,86 @@ retainedCacheCase client plane = withRubyRegistry $ \registry -> do
                 after <- nativeTraffic observed
                 interval <- nativeTrafficSince before after
                 nativeClientRequests interval `shouldSatisfy` any (\request -> nativeRequestPath request == "/rubygems/info/ecluse-fixture-root" && nativeRequestStatus request == 200)
-                (_, info) <- proxyGet proxy "/rubygems/info/ecluse-fixture-root"
-                rows <- either (fail . toString) pure (referenceInfo (LBS.toStrict info))
+                rows <- rubyReadInfo proxy rubyRoot
                 rows `shouldSatisfy` any (elem ("checksum", releaseChecksum privateRoot) . rowFields)
                 seedRubyRegistry registry "rubygems-private" selected
                 setRubyRegistryFault registry "rubygems-private" RubyRegistryRequireRead
                 void (rubyUpdate project >>= shouldFail)
                 setRubyRegistryFault registry "rubygems-private" RubyRegistryHealthy
                 void (rubyUpdate project >>= shouldSucceed)
+
+-- A bare Range, Bundler's Range with a stale If-None-Match, and a matching If-Range each still receive the whole body.
+compactReplacementCase :: GlobalDataPlane -> IO ()
+compactReplacementCase plane = withRubyRegistry $ \registry -> do
+    -- rubygems.org hints each row with its info body's MD5, which no longer describes Écluse's rewritten body.
+    setRubyRegistryFault registry "rubygems-upstream" RubyRegistryInfoHints
+    withStubFault plane (RubyGemsBackend (rubyRegistryPort registry) False) $
+        withObservedNativeProxy defaultE2EConfig plane $ \observed -> do
+            let proxy = observedProxy observed
+            for_ ["/rubygems/versions", "/rubygems/info/ecluse-fixture-root"] $ \path -> do
+                ordinary <- proxyRequest "GET" [] "" proxy path
+                responseStatus ordinary `shouldBe` 200
+                tag <- maybe (fail "the Compact Index response emitted no ETag") pure (lookup "ETag" (responseHeaders ordinary))
+                for_ [[], [("If-None-Match", "\"stale-client-view\"")], [("If-Range", tag)]] $ \validators -> do
+                    replacement <- proxyRequest "GET" (("Range", "bytes=7-") : validators) "" proxy path
+                    responseStatus replacement `shouldBe` 200
+                    responseBody replacement `shouldBe` responseBody ordinary
+            upstream <- rubyRegistryDirectory registry "rubygems-upstream"
+            rootRows upstream `shouldSatisfy` (not . null)
+            rootRows upstream `shouldSatisfy` all ((== 32) . T.length . T.takeWhileEnd (/= ' '))
+            (_, directory) <- proxyGet proxy "/rubygems/versions"
+            let rows = rootRows (decodeUtf8 (LBS.toStrict directory))
+            rows `shouldSatisfy` (not . null)
+            rows `shouldSatisfy` all (T.isSuffixOf " ")
+            native <- rubyReadInfo proxy rubyRoot
+            native `shouldSatisfy` (not . null)
+            releases <- filter ((== rubyRoot) . releaseName) <$> loadRubyReleases
+            for_ native $ \row -> do
+                release <- rubyRelease releases rubyRoot (rowVersion row) (rowPlatform row)
+                rowFields row `shouldSatisfy` elem ("checksum", releaseChecksum release)
+  where
+    rootRows = filter (T.isPrefixOf "ecluse-fixture-root ") . T.lines
+
+-- The authorised install runs where rules deny every public row, so only private reads can supply it.
+-- Refused callers run where rules admit the public namesake, so only the private refusal can stop them.
+privateAuthorityCase :: GlobalDataPlane -> IO ()
+privateAuthorityCase plane = for_ [minimumBundler, currentBundler] $ \client -> withRubyRegistry $ \registry -> do
+    releases <- loadRubyReleases
+    selected <- traverse (\name -> rubyRelease releases name rubyVersion "ruby") [rubyRoot, rubyLeaf]
+    root <- rubyRelease releases rubyRoot rubyVersion "ruby"
+    seedRubyRegistry registry "rubygems-private" selected
+    setRubyRegistryFault registry "rubygems-private" RubyRegistryRequireRead
+    let private = [("ECLUSE_MOUNTS__RUBYGEMS__PRIVATE_UPSTREAM__REGISTRY__URL", stubUrl RubyGemsPrivate)]
+    withStubFault plane (RubyGemsBackend (rubyRegistryPort registry) False) $ do
+        withObservedNativeProxy rubyDeniedConfig{ecExtraEnv = ecExtraEnv rubyDeniedConfig <> private} plane $ \observed -> do
+            let proxy = observedProxy observed
+            withRubyProject client proxy (e2eBaseUrl proxy <> "/rubygems/") (Just "ruby:read") $ \project -> do
+                void (rubyInstall project False >>= shouldSucceed)
+                assertRubyContents project "ecluse-fixture-leaf-1.0.0-ruby|root-1.0.0"
+        withObservedNativeProxy defaultE2EConfig{ecExtraEnv = private} plane $ \observed -> do
+            let proxy = observedProxy observed
+            forM_ [(Nothing, []), (Just "ruby:wrong", [("Authorization", "Basic cnVieTp3cm9uZw==")])] $ \(credentials, authorisation) -> do
+                before <- nativeTraffic observed
+                withRubyProject client proxy (e2eBaseUrl proxy <> "/rubygems/") credentials $ \project -> do
+                    void (rubyInstall project False >>= shouldFail)
+                    rubyInstalledTree project `shouldReturn` mempty
+                -- Bundler stops at discovery, so the per-gem routes are asked directly.
+                for_ ["/rubygems/info/" <> rubyRoot, rubyArchiveRoute root] $ \path ->
+                    (responseStatus <$> proxyRequest "GET" authorisation "" proxy path) `shouldReturn` 403
+                after <- nativeTraffic observed
+                interval <- nativeTrafficSince before after
+                -- A private 401 answers a local 403 for every caller, and Bundler's fallback reads stay refused.
+                let clients = nativeClientRequests interval
+                clients `shouldSatisfy` any (\request -> nativeRequestPath request == "/rubygems/versions" && nativeRequestStatus request == 403)
+                map nativeRequestStatus clients `shouldSatisfy` notElem 401
+                map nativeRequestStatus (filter (T.isPrefixOf "/rubygems/api/v1/dependencies" . nativeRequestPath) clients) `shouldSatisfy` all (== 404)
+                filter (\request -> nativeRequestHost request == "rubygems-upstream" && T.isSuffixOf ".gem" (nativeRequestPath request)) (nativeUpstreamRequests interval) `shouldBe` []
+    observedCredentials <- readTVarIO (rubyRegistryCredentials registry)
+    let public = [credential | (host, _, credential) <- observedCredentials, host == "rubygems-upstream"]
+        privateCredentials = [credential | (host, _, credential) <- observedCredentials, host == "rubygems-private"]
+    public `shouldSatisfy` (not . null)
+    public `shouldSatisfy` all isNothing
+    privateCredentials `shouldSatisfy` elem (Just "Basic cnVieTpyZWFk")
 
 compactRequiredCase :: BundlerClient -> Bool -> Int -> GlobalDataPlane -> IO ()
 compactRequiredCase client failInfo status plane = withRubyRegistry $ \registry -> do

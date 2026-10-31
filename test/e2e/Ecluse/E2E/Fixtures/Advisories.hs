@@ -19,6 +19,9 @@ module Ecluse.E2E.Fixtures.Advisories (
     partialFixExportBase,
     partialFixAdvisoryId,
     partialFixRemainingAdvisoryId,
+    epssProofExportBase,
+    epssControlExportBase,
+    cvssControlExportBase,
     buildAdvisoryFixtures,
     ecosystemAdvisory,
 ) where
@@ -91,6 +94,18 @@ partialFixAdvisoryId = "GHSA-e2e-partial-severe"
 partialFixRemainingAdvisoryId :: Text
 partialFixRemainingAdvisoryId = "GHSA-e2e-partial-minor"
 
+-- | Each ecosystem's EPSS denial export: its advisory with no CVSS vector, so only EPSS 0.875 can deny.
+epssProofExportBase :: Text
+epssProofExportBase = "advisories/epss-proof"
+
+-- | Each ecosystem's EPSS control export: its advisory with CVSS 9.8 and EPSS 0.0625, below a 0.5 deny.
+epssControlExportBase :: Text
+epssControlExportBase = "advisories/epss-control"
+
+-- | Each ecosystem's CVSS control export: its advisory with CVSS 4.2, below a 7.0 deny.
+cvssControlExportBase :: Text
+cvssControlExportBase = "advisories/cvss-control"
+
 -- | Write the local OSV archives and shared EPSS slice without reaching public feeds.
 buildAdvisoryFixtures :: FilePath -> IO ()
 buildAdvisoryFixtures root = do
@@ -111,9 +126,15 @@ buildAdvisoryFixtures root = do
     maliciousZip Cargo [("ecluse-e2e-advisory", ["1.18.0"])] Nothing >>= writeUnder (maliciousExportBase <> "/crates.io/all.zip")
     maliciousZip Npm [(psName corpusRevokedPkg, ["1.0.0"])] Nothing >>= writeUnder (maliciousExportBase <> "/npm/all.zip")
     maliciousZip PyPI [("Flask", ["1.18"])] Nothing >>= writeUnder (maliciousExportBase <> "/PyPI/all.zip")
-    for_ [(Npm, "npm", "e2e-advisory", "1.19.0"), (PyPI, "PyPI", "Flask", "1.19"), (Cargo, "crates.io", "ecluse-e2e-advisory", "1.19.0"), (RubyGems, "RubyGems", "ecluse-fixture-advisory", "1.19.0")] $ \(ecosystem, directory, name, fixed) ->
+    for_ [(Npm, "npm", "e2e-advisory", "1.19.0", npmAdvisoryId), (PyPI, "PyPI", "Flask", "1.19", pypiAdvisoryId), (Cargo, "crates.io", "ecluse-e2e-advisory", "1.19.0", cargoAdvisoryId), (RubyGems, "RubyGems", "ecluse-fixture-advisory", "1.19.0", rubyAdvisoryId)] $ \(ecosystem, directory, name, fixed, advisory) -> do
         osvZipOf [("severe.json", ecosystemAdvisory ecosystem partialFixAdvisoryId name fixed), ("minor.json", minorAdvisory ecosystem name fixed)]
             >>= writeUnder (partialFixExportBase <> "/" <> directory <> "/all.zip")
+        osvZipOf [("epss.json", scoredAdvisory ecosystem advisory "CVE-2026-10001" Nothing name (fixedAt fixed))]
+            >>= writeUnder (epssProofExportBase <> "/" <> directory <> "/all.zip")
+        osvZipOf [("epss.json", scoredAdvisory ecosystem advisory "CVE-2026-10004" (Just severeVector) name (fixedAt fixed))]
+            >>= writeUnder (epssControlExportBase <> "/" <> directory <> "/all.zip")
+        osvZipOf [("cvss.json", scoredAdvisory ecosystem advisory "CVE-2026-10001" (Just minorVector) name (fixedAt fixed))]
+            >>= writeUnder (cvssControlExportBase <> "/" <> directory <> "/all.zip")
     epssFixtureWith [(minorAlias, "0.005")] >>= writeUnder advisoryEpssPath
   where
     writeUnder relative bytes = do
@@ -124,27 +145,39 @@ buildAdvisoryFixtures root = do
 -- | A scored native advisory with one fixed boundary and no feed-specific decoration.
 ecosystemAdvisory :: Ecosystem -> Text -> Text -> Text -> LByteString
 ecosystemAdvisory ecosystem advisory name fixed =
-    scoredAdvisory ecosystem advisory "CVE-2026-10001" "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H" name [object ["introduced" .= ("0" :: Text)], object ["fixed" .= fixed]]
+    scoredAdvisory ecosystem advisory "CVE-2026-10001" (Just severeVector) name (fixedAt fixed)
+
+-- Every release before the fix is affected.
+fixedAt :: Text -> [Value]
+fixedAt fixed = [object ["introduced" .= ("0" :: Text)], object ["fixed" .= fixed]]
+
+-- The CVSS 3.1 vector scoring 9.8.
+severeVector :: Text
+severeVector = "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H"
+
+-- The CVSS 3.1 vector scoring 4.2.
+minorVector :: Text
+minorVector = "CVSS:3.1/AV:N/AC:H/PR:N/UI:R/S:U/C:L/I:L/A:N"
 
 -- The partial fix's remaining advisory: CVSS 4.2 and the EPSS 'minorAlias' carries, from the fix on.
 minorAdvisory :: Ecosystem -> Text -> Text -> LByteString
 minorAdvisory ecosystem name fixed =
-    scoredAdvisory ecosystem partialFixRemainingAdvisoryId minorAlias "CVSS:3.1/AV:N/AC:H/PR:N/UI:R/S:U/C:L/I:L/A:N" name [object ["introduced" .= fixed]]
+    scoredAdvisory ecosystem partialFixRemainingAdvisoryId minorAlias (Just minorVector) name [object ["introduced" .= fixed]]
 
 minorAlias :: Text
 minorAlias = "CVE-2026-10007"
 
-scoredAdvisory :: Ecosystem -> Text -> Text -> Text -> Text -> [Value] -> LByteString
+scoredAdvisory :: Ecosystem -> Text -> Text -> Maybe Text -> Text -> [Value] -> LByteString
 scoredAdvisory ecosystem advisory alias vector name events =
-    encode $
-        object
-            [ "id" .= advisory
-            , "aliases" .= [alias]
-            , "severity" .= [object ["type" .= ("CVSS_V3" :: Text), "score" .= vector]]
-            , "affected"
-                .= [ object
-                        [ "package" .= object ["name" .= name, "ecosystem" .= (case ecosystem of PyPI -> "PyPI"; Cargo -> "crates.io"; RubyGems -> "RubyGems"; _ -> "npm" :: Text)]
-                        , "ranges" .= [object ["type" .= (if ecosystem `elem` [PyPI, RubyGems] then "ECOSYSTEM" else "SEMVER" :: Text), "events" .= events]]
-                        ]
-                   ]
-            ]
+    encode . object $
+        [ "id" .= advisory
+        , "aliases" .= [alias]
+        ]
+            <> ["severity" .= [object ["type" .= ("CVSS_V3" :: Text), "score" .= score]] | Just score <- [vector]]
+            <> [ "affected"
+                    .= [ object
+                            [ "package" .= object ["name" .= name, "ecosystem" .= (case ecosystem of PyPI -> "PyPI"; Cargo -> "crates.io"; RubyGems -> "RubyGems"; _ -> "npm" :: Text)]
+                            , "ranges" .= [object ["type" .= (if ecosystem `elem` [PyPI, RubyGems] then "ECOSYSTEM" else "SEMVER" :: Text), "events" .= events]]
+                            ]
+                       ]
+               ]

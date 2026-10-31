@@ -8,6 +8,7 @@ module Ecluse.Integration.Collector (
     Collector (collectorEndpoint),
     withCollector,
     awaitCollectorLine,
+    collectorOutput,
 
     -- * Pointing the SDK at it
     withSdkEnv,
@@ -52,6 +53,10 @@ awaitCollectorLine collector needle attempts =
   where
     needleBytes :: ByteString
     needleBytes = encodeUtf8 needle
+
+-- | The collector's output so far, one line per log line, in the order it printed them.
+collectorOutput :: Collector -> IO Text
+collectorOutput collector = decodeUtf8 . BS.intercalate "\n" . map (BS.dropWhileEnd (`elem` [10, 13])) . reverse <$> readIORef (collectorLogs collector)
 
 -- | Set the SDK endpoint and signal exporter settings, restoring the environment on exit.
 withSdkEnv :: Text -> [(String, String)] -> IO a -> IO a

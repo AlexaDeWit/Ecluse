@@ -5,7 +5,6 @@
 -- | Native RubyGems OSV generations drive real Bundler advisory and remediation observations.
 module Ecluse.E2E.RubyGems.AdvisoriesE2ESpec (rubyAdvisoryFamily) where
 
-import Data.ByteString.Lazy qualified as LBS
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 
@@ -19,7 +18,7 @@ import Ecluse.E2E.RubyGems.InstallE2ESpec (rubyConsumer)
 import Ecluse.Test.Contract.Ecosystem (FamilyFixture)
 import Ecluse.Test.Contract.Install.Advisory
 import Ecluse.Test.Registry.RubyGems.Fixtures
-import Ecluse.Test.Registry.RubyGems.Reference (RubyInfoRow (..), referenceInfo)
+import Ecluse.Test.Registry.RubyGems.Reference (RubyInfoRow (..))
 
 -- | CVSS, EPSS, malicious denial and exact/partial fixes keep independent source and client lifetimes.
 rubyAdvisoryFamily :: FamilyFixture AdvisoryScenarioDriver
@@ -37,9 +36,7 @@ rubyAdvisoryFamily = scenarioFamily fixture RubyGems rubyGemsTopology{topologyAw
 
 infoCoordinates :: E2E -> IO [(Text, Text, Text)]
 infoCoordinates proxy = do
-    (status, bytes) <- proxyGet proxy "/rubygems/info/ecluse-fixture-advisory"
-    unless (status == 200) (fail "Ruby advisory info listing failed")
-    rows <- either (fail . toString) pure (referenceInfo (LBS.toStrict bytes))
+    rows <- rubyReadInfo proxy "ecluse-fixture-advisory"
     pure [("ecluse-fixture-advisory", rowVersion row, rowPlatform row) | row <- rows]
 
 releaseDriver :: E2E -> Text -> IO AdvisoryDriver

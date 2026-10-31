@@ -7,14 +7,11 @@ module Ecluse.Test.RegistryCapture (
     -- * The curated catalogue
     Catalogue (..),
     loadCatalogue,
-    decodeCatalogue,
     smokeRegistryPackages,
 
     -- * The live registry fetch
-    registryUrl,
     fetchPackumentBody,
     fetchVersions,
-    parseRegistryVersions,
 ) where
 
 import Data.Aeson (FromJSON (parseJSON), Object, eitherDecode, withObject, (.:))
@@ -66,10 +63,6 @@ catalogueFields o = do
         Just eco -> pure (eco, vs)
         Nothing -> fail ("RegistryCapture: unknown ecosystem key in smokeNames: " <> toString k)
 
--- | Decode a 'Catalogue' from raw JSON bytes.
-decodeCatalogue :: LByteString -> Either String Catalogue
-decodeCatalogue = eitherDecode
-
 -- | Fail on a missing or malformed committed catalogue.
 loadCatalogue :: IO Catalogue
 loadCatalogue = readCorpusPins catalogueFields >>= either fail pure
@@ -78,7 +71,7 @@ loadCatalogue = readCorpusPins catalogueFields >>= either fail pure
 smokeRegistryPackages :: Catalogue -> [(Ecosystem, [Text])]
 smokeRegistryPackages = Map.toList . catSmokeNames
 
--- | The versions endpoint, with scoped npm names percent-encoded.
+-- The versions endpoint, with scoped npm names percent-encoded.
 registryUrl :: Ecosystem -> Text -> Text
 registryUrl eco pkg = case eco of
     Npm -> "https://registry.npmjs.org/" <> T.replace "/" "%2F" pkg
@@ -110,7 +103,7 @@ fetchVersions :: Manager -> Ecosystem -> Text -> IO (Maybe [Text])
 fetchVersions manager eco pkg =
     (>>= parseRegistryVersions eco) <$> fetchPackumentBody manager eco pkg
 
--- | Read published versions through each ecosystem's wire decoder.
+-- Read published versions through each ecosystem's wire decoder.
 parseRegistryVersions :: Ecosystem -> LByteString -> Maybe [Text]
 parseRegistryVersions eco body = case eco of
     Npm -> rightToMaybe (map renderVersion <$> parseVersionBytes (BSL.toStrict body))

@@ -17,6 +17,7 @@ module Ecluse.Test.Package (
     defaultMinTrustedIntegrity,
 
     -- * Rendering digest fixtures
+    hexMd5Of,
     hexSha1Of,
     hexSha256Of,
     hexSha384Of,
@@ -27,6 +28,7 @@ module Ecluse.Test.Package (
     sriSha512Of,
     hexSha1OfLazy,
     sriSha512OfLazy,
+    base64Of,
 
     -- * Canonical digest fixtures
     validSha1,
@@ -62,7 +64,7 @@ module Ecluse.Test.Package (
 ) where
 
 import Control.Exception (throw)
-import Crypto.Hash (Blake2b_512, Digest, SHA1, SHA256, SHA384, SHA512, hash, hashlazy)
+import Crypto.Hash (Blake2b_512, Digest, MD5, SHA1, SHA256, SHA384, SHA512, hash, hashlazy)
 import Data.Aeson (Value (Object))
 import Data.ByteArray (ByteArrayAccess)
 import Data.ByteArray.Encoding (Base (Base16, Base64), convertToBase)
@@ -141,7 +143,8 @@ fixtureValue :: Either Text a -> a
 fixtureValue = either (throw . InvalidPackageFixture) id
 
 -- | Lower-case hexadecimal digests for fixture bytes, named by algorithm.
-hexSha1Of, hexSha256Of, hexSha384Of, hexSha512Of, hexBlake2bOf :: ByteString -> Text
+hexMd5Of, hexSha1Of, hexSha256Of, hexSha384Of, hexSha512Of, hexBlake2bOf :: ByteString -> Text
+hexMd5Of bytes = renderBase Base16 (hash bytes :: Digest MD5)
 hexSha1Of bytes = renderBase Base16 (hash bytes :: Digest SHA1)
 hexSha256Of bytes = renderBase Base16 (hash bytes :: Digest SHA256)
 hexSha384Of bytes = renderBase Base16 (hash bytes :: Digest SHA384)
@@ -158,6 +161,10 @@ sriSha512Of bytes = renderSri "sha512-" (hash bytes :: Digest SHA512)
 hexSha1OfLazy, sriSha512OfLazy :: LByteString -> Text
 hexSha1OfLazy bytes = renderBase Base16 (hashlazy bytes :: Digest SHA1)
 sriSha512OfLazy bytes = renderSri "sha512-" (hashlazy bytes :: Digest SHA512)
+
+-- | Standard base64 of fixture bytes, the encoding of an npm publish attachment's @data@.
+base64Of :: ByteString -> Text
+base64Of = renderBase Base64
 
 renderSri :: (ByteArrayAccess digest) => Text -> digest -> Text
 renderSri prefix digest = prefix <> renderBase Base64 digest

@@ -7,8 +7,6 @@ module Ecluse.Test.Corpus.Outputs (
     CorpusRead (..),
     captureOutputs,
     recordedOutputs,
-    captureOutputKey,
-    recordedOutputsFrom,
     rendered,
     releaseFacts,
     selectedFacts,
@@ -138,13 +136,13 @@ line package (label, bytes) = T.intercalate "\t" [captureOutputKey package, labe
 recordedOutputs :: CorpusPackage -> IO [Text]
 recordedOutputs package = recordedOutputsFrom package . lines . decodeUtf8 <$> readFileBS "core/test/unit/fixtures/corpus-outputs.tsv"
 
--- | New captures use versioned paths. Only fixed historical owners receive unqualified keys.
+-- New captures use versioned paths. Only fixed historical owners receive unqualified keys.
 captureOutputKey :: CorpusPackage -> Text
 captureOutputKey package = case Map.lookup (pkgEcosystem (cpPackage package), cpPath package) legacyOutputOwners of
     Just owner | owner == cpName package -> owner
     _ -> "v2:" <> toText (cpPath package)
 
--- | Preserve owned rows and their order, including malformed output fields for the exact comparison.
+-- Preserve owned rows and their order, including malformed output fields for the exact comparison.
 recordedOutputsFrom :: CorpusPackage -> [Text] -> [Text]
 recordedOutputsFrom package = filter ((== captureOutputKey package) . T.takeWhile (/= '\t'))
 

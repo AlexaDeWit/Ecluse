@@ -15,6 +15,7 @@ module Ecluse.E2E.Harness.RubyGemsRegistry (
     seedRubyRegistry,
     rubyRegistryVersions,
     rubyRegistryFiles,
+    rubyRegistryDirectory,
     awaitRubyRegistry,
     awaitBlockedRubyUpload,
     releaseBlockedRubyUpload,
@@ -38,6 +39,7 @@ import UnliftIO.STM (checkSTM)
 import Ecluse.Core.Security.Limits (BodyLimit (PublishRequestBodyLimit), boundedRead)
 import Ecluse.E2E.Harness.Container (withBridgeApplication)
 import Ecluse.E2E.Harness.NativeEdge (NativeRequest (..))
+import Ecluse.Test.Package (hexMd5Of)
 import Ecluse.Test.Poll (pollUntil)
 import Ecluse.Test.Registry.RubyGems.Fixtures
 import Ecluse.Test.Registry.RubyGems.Reference (runRubyReference)
@@ -54,6 +56,7 @@ data RubyRegistryFault
     | RubyRegistryCompactBytes FilePath ByteString
     | RubyRegistryRejectUpload Text
     | RubyRegistryStopAfterOne
+    | RubyRegistryInfoHints
     deriving stock (Eq, Show)
 
 -- | Programmable native responses retain real status, framing and chunk boundaries.
@@ -125,6 +128,12 @@ removeRubyRegistryVersion registry host name version =
 rubyRegistryFiles :: RubyRegistry -> Text -> IO [RubyRelease]
 rubyRegistryFiles registry host = map snd . filter ((== host) . fst . fst) . Map.toList <$> readTVarIO (rubyRegistryInventory registry)
 
+-- | The discovery body one authority serves now, hinted rows included.
+rubyRegistryDirectory :: RubyRegistry -> Text -> IO Text
+rubyRegistryDirectory registry host = do
+    fault <- Map.findWithDefault RubyRegistryHealthy host <$> readTVarIO (rubyRegistryFaults registry)
+    directoryBody host fault <$> rubyRegistryFiles registry host
+
 -- | Whole raw versions remain distinct from individual platform artifacts.
 rubyRegistryVersions :: RubyRegistry -> Text -> Text -> IO [Text]
 rubyRegistryVersions registry host name = sort . ordNub . map releaseVersion . filter ((== name) . releaseName) <$> rubyRegistryFiles registry host
@@ -179,7 +188,7 @@ rubyRegistryApplication registry request respond = do
                     (readMethod, ["versions"]) | readMethod `elem` ["GET", "HEAD"] ->
                         case fault of
                             RubyRegistryDirectoryStatus status -> send (mkStatus status "native directory failure") [] "native directory unavailable"
-                            _ -> send status200 [("Content-Type", "text/plain")] (LBS.fromStrict (encodeUtf8 (rubyVersions stored)))
+                            _ -> send status200 [("Content-Type", "text/plain")] (LBS.fromStrict (encodeUtf8 (directoryBody host fault stored)))
                     (readMethod, ["api", "v1", "dependencies"]) | readMethod `elem` ["GET", "HEAD"] -> do
                         let names = maybe [] (T.splitOn "," . decodeUtf8) (join (lookup "gems" (Wai.queryString request)))
                             rows = [releaseManifest release | release <- stored, releaseName release `elem` names]
@@ -195,10 +204,7 @@ rubyRegistryApplication registry request respond = do
                         let releases = filter ((== name) . releaseName) stored
                         if null releases
                             then send status404 [] ""
-                            else do
-                                let rows = map releaseInfoRow releases
-                                    assigned = if host == "rubygems-upstream" then id else T.replace "2020-01-01T00:00:00Z" "2030-01-01T00:00:00Z" . T.replace "2020-01-03T00:00:00Z" "2030-01-03T00:00:00Z"
-                                send status200 [("Content-Type", "text/plain")] (LBS.fromStrict (encodeUtf8 ("---\n" <> T.unlines (map assigned rows))))
+                            else send status200 [("Content-Type", "text/plain")] (LBS.fromStrict (encodeUtf8 (infoBody host releases)))
                     (readMethod, ["gems", filename]) | readMethod `elem` ["GET", "HEAD"] ->
                         case find ((== filename) . releaseFilename) stored of
                             Just release | fault /= RubyRegistryMissingArchive filename -> serveArchive registry host request release send respond
@@ -213,6 +219,18 @@ rubyRegistryApplication registry request respond = do
                             _ -> send status404 [] ""
                     ("DELETE", _) -> send status405 [] "native yank is not physical deletion"
                     _ -> send status404 [] ""
+
+-- A hinted row carries the MD5 of the info body this authority serves for the name, as rubygems.org's rows do.
+directoryBody :: Text -> RubyRegistryFault -> [RubyRelease] -> Text
+directoryBody host fault stored = case fault of
+    RubyRegistryInfoHints -> rubyVersionsWith (\name -> hexMd5Of (encodeUtf8 (infoBody host (filter ((== name) . releaseName) stored)))) stored
+    _ -> rubyVersions stored
+
+-- Only the public authority keeps the fixture's publication times. Every other authority dates its rows 2030.
+infoBody :: Text -> [RubyRelease] -> Text
+infoBody host releases = "---\n" <> T.unlines (map (assigned . releaseInfoRow) releases)
+  where
+    assigned = if host == "rubygems-upstream" then id else T.replace "2020-01-01T00:00:00Z" "2030-01-01T00:00:00Z" . T.replace "2020-01-03T00:00:00Z" "2030-01-03T00:00:00Z"
 
 serveArchive :: RubyRegistry -> Text -> Wai.Request -> RubyRelease -> (Status -> ResponseHeaders -> LBS.ByteString -> IO Wai.ResponseReceived) -> (Wai.Response -> IO Wai.ResponseReceived) -> IO Wai.ResponseReceived
 serveArchive registry host request release send respond = do

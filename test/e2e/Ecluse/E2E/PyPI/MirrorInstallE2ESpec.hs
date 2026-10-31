@@ -26,6 +26,7 @@ import Ecluse.Test.Contract.Mirror
 import Ecluse.Test.Contract.Phase (timedFixture)
 import Ecluse.Test.Contract.Runner (DeclaredGroup (..))
 import Ecluse.Test.Contract.Types (Group)
+import Ecluse.Test.Log (lineMessage)
 import UnliftIO (finally)
 
 -- | Native protocol and recovery obligations complement the full ecosystem laws.
@@ -51,8 +52,19 @@ completeScenario plane target distributions fault = do
     control <- coldInstall plane config
     targetFiles target `shouldReturn` Map.empty
     setUploadFault target fault
-    withE2EWith config (\proxy -> awaitWholeMirror proxy target distributions) plane
+    withE2EWith
+        config
+        ( \proxy -> do
+            awaitWholeMirror proxy target distributions
+            -- The worker must have seen the lost reply as one, and retried the job after it.
+            when (fault == LoseNextReply) $
+                awaitProxyLog proxy (any retriedAfterTransportFault . mapMaybe lineMessage . T.lines) 1 `shouldReturn` True
+        )
+        plane
     verifyHot plane target distributions control
+  where
+    retriedAfterTransportFault message =
+        "leaving mirror job un-acked for retry" `T.isPrefixOf` message && "publish transport failure" `T.isInfixOf` message
 
 interruptedScenario :: GlobalDataPlane -> NativeTarget -> [Distribution] -> IO ()
 interruptedScenario plane target distributions = do
