@@ -26,7 +26,7 @@ import Ecluse.Test.Deadline (withExchangeClient)
 import Ecluse.Test.Registry.Metadata.Fetch (fetchTestBody)
 import Ecluse.Test.Registry.Npm (defaultNpmConfig)
 import Ecluse.Test.Registry.Npm.Metadata (fetchMetadataFormBounded)
-import Ecluse.Test.Stub (Stub, allCaptured, stubBaseUrl, stubPort, withStub, withStubHeaders)
+import Ecluse.Test.Stub (Stub, allCaptured, headerValue, stubBaseUrl, stubPort, withStub, withStubHeaders)
 import Ecluse.Test.Support (expectRight)
 
 -- | Exercise test-only loopback HTTP and refused redirects through the npm fetch path.
@@ -34,18 +34,20 @@ spec :: Spec
 spec = do
     describe "egress over the validating manager (loopback http opt-in)" $ do
         it (caseLabel "integration/egress/native-001" "reaches a loopback upstream addressed through the test-only http opt-in") $
-            withUpstream $ \port -> do
+            withUpstream $ \upstream -> do
                 withExchangeClient (newManager defaultManagerSettings) $ \exchanges -> do
-                    response <- fetchMetadata exchanges port Nothing
+                    response <- fetchMetadata exchanges (stubPort upstream) Nothing
                     fmap responseBody response `shouldBe` Right (toStrict (encode packument))
+                    map (headerValue "Authorization") <$> allCaptured upstream `shouldReturn` [Nothing]
 
         it (caseLabel "integration/egress/native-002" "uses the same validating manager for a credential-forwarding (private-origin) fetch") $
             -- The split is the credential, not the manager: a token-forwarding read reaches
-            -- the same loopback upstream over the same validating manager.
-            withUpstream $ \port -> do
+            -- the same loopback upstream over the same validating manager, carrying the token.
+            withUpstream $ \upstream -> do
                 withExchangeClient (newManager defaultManagerSettings) $ \exchanges -> do
-                    response <- fetchMetadata exchanges port (Just "tok")
+                    response <- fetchMetadata exchanges (stubPort upstream) (Just "tok")
                     fmap responseBody response `shouldBe` Right (toStrict (encode packument))
+                    map (headerValue "Authorization") <$> allCaptured upstream `shouldReturn` [Just "Bearer tok"]
 
     describe "no upstream redirect is followed (redirectCount = 0)" $ do
         it (caseLabel "integration/egress/native-003" "returns the original 302 without contacting the local target") $
@@ -78,8 +80,8 @@ clientConfig manager port token =
         }
 
 -- Run an action against an in-process upstream serving the packument on loopback.
-withUpstream :: (Port -> IO a) -> IO a
-withUpstream k = withStub status200 (encode packument) (k . stubPort)
+withUpstream :: (Stub -> IO a) -> IO a
+withUpstream = withStub status200 (encode packument)
 
 withRedirector :: (Stub -> Stub -> IO a) -> IO a
 withRedirector action =
