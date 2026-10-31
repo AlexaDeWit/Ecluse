@@ -675,12 +675,16 @@ noSurvivors replies help status decisions = case status of
 
 collectDecisions :: OriginResult -> OriginResult -> [ServeDecision] -> [ServeDecision]
 collectDecisions privResult pubResult exclusions =
-    privateLeg <> publicDecision pubResult <> exclusions
+    privateLeg <> publicLeg <> exclusions
   where
     -- A private 404 beside a public document the gate refused in full is settled, so the refusals decide.
     privateLeg = case (privResult, pubResult) of
         (OriginNotFound, OriginResolved _) | packumentStatus exclusions == PackumentDenied -> []
         _ -> privateDecision privResult
+    -- With no private origin the public one is the only source, so its outage refuses as a private one does.
+    publicLeg = case (privResult, pubResult) of
+        (OriginAbsent, OriginUnresolved (ReadUnavailable retry)) -> [neededUpstreamUnavailable retry]
+        _ -> publicDecision pubResult
 
 privateDecision :: OriginResult -> [ServeDecision]
 privateDecision = \case

@@ -270,7 +270,8 @@ track which input a survivor came from, so assembly can select its retained sour
 - **Public availability.** If the public upstream fails while the private one succeeds, the merge
   serves the private-only union with a degraded signal (readiness stays
   [lenient about public reachability](web-layer.md#meta-routes-ping-health-and-search)). Only when
-  nothing resolves does the request error.
+  nothing resolves does the request error. A mount with no private upstream has no other source,
+  so an unavailable public upstream refuses its listings with `503`, as a private outage does.
 
 A packument request filters but never mirrors. See
 [Applying verdicts to a packument](rules-engine.md#applying-verdicts-to-a-packument).

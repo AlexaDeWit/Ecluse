@@ -108,8 +108,9 @@ data OriginResult
       OriginNameMismatch
     | -- | The origin answered 404, so it holds no such package. It degrades to no contribution.
       OriginNotFound
-    | {- | The origin was not read, for this cause. A public one contributes nothing, and a private
-      one refuses the request.
+    | {- | The origin was not read, for this cause. A private one refuses the request. A public one
+      contributes nothing, unless it was unavailable on a mount with no private origin, where it
+      refuses the listing.
       -}
       OriginUnresolved ReadFailure
     | -- | Public reads are suspended until the authority cooldown expires.
