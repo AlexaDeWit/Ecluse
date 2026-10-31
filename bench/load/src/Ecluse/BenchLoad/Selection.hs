@@ -34,7 +34,7 @@ fixtureSection ecosystem sections =
 
 -- | Identify the shared conditions independently of scenario names and workload settings.
 measurementConditionVersion :: Text
-measurementConditionVersion = "unified-v2"
+measurementConditionVersion = "unified-v3"
 
 -- | Keep an eviction cache below its working set, refusing a set too small to churn.
 evictionEntries :: Int -> Int -> Either Text Int

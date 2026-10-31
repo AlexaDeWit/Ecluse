@@ -7,6 +7,9 @@ module Ecluse.BenchLoad.ReportLabels (
     loadRow,
     loadCell,
     parseLoadCell,
+    latencyRow,
+    latencyCell,
+    parseLatencyCell,
     memoryPeakColumn,
     postureRow,
     admissionRow,
@@ -30,6 +33,20 @@ loadCell connections seconds = show connections <> " connections x " <> show sec
 parseLoadCell :: Text -> Maybe (Int, Int)
 parseLoadCell cell = case words cell of
     connections : "connections" : "x" : seconds : "s" : _ -> (,) <$> readMaybe (toString connections) <*> readMaybe (toString seconds)
+    _ -> Nothing
+
+-- | The operating point row with the latency every stub upstream injects.
+latencyRow :: Text
+latencyRow = "injected upstream latency"
+
+-- | The latency row's value for this injected latency in microseconds.
+latencyCell :: Int -> Text
+latencyCell micros = show (micros `div` 1_000) <> "." <> show ((micros `mod` 1_000) `div` 100) <> " ms"
+
+-- | The injected latency in whole milliseconds a latency row's value states.
+parseLatencyCell :: Text -> Maybe Int
+parseLatencyCell cell = case words cell of
+    [value, "ms"] -> readMaybe (takeWhile (/= '.') (toString value))
     _ -> Nothing
 
 -- | The at-a-glance column with the cgroup's @memory.peak@ and @memory.max@.

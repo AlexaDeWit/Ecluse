@@ -4,8 +4,8 @@
 
 {- | Run the loaded and concurrency-one passes for each ecosystem fixture under one pod shape, or
 the GC-thrash probe across a series of memory limits. Each scenario runs in a child process that
-prints one JSON report and boots its own proxy process. The driver renders the Markdown artifact,
-then fails the run if any invariant broke.
+prints one JSON report and boots its own proxy process. After the last pass the driver re-runs each
+breached scenario pass, renders the Markdown artifact, then fails the run if any invariant broke.
 -}
 module Main (main) where
 
@@ -31,9 +31,9 @@ import UnliftIO.Exception (tryAny)
 import Ecluse.BenchLoad.Cargo (cargoLoadNotes)
 import Ecluse.BenchLoad.Error (benchFail)
 import Ecluse.BenchLoad.Evidence (loadEvidence)
-import Ecluse.BenchLoad.Fixture (probeBaseline)
+import Ecluse.BenchLoad.Fixture (probeLiveFetch)
 import Ecluse.BenchLoad.Floors (
-    Calibration (calConditions, calRetainedConditions),
+    Calibration (calConditions),
     Enforcement (NotHeld),
     FloorKey,
     Floors (floorsCalibration),
@@ -58,7 +58,7 @@ import Ecluse.BenchLoad.Harness (
     reportEvidence,
     runScenario,
  )
-import Ecluse.BenchLoad.Normalise (BaselineSource (InjectedFallback, MeasuredRtt))
+import Ecluse.BenchLoad.Normalise (LiveFetch (NoLiveFetch))
 import Ecluse.BenchLoad.Oha (ohaPinned)
 import Ecluse.BenchLoad.Placement (runnerProcessors, withHarnessPlacement)
 import Ecluse.BenchLoad.Pod (PodShape (Limited), ProxyTuning (ptCpus), renderPodShape)
@@ -66,12 +66,12 @@ import Ecluse.BenchLoad.Profile (parseLoadProfile, selectProfile)
 import Ecluse.BenchLoad.ProxyProcess (podShapeFromEnv, serveProxyFlag, sweepProxyCgroups)
 import Ecluse.BenchLoad.ProxyServe (runServeProxy)
 import Ecluse.BenchLoad.PyPI (pypiLoadNotes)
-import Ecluse.BenchLoad.Report (Section (..), renderFloors, renderLoadSaturation, renderReports, renderServiceTime, renderThrash, renderVerdict)
+import Ecluse.BenchLoad.Report (Section (..), renderConfirmations, renderFloors, renderLoadSaturation, renderReports, renderServiceTime, renderThrash, renderVerdict)
 import Ecluse.BenchLoad.RtsProbe (rtsStatsFlag)
 import Ecluse.BenchLoad.RubyGems (rubyGemsLoadNotes)
 import Ecluse.BenchLoad.Scenarios (checkFixtureCoverage, checkedCounts, findScenario, fixtures, runsUnder, scenariosForSelection)
 import Ecluse.BenchLoad.Selection (fixtureSection, measurementConditionVersion, scenarioKey)
-import Ecluse.BenchLoad.Verdict (RunEvidence, runVerdict)
+import Ecluse.BenchLoad.Verdict (Attempts, Outcome, confirmBreaches, runVerdict)
 import Ecluse.Core.Ecosystem (Ecosystem (Cargo, Npm, PyPI, RubyGems))
 import Ecluse.Test.Registry.Cargo.Fixtures (cargoShard)
 import Ecluse.Test.Registry.Cargo.Reference (IndexLine (indexValue), referenceIndex)
@@ -122,7 +122,8 @@ data Setup = Setup
     , setupShape :: PodShape
     , setupSelected :: Maybe [Text]
     , setupEnforcement :: Enforcement
-    , setupBaselineOf :: Ecosystem -> BaselineSource
+    , setupLiveFetchOf :: Ecosystem -> LiveFetch
+    -- ^ The live public fetch time, for the report's attribution alone.
     , setupSelf :: FilePath
     , setupCapabilities :: Int
     , setupProcessors :: Int
@@ -132,59 +133,60 @@ runPasses :: Map Text Text -> LoadKnobs -> Int -> PodShape -> Text -> Maybe [Tex
 runPasses environment knobs processors shape profile selected = do
     -- Read before any scenario runs, so floors that do not decode cost no load.
     floors <- either benchFail pure =<< loadFloors
-    npmBaseline <- probePublicRtt Npm knobs
-    pypiBaseline <- probePublicRtt PyPI knobs
-    cargoBaseline <- probePublicRtt Cargo knobs
-    rubyGemsBaseline <- probePublicRtt RubyGems knobs
+    npmFetch <- probeLiveFetchOf Npm
+    pypiFetch <- probeLiveFetchOf PyPI
+    cargoFetch <- probeLiveFetchOf Cargo
+    rubyGemsFetch <- probeLiveFetchOf RubyGems
     self <- getExecutablePath
     capabilities <- getNumCapabilities
-    -- One source for what each fixture injects, so the latency compared is the latency injected.
-    let baselineOf eco = case eco of
-            Npm -> npmBaseline
-            PyPI -> pypiBaseline
-            Cargo -> cargoBaseline
-            RubyGems -> rubyGemsBaseline
+    let liveFetchOf eco = case eco of
+            Npm -> npmFetch
+            PyPI -> pypiFetch
+            Cargo -> cargoFetch
+            RubyGems -> rubyGemsFetch
         facts =
             RunFacts
                 { rfSettings = operatingPoint knobs selected (patternOverridesIn environment)
                 , rfRunner = runnerIn environment
                 , rfShape = shape
-                , rfNpmLatencyMs = baselineInjectedMs (baselineOf Npm)
-                , rfCargoLatencyMs = Just (baselineInjectedMs (baselineOf Cargo))
-                , rfRubyGemsLatencyMs = Just (baselineInjectedMs (baselineOf RubyGems))
-                , rfPypiLatencyMs = baselineInjectedMs (baselineOf PyPI)
                 , rfConditions = measurementConditionVersion
                 }
         enforcement = enforce floors facts
-        setup = Setup knobs shape selected enforcement baselineOf self capabilities processors
+        setup = Setup knobs shape selected enforcement liveFetchOf self capabilities processors
     ran <- catMaybes <$> traverse (fixturePasses setup) fixtures
     when (null ran) (benchFail "no scenario matched BENCH_LOAD_SCENARIOS under this pod shape")
-    let outcomes = concatMap fprOutcomes ran
-        violations = runVerdict (triggerIn environment) enforcement (checkedCounts shape) outcomes
-    let calibration = floorsCalibration floors
-        provenance = Map.fromList [("loadProfile", profile), ("floorMeasurementConditions", calConditions calibration), ("retainedFloorConditions", show (calRetainedConditions calibration))]
-    writeLoadObservations (Map.union provenance (measurementConditions setup facts)) enforcement violations outcomes
+    -- Re-runs wait for the end of the job, so a breach and its re-runs do not share one slow spell.
+    passes <- confirmBreaches enforcement (rerunPass setup) [(key, outcome :| []) | (key, outcome) <- concatMap fprOutcomes ran]
+    let violations = runVerdict (triggerIn environment) enforcement (checkedCounts shape) passes
+        calibration = floorsCalibration floors
+        provenance = Map.fromList [("loadProfile", profile), ("floorMeasurementConditions", calConditions calibration)]
+    writeLoadObservations (Map.union provenance (measurementConditions setup facts)) enforcement violations passes
     pure
-        ( map fprBody ran <> [renderFloors (floorsCalibration floors) enforcement]
+        ( map fprBody ran <> [renderConfirmations enforcement passes, renderFloors calibration enforcement]
         , violations
         )
+
+-- One more attempt at a scenario pass, in a fresh child process with its own proxy and cgroup.
+rerunPass :: Setup -> FloorKey -> IO Outcome
+rerunPass setup (key, whichPass) = fmap reportEvidence <$> runScenarioChild whichPass (setupSelf setup) (childOverrides setup) key
+
+-- What every scenario child of the passes runs under: the run's injected latency and the RTS flags.
+childOverrides :: Setup -> [(String, String)]
+childOverrides setup = [latencyOverride (lkUpstreamLatencyMicros (setupKnobs setup) `div` 1_000), childRts (setupCapabilities setup)]
 
 measurementConditions :: Setup -> RunFacts -> Map Text Text
 measurementConditions setup facts =
     Map.fromList
         [ ("measurementConditions", measurementConditionVersion)
-        , ("npmBaseline", show (setupBaselineOf setup Npm))
-        , ("cargoBaseline", show (setupBaselineOf setup Cargo))
-        , ("rubygemsBaseline", show (setupBaselineOf setup RubyGems))
-        , ("pypiBaseline", show (setupBaselineOf setup PyPI))
+        , ("upstreamLatencyMs", show (lkUpstreamLatencyMicros knobs `div` 1_000))
+        , ("npmLiveFetch", show (setupLiveFetchOf setup Npm))
+        , ("cargoLiveFetch", show (setupLiveFetchOf setup Cargo))
+        , ("rubygemsLiveFetch", show (setupLiveFetchOf setup RubyGems))
+        , ("pypiLiveFetch", show (setupLiveFetchOf setup PyPI))
         , ("podShape", renderPodShape (setupShape setup))
         , ("operatingPoint", show (rfSettings facts))
         , ("capabilities", show (setupCapabilities setup))
         , ("processors", show (setupProcessors setup))
-        , ("npmLatencyMs", show (baselineInjectedMs (setupBaselineOf setup Npm)))
-        , ("cargoLatencyMs", show (baselineInjectedMs (setupBaselineOf setup Cargo)))
-        , ("rubygemsLatencyMs", show (baselineInjectedMs (setupBaselineOf setup RubyGems)))
-        , ("pypiLatencyMs", show (baselineInjectedMs (setupBaselineOf setup PyPI)))
         , ("durationSeconds", show (lkDurationSeconds knobs))
         , ("concurrency", show (lkConcurrency knobs))
         , ("payloadBytes", show (lkPayloadBytes knobs))
@@ -197,15 +199,15 @@ measurementConditions setup facts =
   where
     knobs = setupKnobs setup
 
-writeLoadObservations :: Map Text Text -> Enforcement -> [Text] -> [(FloorKey, Either Text RunEvidence)] -> IO ()
-writeLoadObservations conditions enforcement violations outcomes =
+writeLoadObservations :: Map Text Text -> Enforcement -> [Text] -> [(FloorKey, Attempts)] -> IO ()
+writeLoadObservations conditions enforcement violations passes =
     lookupEnv "ECLUSE_PERFORMANCE_OBSERVATIONS" >>= traverse_ (`writeFileLBS` (encode native <> "\n"))
   where
-    native = loadEvidence conditions enforcement violations outcomes
+    native = loadEvidence conditions enforcement violations passes
 
 data FixturePassResult = FixturePassResult
     { fprBody :: Text
-    , fprOutcomes :: [(FloorKey, Either Text RunEvidence)]
+    , fprOutcomes :: [(FloorKey, Outcome)]
     }
 
 -- One ecosystem's loaded and concurrency-one passes: its report section, and what each pass of each scenario produced.
@@ -213,11 +215,11 @@ fixturePasses :: Setup -> UpstreamFixture -> IO (Maybe FixturePassResult)
 fixturePasses setup fixture
     | null chosen = pure Nothing
     | otherwise = do
-        loaded <- traverse (\s -> (keyOf s,) <$> runScenarioChild Loaded self loadOverrides (keyOf s)) chosen
-        c1 <- traverse (\s -> (keyOf s,) <$> runScenarioChild ConcurrencyOne self loadOverrides (keyOf s)) concurrencyOne
+        loaded <- traverse (\s -> (keyOf s,) <$> runScenarioChild Loaded self (childOverrides setup) (keyOf s)) chosen
+        c1 <- traverse (\s -> (keyOf s,) <$> runScenarioChild ConcurrencyOne self (childOverrides setup) (keyOf s)) concurrencyOne
         let section =
                 Section
-                    { sectionKnobs = knobs{lkUpstreamLatencyMicros = injMs * 1_000}
+                    { sectionKnobs = knobs
                     , sectionCapabilities = capabilities
                     , sectionProcessors = setupProcessors setup
                     , sectionShape = setupShape setup
@@ -232,7 +234,7 @@ fixturePasses setup fixture
                         <> [cargoLoadNotes knobs | eco == Cargo]
                         <> [rubyGemsLoadNotes knobs | eco == RubyGems]
                         <> [renderReports section]
-                        <> [renderServiceTime baseline (sectionConcurrencyOne section) | everyPass]
+                        <> [renderServiceTime (lkUpstreamLatencyMicros knobs) (setupLiveFetchOf setup eco) (sectionConcurrencyOne section) | everyPass]
                         <> [renderLoadSaturation (sectionConcurrencyOne section) (filter ((`elem` map keyOf serviceTime) . srName) (sectionLoaded section)) | everyPass]
         pure (Just (FixturePassResult body (map (outcomeOf Loaded) loaded <> map (outcomeOf ConcurrencyOne) c1)))
   where
@@ -246,9 +248,6 @@ fixturePasses setup fixture
     everyPass = lkPasses knobs == EveryPass
     concurrencyOne = [s | everyPass, s <- serviceTime]
     runsHere s = maybe True (keyOf s `elem`) (setupSelected setup) && runsUnder (setupShape setup) s
-    baseline = setupBaselineOf setup eco
-    injMs = baselineInjectedMs baseline
-    loadOverrides = [latencyOverride injMs, childRts capabilities]
     outcomeOf whichPass (key, result) = ((key, whichPass), reportEvidence <$> result)
 
 -- Run one scenario at each memory limit. An OOM kill or a heap overflow is the probe's reading,
@@ -309,11 +308,6 @@ commaListFromEnv name = do
 latencyOverride :: Int -> (String, String)
 latencyOverride injMs = ("BENCH_LOAD_UPSTREAM_LATENCY_MS", show injMs)
 
-baselineInjectedMs :: BaselineSource -> Int
-baselineInjectedMs = \case
-    MeasuredRtt rtt _ -> round rtt
-    InjectedFallback ms -> round ms
-
 -- A child that fails leaves its reason on the inherited stderr, and the run carries on.
 runScenarioChild :: Pass -> FilePath -> [(String, String)] -> Text -> IO (Either Text ScenarioReport)
 runScenarioChild whichPass self overrides name = do
@@ -330,12 +324,13 @@ overrideEnv overrides base =
   where
     overriddenKeys = map fst overrides
 
--- Warm each native listing connection before measuring it. Report failed or disabled probes as fallbacks.
-probePublicRtt :: Ecosystem -> LoadKnobs -> IO BaselineSource
-probePublicRtt ecosystem knobs = do
+-- Time each ecosystem's live public fetch for the report's attribution, warming its connection first.
+-- Holding the run to the floors never reads it.
+probeLiveFetchOf :: Ecosystem -> IO LiveFetch
+probeLiveFetchOf ecosystem = do
     enabled <- probeEnabled
     if not enabled
-        then pure (InjectedFallback configured)
+        then pure NoLiveFetch
         else do
             names <- case ecosystem of
                 Npm -> Map.keys . catBenchPins <$> loadCatalogue
@@ -343,9 +338,8 @@ probePublicRtt ecosystem knobs = do
                 Cargo -> pure (map cpName cargoCorpusPackages)
                 RubyGems -> pure (map cpName rubyGemsCorpusPackages)
             manager <- newManager tlsManagerSettings
-            probeBaseline configured True names (timeFetch manager)
+            probeLiveFetch True names (timeFetch manager)
   where
-    configured = fromIntegral (lkUpstreamLatencyMicros knobs) / 1_000
     timeFetch :: Manager -> Text -> IO (Maybe Double)
     timeFetch manager name = do
         t0 <- getMonotonicTime
