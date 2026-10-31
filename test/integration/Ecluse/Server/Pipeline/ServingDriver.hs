@@ -24,11 +24,13 @@ import Data.List (lookup)
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Data.Time (UTCTime (UTCTime), fromGregorian)
+import Network.HTTP.Client (Manager)
 import Network.HTTP.Types (Method, RequestHeaders, hContentLength, methodHead, mkStatus, status200, status204, status205, status304, status404, statusCode, statusIsInformational)
 import Network.Wai (rawPathInfo, responseLBS)
 import Network.Wai qualified as Wai
 import Network.Wai.Test (SResponse (..))
 
+import Ecluse.Core.Deadline (Deadlines)
 import Ecluse.Core.Ecosystem (Ecosystem (Cargo, Npm, PyPI))
 import Ecluse.Core.Mirror.State (StateRead (..), extendProjectRecord, stateTarget)
 import Ecluse.Core.Mirror.State.Internal (StateRevision (..), retainVerifiedIdentity)
@@ -52,7 +54,7 @@ import Ecluse.Core.Server.Encoding (CodingChoice (ServeCoding), ContentCoding (G
 import Ecluse.Core.Server.MirrorView (MirrorView)
 import Ecluse.Core.Server.Upstream (MirrorServePlan (NoMirrorWrite))
 import Ecluse.Core.Version (mkVersion)
-import Ecluse.Server.Pipeline.TestSupport (newTestEnvWithQueue, packument, proxyApplication, publishedDaysAgo, requestAt, withUpstreams)
+import Ecluse.Server.Pipeline.TestSupport (Upstream (upApp), newTestEnvWithQueue, packument, proxyApplication, publishedDaysAgo, recordingApplication, requestAt, seenArtifactMethods, withUpstreams)
 import Ecluse.Test.Contract.Serving (OriginFault (..), ServingDriver (..), ServingFaults (..), ServingRelease (..), ServingResponse (..), ServingSession (..), ServingSetup (..))
 import Ecluse.Test.Deadline (untracedClient)
 import Ecluse.Test.Json (fieldAt, textAtPath)
@@ -102,7 +104,7 @@ nativeByteDriver ecosystem acquireAdapter mount clientMetadataPath upstreamMetad
     origins :: ServingFaults -> [ServingRelease] -> [ServingRelease] -> ((ServingSetup -> IO ServingSession) -> IO a) -> IO a
     origins faults privateReleases publicReleases use = do
         adapter <- acquireAdapter
-        withUpstreams (faulted (privateFault faults) (upstream privateReleases)) (faulted (publicFault faults) (upstream publicReleases)) $ \privatePort publicPort deadlines manager ->
+        withRecordedOrigins (artifactPath . releaseVersion) (privateReleases <> publicReleases) (faulted (privateFault faults) (upstream privateReleases)) (faulted (publicFault faults) (upstream publicReleases)) $ \artifactMethods privatePort publicPort deadlines manager ->
             use $ \setup -> do
                 env <- newTestMemoryQueue >>= \queue -> newTestEnvWithQueue deadlines queue manager
                 deps <- setupDeps setup (serveDepsFor adapter (Just (loopbackRegistryUrl (localhost privatePort))) (loopbackRegistryUrl (localhost publicPort)) NoMirrorWrite)
@@ -113,6 +115,7 @@ nativeByteDriver ecosystem acquireAdapter mount clientMetadataPath upstreamMetad
                     ServingSession
                         { requestMetadata = \method headers -> raw method clientMetadataPath headers >>= observeNativeMetadata observe artifact method
                         , requestArtifact = \method headers version -> artifact method headers version >>= observeNativeArtifact observe method
+                        , artifactUpstreamMethods = artifactMethods
                         }
     upstream releases request respond
         | BS.dropWhileEnd (== 47) (rawPathInfo request) == upstreamMetadataPath =
@@ -120,6 +123,14 @@ nativeByteDriver ecosystem acquireAdapter mount clientMetadataPath upstreamMetad
         | Just release <- find ((== rawPathInfo request) . artifactPath . releaseVersion) releases =
             respond (artifactResponse (Wai.requestHeaders request) (releaseBytes release))
         | otherwise = respond (responseLBS status404 [] "")
+
+-- Serve both origins, and read the methods each received at the releases' artifact paths.
+withRecordedOrigins :: (ServingRelease -> ByteString) -> [ServingRelease] -> Wai.Application -> Wai.Application -> (IO [Method] -> Int -> Int -> Deadlines -> Manager -> IO a) -> IO a
+withRecordedOrigins artifactAt releases privateApp publicApp k = do
+    let isArtifact path = path `elem` map artifactAt releases
+    privateUp <- recordingApplication isArtifact privateApp
+    publicUp <- recordingApplication isArtifact publicApp
+    withUpstreams (upApp privateUp) (upApp publicUp) (k ((<>) <$> seenArtifactMethods privateUp <*> seenArtifactMethods publicUp))
 
 -- A mount over loopback origins, configured by the setup, at the fixed clock.
 setupDeps :: ServingSetup -> ([PreparedRule] -> IO UTCTime -> PackumentDeps) -> IO PackumentDeps
@@ -272,7 +283,7 @@ cargoDriver =
   where
     origins :: ServingFaults -> [ServingRelease] -> [ServingRelease] -> ((ServingSetup -> IO ServingSession) -> IO a) -> IO a
     origins faults privateReleases publicReleases use =
-        withUpstreams (faulted (privateFault faults) (cargoUpstream privateReleases)) (faulted (publicFault faults) (cargoUpstream publicReleases)) $ \privatePort publicPort deadlines manager -> do
+        withRecordedOrigins (cargoArtifact . releaseVersion) (privateReleases <> publicReleases) (faulted (privateFault faults) (cargoUpstream privateReleases)) (faulted (publicFault faults) (cargoUpstream publicReleases)) $ \artifactMethods privatePort publicPort deadlines manager -> do
             adapter <- requiredAdapter Cargo
             let privateUrl = loopbackRegistryUrl (localhost privatePort)
                 publicUrl = loopbackRegistryUrl (localhost publicPort)
@@ -287,6 +298,7 @@ cargoDriver =
                     ServingSession
                         { requestMetadata = (`request` "/th/in/thing")
                         , requestArtifact = \method headers version -> request method (cargoArtifact version) headers
+                        , artifactUpstreamMethods = artifactMethods
                         }
 
 cargoUpstream :: [ServingRelease] -> Wai.Application

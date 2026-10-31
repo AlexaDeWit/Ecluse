@@ -19,6 +19,7 @@ module Ecluse.Test.Contract.Serving (
     artifactDigestCase,
     artifactHeadCase,
     artifactHeadLengthCase,
+    artifactHeadUpstreamCase,
 ) where
 
 import Codec.Compression.GZip qualified as GZip
@@ -60,6 +61,8 @@ data ServingResponse = ServingResponse
 data ServingSession = ServingSession
     { requestMetadata :: Method -> [Header] -> IO ServingResponse
     , requestArtifact :: Method -> [Header] -> Text -> IO ServingResponse
+    , artifactUpstreamMethods :: IO [Method]
+    -- ^ The methods the session's origins have received at fixture artifact paths, the private origin's first.
     }
 
 -- | How a faulted origin answers every request.
@@ -216,8 +219,9 @@ servingContract provider driver = describe "shared serving contract" $ do
     contractExample "artifact-integrity" "serves the exact artifact bytes and advertised integrity" $
         artifactIntegrityCase driver
     contractExample "artifact-head" "serves artifact HEAD without transferring bytes" $
-        run agePolicy [] [old] $ \session ->
-            requestArtifact session methodHead [] "1.2.3" >>= artifactHeadCase
+        run agePolicy [] [old] $ \session -> do
+            requestArtifact session methodHead [] "1.2.3" >>= artifactHeadLengthCase (toInteger (BS.length (releaseBytes old)))
+            artifactUpstreamMethods session >>= artifactHeadUpstreamCase
     contractExample "conditional-coherence" "keeps GET, HEAD and conditional responses coherent" $
         run agePolicy [] [old] $ \session -> do
             initial <- requestMetadata session methodGet []
@@ -349,6 +353,10 @@ artifactHeadLengthCase :: Integer -> ServingResponse -> Expectation
 artifactHeadLengthCase expected response = do
     artifactHeadCase response
     advertisedLength response `shouldBe` Just expected
+
+-- | The upstream methods during an artifact HEAD: at least one, and every one a HEAD, so the artifact's bytes never travel.
+artifactHeadUpstreamCase :: [Method] -> Expectation
+artifactHeadUpstreamCase methods = methods `shouldSatisfy` (\seen -> not (null seen) && all (== methodHead) seen)
 
 advertisedLength :: ServingResponse -> Maybe Integer
 advertisedLength response = lookup "Content-Length" (responseHeaders response) >>= readMaybe . toString . decodeUtf8 @Text

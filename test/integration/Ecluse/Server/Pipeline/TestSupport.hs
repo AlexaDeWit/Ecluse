@@ -11,9 +11,10 @@ module Ecluse.Server.Pipeline.TestSupport (
     publishedDaysAgo,
 
     -- * Upstream doubles
-    Upstream,
+    Upstream (upApp),
     recordingUpstream,
     recordingUpstreamIO,
+    recordingApplication,
     upstreamRespondingWith,
     truncatedResponse,
     servingUpstream,
@@ -191,11 +192,27 @@ recordingUpstream respondTo = recordingUpstreamIO (pure . respondTo)
 
 -- | Choose each recorded response from mutable test state.
 recordingUpstreamIO :: (Request -> IO Response) -> IO Upstream
-recordingUpstreamIO respondTo = do
+recordingUpstreamIO respondTo = recordingApplication isTarballPath (\req respond -> respondTo req >>= respond)
+
+-- | Record credentials on every request, and methods and validators on the paths the predicate names as artifacts.
+recordingApplication :: (ByteString -> Bool) -> Application -> IO Upstream
+recordingApplication isArtifact app = do
     seen <- newIORef []
-    mkUpstream seen $ \req respond -> do
-        modifyIORef' seen (lookupAuth (requestHeaders req) :)
-        respondTo req >>= respond
+    methods <- newIORef []
+    validators <- newIORef []
+    let recording req respond = do
+            modifyIORef' seen (lookupAuth (requestHeaders req) :)
+            when (isArtifact (rawPathInfo req)) $ do
+                modifyIORef' methods (requestMethod req :)
+                modifyIORef' validators (lookupIfNoneMatch (requestHeaders req) :)
+            app req respond
+    pure
+        Upstream
+            { upApp = recording
+            , upSeenAuth = seen
+            , upSeenArtifactMethods = methods
+            , upSeenArtifactValidators = validators
+            }
 
 -- | An upstream double answering every request with one fixed response.
 upstreamRespondingWith :: Response -> IO Upstream
@@ -246,24 +263,6 @@ seenArtifactMethods up = reverse <$> readIORef (upSeenArtifactMethods up)
 -- | Artifact validators in arrival order, including requests without a validator.
 seenArtifactValidators :: Upstream -> IO [Maybe ByteString]
 seenArtifactValidators up = reverse <$> readIORef (upSeenArtifactValidators up)
-
--- | Preserve credential recording while adding artifact method and validator observations.
-mkUpstream :: IORef [Maybe ByteString] -> Application -> IO Upstream
-mkUpstream seen app = do
-    methods <- newIORef []
-    validators <- newIORef []
-    let recording req respond = do
-            when (isTarballPath (rawPathInfo req)) $ do
-                modifyIORef' methods (requestMethod req :)
-                modifyIORef' validators (lookupIfNoneMatch (requestHeaders req) :)
-            app req respond
-    pure
-        Upstream
-            { upApp = recording
-            , upSeenAuth = seen
-            , upSeenArtifactMethods = methods
-            , upSeenArtifactValidators = validators
-            }
 
 -- | Whether a request path is a tarball slot (@\/…\/-\/….tgz@) rather than a packument, so one double can answer both.
 isTarballPath :: ByteString -> Bool

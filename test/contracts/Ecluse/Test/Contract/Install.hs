@@ -36,7 +36,7 @@ import System.Exit (ExitCode (ExitSuccess))
 import Test.Hspec (Expectation, SpecWith, expectationFailure, it, shouldBe, shouldMatchList, shouldNotBe, shouldSatisfy)
 
 import Ecluse.Test.Contract.Catalogue (caseLabel)
-import Ecluse.Test.Contract.Serving (ServingResponse (responseBody, responseHeaders), artifactDigestCase, artifactHeadLengthCase)
+import Ecluse.Test.Contract.Serving (ServingResponse (responseBody, responseHeaders), artifactDigestCase, artifactHeadLengthCase, artifactHeadUpstreamCase)
 
 -- | The outcome of one client invocation: what ran, its exit code, and its captured output.
 data ClientResult = ClientResult
@@ -106,8 +106,7 @@ installationContract prefix = do
         probe <- installationHead driver
         (_, artifact) <- installationArtifact driver
         artifactHeadLengthCase (toInteger (LBS.length (responseBody artifact))) (probeResponse probe)
-        -- The proxy probes the upstream with HEAD too, so the artifact's bytes never travel.
-        probeUpstreamMethods probe `shouldSatisfy` (\methods -> not (null methods) && all (== "HEAD") methods)
+        artifactHeadUpstreamCase (map encodeUtf8 (probeUpstreamMethods probe))
     it (label "artifact-identity-coding" "fetches the artifact in identity coding from an upstream that gzips on request") $ \driver ->
         installationCodedArtifact driver >>= codedArtifactCase (installationDigest driver)
   where
