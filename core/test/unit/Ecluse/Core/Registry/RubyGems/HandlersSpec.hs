@@ -45,12 +45,12 @@ import Ecluse.Core.Server.Contract (responseToWai)
 import Ecluse.Core.Server.Encoding (MetadataCompression (GzipWhenAccepted))
 import Ecluse.Core.Server.Upstream (MirrorServePlan (NoMirrorWrite))
 import Ecluse.Core.Telemetry.Metrics qualified as Metric
-import Ecluse.Core.Telemetry.Record (MetricsPort (mpDirectoryCacheRequest, mpRuleDenial, mpUpstreamFetch, mpUpstreamFetchError))
+import Ecluse.Core.Telemetry.Record (MetricsPort (mpDirectoryCacheRequest, mpUpstreamFetch, mpUpstreamFetchError))
 import Ecluse.Core.Telemetry.Span (TracingPort (spanDirectoryDecode, spanDirectoryFetch))
 import Ecluse.Core.Version (renderVersion)
 import Ecluse.Test.Deadline (withSweeper)
 import Ecluse.Test.Log (captureJsonLog, lineMessage, newTestLogEnv)
-import Ecluse.Test.Port (noopMetricsPort, passthroughTracingPort, recordingMetricsPort)
+import Ecluse.Test.Port (noopMetricsPort, passthroughTracingPort, recordingDenials, recordingMetricsPort)
 import Ecluse.Test.Registry.RubyGems.Fixtures (RubyRelease (..), loadRubyReleasesFrom, rubyRelease)
 import Ecluse.Test.Rules (atDefaultPrecedence, inertRuleDeps)
 import Ecluse.Test.Server.Cache (cachedMetadata, externalOperations)
@@ -480,18 +480,17 @@ spec = do
             it ("logs only the final matching rejected coordinate with its gate tag for " <> toString (label :: Text) <> " " <> show (method, path)) $
                 withCoordinateSources sources $ \originalRuntime original hits _ -> do
                     tags <- newIORef (0 :: Int)
-                    denials <- newIORef []
+                    (metrics, denials) <- recordingDenials (srMetrics originalRuntime)
                     let deps = bindingPackumentDeps original
                         tag = atomicModifyIORef' tags (\previous -> let next = previous + 1 in (next, Just (DbEtag ("gate-" <> show next))))
                         binding = original{bindingPackumentDeps = deps{pdAdvisoryEtag = tag, pdRules = if missingDatabase then map (missingDatabaseForVersion "2.0") (pdRules deps) else pdRules deps}}
-                        metrics = (srMetrics originalRuntime){mpRuleDenial = \rule reason -> atomicModifyIORef' denials (\seen -> (seen <> [(rule, reason)], ()))}
                         runtime = originalRuntime{srMetrics = metrics}
                     (response, logged) <- captureJsonLog (\logEnv -> captureWithLog logEnv runtime binding method path [])
                     simpleStatus response `shouldBe` expected
                     let rejected = filter ((== Just "denied") . lineMessage) (T.lines logged)
                     length rejected `shouldBe` count
                     readIORef tags `shouldReturn` 2
-                    readIORef denials `shouldReturn` replicate count (if missingDatabase then (Nothing, Metric.ReasonUnavailable) else (Just "BlockedByDefault", Metric.ReasonPolicy))
+                    denials `shouldReturn` replicate count (if missingDatabase then (Nothing, Metric.ReasonUnavailable) else (Just "BlockedByDefault", Metric.ReasonPolicy))
                     for_ rejected $ \line -> do
                         line `shouldSatisfy` T.isInfixOf "\"package\":\"acme-1\""
                         line `shouldSatisfy` T.isInfixOf "\"version\":\"2.0\""

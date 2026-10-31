@@ -9,6 +9,7 @@ module Ecluse.Test.Port (
     -- * Serve-path ports
     noopMetricsPort,
     recordingMetricsPort,
+    recordingDenials,
     recordingDivergenceMetricsPort,
     passthroughTracingPort,
 
@@ -30,7 +31,7 @@ module Ecluse.Test.Port (
 ) where
 
 import Ecluse.Core.Ecosystem (Ecosystem)
-import Ecluse.Core.Telemetry.Metrics (AdvisoryCompileResult, AdvisoryDropCause, AdvisorySyncResult, Decision, MirrorResult)
+import Ecluse.Core.Telemetry.Metrics (AdvisoryCompileResult, AdvisoryDropCause, AdvisorySyncResult, Decision, MirrorResult, ReasonClass)
 import Ecluse.Core.Telemetry.Record (AdvisoryCompileMetricsPort (..), AdvisorySyncMetricsPort (..), MetricsPort (..), WorkerMetricsPort (..))
 import Ecluse.Core.Telemetry.Span (AdvisorySyncTracingPort (..), TracingPort (..), WorkerTracingPort (..))
 
@@ -79,6 +80,12 @@ recordingMetricsPort = do
     seen <- newTVarIO []
     let port = noopMetricsPort{mpServeDecision = \d -> atomically (modifyTVar' seen (<> [d]))}
     pure (port, readTVarIO seen)
+
+-- | Extend a 'MetricsPort' to capture the rule denials it records, each as its rule and reason class, in record order.
+recordingDenials :: MetricsPort -> IO (MetricsPort, IO [(Maybe Text, ReasonClass)])
+recordingDenials port = do
+    seen <- newTVarIO []
+    pure (port{mpRuleDenial = \rule reason -> atomically (modifyTVar' seen (<> [(rule, reason)]))}, readTVarIO seen)
 
 -- | Count merge divergences and discard every other metric.
 recordingDivergenceMetricsPort :: IO (MetricsPort, IO Int)
