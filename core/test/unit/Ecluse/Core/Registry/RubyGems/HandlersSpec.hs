@@ -529,10 +529,10 @@ spec = do
                     sort . ordNub <$> readIORef hits `shouldReturn` expectedReads
         for_ ["GET", "HEAD"] $ \method ->
             for_ ["/gems/acme-1-2.0.gem", "/quick/Marshal.4.8/acme-1-2.0.gemspec.rz"] $ \path -> do
-                it ("keeps invalid inventory on its existing failure path for " <> show (method, path)) $
+                it ("answers 502 when the only public row is malformed beside a private 404 for " <> show (method, path)) $
                     withCoordinateSources InvalidInventoryCandidateSource $ \runtime binding hits _ -> do
                         response <- capture runtime binding method path []
-                        simpleStatus response `shouldBe` status503
+                        simpleStatus response `shouldBe` status502
                         sort <$> readIORef hits `shouldReturn` coordinatePrivateMetadataReads
                 for_ [(status401, status403), (status403, status403), (status502, status503), (status503, status503)] $ \(upstream, expected) ->
                     it ("preserves the actual private refusal beside an all-denied public source for " <> show (upstream, method, path)) $

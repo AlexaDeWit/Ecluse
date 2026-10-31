@@ -5,7 +5,7 @@
 -- | Client responses and metrics through core handlers and ecosystem routes.
 module Ecluse.Core.Server.PipelineSpec (spec) where
 
-import Data.Aeson (Value (Bool, Object, String), eitherDecode, eitherDecodeStrict, encode, object, (.=))
+import Data.Aeson (Value (Bool, Null, Object, String), eitherDecode, eitherDecodeStrict, encode, object, (.=))
 import Data.Aeson.Key qualified as Key
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.ByteString qualified as BS
@@ -136,6 +136,7 @@ spec = describe "Ecluse.Core.Server.Pipeline (core handlers over a ServeRuntime)
     absentNameSpec
     unconfiguredPrivateSpec
     privateAdmitsNothingSpec
+    malformedListingSpec
     deniedListingSpec
     integrityDenialLogSpec
 
@@ -1268,8 +1269,12 @@ withAbsentPublic ecosystem router credential privatePort publicStatus =
 
 -- A mount of the ecosystem, with the given private origin or none and the given change, whose public origin gives one fixed reply.
 withPublicReply :: Ecosystem -> MountRouter -> CredentialMapping -> Maybe Int -> Response -> (PackumentDeps -> PackumentDeps) -> MetricsPort -> (ServeRuntime -> MountBinding -> IO a) -> IO a
-withPublicReply ecosystem router credential privatePort reply change metrics action =
-    testWithApplication (pure (\_ respond -> respond reply)) $ \publicPort -> withSweeper $ \deadlines -> do
+withPublicReply ecosystem router credential privatePort reply = withPublicOrigin ecosystem router credential privatePort (\_ respond -> respond reply)
+
+-- A mount of the ecosystem, with the given private origin or none and the given change, over this public origin.
+withPublicOrigin :: Ecosystem -> MountRouter -> CredentialMapping -> Maybe Int -> Application -> (PackumentDeps -> PackumentDeps) -> MetricsPort -> (ServeRuntime -> MountBinding -> IO a) -> IO a
+withPublicOrigin ecosystem router credential privatePort public change metrics action =
+    testWithApplication (pure public) $ \publicPort -> withSweeper $ \deadlines -> do
         rt <- testServeRuntime deadlines metrics
         adapter <- requiredAdapter ecosystem
         let origin port = loopbackRegistryUrl ("http://localhost:" <> show port)
@@ -1320,7 +1325,7 @@ unconfiguredPrivateSpec = do
 
 {- Each listing route's answer to every public reply Écluse cannot use, for GET and HEAD, beside this
 ecosystem's private origin or none: 502, an unavailable decision and its denial, and a body that names
-the public upstream.
+the public upstream unless the read budget refused first.
 -}
 invalidPublicReplyRoutes :: Maybe (Ecosystem -> Application) -> Spec
 invalidPublicReplyRoutes privateOrigin =
@@ -1330,26 +1335,23 @@ invalidPublicReplyRoutes privateOrigin =
                 withReply metrics action =
                     withPrivateOrigin (($ ecosystem) <$> privateOrigin) $ \privatePort ->
                         withPublicReply ecosystem router credential privatePort reply change metrics action
-                publicLegDecides = ecosystem `notElem` budgeted
-                recorded = if publicLegDecides then ", recording an unavailable decision and its denial" else ""
-            it (named <> " answers 502 for GET and HEAD after " <> cause <> recorded) $ do
+            it (named <> " answers 502 for GET and HEAD after " <> cause <> ", recording an unavailable decision and its denial") $ do
                 (recording, decisions) <- recordingMetricsPort
                 (metrics, denials) <- recordingDenials recording
                 responses <- withReply metrics $ \rt binding -> traverse (\method -> captureRouted rt binding method path) [methodGet, methodHead]
                 map (statusCode . responseStatus) responses `shouldBe` [502, 502]
-                when publicLegDecides $ do
-                    decisions `shouldReturn` [Unavailable, Unavailable]
-                    denials `shouldReturn` replicate 2 (Nothing, Metric.ReasonUnavailable)
+                decisions `shouldReturn` [Unavailable, Unavailable]
+                denials `shouldReturn` replicate 2 (Nothing, Metric.ReasonUnavailable)
             -- A PyPI refusal body carries only the configured help message.
-            when (publicLegDecides && ecosystem /= PyPI) $
+            when (ecosystem `notElem` budgeted && ecosystem /= PyPI) $
                 it (named <> " names the public upstream in its body after " <> cause) $ do
                     body <- withReply noopMetricsPort $ \rt binding -> captureRouted rt binding methodGet path >>= responseBytes
                     LBS.toStrict body `shouldSatisfy` BS.isInfixOf "the public upstream returned an invalid or unusable reply"
 
 {- Public replies Écluse cannot use, each with the mount change that makes it one, and the ecosystems
-whose request-wide read budget refuses it with its own 502 before the public leg decides. RubyGems
-reads /info under a budget the size of the document bound. The bound leaves room for an empty private
-document.
+whose request-wide read budget refuses it with its own 502 and words before the public leg decides.
+RubyGems reads /info under a budget the size of the document bound. The bound leaves room for an empty
+private document.
 -}
 invalidPublicReplies :: [(String, Response, PackumentDeps -> PackumentDeps, [Ecosystem])]
 invalidPublicReplies =
@@ -1376,19 +1378,68 @@ privateAdmitsNothingSpec = do
     describe "a public reply Écluse cannot use beside a private document that admits nothing, through ecosystem routes" $
         invalidPublicReplyRoutes (Just emptyPrivateDocument)
 
--- Each ecosystem's private document for leftpad that names no version, Cargo's discovery, and 404 for any other path.
+-- Each ecosystem's leftpad document that names no version.
 emptyPrivateDocument :: Ecosystem -> Application
-emptyPrivateDocument ecosystem request respond
-    | rawPathInfo request == path = respond (responseLBS status200 [(hContentType, contentType)] body)
+emptyPrivateDocument = leftpadDocument $ \case
+    Npm -> encode (object ["name" .= ("leftpad" :: Text), "dist-tags" .= object [], "versions" .= object []])
+    PyPI -> encode (simpleIndex "leftpad" [])
+    Cargo -> ""
+    RubyGems -> "---\n"
+
+-- Each ecosystem's leftpad document whose only version row is malformed, so the read drops it.
+malformedDocument :: Ecosystem -> Application
+malformedDocument = leftpadDocument $ \case
+    Npm -> encode (packumentValue "leftpad" "1.0.0" [("1.0.0", object ["name" .= ("leftpad" :: Text), "version" .= ("1.0.0" :: Text)])] [] [])
+    PyPI -> encode (simpleIndex "leftpad" [object ["filename" .= ("leftpad-1.0.0.tar.gz" :: Text)]])
+    Cargo -> "{\"name\":\"leftpad\",\"vers\":\"1.0.0\",\"deps\":[],\"cksum\":\"\",\"features\":{},\"yanked\":false}\n"
+    RubyGems -> "---\n1.0.0 |checksum:invalid\n"
+
+-- Each ecosystem's leftpad document with this body, Cargo's discovery, and 404 for any other path.
+leftpadDocument :: (Ecosystem -> LByteString) -> Ecosystem -> Application
+leftpadDocument body ecosystem request respond
+    | rawPathInfo request == path = respond (responseLBS status200 [(hContentType, contentType)] (body ecosystem))
     | ecosystem == Cargo && rawPathInfo request == "/config.json" =
         respond (responseLBS status200 [(hContentType, "application/json")] (LBS.fromStrict (Cargo.cargoViewDiscovery (selfBaseUrl request) Nothing False)))
     | otherwise = respond (responseLBS status404 [] "")
   where
-    (path, contentType, body) = case ecosystem of
-        Npm -> ("/leftpad", "application/json", encode (object ["name" .= ("leftpad" :: Text), "dist-tags" .= object [], "versions" .= object []]))
-        PyPI -> ("/simple/leftpad/", "application/vnd.pypi.simple.v1+json", encode (simpleIndex "leftpad" []))
-        Cargo -> ("/le/ft/leftpad", "text/plain", "")
-        RubyGems -> ("/info/leftpad", "text/plain", "---\n")
+    (path, contentType) = case ecosystem of
+        Npm -> ("/leftpad", "application/json")
+        PyPI -> ("/simple/leftpad/", "application/vnd.pypi.simple.v1+json")
+        Cargo -> ("/le/ft/leftpad", "text/plain")
+        RubyGems -> ("/info/leftpad", "text/plain")
+
+-- A listing whose every upstream version row is malformed answers 502 with that cause, wherever the rows
+-- sit. A valid version the gate denies beside a malformed one keeps the policy 404.
+malformedListingSpec :: Spec
+malformedListingSpec = describe "a listing whose every upstream version row is malformed" $ do
+    for_ absentNameRoutes $ \(ecosystem, router, credential, (route, path), _) ->
+        for_ placements $ \(label, private, public) -> do
+            let named = toString (ecosystemName ecosystem) <> " " <> route
+                withRows metrics action =
+                    withPrivateOrigin (($ ecosystem) <$> private) $ \privatePort ->
+                        withPublicOrigin ecosystem router credential privatePort (public ecosystem) id metrics action
+            it (named <> " answers 502 for GET and HEAD with " <> label <> ", recording an unavailable decision and its denial") $ do
+                (recording, decisions) <- recordingMetricsPort
+                (metrics, denials) <- recordingDenials recording
+                responses <- withRows metrics $ \rt binding -> traverse (\method -> captureRouted rt binding method path) [methodGet, methodHead]
+                map (statusCode . responseStatus) responses `shouldBe` [502, 502]
+                decisions `shouldReturn` [Unavailable, Unavailable]
+                denials `shouldReturn` replicate 2 (Nothing, Metric.ReasonUnavailable)
+            -- A PyPI refusal body carries only the configured help message.
+            when (ecosystem /= PyPI) $
+                it (named <> " names the malformed rows in its body with " <> label) $ do
+                    body <- withRows noopMetricsPort $ \rt binding -> captureRouted rt binding methodGet path >>= responseBytes
+                    LBS.toStrict body `shouldSatisfy` BS.isInfixOf "was malformed or unusable"
+    it "keeps the npm packument 404 when the gate denies the valid version beside a malformed one" $ do
+        denyAll <- prepare inertRuleDeps []
+        listingOver notFoundOrigin (publicAppOver ["1.0.0", "2.0.0"] "1.0.0" withoutDistAt2) (\deps -> deps{pdRules = denyAll}) 404 Nothing Deny
+  where
+    placements =
+        [ ("the rows public and no private origin", Nothing, malformedDocument)
+        , ("the rows public beside a private 404", Just (const notFoundOrigin), malformedDocument)
+        , ("the rows private beside a public 404", Just malformedDocument, const notFoundOrigin)
+        ]
+    withoutDistAt2 entry = if vsVersion entry == "2.0.0" then entry{vsExtraPairs = ["dist" .= Null]} else entry
 
 -- A public listing the gate denies in full answers 404 beside a private 404 or with no private origin. The artifact keeps its 403.
 deniedListingSpec :: Spec

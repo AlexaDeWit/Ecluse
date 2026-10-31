@@ -193,7 +193,7 @@ pypiIndexContract =
                             ( chooseContract
                                 (refusalContract status500 "A permanent or internal inability to decide.")
                                 ( chooseContract
-                                    (refusalContract status502 "An upstream reply was invalid or unusable, such as an index for a different project.")
+                                    (refusalContract status502 "An upstream reply was invalid or unusable, such as an index for a different project or one whose every file entry is malformed.")
                                     (refusalContract status503 "A transient upstream or advisory condition; retry (see `Retry-After`).")
                                 )
                             )

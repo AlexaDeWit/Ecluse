@@ -356,7 +356,9 @@ wins:
   self-reported name is for a different package (see
   [name validation](registry-model.md#the-route-name-is-the-served-names-validation-authority)),
   or a public reply Écluse cannot use, a `401` or `403` included, beside a private `404`, beside a
-  private document that admits nothing, or with no private upstream.
+  private document that admits nothing, or with no private upstream. A listing whose every version
+  entry from the upstreams was malformed, such as a Cargo or RubyGems row with no checksum, answers
+  `502` too. Its cause is in the body, and the dropped entries are in the warning log.
 - Otherwise `500` if none is retryable but an exclusion is a permanent inability.
 - Otherwise `404` if every exclusion is a policy or integrity refusal. The body names the
   refusals on npm, Cargo and RubyGems. A PyPI body carries only the operator's help message, so
@@ -364,7 +366,7 @@ wins:
   on every ecosystem, with the deciding rule and the reason class but not the refusal text. The
   serve decision and denial metrics record a denial. A private `404` beside such a public document
   is settled too, so it does not turn the answer into `503`.
-- Otherwise `403`, when nothing was excluded and no version reached the gate.
+- Otherwise `403`, when the upstream documents list no version entry at all.
 
 A listing that admits nothing answers `404` because no installable package exists under that name
 for the client, and a `403` would suggest a credential problem. The versions existed, so the

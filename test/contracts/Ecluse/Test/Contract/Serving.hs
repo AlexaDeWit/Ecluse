@@ -209,8 +209,8 @@ servingContract provider driver = describe "shared serving contract" $ do
         run agePolicy [old{releaseHasIntegrity = False}] [] $ \session -> do
             response <- requestMetadata session methodGet []
             -- npm and PyPI refuse the version at the trusted floor, so the listing admits nothing.
-            -- Cargo and RubyGems drop a row with no checksum as malformed, so nothing is refused.
-            (responseStatus response, responseVersions response) `shouldBe` (if provider `elem` ["cargo", "rubygems"] then 403 else 404, [])
+            -- Cargo and RubyGems drop a row with no checksum as malformed, so no usable row remains.
+            (responseStatus response, responseVersions response) `shouldBe` (if provider `elem` ["cargo", "rubygems"] then 502 else 404, [])
         -- Cargo and RubyGems parsers refuse a hashless row before any floor, so a SHA-512 trusted floor
         -- over SHA-256 fixtures reaches the floor in every format. The public floor is unchanged.
         sha512Floor <- either (fail . toString) pure (mkMinTrustedIntegrity SHA512)

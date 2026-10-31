@@ -310,7 +310,7 @@ npmPackumentContract =
                             ( chooseContract
                                 (jsonContract status500 "A permanent or internal inability to decide." npmErrorCodec)
                                 ( chooseContract
-                                    (jsonContract status502 "An upstream reply was invalid or unusable, such as a packument for a different package." npmErrorCodec)
+                                    (jsonContract status502 "An upstream reply was invalid or unusable, such as a packument for a different package or one whose every version entry is malformed." npmErrorCodec)
                                     (jsonContract status503 "A transient upstream or advisory condition; retry (see `Retry-After`)." npmErrorCodec)
                                 )
                             )

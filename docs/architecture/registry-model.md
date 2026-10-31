@@ -262,8 +262,10 @@ track which input a survivor came from, so assembly can select its retained sour
   holds the name, and every ecosystem answers `404` for its metadata and artifacts. A mount with no
   private upstream settles the name on the public `404` alone. A name the mirror state records
   answers `404` on its listing too once no recorded version survives in the mirror, for example
-  after a takedown and a Dredger deletion of the stored copies. Its artifact requests keep the
-  managed path. A failed public read beside a private `404` leaves the question open, so the public
+  after a takedown and a Dredger deletion of the stored copies. Its artifacts answer `404` once the
+  private upstream answers `404` for the name or for the stored artifact and the public upstream
+  lacks the version, and `503` while the public upstream is unavailable. The managed path serves
+  public bytes only for a version the mirror coverage check allows. A failed public read beside a private `404` leaves the question open, so the public
   cause answers: `503` with the public `Retry-After` when the public upstream is unavailable, and
   `502` when its reply is invalid or unusable. A private `404` beside a public document whose every version the gate refuses is
   settled as well: the listing answers `404` with the refusals

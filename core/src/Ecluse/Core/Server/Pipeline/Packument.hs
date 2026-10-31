@@ -41,6 +41,8 @@ import Ecluse.Core.Mirror.Documents (MirrorDocuments)
 import Ecluse.Core.Mirror.State (ProjectMirrorRecord, StateRevision)
 import Ecluse.Core.Package (
     Artifact (artHashes),
+    InvalidEntry (invalidKind),
+    InvalidEntryKind (..),
     PackageDetails (pkgArtifacts),
     PackageInfo (infoInvalidEntries, infoVersions),
     PackageName,
@@ -434,16 +436,15 @@ serveMergedPackument serving evalCtx record privResult pubResult
                                  in noServeableVersions serving (ctxAdvisoryEtag evalCtx) refused $
                                         collectDecisions privResult pubResult (map vvDecision refused)
   where
-    budgetRefused fault = pure (packumentBadGateway (psvReplies serving) [] (mkRefusal (pdHelp deps) ("the cumulative metadata input exceeded its bound: " <> show fault)))
+    budgetRefused fault =
+        noServeableVersions serving (ctxAdvisoryEtag evalCtx) [] [Reject (Rejection UpstreamInvalid ("the cumulative metadata input exceeded its bound: " <> show fault))]
     settledAbsence OriginAbsent = True
     settledAbsence OriginNotFound = True
     settledAbsence _ = False
-    -- A listing answers 404 unless a recorded version survives in the mirror. A coordinate lookup takes
-    -- its own answer, and a recorded name keeps its managed path there.
-    unheldAnswer = case psvAbsent serving of
-        Nothing | noRecordedCopy -> Just (liftIO (unheldNameReply (servingMetrics serving) (psvReplies serving) deps))
-        Just absent | isNothing record -> Just (pure absent)
-        _ -> Nothing
+    -- Unless a recorded version survives in the mirror, a listing answers 404 and a coordinate lookup takes its own answer.
+    unheldAnswer
+        | noRecordedCopy = Just (maybe (liftIO (unheldNameReply (servingMetrics serving) (psvReplies serving) deps)) pure (psvAbsent serving))
+        | otherwise = Nothing
     noRecordedCopy = either (const False) (\(_, managed, _) -> isNothing managed) views
     deps = psvDeps serving
     name = psvName serving
@@ -671,16 +672,39 @@ noSurvivors replies help status decisions = case status of
 
     !body = mkRefusal help message
 
+-- With nothing else to name, the cause is the malformed entries the documents dropped, if any.
 collectDecisions :: OriginResult -> OriginResult -> [ServeDecision] -> [ServeDecision]
-collectDecisions privResult pubResult exclusions =
-    privateLeg <> publicDecision pubResult <> exclusions
+collectDecisions privResult pubResult exclusions = case privateLeg <> publicDecision pubResult <> exclusions of
+    [] -> malformedEntries privResult pubResult
+    decisions -> decisions
   where
-    -- A private 404 leaves the listing to the public origin. A public document the gate refused in
-    -- full settles it, and a failed public read refuses it by its own cause.
+    -- A private 404 leaves the listing to the public origin. A public document the gate refused in full
+    -- settles it, and a failed public read or a public document of malformed entries refuses it by its own cause.
     privateLeg = case (privResult, pubResult) of
         (OriginNotFound, OriginResolved _) | packumentStatus exclusions == PackumentDenied -> []
+        (OriginNotFound, OriginResolved manifest) | droppedEveryEntry manifest -> []
         (OriginNotFound, _) | publicReadFailed pubResult -> []
         _ -> privateDecision privResult
+
+-- A listing whose documents dropped every version entry they listed, naming the upstreams that sent them.
+malformedEntries :: OriginResult -> OriginResult -> [ServeDecision]
+malformedEntries privResult pubResult = case [upstream | (upstream, result) <- origins, maybe False droppedEveryEntry (originManifest result)] of
+    [] -> []
+    upstreams -> [Reject (Rejection UpstreamInvalid ("every version entry from " <> mconcat (intersperse " and " upstreams) <> " was malformed or unusable"))]
+  where
+    origins = [("the private upstream", privResult), ("the public upstream", pubResult)]
+
+-- Whether a document listed version entries and dropped every one. A dropped tag, time or listing entry is no version.
+droppedEveryEntry :: Manifest -> Bool
+droppedEveryEntry manifest = Map.null (infoVersions info) && any (dropsVersion . invalidKind) (infoInvalidEntries info)
+  where
+    info = manifestInfo manifest
+    dropsVersion = \case
+        InvalidVersionManifest -> True
+        InvalidIndexFile -> True
+        InvalidDistTag -> False
+        InvalidPublishTime -> False
+        InvalidVersionListing -> False
 
 privateDecision :: OriginResult -> [ServeDecision]
 privateDecision = \case

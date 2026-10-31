@@ -143,12 +143,13 @@ pipeline applies verdicts across it. For the cross-upstream merge, see
   the default install.
 - **No survivors → 503, 502, 500, 404, or 403.** If nothing survives, the status follows the most
   recoverable cause. `503` (with `Retry-After`) when any rejection was transient or a needed
-  upstream was unavailable. `502` when an upstream returned a document Écluse could not use.
+  upstream was unavailable. `502` when an upstream returned a document Écluse could not use,
+  including one whose every version entry was malformed.
   `500` when an exclusion is a permanent inability and none is retryable. `404` on a listing when
   all exclusions are policy or integrity refusals, with the reasons in the body and the logs. A
   PyPI body carries only the help message, so on PyPI only the `denied` log lines carry them, with
   the deciding rule and the reason class but not the refusal text. A native coordinate keeps `403`
-  there. `403` when nothing was excluded. The HTTP status mapping belongs to the
+  there. `403` when the upstream documents list no version entry. The HTTP status mapping belongs to the
   [error model](web-layer.md#error-model).
 
 Because the filtered body differs from upstream's, the proxy computes its own `ETag` over it

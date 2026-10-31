@@ -367,7 +367,21 @@ pypiReads = describe "managed PyPI mirror reads" $ do
             record <- expectRight (extendProjectRecord pypiStateFormat defaultLimits target inventory Nothing)
             view <- testView (pure (Right (StateLoaded revision record)))
             withManagedProxy view False (native status404 []) (native publicStatus []) $ \app ->
-                recordedListingAnswers expected "/pypi/simple/demo/" app
+                recordedPathAnswers expected "/pypi/simple/demo/" app
+
+    for_ [("absent-public", status404, status404), ("unavailable-public", status503, status503)] $ \(identifier, publicStatus, expected) -> do
+        it (caseLabel ("integration/mirror-view/native-025/" <> identifier) "answers a recorded distribution and its companion 404 only when both origins answer 404 for the project") $ do
+            inventory <- mirrorSample [1, 2] False "https://public.test/" "source"
+            record <- expectRight (extendProjectRecord pypiStateFormat defaultLimits target inventory Nothing)
+            view <- testView (pure (Right (StateLoaded revision record)))
+            withManagedProxy view False (native status404 []) (native publicStatus []) $ \app ->
+                for_ [artifactPath, artifactPath <> ".metadata"] $ \path -> recordedPathAnswers expected path app
+        it (caseLabel ("integration/mirror-view/native-026/" <> identifier) "answers a recorded distribution 404 only when the private file and the public version are both gone") $ do
+            inventory <- mirrorSample [1, 2] False "https://public.test/" "source"
+            record <- expectRight (extendProjectRecord pypiStateFormat defaultLimits target inventory Nothing)
+            view <- testView (pure (Right (StateLoaded revision record)))
+            withManagedProxy view False (withoutFiles (native status200 [1, 2])) (native publicStatus []) $
+                recordedPathAnswers expected artifactPath
 
 newFilePaths :: [ByteString]
 newFilePaths = [path, path <> ".metadata"]
@@ -389,8 +403,20 @@ cargoReads = describe "managed Cargo mirror reads" $ do
             view <- recordedCrateView
             adapter <- requiredAdapter Cargo
             withMountProxy Cargo adapter (\deps -> deps{pdEgressUrl = Right . loopbackRegistryUrl}) view crateDiscovery public $
-                recordedListingAnswers expected "/cargo/th/in/thing"
+                recordedPathAnswers expected "/cargo/th/in/thing"
+    for_ [("absent-public", native status404 [], status404), ("unavailable-public", unavailable, status503)] $ \(identifier, public, expected) -> do
+        it (caseLabel ("integration/mirror-view/native-027/" <> identifier) "answers a recorded archive 404 only when both origins answer 404 for the crate") $ do
+            view <- recordedCrateView
+            adapter <- requiredAdapter Cargo
+            withMountProxy Cargo adapter (\deps -> deps{pdEgressUrl = Right . loopbackRegistryUrl}) view crateDiscovery public $
+                recordedPathAnswers expected archivePath
+        it (caseLabel ("integration/mirror-view/native-028/" <> identifier) "answers a recorded archive 404 only when the private archive and the public version are both gone") $ do
+            view <- recordedCrateView
+            adapter <- requiredAdapter Cargo
+            withMountProxy Cargo adapter (\deps -> deps{pdEgressUrl = Right . loopbackRegistryUrl}) view (crateIndex (map original ["1.9.0", "1.10.0", "1.9.1"])) public $
+                recordedPathAnswers expected archivePath
   where
+    archivePath = "/cargo/crates/thing/1.9.0/thing-1.9.0.crate"
     name = mkPackageName Cargo Nothing "thing"
     release = Cargo.minimalCargoRelease "thing"
     original version = Cargo.cargoIndexRecord (release version)
@@ -423,7 +449,14 @@ rubyGemsReads = describe "managed RubyGems mirror reads" $ do
             view <- recordedGemView
             adapter <- requiredAdapter RubyGems
             withMountProxy RubyGems adapter id view (native status404 []) public $
-                recordedListingAnswers expected "/rubygems/info/ecluse-fixture-platform"
+                recordedPathAnswers expected "/rubygems/info/ecluse-fixture-platform"
+    for_ [("absent-public", native status404 [], status404), ("unavailable-public", unavailable, status503)] $ \(identifier, public, expected) ->
+        it (caseLabel ("integration/mirror-view/native-029/" <> identifier) "answers a recorded gem's archive and compact specification 404 only when both origins answer 404") $ do
+            view <- recordedGemView
+            adapter <- requiredAdapter RubyGems
+            withMountProxy RubyGems adapter id view (native status404 []) public $ \app ->
+                for_ ["/rubygems/gems/ecluse-fixture-platform-1.0.0.gem", "/rubygems/quick/Marshal.4.8/ecluse-fixture-platform-1.0.0.gemspec.rz"] $ \path ->
+                    recordedPathAnswers expected path app
   where
     unpositioned row = row{rowPosition = 0}
     recordedGemView = do
@@ -433,9 +466,9 @@ rubyGemsReads = describe "managed RubyGems mirror reads" $ do
         record <- chargedDecodeProjectRecord rubyGemsStateFormat (const pass) defaultLimits gemTarget name (rubyStateEncodedRecord fixture) >>= expectRight
         testViewAt rubyGemsStateFormat rubyGemsMirrorDocuments gemTarget (pure (Right (StateLoaded (StateRevision gemTarget name "complete") record)))
 
--- A recorded name's listing answers GET and HEAD with this status.
-recordedListingAnswers :: Status -> ByteString -> Application -> Expectation
-recordedListingAnswers expected path app =
+-- A recorded name's path answers GET and HEAD with this status.
+recordedPathAnswers :: Status -> ByteString -> Application -> Expectation
+recordedPathAnswers expected path app =
     for_ [methodGet, methodHead] $ \method -> do
         response <- requestAt method path defaultRequest app
         simpleStatus response `shouldBe` expected
@@ -485,6 +518,12 @@ nativeWith companion bytes status numbers request respond = case dropWhileEnd T.
                 RubyGemsMirrorRead _ -> "unsupported fixture source"
         respond (responseLBS status [("Content-Type", "application/vnd.pypi.simple.v1+json")] body)
     _ -> respond (responseLBS status [] bytes)
+
+-- This origin's project index, with every file it lists answering 404.
+withoutFiles :: Application -> Application
+withoutFiles index request respond = case dropWhileEnd T.null (pathInfo request) of
+    ["simple", _] -> index request respond
+    _ -> respond (responseLBS status404 [] "")
 
 -- Cargo discovery and one LF index file at the private upstream's root.
 crateIndex :: [Value] -> Application
