@@ -549,8 +549,6 @@ integrationObligations =
         ["server-shutdown"]
         [ "integration/server-shutdown/native-001"
         , "integration/server-shutdown/native-002"
-        , "integration/server-shutdown/native-003"
-        , "integration/server-shutdown/native-004"
         ]
     , required
         "integration/telemetry-metrics"

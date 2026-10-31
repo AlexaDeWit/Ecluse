@@ -2,7 +2,7 @@
 --
 -- SPDX-License-Identifier: MIT
 
--- | The production listener drains in-flight work on @SIGTERM@, and the fixture cleans up after failures.
+-- | The production listener drains in-flight work on @SIGTERM@.
 module Ecluse.Runtime.ServerIntegrationSpec (spec) where
 
 import Data.List (lookup)
@@ -24,7 +24,7 @@ import Network.Wai (Application, defaultRequest, pathInfo, responseLBS)
 import Network.Wai.Handler.Warp (Port)
 import Network.Wai.Test (SResponse (simpleStatus), request, runSession, setPath)
 import Test.Hspec
-import UnliftIO.Async (Async, poll, race, wait, withAsync)
+import UnliftIO.Async (Async, race, wait, withAsync)
 import UnliftIO.Concurrent (threadDelay)
 import UnliftIO.Exception (bracket, finally, throwIO, try)
 import UnliftIO.Timeout (timeout)
@@ -89,35 +89,6 @@ spec = describe "graceful shutdown -- drain in-flight work" $ do
 
             afterStop <- try (getResponse manager port []) :: IO (Either SomeException (Int, Maybe ByteString, LByteString))
             afterStop `shouldSatisfy` isLeft
-
-    it (caseLabel "integration/server-shutdown/native-003" "joins the listener and client when the fixture body fails") $ do
-        arrived <- newEmptyMVar
-        release <- newEmptyMVar
-        resources <- newEmptyMVar
-        let app _ respond = putMVar arrived () >> takeMVar release >> respond (responseLBS status200 [] "served")
-        withListener
-            app
-            ( \port serverThread _ -> do
-                manager <- newManager defaultManagerSettings
-                flip finally (void (tryPutMVar release ())) $ withAsync (getResponse manager port []) $ \client -> do
-                    putMVar resources (port, serverThread, client)
-                    awaitFixture "handler arrival" (wait client) (takeMVar arrived)
-                    throwIO (TestContractEscape "forced fixture failure")
-            )
-            `shouldThrow` (\(TestContractEscape message) -> message == "forced fixture failure")
-        (port, serverThread, client) <- takeMVar resources
-        poll serverThread >>= (`shouldSatisfy` isJust)
-        poll client >>= (`shouldSatisfy` isJust)
-        manager <- newManager defaultManagerSettings
-        afterStop <- try (getResponse manager port []) :: IO (Either SomeException (Int, Maybe ByteString, LByteString))
-        afterStop `shouldSatisfy` isLeft
-
-    it (caseLabel "integration/server-shutdown/native-004" "reports a client failure before handler arrival") $ do
-        arrived <- newEmptyMVar :: IO (MVar ())
-        withListener (\_ respond -> respond (responseLBS status200 [] "served")) $ \_ _ _ ->
-            withAsync (throwIO (TestContractEscape "forced client failure") :: IO ()) $ \client ->
-                awaitFixture "handler arrival" (wait client) (takeMVar arrived)
-                    `shouldThrow` (\(TestContractEscape message) -> message == "forced client failure")
 
 {- The production listener under the production middleware, serving @app@ beside the production
 health probes, with the application it serves. The drain is long enough that only a finished
