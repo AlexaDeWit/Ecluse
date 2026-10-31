@@ -28,7 +28,7 @@ import Ecluse.Test.Contract.Phase (timedFixture)
 import Ecluse.Test.Contract.Runner (DeclaredGroup (..))
 import Ecluse.Test.Contract.Serving (ServingResponse (..))
 import Ecluse.Test.Registry.RubyGems.Fixtures
-import Ecluse.Test.Registry.RubyGems.Reference (RubyInfoRow (..), referenceInfo, runRubyReference)
+import Ecluse.Test.Registry.RubyGems.Reference (RubyInfoRow (..), runRubyReference)
 
 -- | Native client observations include isolated installs and retained-cache revalidation.
 rubyNativeContract :: DeclaredGroup
@@ -49,9 +49,7 @@ rubyNativeContract = DeclaredGroup (fixtureMetadata rubyNativeFixture) $ \record
             withObservedNativeProxy defaultE2EConfig plane $ \observed -> rubyConsumer (observedProxy observed) client $ \project -> do
                 releases <- filter ((== "ecluse-fixture-platform") . releaseName) <$> loadRubyReleases
                 rubyDependency project "ecluse-fixture-platform" "= 1.0.0"
-                (status, body) <- proxyGet (observedProxy observed) "/rubygems/info/ecluse-fixture-platform"
-                status `shouldBe` 200
-                nativeRows <- either (fail . toString) pure (referenceInfo (LBS.toStrict body))
+                nativeRows <- rubyReadInfo (observedProxy observed) "ecluse-fixture-platform"
                 sort [(rowVersion row, rowPlatform row) | row <- nativeRows] `shouldBe` sort [(releaseVersion release, releasePlatform release) | release <- releases]
                 assertRubyPlatformInstall observed releases project
         it (label "checksum-failure" "refuses a wrong lockfile digest against current native metadata") $ \plane ->
@@ -252,8 +250,7 @@ retainedCacheCase client plane = withRubyRegistry $ \registry -> do
                 after <- nativeTraffic observed
                 interval <- nativeTrafficSince before after
                 nativeClientRequests interval `shouldSatisfy` any (\request -> nativeRequestPath request == "/rubygems/info/ecluse-fixture-root" && nativeRequestStatus request == 200)
-                (_, info) <- proxyGet proxy "/rubygems/info/ecluse-fixture-root"
-                rows <- either (fail . toString) pure (referenceInfo (LBS.toStrict info))
+                rows <- rubyReadInfo proxy rubyRoot
                 rows `shouldSatisfy` any (elem ("checksum", releaseChecksum privateRoot) . rowFields)
                 seedRubyRegistry registry "rubygems-private" selected
                 setRubyRegistryFault registry "rubygems-private" RubyRegistryRequireRead
@@ -284,8 +281,7 @@ compactReplacementCase plane = withRubyRegistry $ \registry -> do
             let rows = rootRows (decodeUtf8 (LBS.toStrict directory))
             rows `shouldSatisfy` (not . null)
             rows `shouldSatisfy` all (T.isSuffixOf " ")
-            (_, info) <- proxyGet proxy "/rubygems/info/ecluse-fixture-root"
-            native <- either (fail . toString) pure (referenceInfo (LBS.toStrict info))
+            native <- rubyReadInfo proxy rubyRoot
             native `shouldSatisfy` (not . null)
             releases <- filter ((== rubyRoot) . releaseName) <$> loadRubyReleases
             for_ native $ \row -> do
