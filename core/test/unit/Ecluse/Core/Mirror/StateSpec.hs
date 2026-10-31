@@ -262,10 +262,10 @@ spec = describe "durable mirror expectations" $ do
 
     it "checks dimensions before retaining the source tree" $ do
         inventory <- mirrorSample [1, 2] False "https://first.test/" "original"
-        record <- expectRight (extendProjectRecord defaultLimits target inventory Nothing)
-        bytes <- expectRight (encodeProjectRecord defaultLimits record)
-        chargedDecodeProjectRecord (const (pure ())) defaultLimits{mirrorStateFileCeiling = 1} target mirrorPackage bytes >>= (`shouldSatisfy` isLeft)
-        chargedDecodeProjectRecord (const (pure ())) defaultLimits{maxVersionCount = 0} target mirrorPackage bytes >>= (`shouldSatisfy` isLeft)
+        record <- expectRight (extendProjectRecord pypiStateFormat defaultLimits target inventory Nothing)
+        bytes <- expectRight (encodeProjectRecord pypiStateFormat defaultLimits record)
+        chargedDecodeProjectRecord pypiStateFormat (const (pure ())) defaultLimits{mirrorStateFileCeiling = 1} target mirrorPackage bytes >>= (`shouldSatisfy` isLeft)
+        chargedDecodeProjectRecord pypiStateFormat (const (pure ())) defaultLimits{maxVersionCount = 0} target mirrorPackage bytes >>= (`shouldSatisfy` isLeft)
 
     it "round trips every admission fact and original source field" $ do
         inventory <- mirrorSample [1, 2] True "https://first.test/" "original"

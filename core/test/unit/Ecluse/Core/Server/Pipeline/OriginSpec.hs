@@ -39,7 +39,7 @@ import Ecluse.Core.Registry.Cargo.Credential (cargoCredential)
 import Ecluse.Core.Registry.Cargo.Document (cargoRecords)
 import Ecluse.Core.Registry.Cargo.Route (cargoRouter)
 import Ecluse.Core.Registry.Exchange (chargedRead)
-import Ecluse.Core.Registry.Metadata (Manifest (..), MetadataError (MetadataAbsent), VersionDoc (..), VersionRead (..))
+import Ecluse.Core.Registry.Metadata (Manifest (..), MetadataClient (fetchVersionMetadata), MetadataError (MetadataAbsent), VersionDoc (..), VersionRead (..))
 import Ecluse.Core.Registry.Metadata.EntryFloor (entryFloorBytes)
 import Ecluse.Core.Registry.Metadata.Fetch (readVersion)
 import Ecluse.Core.Registry.Metadata.Fetch.Preparation (PrepareRead (PrepareRead), prepareRead)
@@ -61,7 +61,7 @@ import Ecluse.Core.Server.Cache (CacheConfig (cacheMaxEntries), MetadataCache, S
 import Ecluse.Core.Server.Cache.Backend (BackendStorage (LocalStorage), RetentionOperations (roInsert))
 import Ecluse.Core.Server.Cache.Provider (cacheProvider)
 import Ecluse.Core.Server.Cache.VersionWeight (weighVersion)
-import Ecluse.Core.Server.Context (MountBinding (..), MountRouter, PackumentDeps (..), RequestCtx (RequestCtx), ServeRuntime (srMemoryMeter, srMetadataCache), pdPublicBaseUrl, runHandler)
+import Ecluse.Core.Server.Context (MountBinding (..), MountRouter, PackumentDeps (..), RequestCtx (RequestCtx), ServeRuntime (srMemoryMeter, srMetadataCache), pdPrivateBase, pdPublicBaseUrl, runHandler)
 import Ecluse.Core.Server.Pipeline.Origin (
     ObservedReadBoundExceeded (ObservedReadBoundExceeded),
     OriginMiss (MissAbsent, MissUnresolved),
@@ -107,7 +107,7 @@ spec = describe "originMiss -- the outcomes that leave nothing to serve" $ do
     selectedChargeSpec
     fullReadSpec
     keptFloorSpec
-    it "reports no miss for a document, an access refusal, or an identity refusal" $
+    it "reports no miss for a document or an access refusal" $
         map
             originMiss
             [ OriginResolved (sampleManifest thingName [])

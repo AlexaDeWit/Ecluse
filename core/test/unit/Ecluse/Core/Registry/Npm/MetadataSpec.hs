@@ -839,7 +839,7 @@ basePackedStep writer limits name (BasePackedRead acc heldReleases) field next =
 baseRebases :: Value -> Bool
 baseRebases release = isJust (tarballUrl release >>= rebaseArtifactUrl Just)
 baseTypedMembers :: Pick
-baseTypedMembers = Only [(field, if field == "dist" then Only [(member, Whole) | member <- distFields] else Whole) | field <- versionListFields <> map installableFieldName [minBound .. maxBound]]
+baseTypedMembers = Only [(field, if field == "dist" then Only [(member, Whole) | member <- distFields] else Whole) | field <- versionListFields <> map installableFieldName Universe.universe]
 baseFinishPacked :: PackageName -> Text -> DocTable -> BasePackedRead -> Either MetadataError (PackageInfo, PackedPackument)
 baseFinishPacked requested authorPointer table (BasePackedRead acc heldReleases) = second document <$> baseFinishParts requested acc
   where

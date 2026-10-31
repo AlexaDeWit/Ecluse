@@ -129,7 +129,7 @@ spec = do
 
         it "keeps restored listing contributions packed and binds their validator to revision" $ do
             inventory <- mirrorSample [1, 2] False "https://private.test/" "source"
-            record <- expectRight (extendProjectRecord defaultLimits target inventory Nothing)
+            record <- expectRight (extendProjectRecord pypiStateFormat defaultLimits target inventory Nothing)
             let private = Manifest (info inventory) (raw inventory) 1024 noRetainedEntries (digestOf "private")
             (_, initialManifest, incompleteVersions) <- expectRight (mirrorProjectViews pypiMirrorDocuments revision record (Just private))
             (_, updatedManifest, _) <- expectRight (mirrorProjectViews pypiMirrorDocuments (rev "new") record (Just private))

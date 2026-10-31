@@ -45,7 +45,7 @@ An npm or RubyGems `mirrorTarget` or `publicationTarget` that sets `uploadUrl` n
 
 `limits.maxArtifactCount` is removed, and no key replaces it. A config document or an `ECLUSE_LIMITS__MAX_ARTIFACT_COUNT` environment variable that still sets it refuses at load, so remove both ([Upgrade existing limits and admission pins](@/docs/operations.md#upgrade-existing-limits-and-admission-pins)).
 
-The npm mount ships a second admission-only default, `deny-external-dependencies`. A public npm version whose `dependencies`, `optionalDependencies` or `peerDependencies` name a git source or a remote tarball URL stops resolving, and npm publication refuses such a release with `400`. Copies your stores already hold keep serving. Pin a package you still need with an `AllowByIdentity` rule at precedence above 300, or disable the default under `mounts.npm.rules` ([Rule policy](@/docs/configuration.md#rule-policy)).
+The npm mount ships a second admission-only default, `deny-external-dependencies`. A public npm version whose `dependencies`, `optionalDependencies` or `peerDependencies` name a git source, a remote tarball URL or an unsupported scheme such as `jsr:` stops resolving, and npm publication refuses such a release with `400`. Copies your stores already hold keep serving. Pin a package you still need with an `AllowByIdentity` rule at precedence above 300, or disable the default under `mounts.npm.rules` ([Rule policy](@/docs/configuration.md#rule-policy)).
 
 A rollback must account for queued messages and advisory data, as well as the container image.
 

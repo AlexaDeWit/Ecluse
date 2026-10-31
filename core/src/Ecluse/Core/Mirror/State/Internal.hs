@@ -61,7 +61,6 @@ import Ecluse.Core.Package.Integrity (IntegrityResult (..), verifyIntegrity)
 import Ecluse.Core.Registry (CompanionRequirement (DeclaredCompanions, NativeCompanions))
 import Ecluse.Core.Registry.MirrorUpload
 import Ecluse.Core.Registry.MirrorUpload.Internal (restoreMirrorFragment)
-import Ecluse.Core.Registry.PyPI.Document (simpleDocument, simpleEnvelope, simpleFiles)
 import Ecluse.Core.Security (LimitError (TooManyArtifacts), Limits (..), checkVersionCountOf, withinCeiling)
 import Ecluse.Core.Version (Version, renderVersion)
 
@@ -189,8 +188,8 @@ extendProjectRecord format limits target inventory previous = do
 checkStateFiles :: Limits -> Int -> Either LimitError ()
 checkStateFiles limits = withinCeiling TooManyArtifacts (mirrorStateFileCeiling limits)
 
-extendVersion :: MirrorInventory -> Maybe MirrorVersion -> Either MirrorStateFault MirrorVersion
-extendVersion inventory previous = do
+extendVersion :: MirrorStateFormat -> MirrorInventory -> Maybe MirrorVersion -> Either MirrorStateFault MirrorVersion
+extendVersion format inventory previous = do
     let oldFiles = maybe Map.empty versionFiles previous
         incoming = Map.fromList [(artFilename (expectedArtifact file), file) | file <- toList (inventoryFiles inventory)]
     for_ (Map.toList incoming) $ \(name, file) -> for_ (Map.lookup name oldFiles) $ \old ->

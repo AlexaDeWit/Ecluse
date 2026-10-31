@@ -35,6 +35,7 @@ import Ecluse.Test.Registry.Npm (packumentValue, versionSpec, versionValue)
 import Ecluse.Test.Registry.Npm.Metadata (npmRead)
 import Ecluse.Test.Registry.PyPI (filesNamed, simpleIndex)
 import Ecluse.Test.Registry.PyPI.Metadata (pypiRead)
+import Ecluse.Test.Server.Mount (requiredAdapter)
 import Ecluse.Test.Support (expectRight)
 import Test.Hspec
 import Prelude hiding (universe)
