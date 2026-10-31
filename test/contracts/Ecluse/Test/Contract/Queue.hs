@@ -15,6 +15,7 @@ import Ecluse.Test.Contract.Catalogue (caseLabel)
 import Test.Hspec
 
 import Ecluse.Core.Queue (MirrorJob (..), MirrorQueue (..), QueueMessage (..), RemoteSpanContext (..))
+import Ecluse.Test.Package (scopedNpm)
 import Ecluse.Test.Queue (sampleJob)
 import Ecluse.Test.Support (expectRightIO)
 
@@ -33,7 +34,7 @@ queueContract contractGroup =
 -- | Check payload and acknowledgement evidence. Broken-driver tests exercise this same law.
 queuePayloadLaw :: QueueDriver -> Expectation
 queuePayloadLaw driver =
-    for_ [sampleJob, sampleJob{jobTriggerFilename = Nothing}, sampleJob{jobTraceContext = Just carrier}] $ \payload -> do
+    for_ [sampleJob, sampleJob{jobTriggerFilename = Nothing}, sampleJob{jobTraceContext = Just carrier}, sampleJob{jobPackage = scopedNpm "scope" "thing"}] $ \payload -> do
         expectRightIO (enqueue (queueHandle driver) payload)
         messages <- awaitDelivery driver
         map msgJob messages `shouldBe` [payload]

@@ -7,8 +7,10 @@ module Ecluse.Test.Contract.QueueSpec (spec) where
 
 import Test.Hspec
 
-import Ecluse.Core.Queue (MirrorJob (jobTraceContext), MirrorQueue (receive), QueueMessage (msgJob))
+import Ecluse.Core.Package (unscopedName)
+import Ecluse.Core.Queue (MirrorJob (jobPackage, jobTraceContext), MirrorQueue (receive), QueueMessage (msgJob))
 import Ecluse.Test.Contract.Queue (QueueDriver (..), queuePayloadLaw)
+import Ecluse.Test.Package (unscopedNpm)
 import Ecluse.Test.Queue (newTestMemoryQueue, otherJob)
 import Ecluse.Test.Support (expectRightIO)
 
@@ -30,4 +32,9 @@ spec = describe "queue contract negative controls" $ do
         queue <- newTestMemoryQueue
         let untraced message = message{msgJob = (msgJob message){jobTraceContext = Nothing}}
         queuePayloadLaw QueueDriver{queueHandle = queue, awaitDelivery = map untraced <$> expectRightIO (receive queue)}
+            `shouldThrow` anyException
+    it "rejects a driver that drops the package scope" $ do
+        queue <- newTestMemoryQueue
+        let unscoped message = message{msgJob = (msgJob message){jobPackage = unscopedNpm (unscopedName (jobPackage (msgJob message)))}}
+        queuePayloadLaw QueueDriver{queueHandle = queue, awaitDelivery = map unscoped <$> expectRightIO (receive queue)}
             `shouldThrow` anyException
