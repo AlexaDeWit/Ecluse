@@ -1323,10 +1323,8 @@ unconfiguredPrivateSpec = do
                 decisions `shouldReturn` [Unavailable, Unavailable]
                 denials `shouldReturn` replicate 2 (Nothing, Metric.ReasonUnavailable)
 
-{- Each listing route's answer to every public reply Écluse cannot use, for GET and HEAD, beside this
-ecosystem's private origin or none: 502, an unavailable decision and its denial, and a body that names
-the public upstream unless the read budget refused first.
--}
+-- Every listing route answers each public reply Écluse cannot use with 502, an unavailable decision and its
+-- denial, and, unless the read budget refused first, a body naming the public upstream.
 invalidPublicReplyRoutes :: Maybe (Ecosystem -> Application) -> Spec
 invalidPublicReplyRoutes privateOrigin =
     for_ invalidPublicReplies $ \(cause, reply, change, budgeted) ->
@@ -1348,11 +1346,8 @@ invalidPublicReplyRoutes privateOrigin =
                     body <- withReply noopMetricsPort $ \rt binding -> captureRouted rt binding methodGet path >>= responseBytes
                     LBS.toStrict body `shouldSatisfy` BS.isInfixOf "the public upstream returned an invalid or unusable reply"
 
-{- Public replies Écluse cannot use, each with the mount change that makes it one, and the ecosystems
-whose request-wide read budget refuses it with its own 502 and words before the public leg decides.
-RubyGems reads /info under a budget the size of the document bound. The bound leaves room for an empty
-private document.
--}
+-- Public replies Écluse cannot use, with the mount change that makes each one, and the ecosystems whose read
+-- budget refuses it first in its own words: RubyGems /info, budgeted at one document bound beside an empty private one.
 invalidPublicReplies :: [(String, Response, PackumentDeps -> PackumentDeps, [Ecosystem])]
 invalidPublicReplies =
     [ ("an unfollowed redirect", responseLBS status302 [(hLocation, "http://elsewhere.test/leftpad")] "", id, [])
