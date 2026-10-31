@@ -161,12 +161,19 @@ shrinkSpec eco versioned =
             large <- aiOsvZip <$> syntheticAdvisories eco (fillerTargets 400)
             small <- aiOsvZip <$> syntheticAdvisories eco (fillerTargets 20)
             void (withServedCandidate server eco large (Just "Wed, 01 Oct 2026 10:00:00 GMT") (dir </> "large") (publish store) >>= expectPublished)
-            before <- storedEtag store
-            baseline <- HashMap.lookup "baseline-bytes" <$> storedMetadata store
-            withServedCandidate server eco small (Just "Wed, 01 Oct 2026 11:00:00 GMT") (dir </> "small") (publish store) >>= \case
-                Left (PublicationRefused (ShrinkPastBaseline reading)) -> show (srBaselineBytes reading) `shouldBe` fromMaybe "" baseline
-                other -> expectationFailure ("expected a shrink refusal, got " <> show other)
-            storedEtag store `shouldReturn` before
+            metadata <- storedMetadata store
+            withServedCandidate server eco small (Just "Wed, 01 Oct 2026 11:00:00 GMT") (dir </> "small") $ \candidate -> do
+                -- An operator write leaves an object of the candidate's own size under the large publication's
+                -- metadata, so only the metadata's baseline can refuse the candidate.
+                void (putDirect store (candidatePath candidate) metadata)
+                storedBytes <- maybe (fail "the stored object has no length") pure . (^. S3L.headObjectResponse_contentLength) =<< headObject store
+                before <- storedEtag store
+                publish store candidate >>= \case
+                    Left (PublicationRefused (ShrinkPastBaseline reading)) -> do
+                        Just (show (srBaselineBytes reading)) `shouldBe` HashMap.lookup "baseline-bytes" metadata
+                        toRational (srCandidateBytes reading) `shouldSatisfy` (>= toRational storedBytes * (100 - unPercent (spMaxShrink (stPolicy store))) / 100)
+                    other -> expectationFailure ("expected a shrink refusal, got " <> show other)
+                storedEtag store `shouldReturn` before
   where
     bucketKind = if versioned then "versioned" else "unversioned"
 
