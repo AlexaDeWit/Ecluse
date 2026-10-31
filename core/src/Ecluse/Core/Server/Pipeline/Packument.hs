@@ -23,8 +23,8 @@ module Ecluse.Core.Server.Pipeline.Packument (
     -- * The refusal when no version survives (exported for its unit spec)
     noSurvivors,
 
-    -- * The refusal for a name neither origin holds
-    unheldNameRefusal,
+    -- * The answer for a name neither origin holds
+    unheldNameReply,
 ) where
 
 import Crypto.Hash (Digest, SHA256, hash)
@@ -401,7 +401,7 @@ serveMergedPackument serving evalCtx record privResult pubResult
     , not (pdFirstParty deps name)
     , OriginNotFound <- privResult
     , OriginNotFound <- pubResult =
-        unheldName serving
+        liftIO (unheldNameReply (servingMetrics serving) (psvReplies serving) (pdHelp deps))
     | otherwise = withCheckedSourceDocuments serving (catMaybes [originManifest privResult, originManifest pubResult]) $ case views of
         Left _ -> mirrorUnavailable serving
         Right (unmanagedManifest, managedManifest, pending) -> do
@@ -706,22 +706,15 @@ neededUpstreamUnavailableMessage = "a needed upstream was unavailable"
 upstreamInvalidDecision :: ServeDecision
 upstreamInvalidDecision = Reject (Rejection UpstreamInvalid "an upstream returned a packument for a different package")
 
--- Both origins answered 404, so the name is absent: a 404, recorded as the artifact path records a missing version.
-unheldName :: PackumentServing response -> Handler response
-unheldName serving = do
-    liftIO (mpServeDecision metrics (serveDecisionClass decision))
-    liftIO (recordDenials metrics [decision])
-    pure (packumentNotFound (psvReplies serving) [] (unheldNameRefusal (pdHelp (psvDeps serving))))
+-- | Answer @404@ for a name both origins answered @404@ for, recorded as the artifact path records a missing version.
+unheldNameReply :: MetricsPort -> PackumentReplies response -> Maybe HelpMessage -> IO response
+unheldNameReply metrics replies help = do
+    mpServeDecision metrics (serveDecisionClass decision)
+    recordDenials metrics [decision]
+    pure (packumentNotFound replies [] (mkRefusal help message))
   where
-    metrics = servingMetrics serving
-    decision = rejectUnavailable WontResolve unheldNameMessage
-
--- | The @404@ refusal for a name that both the private and the public origin answered @404@ for.
-unheldNameRefusal :: Maybe HelpMessage -> Refusal
-unheldNameRefusal help = mkRefusal help unheldNameMessage
-
-unheldNameMessage :: Text
-unheldNameMessage = "neither the private nor the public upstream has the requested package"
+    message = "neither the private nor the public upstream has the requested package"
+    decision = rejectUnavailable WontResolve message
 
 -- A private origin that was not read refuses every name, so no public namesake stands in for a
 -- private package. Its cause alone sets the status, whatever the public leg did.
