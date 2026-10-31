@@ -11,10 +11,8 @@ import Data.List (dropWhileEnd, lookup)
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Data.Time (UTCTime (UTCTime), fromGregorian)
-import Network.HTTP.Client (defaultManagerSettings, newManager)
-import Network.HTTP.Types (Status, methodGet, methodHead, status200, status304, status403, status404, status503)
+import Network.HTTP.Types (Status, methodHead, status200, status304, status403, status404, status503)
 import Network.Wai (Application, defaultRequest, pathInfo, rawPathInfo, requestHeaders, responseLBS)
-import Network.Wai.Handler.Warp (testWithApplication)
 import Network.Wai.Test (SResponse (simpleBody, simpleHeaders, simpleStatus))
 import Test.Hspec
 
@@ -45,10 +43,9 @@ import Ecluse.Core.Server.MirrorView
 import Ecluse.Core.Server.Path (unFilename)
 import Ecluse.Core.Server.Upstream (MirrorServePlan (MirrorOnAdmit, NoMirrorWrite))
 import Ecluse.Runtime.Server (application, mkServerConfig)
-import Ecluse.Server.Pipeline.TestSupport (getPath, getPathWith, newTestEnvWithQueue, requestAt)
+import Ecluse.Server.Pipeline.TestSupport (getPath, getPathWith, newTestEnvWithQueue, requestAt, withUpstreams)
 import Ecluse.Service (mountBindingFor)
 import Ecluse.Test.Contract.Catalogue (caseLabel)
-import Ecluse.Test.Deadline (withSweeper)
 import Ecluse.Test.Mirror.RubyGems (RubyStateProbeFixture (..), rubyStateProbeFixture)
 import Ecluse.Test.Mirror.State
 import Ecluse.Test.Queue (newTestMemoryQueue)
@@ -552,15 +549,13 @@ withMountProxy eco adapter configure view private public action = do
     withMountOver eco adapter (queue{enqueue = \_ -> fail "unexpected mirror enqueue"}, configure) view False private public action
 
 withMountOver :: Ecosystem -> RegistryAdapter -> (MirrorQueue, PackumentDeps -> PackumentDeps) -> MirrorView -> Bool -> Application -> Application -> (Application -> IO a) -> IO a
-withMountOver eco adapter (queue, configure) view firstParty private public action = do
-    manager <- newManager defaultManagerSettings
-    testWithApplication (pure private) $ \privatePort ->
-        testWithApplication (pure public) $ \publicPort -> withSweeper $ \deadlines -> do
-            env <- newTestEnvWithQueue deadlines queue manager
-            let deps =
-                    (serveDepsFor adapter (Just (loopbackRegistryUrl (localhost privatePort))) (loopbackRegistryUrl (localhost publicPort)) NoMirrorWrite [] (pure (UTCTime (fromGregorian 2026 10 11) 0)))
-                        { pdMirrorState = Just view
-                        , pdFirstParty = const firstParty
-                        , pdMountBaseUrl = "http://ecluse.test/" <> ecosystemName eco
-                        }
-            action (application (mkServerConfig (maybeToList (mountBindingFor eco (configure deps) Nothing))) env)
+withMountOver eco adapter (queue, configure) view firstParty private public action =
+    withUpstreams private public $ \privatePort publicPort deadlines manager -> do
+        env <- newTestEnvWithQueue deadlines queue manager
+        let deps =
+                (serveDepsFor adapter (Just (loopbackRegistryUrl (localhost privatePort))) (loopbackRegistryUrl (localhost publicPort)) NoMirrorWrite [] (pure (UTCTime (fromGregorian 2026 10 11) 0)))
+                    { pdMirrorState = Just view
+                    , pdFirstParty = const firstParty
+                    , pdMountBaseUrl = "http://ecluse.test/" <> ecosystemName eco
+                    }
+        action (application (mkServerConfig (maybeToList (mountBindingFor eco (configure deps) Nothing))) env)
