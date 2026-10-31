@@ -20,7 +20,7 @@ import Network.HTTP.Types (Header, Status, methodGet, methodHead, status200, sta
 import Network.Wai (Application, responseLBS)
 import Network.Wai qualified as Wai
 import Network.Wai.Handler.Warp (testWithApplication)
-import Network.Wai.Test (SResponse (SResponse, simpleBody, simpleHeaders, simpleStatus))
+import Network.Wai.Test (SResponse (simpleBody, simpleHeaders, simpleStatus))
 import Test.Hspec
 import UnliftIO (tryAny)
 
@@ -100,7 +100,17 @@ indexSpec = describe "the served Simple index" $ do
             servedFiles resp `shouldBe` expectedFiles
 
     for_ sidecarKeys $ \key ->
-        it (caseLabel ("integration/pypi/native-005/" <> key) (toText ("recognises " <> toString key <> " and rejects its retained-response control" :: String))) $
+        it (caseLabel ("integration/pypi/native-005/" <> key) (toText ("recognises " <> toString key <> ", drops it as a file's only companion declaration, and rejects its retained-response control" :: String))) $ do
+            -- With no canonical declaration beside it, a kept alias would be the file's only companion advertisement.
+            withPyPIProxyOver (publicIndexWith (\fields -> foldr (KeyMap.delete . Key.fromText) fields (filter (/= key) ("core-metadata" : sidecarKeys)))) publicPypiDeps $ \proxy -> do
+                resp <- getIndex (proxyApp proxy)
+                statusOf resp `shouldBe` 200
+                length (servedFiles resp) `shouldBe` 2
+                for_ ("core-metadata" : sidecarKeys) (`excludesSidecar` resp)
+                companion <- getPath (sdistPath <> ".metadata") (proxyApp proxy)
+                statusOf companion `shouldBe` 404
+                hits <- privateHits proxy
+                map fst hits `shouldNotContain` [sdistPath <> ".metadata"]
             withPyPIProxy publicIndex $ \app -> do
                 resp <- getIndex app
                 let input = resp{simpleBody = encode (publicIndex "http://upstream.test")}
@@ -210,9 +220,11 @@ sidecarSpec = describe "the metadata companion" $ do
             privateHits proxy `shouldReturn` []
 
     it (caseLabel "integration/pypi/native-025" "reports an unavailable public index without fetching companion bytes") $
-        withPyPIProxyResponding (const (\_ respond -> respond (responseLBS status503 [] "unavailable"))) publicIndex publicPypiDeps $ \proxy -> do
+        -- Only the index fails, so a companion fetch would reach the recorded upstream and find bytes.
+        withPyPIProxyResponding (onIndex (\_ respond -> respond (responseLBS status503 [] "unavailable"))) publicIndex publicPypiDeps $ \proxy -> do
             response <- getPath (sdistPath <> ".metadata") (proxyApp proxy)
             statusOf response `shouldBe` 503
+            privateHits proxy `shouldReturn` []
 
     it (caseLabel "integration/pypi/native-026" "refuses a mismatched project identity") $
         withPyPIProxyOver (withKeys ["name" .= ("other-project" :: Text)] . publicIndex) publicPypiDeps $ \proxy -> do
@@ -416,10 +428,17 @@ privateMetadataBytes :: LByteString
 privateMetadataBytes = "private metadata"
 
 alterDeclarations :: Maybe Value -> Text -> Value
-alterDeclarations declaration authority = withKeys ["files" .= map change (servedFiles response)] (publicIndex authority)
-  where
-    response = SResponse status200 [] (encode (publicIndex authority))
-    change = Object . maybe (KeyMap.delete "core-metadata") (KeyMap.insert "core-metadata") declaration . asObject
+alterDeclarations declaration = publicIndexWith (maybe (KeyMap.delete "core-metadata") (KeyMap.insert "core-metadata") declaration)
+
+-- The public index with each file's members changed.
+publicIndexWith :: (KeyMap.KeyMap Value -> KeyMap.KeyMap Value) -> Text -> Value
+publicIndexWith change authority = withKeys ["files" .= map (Object . change . asObject . fileOn authority) publicFilenames] (publicIndex authority)
+
+-- Answer the project index with the first application, and every other request with the second.
+onIndex :: Application -> Application -> Application
+onIndex index original request respond = case dropWhileEnd T.null (Wai.pathInfo request) of
+    ["simple", _project] -> index request respond
+    _ -> original request respond
 
 onCompanion :: Application -> Application -> Application
 onCompanion companion original request respond
@@ -439,10 +458,11 @@ negotiationSpec = describe "content negotiation, decided from the route record" 
             simpleStatus resp `shouldBe` status200
 
     it (caseLabel "integration/pypi/native-012" "answers 406 to a client that requires HTML, before any upstream work") $
-        withPyPIProxy publicIndex $ \app -> do
-            resp <- getPathWith [("Accept", "text/html")] "/pypi/simple/requests" app
+        withPyPIProxyOver publicIndex publicPypiDeps $ \proxy -> do
+            resp <- getPathWith [("Accept", "text/html")] "/pypi/simple/requests" (proxyApp proxy)
             statusOf resp `shouldBe` 406
             simpleBody resp `shouldBe` ""
+            privateHits proxy `shouldReturn` []
 
 refusalBodySpec :: Spec
 refusalBodySpec = describe "the operator help message on a refusal the route table decides" $ do
@@ -631,8 +651,11 @@ publicIndex authority =
     object
         [ "name" .= ("requests" :: Text)
         , "meta" .= object ["api-version" .= ("1.4" :: Text), "_last-serial" .= (37059094 :: Int)]
-        , "files" .= map (fileOn authority) ["requests-2.34.2-py3-none-any.whl", "requests-2.34.2.tar.gz"]
+        , "files" .= map (fileOn authority) publicFilenames
         ]
+
+publicFilenames :: [Text]
+publicFilenames = ["requests-2.34.2-py3-none-any.whl", "requests-2.34.2.tar.gz"]
 
 privateIndexOnItself :: Text -> Value
 privateIndexOnItself = publicIndex
