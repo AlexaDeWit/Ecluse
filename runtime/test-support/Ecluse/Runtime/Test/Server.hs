@@ -30,8 +30,8 @@ withProductionListener listener cfg getApp action = withSavedSignalHandlers $
   where
     loggedPort = listToMaybe . mapMaybe (readMaybe . toString <=< T.stripPrefix (listeningPrefix listener))
 
-{- | Deliver @SIGTERM@ to this process, as an orchestrator stopping the pod does. Outside a
-'withProductionListener' the saved disposition ignores it.
+{- | Deliver @SIGTERM@ to this process, as an orchestrator stopping the pod does. Raise it once, inside
+'withProductionListener': its handler catches one signal, and elsewhere the signal ends the test process.
 -}
 raiseShutdownSignal :: IO ()
 raiseShutdownSignal = Posix.raiseSignal Posix.sigTERM
