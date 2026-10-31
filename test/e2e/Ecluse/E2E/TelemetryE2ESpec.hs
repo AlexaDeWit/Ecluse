@@ -68,10 +68,18 @@ readDriver recorder plane traffic primary secondary identityPackage =
         , readTelemetryIdentity = TelemetryIdentity ddTagService ddTagEnv ddTagVersion
         }
 
+{- The disabled proxy keeps the exporter's endpoint and tuning beside a running collector, so only
+the switch stands between it and an export. Debug logs carry the request-scoped lines it checks. -}
 telemetryConfig :: TelemetryMode -> E2EConfig
 telemetryConfig = \case
     EnabledTelemetry -> defaultE2EConfig{ecCollector = True, ecExtraEnv = otlpCollectorEnv}
-    DisabledTelemetry -> defaultE2EConfig{ecExtraEnv = [("ECLUSE_OBSERVABILITY__TELEMETRY", "off")]}
+    DisabledTelemetry ->
+        defaultE2EConfig
+            { ecCollector = True
+            , ecExtraEnv =
+                [("ECLUSE_OBSERVABILITY__TELEMETRY", "off"), ("ECLUSE_OBSERVABILITY__LOG_LEVEL", "debug")]
+                    <> filter ((/= "ECLUSE_OBSERVABILITY__TELEMETRY") . fst) otlpCollectorEnv
+            }
     FailedExporter -> defaultE2EConfig{ecExtraEnv = otlpCollectorEnv}
     IdentityTelemetry -> defaultE2EConfig{ecCollector = True, ecExtraEnv = ("ECLUSE_OBSERVABILITY__LOG_LEVEL", "debug") : datadogCollectorEnv}
 

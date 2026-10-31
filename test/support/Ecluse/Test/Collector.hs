@@ -12,6 +12,7 @@ module Ecluse.Test.Collector (
     printedSpans,
     spanCarries,
     spanFor,
+    linkedMirrorTraces,
     privateArtifactAnswers,
     privateLookupAnswers,
 ) where
@@ -61,8 +62,8 @@ data PrintedSpan = PrintedSpan
     -- ^ The 16-hex span ID, when the span printed a valid one.
     , psParentId :: Maybe Text
     , psKind :: Maybe Text
-    , psLinkTraceIds :: [Text]
-    -- ^ The valid trace ID of each span link, in printed order.
+    , psLinks :: [(Text, Text)]
+    -- ^ The trace and span IDs each of the span's links names, in printed order.
     }
 
 -- | Every span in the collector's output with its identifiers and links, in printed order.
@@ -75,11 +76,11 @@ printedSpans = spansIn . lines
             let (own, later) = span ownLine rest
              in [ PrintedSpan
                     { psSpan = ExportedSpan name (mapMaybe attribute own)
-                    , psTraceId = uniqueField "Trace ID" own >>= validId 32
-                    , psSpanId = uniqueField "ID" own >>= validId 16
+                    , psTraceId = validId 32 =<< uniqueField "Trace ID" own
+                    , psSpanId = validId 16 =<< uniqueField "ID" own
                     , psParentId = uniqueField "Parent ID" own
                     , psKind = uniqueField "Kind" own
-                    , psLinkTraceIds = linkTraceIds (takeWhile (not . spanBoundary) later)
+                    , psLinks = spanLinks (takeWhile detailLine later)
                     }
                 | Just name <- [fieldNamed "Name" own]
                 ]
@@ -89,6 +90,9 @@ printedSpans = spansIn . lines
     -- Any other line starts the span's events or links, the next span, or another signal.
     ownLine line = " " `T.isPrefixOf` line || T.stripEnd line == "Attributes:"
 
+    -- The span's events, then its links, each under an unindented label and numbered header.
+    detailLine line = " " `T.isPrefixOf` line || any (`T.isPrefixOf` line) ["Events:", "SpanEvent #", "Links:", "SpanLink #"]
+
     fieldNamed field own =
         listToMaybe [T.strip (T.drop 1 value) | (key, value) <- map (T.breakOn ":") own, T.strip key == field]
 
@@ -96,20 +100,24 @@ printedSpans = spansIn . lines
         [value] -> Just value
         _ -> Nothing
 
-    validId width value = value <$ guard (T.length value == width && T.all isHexDigit value && T.any (/= '0') value)
+    -- An all-zero ID is the exporter's rendering of an absent one.
+    validId size value = value <$ guard (T.length value == size && T.all isHexDigit value && T.any (/= '0') value)
 
-    -- The exporter prints a span's events, then its links: a @Links:@ label, then one
-    -- @SpanLink #n@ block of indented @-> Trace ID:@ style fields per link.
-    linkTraceIds trailer = case break ((== "Links:") . T.stripEnd) trailer of
-        (_, _ : links) ->
-            [ traceKey
-            | line <- takeWhile (\entry -> "SpanLink #" `T.isPrefixOf` entry || " " `T.isPrefixOf` entry) links
-            , Just value <- [T.stripPrefix "-> Trace ID:" (T.strip line)]
-            , Just traceKey <- [validId 32 (T.strip value)]
-            ]
+    -- Links print last, so every @SpanLink #n@ after the @Links:@ label is one of this span's.
+    spanLinks details = mapMaybe linkOf (linkBlocks (drop 1 (dropWhile ((/= "Links:") . T.stripEnd) details)))
+
+    linkBlocks = \case
+        header : rest
+            | "SpanLink #" `T.isPrefixOf` header ->
+                let (fields, more) = break (T.isPrefixOf "SpanLink #") rest
+                 in fields : linkBlocks more
         _ -> []
 
-    spanBoundary line = any (`T.isPrefixOf` line) ["Span #", "ScopeSpans #", "ResourceSpans #", "Metric #", "LogRecord #"]
+    linkOf fields = (,) <$> (validId 32 =<< linkField "Trace ID" fields) <*> (validId 16 =<< linkField "ID" fields)
+
+    linkField field fields = case [T.strip value | Just entry <- map (T.stripPrefix "-> " . T.strip) fields, Just value <- [T.stripPrefix (field <> ": ") entry]] of
+        [value] -> Just value
+        _ -> Nothing
 
     attribute line = do
         entry <- T.stripPrefix "-> " (T.strip line)
@@ -133,6 +141,22 @@ spanFor :: Text -> Text -> Text -> ExportedSpan -> Bool
 spanFor package version name exported =
     esName exported == name
         && spanCarries [("ecluse.package", TextValue package), ("ecluse.version", TextValue version)] exported
+
+{- | The traces in which a coordinate's rule evaluation and mirror enqueue ran together, and whose
+enqueue span the coordinate's mirror job links back to.
+-}
+linkedMirrorTraces :: Text -> Text -> Text -> [Text]
+linkedMirrorTraces package version output =
+    ordNub
+        [ traceKey
+        | enqueue <- named "ecluse.mirror.enqueue"
+        , Just traceKey <- [psTraceId enqueue]
+        , Just traceKey `elem` map psTraceId (named "ecluse.rule.eval")
+        , Just spanKey <- [psSpanId enqueue]
+        , any (elem (traceKey, spanKey) . psLinks) (named "ecluse.mirror.job")
+        ]
+  where
+    named name = filter (spanFor package version name . psSpan) (printedSpans output)
 
 -- | Statuses of GETs to one private artifact, in collector output order.
 privateArtifactAnswers :: Text -> Text -> [ExportedSpan] -> [AttributeValue]

@@ -20,6 +20,7 @@ module Ecluse.Test.Contract.Telemetry (
     exportsDomainSpans,
     exportsPrivateFetch,
     logsWithoutCollector,
+    exportsNothingWhenDisabled,
     servesAfterExportFailure,
     exportsIdentity,
     hasPopulatedTraceId,
@@ -30,14 +31,17 @@ import Data.Aeson.KeyMap qualified as KeyMap
 import Data.Char (isDigit)
 import Data.Text qualified as T
 import Numeric (readHex)
-import Test.Hspec (Expectation, SpecWith, it, shouldBe, shouldReturn, shouldSatisfy)
+import Test.Hspec (Expectation, SpecWith, it, shouldBe, shouldNotSatisfy, shouldReturn, shouldSatisfy)
 
 import Ecluse.Test.Contract.Catalogue (caseLabel)
 
 import Ecluse.Test.Collector
 import Ecluse.Test.Contract.Install (ClientResult, shouldSucceed)
+import Ecluse.Test.Log (lineMessage)
 
--- | Exporter configurations required for read-only service conformance.
+{- | Exporter configurations required for read-only service conformance. 'DisabledTelemetry' turns
+telemetry off beside a reachable collector, so an ignored switch shows as exported signals.
+-}
 data TelemetryMode = EnabledTelemetry | DisabledTelemetry | FailedExporter | IdentityTelemetry
     deriving stock (Eq, Show)
 
@@ -65,7 +69,7 @@ readTelemetryContract prefix = do
             exportsSignals (readTelemetryPackage driver) (sessionTraffic session) (sessionCollector session)
     it (label "disabled" "serves and logs without a collector") $ \driver ->
         withReadTelemetry driver DisabledTelemetry $ \session ->
-            logsWithoutCollector (readTelemetryPackage driver) (sessionTraffic session) (sessionLogs session)
+            exportsNothingWhenDisabled (readTelemetryPackage driver) (sessionTraffic session) (sessionLogs session) (sessionCollector session)
     it (label "export-failure" "warns and keeps serving after export failure") $ \driver ->
         withReadTelemetry driver FailedExporter $ \session ->
             servesAfterExportFailure (readTelemetryPackage driver) (readTelemetrySecondPackage driver) (sessionTraffic session) (sessionLogs session)
@@ -151,28 +155,20 @@ exportsSignals package traffic collector = do
   where
     signals logs = "ecluse.serve.decision" `T.isInfixOf` logs && "Span #" `T.isInfixOf` logs
 
-{- | All domain spans must identify this scenario's own coordinate. The rule evaluation and the
-enqueue share one trace, and the worker's job span links back to that trace.
+{- | The coordinate's rule evaluation and enqueue share the serving request's trace, and its mirror
+job links back to that enqueue span.
 -}
 exportsDomainSpans :: Text -> Text -> TrafficDriver -> MirrorTelemetryDriver -> CollectorDriver -> Expectation
 exportsDomainSpans package version traffic mirror collector = do
     void (telemetryInstall traffic package >>= shouldSucceed)
     versions <- telemetryAwaitVersion mirror package version
     (version `elem` versions) `shouldBe` True
-    logs <- telemetryCollected collector emitted 120
-    logs `shouldSatisfy` emitted
+    logs <- telemetryCollected collector (not . null . correlated) 120
+    (correlated logs, [esName exported | exported <- exportedSpans logs, any (\name -> spanFor package version name exported) domainSpans])
+        `shouldSatisfy` (not . null . fst)
   where
-    emitted logs =
-        let spans = printedSpans logs
-            named name = filter (spanFor package version name . psSpan) spans
-         in not $
-                null
-                    [ traceKey
-                    | enqueue <- named "ecluse.mirror.enqueue"
-                    , Just traceKey <- [psTraceId enqueue]
-                    , any ((== Just traceKey) . psTraceId) (named "ecluse.rule.eval")
-                    , any (elem traceKey . psLinkTraceIds) (named "ecluse.mirror.job")
-                    ]
+    correlated = linkedMirrorTraces package version
+    domainSpans = ["ecluse.rule.eval", "ecluse.mirror.enqueue", "ecluse.mirror.job"]
 
 -- | A fresh second install records a successful private fetch after the initial miss.
 exportsPrivateFetch :: PrivateFetchKind -> Text -> Text -> Text -> Text -> TrafficDriver -> MirrorTelemetryDriver -> CollectorDriver -> Expectation
@@ -191,6 +187,23 @@ exportsPrivateFetch kind package version host target traffic mirror collector = 
     answers = case kind of
         ConventionalArtifact -> privateArtifactAnswers host target . exportedSpans
         IndexedLookup -> privateLookupAnswers host target
+
+{- | With telemetry off, a fresh client is served, its request is logged, and nothing reaches the
+collector the exporter could have reached, over several export intervals.
+-}
+exportsNothingWhenDisabled :: Text -> TrafficDriver -> LogDriver -> CollectorDriver -> Expectation
+exportsNothingWhenDisabled package traffic logs collector = do
+    void (telemetryInstall traffic package >>= shouldSucceed)
+    logged <- telemetryLogs logs namesPackage 80
+    logged `shouldSatisfy` namesPackage
+    exported <- telemetryCollected collector anySignal 40
+    exported `shouldNotSatisfy` anySignal
+    warned <- telemetryLogs logs exportError 1
+    warned `shouldNotSatisfy` exportError
+  where
+    namesPackage = any (maybe False (T.isInfixOf package) . lineMessage) . lines
+    anySignal output = "Span #" `T.isInfixOf` output || "Metric #" `T.isInfixOf` output
+    exportError = T.isInfixOf "telemetry export error"
 
 -- | Logging and client service remain available without a collector.
 logsWithoutCollector :: Text -> TrafficDriver -> LogDriver -> Expectation

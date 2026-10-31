@@ -28,7 +28,16 @@ readTelemetrySpec = describe "read telemetry evidence" $ do
     it "rejects a trace-only collector" $
         exportsSignals "package" traffic (collector "Span #1") `shouldThrow` anyException
     it "rejects missing logs when telemetry is disabled" $
-        logsWithoutCollector "package" traffic (logs "") `shouldThrow` anyException
+        exportsNothingWhenDisabled "package" traffic (logs "") (collector "") `shouldThrow` anyException
+    it "requires a request log and a quiet collector when telemetry is disabled" $
+        exportsNothingWhenDisabled "package" traffic (logs requestLog) (collector "")
+    it "rejects a disabled-telemetry log that never names the requested package" $
+        exportsNothingWhenDisabled "package" traffic (logs "{\"message\":\"listening on port 8080\"}") (collector "") `shouldThrow` anyException
+    for_ [("span", "Span #0"), ("metric", "Metric #0")] $ \(signal, printed) ->
+        it ("rejects an exported " <> signal <> " when telemetry is disabled") $
+            exportsNothingWhenDisabled "package" traffic (logs requestLog) (collector printed) `shouldThrow` anyException
+    it "rejects an export attempt when telemetry is disabled" $
+        exportsNothingWhenDisabled "package" traffic (logs (requestLog <> "\n{\"message\":\"telemetry export error\"}")) (collector "") `shouldThrow` anyException
     it "requires readiness after exporter failure" $
         servesAfterExportFailure
             "first"
@@ -46,24 +55,31 @@ readTelemetrySpec = describe "read telemetry evidence" $ do
     traffic = TrafficDriver (const (pure success)) (pure 200)
     collector output = CollectorDriver (\_ _ -> pure output)
     logs output = LogDriver (\_ _ -> pure output)
+    requestLog = "{\"message\":\"fetching public origin for package\"}"
 
 domainSpansSpec :: Spec
 domainSpansSpec = describe "domain span correlation" $ do
-    it "accepts a job span linked to the trace of the rule evaluation and the enqueue" $
-        domainSpans (servingSpans servingTrace <> jobSpan [servingTrace])
-    it "rejects a job span with no link back to the enqueueing trace" $
-        domainSpans (servingSpans servingTrace <> jobSpan []) `shouldThrow` anyException
-    it "rejects a job span linked to another trace" $
-        domainSpans (servingSpans servingTrace <> jobSpan [workerTrace]) `shouldThrow` anyException
+    it "accepts a mirror job linked to the enqueue that shares the rule evaluation's trace" $
+        domainSpans servingTrace [(servingTrace, enqueueSpan)]
+    it "rejects a mirror job without a link to its enqueue" $
+        domainSpans servingTrace [] `shouldThrow` anyException
+    it "rejects a mirror job linked to another trace" $
+        domainSpans servingTrace [(workerTrace, enqueueSpan)] `shouldThrow` anyException
+    it "rejects a mirror job linked to another span of the enqueue's trace" $
+        domainSpans servingTrace [(servingTrace, ruleSpan)] `shouldThrow` anyException
     it "rejects a rule evaluation outside the enqueueing trace" $
-        domainSpans (coordinateSpan "ecluse.rule.eval" workerTrace "" <> coordinateSpan "ecluse.mirror.enqueue" servingTrace "" <> jobSpan [servingTrace])
-            `shouldThrow` anyException
+        domainSpans workerTrace [(servingTrace, enqueueSpan)] `shouldThrow` anyException
   where
-    domainSpans output =
-        exportsDomainSpans "pkg" "1.0.0" (TrafficDriver (const (pure installed)) (pure 200)) (MirrorTelemetryDriver (const (pure [])) (\_ version -> pure [version])) (CollectorDriver (\_ _ -> pure output))
-    servingSpans traceKey = coordinateSpan "ecluse.rule.eval" traceKey "" <> coordinateSpan "ecluse.mirror.enqueue" traceKey ""
-    jobSpan links = coordinateSpan "ecluse.mirror.job" workerTrace "" <> linkBlock links
-    linkBlock links = if null links then "" else "Links:\n" <> T.concat ["SpanLink #0\n     -> Trace ID: " <> traceKey <> "\n" | traceKey <- links]
+    enqueueSpan = "1111111111111111"
+    ruleSpan = "2222222222222222"
+    domainSpans ruleTrace links =
+        exportsDomainSpans "pkg" "1.0.0" (TrafficDriver (const (pure installed)) (pure 200)) (MirrorTelemetryDriver (const (pure [])) (\_ version -> pure [version])) . CollectorDriver $ \_ _ ->
+            pure $
+                coordinateSpan "ecluse.rule.eval" ruleTrace ruleSpan
+                    <> coordinateSpan "ecluse.mirror.enqueue" servingTrace enqueueSpan
+                    <> coordinateSpan "ecluse.mirror.job" workerTrace "3333333333333333"
+                    <> linkBlock links
+    linkBlock links = if null links then "" else "Links:\n" <> T.concat ["SpanLink #" <> show index <> "\n     -> Trace ID: " <> linkTrace <> "\n     -> ID: " <> linkSpan <> "\n" | (index, (linkTrace, linkSpan)) <- zip [0 :: Int ..] links]
 
 identitySpec :: Spec
 identitySpec = describe "Datadog identity and log correlation" $ do
