@@ -299,16 +299,28 @@ conditionalRevision plane = withRelay plane $ \registry release -> do
         responseBody response `shouldBe` LBS.fromStrict changed
         lookup "ETag" (responseHeaders response) `shouldBe` Just oldTag
 
+-- After the miss, the public gate reads public metadata. A revocation in those facts refuses before any public archive read.
 privateMiss :: GlobalDataPlane -> IO ()
 privateMiss plane = withRelay plane $ \registry release -> do
     let privateDigest = T.replicate 64 "0"
         private = release{releaseChecksum = privateDigest, releaseInfoRow = T.replace (releaseChecksum release) privateDigest (releaseInfoRow release)}
         config = serveOnly{ecExtraEnv = [("ECLUSE_MOUNTS__RUBYGEMS__PRIVATE_UPSTREAM__REGISTRY__URL", stubUrl RubyGemsPrivate)]}
+        revoked = config{ecExtraEnv = ecExtraEnv config <> [("ECLUSE_MOUNTS__RUBYGEMS__RULES", "{\"revoke-leaf\":{\"type\":\"DenyByIdentity\",\"identity\":\"" <> rubyLeaf <> "@" <> rubyVersion <> "\"}}")]}
+        missed rules = withObservedNativeProxy rules plane $ \observed -> do
+            before <- length <$> requests registry
+            response <- proxyRequest "GET" [] "" (observedProxy observed) (rubyArchiveRoute release)
+            archives <- artifactRequests before registry release
+            exchanges <- drop before <$> requests registry
+            pure (response, map (\(host, method, _) -> (host, method)) archives, map (\(host, method, path, _) -> (host, method, path)) exchanges)
+        publicInfo = ("rubygems-upstream", "GET", "/info/" <> rubyLeaf)
     seedRubyRegistry registry "rubygems-private" [private]
     setReply registry "rubygems-private" release (nativeReply 404 False "")
-    withObservedNativeProxy config plane $ \observed -> do
-        response <- proxyRequest "GET" [] "" (observedProxy observed) (rubyArchiveRoute release)
-        responseStatus response `shouldBe` 200
-        responseBody response `shouldBe` LBS.fromStrict (releaseArchive release)
-        actual <- artifactRequests 0 registry release
-        map (\(host, method, _) -> (host, method)) actual `shouldBe` [("rubygems-private", "GET"), ("rubygems-upstream", "GET")]
+    (refused, refusedArchives, refusedReads) <- missed revoked
+    rejected 403 refused
+    refusedArchives `shouldBe` [("rubygems-private", "GET")]
+    refusedReads `shouldSatisfy` elem publicInfo
+    (admitted, admittedArchives, admittedReads) <- missed config
+    responseStatus admitted `shouldBe` 200
+    responseBody admitted `shouldBe` LBS.fromStrict (releaseArchive release)
+    admittedArchives `shouldBe` [("rubygems-private", "GET"), ("rubygems-upstream", "GET")]
+    admittedReads `shouldSatisfy` elem publicInfo
