@@ -4,8 +4,6 @@
 
 module Ecluse.Runtime.Telemetry.TracingIntegrationSpec (spec) where
 
-import Data.Aeson (Value (Object, String), decodeStrict)
-import Data.Aeson.KeyMap qualified as KeyMap
 import Data.Char (isDigit)
 import Data.Text qualified as T
 import Data.Time.Clock.POSIX (getPOSIXTime)
@@ -36,7 +34,7 @@ import Ecluse.Runtime.Telemetry (
  )
 import Ecluse.Runtime.Test.Support (newTestEnvLogging)
 import Ecluse.Service (mountBindingFor)
-import Ecluse.Test.Collector (datadogIds, printedSpans)
+import Ecluse.Test.Collector (datadogIds, loggedDatadogIds, printedSpans)
 import Ecluse.Test.Deadline (withSweeper)
 import Ecluse.Test.Log (captureJsonLog)
 import Ecluse.Test.Poll (pollUntil)
@@ -120,17 +118,9 @@ freshMarker = do
     now <- getPOSIXTime
     pure ("ecltrace" <> show (round (now * 1_000_000) :: Integer))
 
--- The @dd@ trace and span ids of every captured line that carries both, under katip's @data@ object.
+-- Katip nests the @dd@ object under @data@.
 loggedSpans :: Text -> [(Text, Text)]
-loggedSpans output =
-    [ (loggedTrace, loggedSpan)
-    | line <- lines output
-    , Just (Object item) <- [decodeStrict (encodeUtf8 line)]
-    , Just (Object payload) <- [KeyMap.lookup "data" item]
-    , Just (Object dd) <- [KeyMap.lookup "dd" payload]
-    , Just (String loggedTrace) <- [KeyMap.lookup "trace_id" dd]
-    , Just (String loggedSpan) <- [KeyMap.lookup "span_id" dd]
-    ]
+loggedSpans = mapMaybe (loggedDatadogIds ["data"]) . lines
 
 -- A rendered Datadog id is an unsigned decimal. A real span's id is non-empty and
 -- non-zero (the low-64 render of a random id is overwhelmingly non-zero).

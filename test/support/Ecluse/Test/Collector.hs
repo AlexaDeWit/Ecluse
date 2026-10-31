@@ -10,7 +10,9 @@ module Ecluse.Test.Collector (
     exportedSpans,
     PrintedSpan (..),
     printedSpans,
+    detailedSpan,
     datadogIds,
+    loggedDatadogIds,
     spanCarries,
     spanFor,
     linkedMirrorTraces,
@@ -18,11 +20,14 @@ module Ecluse.Test.Collector (
     privateLookupAnswers,
 ) where
 
+import Data.Aeson (Key)
 import Data.Char (isHexDigit)
 import Data.List (lookup)
 import Data.Set qualified as Set
 import Data.Text qualified as T
 import Numeric (readHex)
+
+import Ecluse.Test.Log (lineField)
 
 -- | Flow-style YAML for the @env:@ provider, which needs no file or shell in the collector image.
 collectorConfig :: [Text] -> Text
@@ -127,6 +132,27 @@ printedSpans = spansIn . lines
         value <- T.stripPrefix ": " printed
         pure (key, attributeValue value)
 
+{- | A span in the debug exporter's detailed layout, as 'printedSpans' reads it: name, kind, trace ID,
+span ID, attributes as printed, and each link's trace and span IDs.
+-}
+detailedSpan :: Text -> Text -> Text -> Text -> [(Text, Text)] -> [(Text, Text)] -> Text
+detailedSpan name kind traceKey spanKey attributes links =
+    "Span #0\n    Trace ID       : "
+        <> traceKey
+        <> "\n    Parent ID      : \n    ID             : "
+        <> spanKey
+        <> "\n    Name           : "
+        <> name
+        <> "\n    Kind           : "
+        <> kind
+        <> "\nAttributes:\n"
+        <> T.concat ["     -> " <> key <> ": " <> value <> "\n" | (key, value) <- attributes]
+        <> (if null links then "" else "Links:\n")
+        <> T.concat
+            [ "SpanLink #" <> show index <> "\n     -> Trace ID: " <> linkTrace <> "\n     -> ID: " <> linkSpan <> "\n     -> TraceState: \n     -> DroppedAttributesCount: 0\n"
+            | (index, (linkTrace, linkSpan)) <- zip [0 :: Int ..] links
+            ]
+
 {- | A printed span's IDs as Datadog logs them: the low 64 bits of the trace ID and the span ID,
 each as an unsigned decimal.
 -}
@@ -136,6 +162,10 @@ datadogIds printed = (,) <$> (decimal . T.takeEnd 16 =<< psTraceId printed) <*> 
     decimal hex = case readHex (toString hex) of
         [(value, "")] -> Just (show (value :: Word64))
         _ -> Nothing
+
+-- | The trace and span IDs one JSON log line carries in the @dd@ object at the key path, for 'datadogIds' to match.
+loggedDatadogIds :: [Key] -> Text -> Maybe (Text, Text)
+loggedDatadogIds path line = (,) <$> lineField (path <> ["dd", "trace_id"]) line <*> lineField (path <> ["dd", "span_id"]) line
 
 attributeValue :: Text -> AttributeValue
 attributeValue printed =
