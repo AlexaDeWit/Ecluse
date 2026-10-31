@@ -298,7 +298,7 @@ boundsLogSpec = describe "serve-path warnings are logged before degrading" $ do
         -- A private upstream refusing access with 403, beside an admitting public upstream.
         refused <- captureServeLog DebugLevel (upstreamRespondingWith (responseLBS status403 [] "forbidden")) (servingUpstream (encodePackument (admittingPublic "1.0.0")))
         let refusal = lineWhere ["message"] "the upstream refused metadata access" refused
-        (lineField ["data", "module"] =<< refusal) `shouldBe` Just "Ecluse.Server.Pipeline"
+        moduleOfLineWhere ["message"] "the upstream refused metadata access" refused `shouldBe` Just "Ecluse.Server.Pipeline"
         (lineField ["data", "package"] =<< refusal) `shouldBe` Just "thing"
         (lineField ["data", "upstream"] =<< refusal) `shouldSatisfy` isJust
         untaggedLines refused `shouldBe` []
