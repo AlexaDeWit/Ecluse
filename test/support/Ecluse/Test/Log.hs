@@ -8,6 +8,7 @@ module Ecluse.Test.Log (
     runQuietKatip,
     jsonLogEnv,
     memoryLogEnv,
+    memorySeverityLogEnv,
     captureStdout,
     captureStderr,
     captureStderrWith,
@@ -29,7 +30,7 @@ import GHC.IO.Handle (hClose, hDuplicate, hDuplicateTo)
 import Katip (
     ColorStrategy (ColorLog),
     Environment (Environment),
-    Item (_itemMessage),
+    Item (_itemMessage, _itemSeverity),
     KatipContextT,
     LogEnv,
     LogStr (unLogStr),
@@ -73,9 +74,13 @@ jsonLogEnvAt severity = do
 
 -- | Capture messages in order. The scribe runs asynchronously, so a spec polls the reader.
 memoryLogEnv :: IO (LogEnv, IO [Text])
-memoryLogEnv = do
+memoryLogEnv = second (fmap (map snd)) <$> memorySeverityLogEnv
+
+-- | 'memoryLogEnv' keeping each message's severity.
+memorySeverityLogEnv :: IO (LogEnv, IO [(Severity, Text)])
+memorySeverityLogEnv = do
     held <- newIORef []
-    let keep item = atomicModifyIORef' held (\messages -> (toStrict (toLazyText (unLogStr (_itemMessage item))) : messages, ()))
+    let keep item = atomicModifyIORef' held (\items -> ((_itemSeverity item, toStrict (toLazyText (unLogStr (_itemMessage item)))) : items, ()))
         scribe = Scribe{liPush = keep, scribeFinalizer = pass, scribePermitItem = permitItem DebugS}
     logEnv <- registerScribe "memory" scribe defaultScribeSettings =<< newTestLogEnv
     pure (logEnv, reverse <$> readIORef held)
