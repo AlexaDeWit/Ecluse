@@ -7,7 +7,6 @@ module Ecluse.Test.Contract.Artifact.Attempt (
     beginAttempt,
     finishAttempt,
     continueAttempt,
-    continuationProblems,
 ) where
 
 import Data.ByteString qualified as BS
@@ -65,7 +64,7 @@ continueAttempt root shard attempt = do
                 <> continuationProblems expected plan (readMaybe (toString (T.strip status))) report
     unless (null problems) $ failRunner (T.unlines problems)
 
--- | Setup, cancellation, timeout, pending results and incomplete declarations stop aggregation.
+-- Setup, cancellation, timeout, pending results and incomplete declarations stop aggregation.
 continuationProblems :: ExecutionIdentity -> Plan -> Maybe Int -> Report -> [Text]
 continuationProblems expected plan status report =
     ["attempt did not finish ordinarily" | maybe True (\code -> code `notElem` [0, 1]) status]

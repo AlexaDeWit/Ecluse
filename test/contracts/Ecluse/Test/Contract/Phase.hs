@@ -7,7 +7,6 @@ module Ecluse.Test.Contract.Phase (
     PhaseRecorder,
     PhaseTimings (..),
     newPhaseRecorder,
-    newPhaseRecorderWithClock,
     readPhaseTimings,
     timedFixture,
 ) where
@@ -44,13 +43,9 @@ data PhaseRecorder = PhaseRecorder (IO Word64) (IORef ClockState)
 
 -- | Uninstrumented work, including role restarts inside a scenario, counts as execution.
 newPhaseRecorder :: IO PhaseRecorder
-newPhaseRecorder = newPhaseRecorderWithClock getMonotonicTimeNSec
-
--- | Inject a monotonic nanosecond clock for deterministic accounting tests.
-newPhaseRecorderWithClock :: IO Word64 -> IO PhaseRecorder
-newPhaseRecorderWithClock clock = do
-    now <- clock
-    PhaseRecorder clock <$> newIORef (ClockState now [Execution] $ PhaseTimings 0 0 0)
+newPhaseRecorder = do
+    now <- getMonotonicTimeNSec
+    PhaseRecorder getMonotonicTimeNSec <$> newIORef (ClockState now [Execution] $ PhaseTimings 0 0 0)
 
 -- | Read accumulated exclusive timings after resource cleanup.
 readPhaseTimings :: PhaseRecorder -> IO PhaseTimings

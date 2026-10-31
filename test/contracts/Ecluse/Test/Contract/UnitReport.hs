@@ -3,7 +3,7 @@
 -- SPDX-License-Identifier: MIT
 
 -- | Observe canonical unit examples without changing Hspec discovery, options or execution.
-module Ecluse.Test.Contract.UnitReport (unitReportHook, unitReport, unitCatalogueFor, wrapUnitFormatter) where
+module Ecluse.Test.Contract.UnitReport (unitReportHook, unitCatalogueFor) where
 
 import Data.List qualified as List
 import Data.Text qualified as T
@@ -56,7 +56,7 @@ unitReportHook suite inspect spec = do
 unitCatalogueFor :: Text -> Catalogue -> Catalogue
 unitCatalogueFor suite catalogue = catalogue{catalogueGroups = map (\scenarioGroup -> scenarioGroup{groupPartition = suite, groupCases = List.sortOn caseId (groupCases scenarioGroup)}) (catalogueGroups catalogue)}
 
--- | Wrap the selected formatter and persist only actual labelled outcomes, including pending and failures.
+-- Wrap the selected formatter and persist only actual labelled outcomes, including pending and failures.
 wrapUnitFormatter :: FilePath -> ExecutionIdentity -> Text -> [Group] -> (Format.FormatConfig -> IO Format.Format) -> Format.FormatConfig -> IO Format.Format
 wrapUnitFormatter path runIdentity suite groups formatter formatConfig = do
     display <- formatter formatConfig
@@ -92,7 +92,7 @@ wrapUnitFormatter path runIdentity suite groups formatter formatConfig = do
         writeJsonFile path report
         pure report
 
--- | Group success requires every declared case to execute and pass. Missing cases are never synthesised.
+-- Group success requires every declared case to execute and pass. Missing cases are never synthesised.
 unitReport :: ExecutionIdentity -> Text -> Integer -> [Group] -> [CaseResult] -> Report
 unitReport runIdentity suite seed groups outcomes = Report 1 runIdentity suite False (map groupResult groups) outcomes seed groups
   where

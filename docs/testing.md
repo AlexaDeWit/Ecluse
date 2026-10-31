@@ -2173,8 +2173,7 @@ requires reads, writes, inventory, deletion, integrity, and recovery for every b
 An incomplete driver cannot reduce either required list. Discovery is pure, and missing families
 produce named failures without stopping unrelated contracts. A passing full composition defines
 completion only when its lower-tier obligations and execution reports also pass.
-npm, PyPI, Cargo, and RubyGems register the full ecosystem composition. The separately named read-only foundation
-remains an API for incomplete providers and does not establish full ecosystem completion.
+npm, PyPI, Cargo, and RubyGems register the full ecosystem composition.
 CI uploads actual plan and report pairs from the instrumented core unit, runtime unit and
 integration legs. The `e2e` job downloads all three pairs and audits each ecosystem against its subject's E2E report.
 All four tiers share the workflow run and attempt identity and use `arm64` as the architecture name.

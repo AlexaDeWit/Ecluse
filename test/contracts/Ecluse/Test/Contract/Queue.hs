@@ -6,7 +6,6 @@
 module Ecluse.Test.Contract.Queue (
     QueueDriver (..),
     queueContract,
-    queuePayloadLaw,
     ephemeralQueueContract,
     leasedQueueContract,
 ) where
@@ -31,7 +30,7 @@ queueContract contractGroup =
     describe "queue contract" $
         it (caseLabel (contractGroup <> "/payload") "preserves every payload field through delivery") queuePayloadLaw
 
--- | Check payload and acknowledgement evidence. Broken-driver tests exercise this same law.
+-- Check payload and acknowledgement evidence. Broken-driver tests exercise this same law.
 queuePayloadLaw :: QueueDriver -> Expectation
 queuePayloadLaw driver =
     for_ [sampleJob, sampleJob{jobTriggerFilename = Nothing}, sampleJob{jobTraceContext = Just carrier}, sampleJob{jobPackage = scopedNpm "scope" "thing"}] $ \payload -> do

@@ -8,9 +8,6 @@ module Ecluse.Test.Contract.Publication (
     NonUploadDriver (..),
     PublicationFixture (..),
     publicationContract,
-    publishesAndInstalls,
-    refusesWithoutPublication,
-    refusesNonUpload,
 ) where
 
 import Data.Text qualified as T
@@ -59,7 +56,7 @@ publicationContract prefix = do
     it (caseLabel (prefix <> "/non-upload-refusal") "refuses a write that is not a new-release upload without a destination effect") $ \fixture ->
         refusesNonUpload (publicationNonUpload fixture)
 
--- | An admitted publication reaches its target and supplies a fresh installation.
+-- An admitted publication reaches its target and supplies a fresh installation.
 publishesAndInstalls :: Text -> PublicationDriver -> Expectation
 publishesAndInstalls version driver = do
     void (publicationRun driver >>= shouldSucceed)
@@ -67,7 +64,7 @@ publishesAndInstalls version driver = do
     (version `elem` versions) `shouldBe` True
     void (publicationInstall driver >>= shouldSucceed)
 
--- | A refused publication leaves the destination unchanged after the write window.
+-- A refused publication leaves the destination unchanged after the write window.
 refusesWithoutPublication :: Text -> PublicationDriver -> Expectation
 refusesWithoutPublication version driver = do
     before <- publicationVersions driver
@@ -78,7 +75,7 @@ refusesWithoutPublication version driver = do
     after `shouldBe` before
     (version `elem` after) `shouldBe` False
 
--- | The refused write names its refusal, and the destination keeps every fact the release left.
+-- The refused write names its refusal, and the destination keeps every fact the release left.
 refusesNonUpload :: NonUploadDriver -> Expectation
 refusesNonUpload driver = do
     void (nonUploadRelease driver >>= shouldSucceed)

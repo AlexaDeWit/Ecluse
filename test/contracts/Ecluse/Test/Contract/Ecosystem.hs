@@ -11,7 +11,6 @@ module Ecluse.Test.Contract.Ecosystem (
     ServingEvidence (..),
     EcosystemDriver (..),
     fullEcosystemContract,
-    readOnlyEcosystemFoundation,
     ecosystemCompletion,
     missingCapabilityProfiles,
     missingCapabilityObligations,
@@ -75,14 +74,7 @@ data EcosystemDriver observation graph value plane store project = EcosystemDriv
 
 -- | Compose every E2E family. 'ecosystemCompletion' also requires the canonical lower-tier evidence.
 fullEcosystemContract :: (Eq observation, Show observation, Eq graph, Show graph, Eq value, Show value) => EcosystemDriver observation graph value plane store project -> [DeclaredGroup]
-fullEcosystemContract = composeEcosystem FullEcosystem
-
--- | This explicit foundation certifies read behaviour only, regardless of advertised capabilities.
-readOnlyEcosystemFoundation :: (Eq observation, Show observation, Eq graph, Show graph, Eq value, Show value) => EcosystemDriver observation graph value plane store project -> [DeclaredGroup]
-readOnlyEcosystemFoundation = composeEcosystem ReadOnlyEcosystemFoundation
-
-composeEcosystem :: (Eq observation, Show observation, Eq graph, Show graph, Eq value, Show value) => CompletionScope -> EcosystemDriver observation graph value plane store project -> [DeclaredGroup]
-composeEcosystem scope driver =
+fullEcosystemContract driver =
     external "proxying" (ecosystemProxying driver)
         <> acquired "installation" "installation" installationContract (ecosystemInstallation driver)
         <> external "policy" (ecosystemPolicy driver)
@@ -92,7 +84,7 @@ composeEcosystem scope driver =
         <> ecosystemNativeExtensions driver
   where
     subject = ecosystemName driver
-    laws family = filter (/= "last-good-generation") $ fromMaybe [] $ lookup family (requiredFamilyLawsFor subject scope)
+    laws family = filter (/= "last-good-generation") $ fromMaybe [] $ lookup family (requiredFamilyLawsFor subject FullEcosystem)
     prefix suffix = subject <> "/" <> suffix
     external family = \case
         Available _ -> []
@@ -104,20 +96,18 @@ composeEcosystem scope driver =
                  in DeclaredGroup metadata $ \recorder -> aroundAll (familyAcquire fixture recorder) (body $ prefix suffix)
             Unavailable reason -> missingGroup subject family (prefix suffix) (laws family) reason
         ]
-    writes
-        | scope /= FullEcosystem = []
-        | otherwise =
-            [ case ecosystemMirroring driver of
-                Available (fixture, provider) ->
-                    let metadata = canonicalGroup subject "mirroring" (prefix "mirror") (familyMetadata provider) (laws "mirroring")
-                     in DeclaredGroup metadata $ \recorder -> aroundAll (familyAcquire provider recorder) (mirrorContract (prefix "mirror") fixture)
-                Unavailable reason -> missingGroup subject "mirroring" (prefix "mirror") (laws "mirroring") reason
-            ]
-                <> acquired "publication" "publish" publicationContract (ecosystemPublication driver)
-                <> [ case ecosystemDredger driver of
-                        Available (metadata, provider) -> DeclaredGroup (canonicalGroup subject "dredger" (prefix "dredger") metadata (laws "dredger")) (sweepContract . provider)
-                        Unavailable reason -> missingGroup subject "dredger" (prefix "dredger") (laws "dredger") reason
-                   ]
+    writes =
+        [ case ecosystemMirroring driver of
+            Available (fixture, provider) ->
+                let metadata = canonicalGroup subject "mirroring" (prefix "mirror") (familyMetadata provider) (laws "mirroring")
+                 in DeclaredGroup metadata $ \recorder -> aroundAll (familyAcquire provider recorder) (mirrorContract (prefix "mirror") fixture)
+            Unavailable reason -> missingGroup subject "mirroring" (prefix "mirror") (laws "mirroring") reason
+        ]
+            <> acquired "publication" "publish" publicationContract (ecosystemPublication driver)
+            <> [ case ecosystemDredger driver of
+                    Available (metadata, provider) -> DeclaredGroup (canonicalGroup subject "dredger" (prefix "dredger") metadata (laws "dredger")) (sweepContract . provider)
+                    Unavailable reason -> missingGroup subject "dredger" (prefix "dredger") (laws "dredger") reason
+               ]
     telemetry = case ecosystemTelemetry driver of
         Unavailable reason -> [missingGroup subject "telemetry" (prefix "telemetry") (laws "telemetry") reason]
         Available (readFixture, writeDriver) ->
@@ -129,7 +119,6 @@ composeEcosystem scope driver =
                             let metadata = canonicalGroup subject "telemetry" (prefix "telemetry") (familyMetadata fixture) writeTelemetryLaws
                              in DeclaredGroup metadata $ \recorder -> aroundAll (familyAcquire fixture recorder) (mirrorTelemetryContract $ prefix "telemetry")
                         Unavailable reason -> missingGroup subject "telemetry-write" (prefix "telemetry") writeTelemetryLaws reason
-                   | scope == FullEcosystem
                    ]
 
 readTelemetryLaws :: [Text]

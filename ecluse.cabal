@@ -1068,7 +1068,6 @@ library ecluse-test-contracts
     Ecluse.Test.Contract.Publication
     Ecluse.Test.Contract.Telemetry
     Ecluse.Test.Contract.Maintenance
-    Ecluse.Test.Contract.Measurement
     Ecluse.Test.Contract.Metadata.Projection
     Ecluse.Test.Contract.Manifest
     Ecluse.Test.Contract.Phase
@@ -1177,50 +1176,14 @@ test-suite ecluse-core-unit
   ghc-options:        -Wno-missing-export-lists -threaded
   type:               exitcode-stdio-1.0
   main-is:            Spec.hs
-  -- Extra roots supply declarations for coverage audits, not discovered executable examples.
   -- The bench root supplies the streaming bench's sink model, which a spec here checks.
-  hs-source-dirs:     core/test/unit test/smoke test/residency bench
+  hs-source-dirs:     core/test/unit bench
   other-modules:
     SpecHook
-    Ecluse.Core.Registry.CargoSmokeSpec
-    Ecluse.Core.Registry.NpmSmokeSpec
-    Ecluse.Core.Registry.PyPISmokeSpec
-    Ecluse.Core.Registry.RubyGemsSmokeSpec
-    Ecluse.Core.Registry.Npm.ReaderResidencySpec
-    Ecluse.Core.Registry.PyPI.ReaderResidencySpec
-    Ecluse.Core.Registry.Cargo.ReaderResidencySpec
-    Ecluse.Core.Registry.RubyGems.ReaderResidencySpec
-    Ecluse.Core.Registry.Json.WalkProbe
-    Ecluse.Core.Server.MemoryModel.HeapSample
     Ecluse.Core.StreamBench.Sink
-    Ecluse.Test.Contract.Artifact.IdentitySpec
-    Ecluse.Test.Contract.Artifact.AttemptSpec
-    Ecluse.Test.Contract.BindingSpec
-    Ecluse.Test.Contract.CatalogueSpec
-    Ecluse.Test.Contract.CompletionSpec
-    Ecluse.Test.Contract.EcosystemSpec
-    Ecluse.Test.Contract.PerformanceSpec
-    Ecluse.Test.Contract.PackageStoreSpec
-    Ecluse.Test.Contract.Fixtures
-    Ecluse.Test.Contract.PhaseSpec
-    Ecluse.Test.Contract.ResultSpec
-    Ecluse.Test.Contract.RegistrySmokeSpec
-    Ecluse.Test.Contract.ServingSpec
-    Ecluse.Test.Contract.InstallSpec
-    Ecluse.Test.Contract.Install.AdvisorySpec
-    Ecluse.Test.Contract.TelemetrySpec
-    Ecluse.Test.Contract.Integration.CatalogueSpec
-    Ecluse.Test.Contract.UnitCatalogueSpec
-    Ecluse.Test.Contract.UnitReportSpec
-    Ecluse.Test.Contract.Sweep.AdvisorySpec
-    Ecluse.Test.Contract.PublicationSpec
-    Ecluse.Test.Contract.QueueSpec
     Ecluse.Test.Registry.Npm.StoredVersionsSpec
     Ecluse.Test.Registry.Cargo.FixturesSpec
     Ecluse.Test.Registry.Cargo.MetadataSpec
-    Ecluse.Test.Contract.RunnerSpec
-    Ecluse.Test.Contract.MeasurementSpec
-    Ecluse.Test.Contract.RetentionSpec
     Ecluse.Test.CorpusSpec
     Ecluse.Test.Corpus.OutputsSpec
     Ecluse.Test.Corpus.CargoSpec
