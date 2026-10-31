@@ -33,7 +33,7 @@ import Ecluse.Core.Server.Admission.Types (ChargeFactors (ChargeFactors))
 import Ecluse.Core.Server.Context (MountBinding (..), PackumentDeps (..), PublishDeps (..), RequestCtx (RequestCtx), ResponseAction (..), RouteAction (RouteAction), ServeRuntime (..), runHandler)
 import Ecluse.Core.Server.Contract (responseToWai)
 import Ecluse.Core.Server.Path (unFilename)
-import Ecluse.Core.Server.Pipeline.Packument (PackumentReplies (packumentForbidden, packumentForbiddenText, packumentInternal, packumentNotFound, packumentPrivateRefused, packumentUnauthorised))
+import Ecluse.Core.Server.Pipeline.Packument (PackumentReplies (packumentDenied, packumentDeniedText, packumentInternal, packumentNotFound, packumentPrivateRefused, packumentUnauthorised))
 import Ecluse.Core.Server.Pipeline.Tarball.Types (TarballReplies (tarballError, tarballPrivateRefused))
 import Ecluse.Core.Server.Response (RejectReason (Unavailable), Rejection (Rejection), ServeDecision (Reject), Transience (WontResolve), mkHelpMessage, mkRefusal)
 import Ecluse.Core.Server.Route (Route (routeName), RouteName (RouteName), matchRoute)
@@ -184,15 +184,15 @@ spec = do
             for_ [(Nothing, "example@1.0.0 was denied by execution: runs code on install"), (Just (mkHelpMessage "Contact the platform team."), "example@1.0.0 was denied by execution: runs code on install Contact the platform team.")] $ \(help, expected) -> do
                 let refusal = mkRefusal help "example@1.0.0 was denied by execution: runs code on install"
                     responses =
-                        [ responseToWai indexContract (packumentForbidden indexReplies [] refusal)
-                        , responseToWai artifactContract (tarballError artifactReplies status403 [] refusal)
+                        [ (status404, responseToWai indexContract (packumentDenied indexReplies [] refusal))
+                        , (status403, responseToWai artifactContract (tarballError artifactReplies status403 [] refusal))
                         ]
-                for_ responses $ \response -> do
-                    responseStatus response `shouldBe` status403
+                for_ responses $ \(status, response) -> do
+                    responseStatus response `shouldBe` status
                     responseBytes response `shouldReturn` expected
         it "keeps detailed public rejection messages in their existing order" $ do
             let decisions = [Reject (Rejection (Unavailable WontResolve) reason) | reason <- ["example@1.0.0 could not be evaluated", "example@2.0.0 could not be evaluated"]]
-            packumentForbiddenText indexReplies decisions
+            packumentDeniedText indexReplies decisions
                 `shouldBe` "example@1.0.0 could not be evaluated; example@2.0.0 could not be evaluated"
         it "renders the exact public evaluation failure without operator-only evidence details" $ do
             let refusal = mkRefusal Nothing "example@1.0.0 could not be evaluated: the rule could not be evaluated"

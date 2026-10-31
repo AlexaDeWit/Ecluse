@@ -55,7 +55,7 @@ nativeDriver =
         , lrdCacheEvicts = infoScenario ManyProjects
         , lrdPrivateArtifact = artifactScenario True
         , lrdPublicArtifact = artifactScenario False
-        , lrdArtifactCeiling = (artifactScenario True){scenarioName = "gem-ceiling", scenarioConcurrencyScale = 4, scenarioUpstreamLatencyMicros = Just 2_000, scenarioPublicLegUnavailableReason = Just "the fixture uses a fixed 2 ms upstream delay instead of the run's native RTT baseline"}
+        , lrdArtifactCeiling = (artifactScenario True){scenarioName = "gem-ceiling", scenarioConcurrencyScale = 4, scenarioUpstreamLatencyMicros = Just 2_000, scenarioPublicLegUnavailableReason = Just "the fixture uses a fixed 2 ms upstream delay instead of the run's injected latency"}
         , lrdHerd =
             ( scenario
                 "herd"
@@ -113,7 +113,6 @@ rubyGemsPrivateCopy =
         , pcUrl = listingUrl
         , pcPreflight = preflightListings
         , pcHerdPackage = "rails"
-        , pcManagedState = Nothing
         }
 
 -- | Relay bodies replace only checksum fields. Native worker archives remain independent genuine packages.

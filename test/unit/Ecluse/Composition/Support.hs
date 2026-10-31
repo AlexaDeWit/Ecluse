@@ -18,6 +18,7 @@ module Ecluse.Composition.Support (
     cargoGateEnv,
     cargoMirrorEnv,
     rubyGemsMirrorEnv,
+    rubyGemsCodeArtifactMirrorEnv,
     cargoCodeArtifactEnv,
     cargoScopeRefusal,
     cargoInstallRefusal,
@@ -402,6 +403,12 @@ rubyGemsMirrorEnv =
            , ("ECLUSE_MOUNTS__RUBYGEMS__MIRROR_TARGET__REGISTRY__URL", "https://target.example.test/")
            , ("ECLUSE_MOUNTS__RUBYGEMS__MIRROR_TARGET__REGISTRY__TOKEN", "fixture-token")
            ]
+
+-- | 'rubyGemsMirrorEnv' mirroring to a CodeArtifact repository, which mints its own write token.
+rubyGemsCodeArtifactMirrorEnv :: [(String, String)]
+rubyGemsCodeArtifactMirrorEnv =
+    ("ECLUSE_MOUNTS__RUBYGEMS__MIRROR_TARGET__CODE_ARTIFACT__URL", codeArtifactDomain <> "/ruby/mirror/")
+        : filter (not . ("ECLUSE_MOUNTS__RUBYGEMS__MIRROR_TARGET__REGISTRY__" `isPrefixOf`) . fst) rubyGemsMirrorEnv
 
 -- | Separate native CodeArtifact stores with inventory and physical deletion capabilities.
 cargoCodeArtifactEnv :: [(String, String)]

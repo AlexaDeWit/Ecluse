@@ -76,6 +76,7 @@ import Ecluse.Composition.Validate (
     vetBoot,
     vetBootWith,
     vetMirrorCapabilities,
+    vetMirrorCapabilitiesWith,
  )
 import Ecluse.Composition.Vet (runVet)
 import Ecluse.Config (
@@ -102,6 +103,7 @@ import Ecluse.Core.Registry.Sweep.Types (minimumChunkPause)
 import Ecluse.Core.Rules.Types (PrecededRule (prRule), RuleType (AllowScopeType, DenyExternalDependenciesType, DenyIfYankedType, DenyInstallTimeExecutionType), ruleName)
 import Ecluse.Core.Security (mkProgressFloor, serveCapSeconds)
 import Ecluse.Core.Security.Egress (registryUrlText)
+import Ecluse.Test.Credential (basicReadsBearerWrites)
 import Ecluse.Test.Support (parseRequestOrFail)
 
 -- | Check accumulated refusals and the plans cleared for each registry role.
@@ -154,7 +156,7 @@ mirrorCapabilitiesSpec = describe "role-specific mirror capabilities" $ do
         let app = (configApp config){cfgMirrorState = Nothing}
         for_ [BootStorePruner, BootStorePreview, BootWithoutPipeline] $ \role ->
             capabilityResult role app `shouldBe` Right ()
-    it "requires an upload username exactly where the write target's store supplies none" $ do
+    it "requires an upload username exactly where the write target's store declares no write mechanism" $ do
         observed <- for ["REGISTRY", "VERDACCIO", "CODE_ARTIFACT"] $ \tag -> do
             config <- expectConfig (pypiWriteTargetsEnv tag) Nothing
             pure (tag, capabilityResult (BootMirrorPipeline ServeAndMirror) (configApp config))
@@ -163,10 +165,14 @@ mirrorCapabilitiesSpec = describe "role-specific mirror capabilities" $ do
                        , ("VERDACCIO", Left [UploadConfigurationRequired PyPI "mirrorTarget.verdaccio.username", UploadConfigurationRequired PyPI "publicationTarget.verdaccio.username"])
                        , ("CODE_ARTIFACT", Right ())
                        ]
+    it "requires no upload username where the write target's store declares Bearer for PyPI writes" $ do
+        config <- expectConfig (pypiWriteTargetsEnv "REGISTRY") Nothing
+        capabilityResultUnder (\_ _ -> basicReadsBearerWrites) (BootMirrorPipeline ServeAndMirror) (configApp config) `shouldBe` Right ()
   where
     withoutWriteUsername eco app = app{cfgMounts = Map.adjust stripUsername eco (cfgMounts app)}
     stripUsername mount = mount{mntMirrorTarget = fmap (\endpoint -> endpoint{meUsername = Nothing}) (mntMirrorTarget mount)}
     capabilityResult role = snd . runVet (registryRoleOf role) . vetMirrorCapabilities role
+    capabilityResultUnder presentationOf role = snd . runVet (registryRoleOf role) . vetMirrorCapabilitiesWith presentationOf role
 
 -- PyPI mirror and publication targets under one store tag, each with a static or minted token and no username.
 pypiWriteTargetsEnv :: String -> [(String, String)]

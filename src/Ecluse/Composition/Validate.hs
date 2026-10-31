@@ -11,6 +11,7 @@ module Ecluse.Composition.Validate (
     vetBoot,
     vetBootWith,
     vetMirrorCapabilities,
+    vetMirrorCapabilitiesWith,
 
     -- * What it clears
     VettedMount (vmEcosystem, vmAdapter, vmMount, vmConfig),
@@ -84,7 +85,7 @@ import Ecluse.Core.Registry.Adapter.Capability (
     companionsAgree,
     durableMirrorDocuments,
  )
-import Ecluse.Core.Registry.Request (ServicePresentation, StoreOperation (StoreWrite), declaredUsername, nativePresentation)
+import Ecluse.Core.Registry.Request (ServicePresentation, StoreOperation (StoreWrite), nativePresentation, sendsCredentialUsername)
 import Ecluse.Core.Registry.Sweep.Types (minimumChunkPause)
 import Ecluse.Core.Rules.Types (
     AllowIfRemediatesCveParams (aircOnUnavailable),
@@ -137,7 +138,11 @@ data VettedPublication = VettedPublication
 
 -- | Require only capabilities this process uses. Store maintenance never opens mirror state or uploads packages.
 vetMirrorCapabilities :: BootRole -> AppConfig -> Vet ()
-vetMirrorCapabilities role app = decided $ case missing of
+vetMirrorCapabilities = vetMirrorCapabilitiesWith storePresentation
+
+-- | 'vetMirrorCapabilities' with each write target's store presentation drawn from one lookup.
+vetMirrorCapabilitiesWith :: (StoreTag -> Ecosystem -> ServicePresentation) -> BootRole -> AppConfig -> Vet ()
+vetMirrorCapabilitiesWith presentationOf role app = decided $ case missing of
     [] -> Right ()
     errors -> Left errors
   where
@@ -152,12 +157,12 @@ vetMirrorCapabilities role app = decided $ case missing of
                 <> maybe [] (publicationNeeds eco publish) (mntPublicationTarget mount)
     mirrorNeeds eco publish endpoint =
         [MirrorStateRequired eco | isJust (durableMirrorDocuments (mirrorStateRequirement (publishMirrorRequirements publish))), isJust pipeline, isNothing (cfgMirrorState app)]
-            <> [usernameRequired eco "mirrorTarget" (meTarget endpoint) | publishIdentity publish == NamedIdentity, mirrorWrites, storeLacksUsername eco (meTarget endpoint), isNothing (meUsername endpoint)]
+            <> [usernameRequired eco "mirrorTarget" (meTarget endpoint) | publishIdentity publish == NamedIdentity, mirrorWrites, uploadSendsUsername eco (meTarget endpoint), isNothing (meUsername endpoint)]
     publicationNeeds eco publish endpoint =
-        [usernameRequired eco "publicationTarget" (peTarget endpoint) | publishIdentity publish == NamedIdentity, clientWrites, isJust (peToken endpoint), storeLacksUsername eco (peTarget endpoint), isNothing (peUsername endpoint)]
+        [usernameRequired eco "publicationTarget" (peTarget endpoint) | publishIdentity publish == NamedIdentity, clientWrites, isJust (peToken endpoint), uploadSendsUsername eco (peTarget endpoint), isNothing (peUsername endpoint)]
     usernameRequired eco endpoint target = UploadConfigurationRequired eco (taggedKeyPath endpoint (tgtTag target) "username")
-    -- A store whose upload presentation names its Basic username supplies the one configuration would.
-    storeLacksUsername eco target = isNothing (declaredUsername (storePresentation (tgtTag target) eco) StoreWrite)
+    -- The same question the upload asks: a store that declares its write mechanism never sends a configured username.
+    uploadSendsUsername eco target = sendsCredentialUsername (presentationOf (tgtTag target) eco) StoreWrite
 
 -- | Accumulate every pure refusal and advisory for one role before constructing its plan.
 vetBoot :: Config -> Vet ValidatedPlan

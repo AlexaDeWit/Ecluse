@@ -199,6 +199,12 @@ integrationObligations =
         , "integration/mirror-view/native-019"
         , "integration/mirror-view/native-020"
         , "integration/mirror-view/native-021"
+        , "integration/mirror-view/native-022/absent-public"
+        , "integration/mirror-view/native-022/unavailable-public"
+        , "integration/mirror-view/native-023/absent-public"
+        , "integration/mirror-view/native-023/unavailable-public"
+        , "integration/mirror-view/native-024/absent-public"
+        , "integration/mirror-view/native-024/unavailable-public"
         ]
     , required
         "integration/egress"

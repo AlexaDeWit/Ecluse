@@ -15,9 +15,9 @@ reference = "/docs/operations/"
 
 | What you see | Check first |
 | --- | --- |
-| No matching version | The minimum age, npm install scripts, npm dependencies on a git source, a remote URL or an unsupported scheme, explicit denies, and file eligibility. Filtered versions do not appear in listings. |
+| No matching version | The minimum age, npm install scripts, npm dependencies on a git source, a remote URL or an unsupported scheme, Cargo dependencies from a registry other than crates.io, explicit denies, and file eligibility. Filtered versions do not appear in listings. |
 | 403 from an artifact request | The deciding policy rule or integrity refusal in the response and logs. Also check private credentials. |
-| 404 for a package | Whether the package name is spelled as published. Écluse answers `404` when neither the private nor the public registry holds the name. |
+| 404 for a package | Whether the package name is spelled as published, then the refusal reason. Écluse answers `404` when no configured registry holds the name, and when the registries hold the name but no version passes your rules and integrity checks. For the second case, the npm `error` field and the Cargo and RubyGems response body name each deciding rule. A PyPI body carries only `server.helpMessage`, so read the reason from the proxy's `denied` log lines at `debug` level instead. |
 | 503 | Whether Écluse can obtain required evidence or upstream data. Check advisory state, managed mirror completion, and whether the private registry answers. A failed private read refuses every package on the mount. |
 | 502 | Whether the private registry answers with a redirect, an unexpected status, or a document Écluse cannot use. An invalid private reply refuses every package on the mount. A public document for another package with nothing else to serve, or metadata past its bound, also answers 502. |
 | A first-party package is missing | The private repository and declared names. First-party requests never fall back to public. |

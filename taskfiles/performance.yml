@@ -20,6 +20,12 @@ tasks:
     cmds:
       - bash scripts/load-cgroup.sh prepare
 
+  # task performance:load-floors -- <run-id>,<run-id>,<run-id> [<scenario>,...]
+  load-floors:
+    desc: Write bench/load/floors.json from three calibration runs of the Load test workflow
+    cmds:
+      - bash scripts/load-floors.sh {{.CLI_ARGS}}
+
   allocation-measure:
     vars:
       RUN_ID:
@@ -186,7 +192,7 @@ tasks:
       - rm -f bench-load-results.md load-observations.json "$PERF_ARTIFACT_DIR/conditions.json"
       - task --exit-code performance:invalidate
       - task: reporter
-      - '"$(cabal list-bin exe:bench-report)" conditions "$PERF_ARTIFACT_DIR/conditions.json" optimisation=-O{{.OPTIMISATION}} profiling={{if eq .PROFILING "disable"}}off{{else}}on{{end}} "podShape=${BENCH_LOAD_POD:-}" "durationSeconds=${BENCH_LOAD_DURATION_SECONDS:-}" "concurrency=${BENCH_LOAD_CONCURRENCY:-}" "serveMaxInFlight=${BENCH_LOAD_SERVE_MAX_IN_FLIGHT:-automatic}" "selectedScenarios=${BENCH_LOAD_SCENARIOS:-}" "loadProfile=${BENCH_LOAD_PROFILE:-full}" "thrashLimitsMiB=${BENCH_LOAD_THRASH_LIMITS_MIB:-}" "affinity=$MEASUREMENT_AFFINITY" "loadPasses=${BENCH_LOAD_PASSES:-every}" "probeRtt=${BENCH_LOAD_PROBE_RTT:-1}" "upstreamLatencyMs=${BENCH_LOAD_UPSTREAM_LATENCY_MS:-5}" "proxyCpus=${BENCH_LOAD_PROXY_CPUS:-}" "proxyCores=${BENCH_LOAD_PROXY_CORES:-}" "proxyMaxHeapBytes=${BENCH_LOAD_PROXY_MAX_HEAP_BYTES:-}" "proxyAllocAreaMib=${BENCH_LOAD_PROXY_ALLOC_AREA_MIB:-}"'
+      - '"$(cabal list-bin exe:bench-report)" conditions "$PERF_ARTIFACT_DIR/conditions.json" optimisation=-O{{.OPTIMISATION}} profiling={{if eq .PROFILING "disable"}}off{{else}}on{{end}} "podShape=${BENCH_LOAD_POD:-}" "durationSeconds=${BENCH_LOAD_DURATION_SECONDS:-}" "concurrency=${BENCH_LOAD_CONCURRENCY:-}" "serveMaxInFlight=${BENCH_LOAD_SERVE_MAX_IN_FLIGHT:-automatic}" "selectedScenarios=${BENCH_LOAD_SCENARIOS:-}" "loadProfile=${BENCH_LOAD_PROFILE:-full}" "thrashLimitsMiB=${BENCH_LOAD_THRASH_LIMITS_MIB:-}" "affinity=$MEASUREMENT_AFFINITY" "loadPasses=${BENCH_LOAD_PASSES:-every}" "probeRtt=${BENCH_LOAD_PROBE_RTT:-1}" "upstreamLatencyMs=${BENCH_LOAD_UPSTREAM_LATENCY_MS:-20}" "proxyCpus=${BENCH_LOAD_PROXY_CPUS:-}" "proxyCores=${BENCH_LOAD_PROXY_CORES:-}" "proxyMaxHeapBytes=${BENCH_LOAD_PROXY_MAX_HEAP_BYTES:-}" "proxyAllocAreaMib=${BENCH_LOAD_PROXY_ALLOC_AREA_MIB:-}"'
       - bash scripts/process-capture.sh "$PERF_ARTIFACT_DIR/native-status" bench-load-results.md bash scripts/load-cgroup.sh enter cabal run -v0 bench-load --enable-optimization={{.OPTIMISATION}} --{{.PROFILING}}-profiling -- +RTS -N3 -RTS
       - bash scripts/process-status.sh "$PERF_ARTIFACT_DIR/native-status"
 

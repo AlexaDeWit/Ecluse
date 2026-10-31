@@ -120,7 +120,7 @@ rubyNativeContract = DeclaredGroup (fixtureMetadata rubyNativeFixture) $ \record
                     Map.keys tree `shouldSatisfy` (not . any (T.isSuffixOf ".gem" . toText))
                     after <- nativeTraffic observed
                     interval <- nativeTrafficSince before after
-                    nativeClientRequests interval `shouldSatisfy` any (\request -> "/rubygems/info/" `T.isPrefixOf` nativeRequestPath request && nativeRequestStatus request == 403)
+                    nativeClientRequests interval `shouldSatisfy` any (\request -> "/rubygems/info/" `T.isPrefixOf` nativeRequestPath request && nativeRequestStatus request == 404)
                     filter (T.isSuffixOf ".gem" . nativeRequestPath) (nativeClientRequests interval) `shouldBe` []
                     map nativeRequestPath (nativeUpstreamRequests interval) `shouldSatisfy` all (\path -> path == "/versions" || T.isPrefixOf "/info/" path)
                     filter (T.isSuffixOf ".gem" . nativeRequestPath) (nativeUpstreamRequests interval) `shouldBe` []

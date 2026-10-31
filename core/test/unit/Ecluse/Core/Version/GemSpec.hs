@@ -32,8 +32,9 @@ spec = do
                 keyBox <- Heap.asBox <$> (expectRight (parseVersionKey RubyGems raw) >>= evaluate)
                 settledPart 64 NativeKey keyBox `shouldReturn` True
 
-{- Raw spellings and their canonical renderings. Gem::Version drops only the first run of zero
-segments before a letter, and a kept zero before a letter needs a leading zero for parsing to drop. -}
+{- Raw spellings and their canonical renderings. Gem::Version drops the first run of zeros that starts
+a dotted segment and directly precedes a letter. A key that keeps a zero before a letter spells its
+first letter after an added zero, which parsing drops again. -}
 renderings :: [(Text, Text)]
 renderings =
     [("1.19.0", "1.19"), ("2.0.a.0", "2.a"), ("1.0.0-1", "1.pre.1"), ("0.0.0", "0"), ("0.a", "a")]

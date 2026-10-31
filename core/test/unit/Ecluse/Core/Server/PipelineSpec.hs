@@ -98,7 +98,7 @@ import Ecluse.Test.Maintenance (
  )
 import Ecluse.Test.Mirror.State (mirrorViewWith)
 import Ecluse.Test.Package (hexSha1Of, leftpadName, npmVersion, requestsName, sampleDetails, sampleManifest, sriSha256Of, sriSha512Of, unsafeFilename)
-import Ecluse.Test.Port (noopMetricsPort, recordingDivergenceMetricsPort, recordingMetricsPort)
+import Ecluse.Test.Port (noopMetricsPort, recordingDenials, recordingDivergenceMetricsPort, recordingMetricsPort)
 import Ecluse.Test.Registry.Npm (VersionSpec (..), packumentValue, versionSpec, versionValue)
 import Ecluse.Test.Registry.Public (PublicFixture (..), newPublicFixture)
 import Ecluse.Test.Registry.PyPI (simpleFile, simpleIndex, withFileKeys)
@@ -132,6 +132,8 @@ spec = describe "Ecluse.Core.Server.Pipeline (core handlers over a ServeRuntime)
     pypiPrivateArtifactSpec
     publicControlSpec
     absentNameSpec
+    unconfiguredPrivateAbsentNameSpec
+    deniedListingSpec
 
     for_ [(status200, Admit), (status304, Admit), (status401, Deny), (status403, Deny)] $ \(upstreamStatus, expected) ->
         it ("records private artifact HTTP " <> show (statusCode upstreamStatus) <> " as " <> show expected <> " for GET and HEAD") $
@@ -187,7 +189,7 @@ spec = describe "Ecluse.Core.Server.Pipeline (core handlers over a ServeRuntime)
             rules <- prepare source (atDefaultPrecedence (Rules.DenyIfKnownMalicious Rules.FailDeny) : allowPolicy)
             let deps = withPrivateBaseUrl Nothing base{pdRules = rules}
             metadata <- captureServe npmPackumentContract rt (mountWith deps) (servePackument npmPackumentReplies leftpadName defaultRequest)
-            statusCode (responseStatus metadata) `shouldBe` 403
+            statusCode (responseStatus metadata) `shouldBe` 404
             (_, logged) <- captureJsonLog $ \logEnv -> do
                 artifact <- captureServeWithLog logEnv npmTarballContract rt (mountWith deps) (serveTarball npmTarballReplies leftpadName (npmVersion "1.0.0") (unsafeFilename "leftpad-1.0.0.tgz") defaultRequest)
                 statusCode (responseStatus artifact) `shouldBe` 403
@@ -1200,29 +1202,99 @@ pypiPrivateArtifactSpec = describe "PyPI first-party private artifacts" $ do
 -- Both origins answering 404 settle the name as absent on every ecosystem. A public outage beside a private 404 does not.
 absentNameSpec :: Spec
 absentNameSpec = describe "a name the private origin answers 404 for, through ecosystem routes" $
-    for_ absentNameRoutes $ \(ecosystem, router, credential, routes) ->
+    for_ absentNameRoutes $ \(ecosystem, router, credential, listing, artifacts) -> do
+        let named = toString (ecosystemName ecosystem) <> " "
+            capturedAfter publicStatus metrics path =
+                withAbsentPrivate ecosystem router credential publicStatus metrics $ \rt binding ->
+                    traverse (\method -> captureRouted rt binding method path) [methodGet, methodHead]
         for_ [(status404, 404), (status503, 503)] $ \(publicStatus, expectedStatus) ->
-            for_ routes $ \(route, path) ->
-                it (toString (ecosystemName ecosystem) <> " " <> route <> " answers " <> show expectedStatus <> " for GET and HEAD when the public origin answers " <> show (statusCode publicStatus)) $
-                    testWithApplication (pure (\_ respond -> respond (responseLBS status404 [] ""))) $ \privatePort ->
-                        testWithApplication (pure (\_ respond -> respond (responseLBS publicStatus [] ""))) $ \publicPort -> withSweeper $ \deadlines -> do
-                            rt <- testServeRuntime deadlines noopMetricsPort
-                            adapter <- requiredAdapter ecosystem
-                            let origin port = loopbackRegistryUrl ("http://localhost:" <> show port)
-                                deps = (serveDepsFor adapter (Just (origin privatePort)) (origin publicPort) NoMirrorWrite [] (pure fixedNow)){pdMountBaseUrl = "http://proxy.test"}
-                                binding = (mountUnder credential deps){bindingRouter = router}
-                            for_ [methodGet, methodHead] $ \method -> do
-                                response <- captureRouted rt binding method path
-                                statusCode (responseStatus response) `shouldBe` expectedStatus
+            for_ (listing : artifacts) $ \(route, path) ->
+                it (named <> route <> " answers " <> show expectedStatus <> " for GET and HEAD when the public origin answers " <> show (statusCode publicStatus)) $ do
+                    responses <- capturedAfter publicStatus noopMetricsPort path
+                    map (statusCode . responseStatus) responses `shouldBe` [expectedStatus, expectedStatus]
+        it (named <> fst listing <> " records an unavailable decision and its denial for GET and HEAD when neither origin holds the name") $ do
+            (recording, decisions) <- recordingMetricsPort
+            (metrics, denials) <- recordingDenials recording
+            void (capturedAfter status404 metrics (snd listing))
+            decisions `shouldReturn` [Unavailable, Unavailable]
+            denials `shouldReturn` replicate 2 (Nothing, Metric.ReasonUnavailable)
 
--- Each ecosystem's router, credential and the name-bearing routes a request for leftpad 1.0.0 takes.
-absentNameRoutes :: [(Ecosystem, MountRouter, CredentialMapping, [(String, [Text])])]
+-- Each ecosystem's router, credential, listing route and artifact routes for a request naming leftpad 1.0.0.
+absentNameRoutes :: [(Ecosystem, MountRouter, CredentialMapping, (String, [Text]), [(String, [Text])])]
 absentNameRoutes =
-    [ (Npm, npmRouter, npmCredential, [("packument", ["leftpad"]), ("tarball", ["leftpad", "-", "leftpad-1.0.0.tgz"])])
-    , (PyPI, pypiRouter, pypiCredential, [("index", ["simple", "leftpad"]), ("distribution", ["simple", "leftpad", "leftpad-1.0.0.tar.gz"]), ("companion", ["simple", "leftpad", "leftpad-1.0.0.tar.gz.metadata"])])
-    , (Cargo, cargoRouter, cargoCredential, [("sparse index", ["le", "ft", "leftpad"]), ("archive", ["crates", "leftpad", "1.0.0", "leftpad-1.0.0.crate"])])
-    , (RubyGems, rubyGemsRouter, rubyReadCredential, [("info", ["info", "leftpad"]), ("compact specification", ["quick", "Marshal.4.8", "leftpad-1.0.0.gemspec.rz"]), ("archive", ["gems", "leftpad-1.0.0.gem"])])
+    [ (Npm, npmRouter, npmCredential, ("packument", ["leftpad"]), [("tarball", ["leftpad", "-", "leftpad-1.0.0.tgz"])])
+    , (PyPI, pypiRouter, pypiCredential, ("index", ["simple", "leftpad"]), [("distribution", ["simple", "leftpad", "leftpad-1.0.0.tar.gz"]), ("companion", ["simple", "leftpad", "leftpad-1.0.0.tar.gz.metadata"])])
+    , (Cargo, cargoRouter, cargoCredential, ("sparse index", ["le", "ft", "leftpad"]), [("archive", ["crates", "leftpad", "1.0.0", "leftpad-1.0.0.crate"])])
+    , (RubyGems, rubyGemsRouter, rubyReadCredential, ("info", ["info", "leftpad"]), [("compact specification", ["quick", "Marshal.4.8", "leftpad-1.0.0.gemspec.rz"]), ("archive", ["gems", "leftpad-1.0.0.gem"])])
     ]
+
+-- A mount of the ecosystem whose private origin answers 404 and whose public origin answers the given status.
+withAbsentPrivate :: Ecosystem -> MountRouter -> CredentialMapping -> Status -> MetricsPort -> (ServeRuntime -> MountBinding -> IO a) -> IO a
+withAbsentPrivate ecosystem router credential publicStatus metrics action =
+    testWithApplication (pure (\_ respond -> respond (responseLBS status404 [] ""))) $ \privatePort ->
+        withAbsentPublic ecosystem router credential (Just privatePort) publicStatus metrics action
+
+-- A mount of the ecosystem, with the given private origin or none, whose public origin answers the given status.
+withAbsentPublic :: Ecosystem -> MountRouter -> CredentialMapping -> Maybe Int -> Status -> MetricsPort -> (ServeRuntime -> MountBinding -> IO a) -> IO a
+withAbsentPublic ecosystem router credential privatePort publicStatus metrics action =
+    testWithApplication (pure (\_ respond -> respond (responseLBS publicStatus [] ""))) $ \publicPort -> withSweeper $ \deadlines -> do
+        rt <- testServeRuntime deadlines metrics
+        adapter <- requiredAdapter ecosystem
+        let origin port = loopbackRegistryUrl ("http://localhost:" <> show port)
+            deps = (serveDepsFor adapter (origin <$> privatePort) (origin publicPort) NoMirrorWrite [] (pure fixedNow)){pdMountBaseUrl = "http://proxy.test"}
+        action rt (mountUnder credential deps){bindingRouter = router}
+
+-- A public 404 settles the name on a mount with no private origin, on every ecosystem.
+unconfiguredPrivateAbsentNameSpec :: Spec
+unconfiguredPrivateAbsentNameSpec = describe "a name the public origin answers 404 for on a mount with no private origin, through ecosystem routes" $ do
+    for_ absentNameRoutes $ \(ecosystem, router, credential, listing, artifacts) -> do
+        let named = toString (ecosystemName ecosystem) <> " "
+            captured metrics path =
+                withAbsentPublic ecosystem router credential Nothing status404 metrics $ \rt binding ->
+                    traverse (\method -> captureRouted rt binding method path) [methodGet, methodHead]
+        for_ (listing : artifacts) $ \(route, path) ->
+            it (named <> route <> " answers 404 for GET and HEAD") $ do
+                responses <- captured noopMetricsPort path
+                map (statusCode . responseStatus) responses `shouldBe` [404, 404]
+        it (named <> fst listing <> " records an unavailable decision and its denial for GET and HEAD") $ do
+            (recording, decisions) <- recordingMetricsPort
+            (metrics, denials) <- recordingDenials recording
+            void (captured metrics (snd listing))
+            decisions `shouldReturn` [Unavailable, Unavailable]
+            denials `shouldReturn` replicate 2 (Nothing, Metric.ReasonUnavailable)
+    it "names only the configured origins in the npm refusal" $ do
+        let request rt binding = captureRouted rt binding methodGet ["leftpad"] >>= responseBytes
+        publicOnly <- withAbsentPublic Npm npmRouter npmCredential Nothing status404 noopMetricsPort request
+        eitherDecode publicOnly `shouldBe` Right (object ["error" .= ("the public upstream does not have the requested package" :: Text)])
+        both <- withAbsentPrivate Npm npmRouter npmCredential status404 noopMetricsPort request
+        eitherDecode both `shouldBe` Right (object ["error" .= ("neither the private nor the public upstream has the requested package" :: Text)])
+
+-- A public listing the gate denies in full answers 404 beside a private 404 or with no private origin. The artifact keeps its 403.
+deniedListingSpec :: Spec
+deniedListingSpec = describe "a public listing the gate denies in full" $
+    for_ [("a private 404", Just status404), ("no private origin", Nothing)] $ \(label, private) -> do
+        let withDenied action = withSweeper $ \deadlines -> testWithApplication (pure upstreamApp) $ \publicPort ->
+                testWithApplication (pure (\_ respond -> respond (responseLBS (fromMaybe status404 private) [] ""))) $ \privatePort -> do
+                    (recording, decisions) <- recordingMetricsPort
+                    (metrics, denials) <- recordingDenials recording
+                    rt <- testServeRuntime deadlines metrics
+                    prepared <- prepare inertRuleDeps []
+                    base <- depsFor publicPort
+                    let deps = (withPrivateBaseUrl (loopbackRegistryUrl ("http://localhost:" <> show privatePort) <$ private) base){pdRules = prepared}
+                    action rt (mountWith deps) decisions denials
+        it ("answers the npm packument 404 for GET and HEAD with " <> label <> ", naming the deciding rule and recording a denial") $
+            withDenied $ \rt binding decisions denials -> do
+                got <- captureRouted rt binding methodGet ["leftpad"]
+                headed <- captureRouted rt binding methodHead ["leftpad"]
+                map (statusCode . responseStatus) [got, headed] `shouldBe` [404, 404]
+                body <- responseBytes got
+                eitherDecode body `shouldBe` Right (object ["error" .= ("BlockedByDefault: no allow rule matched (rejection entries: 1)" :: Text)])
+                decisions `shouldReturn` [Deny, Deny]
+                denials `shouldReturn` replicate 2 (Just "BlockedByDefault", Metric.ReasonPolicy)
+        it ("keeps the npm tarball 403 for GET and HEAD with " <> label) $
+            withDenied $ \rt binding _ _ -> do
+                responses <- traverse (\method -> captureRouted rt binding method ["leftpad", "-", "leftpad-1.0.0.tgz"]) [methodGet, methodHead]
+                map (statusCode . responseStatus) responses `shouldBe` [403, 403]
 
 -- A request through the binding's own router, carrying the method so a HEAD takes the bodiless contract.
 captureRouted :: ServeRuntime -> MountBinding -> Method -> [Text] -> IO Response

@@ -10,12 +10,16 @@ import Ecluse.Core.Server.Stream (RelayResponder (..))
 import Network.HTTP.Types (hContentLength, hContentType, status200, status304, status401, status403, status404, status503)
 import Test.Hspec
 
-import Ecluse.Core.Server.Pipeline.Tarball.Relay (RelayVerdict (RelayedArtifact, RelayedNonSuccess, RelayedOddShape), acceptPrivateArtifact, privateArtifactResponder, relayVerdict)
+import Ecluse.Core.Server.Pipeline.Tarball.Relay (RelayVerdict (RelayedArtifact, RelayedNonSuccess, RelayedOddShape), acceptPrivateArtifact, observeRelayAnomaly, privateArtifactResponder, relayVerdict)
+import Ecluse.Test.Log (moduleOfLineWhere, runJsonLog)
+import Ecluse.Test.Package (npmVersion, thingName)
+import Ecluse.Test.Port (noopMetricsPort)
 
 spec :: Spec
 spec = do
     privateResponderSpec
     publicVerdictSpec
+    anomalyLogSpec
 
 privateResponderSpec :: Spec
 privateResponderSpec = describe "private artifact relay" $ do
@@ -63,3 +67,11 @@ publicVerdictSpec = describe "relayVerdict (the public relay judged from status 
 
     it "the declared length never enters the judgement (npm's declared size is the unpacked tree, not the transfer)" $
         relayVerdict status200 [(hContentLength, "12345"), (hContentType, "application/octet-stream")] `shouldBe` RelayedArtifact
+
+anomalyLogSpec :: Spec
+anomalyLogSpec = describe "observeRelayAnomaly" $
+    it "logs each anomaly under the pipeline's module filter key" $ do
+        logged <- runJsonLog $ for_ [RelayedNonSuccess status503, RelayedOddShape "text/html"] (observeRelayAnomaly noopMetricsPort thingName (npmVersion "1.0.0"))
+        moduleOfLineWhere ["msg"] "the public upstream answered a non-success: HTTP 503" logged `shouldBe` Just "Ecluse.Server.Pipeline"
+        moduleOfLineWhere ["msg"] "the public upstream answered a success that does not look like the admitted artifact: text/html" logged
+            `shouldBe` Just "Ecluse.Server.Pipeline"

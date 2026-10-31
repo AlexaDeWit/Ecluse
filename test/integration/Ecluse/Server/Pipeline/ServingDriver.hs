@@ -47,6 +47,7 @@ import Ecluse.Core.Registry.Origin (OriginClient, originClient)
 import Ecluse.Core.Registry.PyPI.Adapter (pypiAdapter)
 import Ecluse.Core.Rules (PreparedRule, prepare)
 import Ecluse.Core.Security (defaultLimits)
+import Ecluse.Core.Security.Egress (RegistryUrl)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Core.Server.Context (PackumentDeps (..))
 import Ecluse.Core.Server.Encoding (CodingChoice (ServeCoding), ContentCoding (GzipCoding), MetadataCompression (GzipWhenAccepted), chooseCoding, gzipEncodingHeader)
@@ -106,7 +107,7 @@ nativeByteDriver ecosystem acquireAdapter mount clientMetadataPath upstreamMetad
         withRecordedOrigins (artifactPath . releaseVersion) (privateReleases <> publicReleases) (faulted (privateFault faults) (upstream privateReleases)) (faulted (publicFault faults) (upstream publicReleases)) $ \artifactMethods privatePort publicPort deadlines manager ->
             use $ \setup -> do
                 env <- newTestMemoryQueue >>= \queue -> newTestEnvWithQueue deadlines queue manager
-                deps <- setupDeps setup (serveDepsFor adapter (Just (loopbackRegistryUrl (localhost privatePort))) (loopbackRegistryUrl (localhost publicPort)) NoMirrorWrite)
+                deps <- setupDeps setup (serveDepsFor adapter (configuredPrivate faults privatePort) (loopbackRegistryUrl (localhost publicPort)) NoMirrorWrite)
                 let app = proxyApplication ecosystem env deps{pdMountBaseUrl = "http://ecluse.test" <> decodeUtf8 mount}
                     raw method path headers = requestAt method (mount <> path) Wai.defaultRequest{Wai.requestHeaders = headers} app
                     artifact method headers version = raw method (artifactPath version) headers
@@ -143,12 +144,19 @@ setupDeps setup depsOver = do
             , pdMinTrustedIntegrity = setupTrustedFloor setup
             }
 
--- Answer every request with the fault, or leave the origin as it is.
+-- Answer every request with the fault, or leave the origin as it is. An unconfigured origin is never read.
 faulted :: Maybe OriginFault -> Wai.Application -> Wai.Application
 faulted fault app = case fault of
     Nothing -> app
     Just (FaultStatus code) -> \_ respond -> respond (responseLBS (mkStatus code "") [] "")
     Just FaultClosed -> \_ respond -> respond closedResponse
+    Just FaultUnconfigured -> app
+
+-- The private origin the mount configures, unless the faults leave it out.
+configuredPrivate :: ServingFaults -> Int -> Maybe RegistryUrl
+configuredPrivate faults port
+    | privateFault faults == Just FaultUnconfigured = Nothing
+    | otherwise = Just (loopbackRegistryUrl (localhost port))
 
 -- A CDN can gzip archive responses. HEAD needs an explicit length because Warp cannot infer it.
 artifactResponse :: RequestHeaders -> ByteString -> Wai.Response
@@ -277,13 +285,12 @@ cargoDriver =
     origins faults privateReleases publicReleases use =
         withRecordedOrigins (cargoArtifact . releaseVersion) (privateReleases <> publicReleases) (faulted (privateFault faults) (cargoUpstream privateReleases)) (faulted (publicFault faults) (cargoUpstream publicReleases)) $ \artifactMethods privatePort publicPort deadlines manager -> do
             adapter <- requiredAdapter Cargo
-            let privateUrl = loopbackRegistryUrl (localhost privatePort)
-                publicUrl = loopbackRegistryUrl (localhost publicPort)
+            let publicUrl = loopbackRegistryUrl (localhost publicPort)
                 origin = originClient defaultLimits (untracedClient manager deadlines) publicUrl Nothing
             view <- cargoManagedView adapter origin (localhost privatePort) privateReleases publicReleases
             use $ \setup -> do
                 env <- newTestMemoryQueue >>= \queue -> newTestEnvWithQueue deadlines queue manager
-                deps <- setupDeps setup (serveDepsFor adapter (Just privateUrl) publicUrl NoMirrorWrite)
+                deps <- setupDeps setup (serveDepsFor adapter (configuredPrivate faults privatePort) publicUrl NoMirrorWrite)
                 let app = proxyApplication Cargo env deps{pdMountBaseUrl = "http://ecluse.test/cargo", pdMirrorState = Just view}
                     request method path headers = cargoObservation method <$> requestAt method ("/cargo" <> path) Wai.defaultRequest{Wai.requestHeaders = headers} app
                 pure

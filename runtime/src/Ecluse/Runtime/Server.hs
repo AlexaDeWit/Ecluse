@@ -21,6 +21,7 @@ module Ecluse.Runtime.Server (
     -- * Running the server
     runWarp,
     proxyListener,
+    serverModule,
     listeningPrefix,
     raceServerAgainstLoop,
     probeApplication,
@@ -65,6 +66,7 @@ import Ecluse.Runtime.Server.Internal (
     raceServerAgainstLoop,
     runWarp,
     serverMiddleware,
+    serverModule,
     tracedApplication,
     withInteractiveHalt,
  )

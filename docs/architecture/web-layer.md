@@ -356,12 +356,18 @@ wins:
   self-reported name is for a different package (see
   [name validation](registry-model.md#the-route-name-is-the-served-names-validation-authority)).
 - Otherwise `500` if none is retryable but an exclusion is a permanent inability.
-- Otherwise `403`.
+- Otherwise `404` if every exclusion is a policy or integrity refusal. The body names the
+  refusals, and the serve decision and denial metrics record a denial. A private `404` beside
+  such a public document is settled too, so it does not turn the answer into `503`.
+- Otherwise `403`, when nothing was excluded and no version reached the gate.
 
-Never `404`: the versions existed and Écluse withheld them, and a genuinely absent package is a
-separate upstream miss. A name that both the private and the public upstream answer `404` for is
-that miss, and it answers `404` before any merge. (`packumentStatus` in `Ecluse.Core.Server.Response`
-is the counterpart of `artifactStatus`.)
+A listing that admits nothing answers `404` because no installable package exists under that name
+for the client, and a `403` would suggest a credential problem. The versions existed, so the body
+keeps the deciding rules, and an artifact request for one of them still answers `403`. The
+RubyGems compact specification and archive routes resolve their coordinate through the listing,
+and keep that `403` as well. A name no configured upstream holds is a separate miss, decided
+before any merge (see [settled absence](registry-model.md#packument-merge-across-upstreams)).
+(`packumentStatus` in `Ecluse.Core.Server.Response` is the counterpart of `artifactStatus`.)
 
 The serve-outcome model decides the status, not the body shape: an ecosystem's route contract
 supplies the matching response constructor and codec. A request matching no mount is a neutral

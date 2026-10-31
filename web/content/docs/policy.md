@@ -28,7 +28,7 @@ reference = "/docs/configuration/#rule-policy"
 
 Higher precedence runs first. A decisive allow can prevent lower rules from running. A check that was not reached is not a successful check.
 
-An identity allow at its default precedence overrides scored CVSS and EPSS denies. It does not override the default known-malicious, npm install-script or npm external-dependency denies.
+An identity allow at its default precedence overrides scored CVSS and EPSS denies. It does not override the default known-malicious, npm install-script, npm external-dependency or Cargo external-dependency denies.
 
 Print the resolved order with `check-config`. Use that order when reviewing an exception.
 
@@ -44,7 +44,7 @@ Public files must satisfy the artifact host and integrity requirements. The defa
 
 Files that fail these checks disappear from listings. A release disappears when no eligible file remains. An allow rule does not waive those checks.
 
-PyPI, Cargo, and RubyGems do not support the npm scope, deprecation, install-execution, or external-dependency rule types, and npm and RubyGems do not support the yank rule type. An active incompatible rule prevents that mount from starting. The [rule policy](@/docs/configuration.md#rule-policy) lists each blocked type and its reason.
+PyPI, Cargo, and RubyGems do not support the npm scope, deprecation, or install-execution rule types. PyPI and RubyGems do not support the external-dependency rule type either, and npm and RubyGems do not support the yank rule type. An active incompatible rule prevents that mount from starting. The [rule policy](@/docs/configuration.md#rule-policy) lists each blocked type and its reason.
 
 {{ task_link(path="@/docs/exceptions.md", title="Allow a specific version", description="Choose the override deliberately and inspect its effect.") }}
 
@@ -52,7 +52,8 @@ PyPI, Cargo, and RubyGems do not support the npm scope, deprecation, install-exe
 
 ## When no npm version survives
 
-An npm metadata request returns `403` when every exclusion is a policy or integrity refusal.
+An npm metadata request returns `404` when every exclusion is a policy or integrity refusal, as a
+listing with nothing admitted does on every ecosystem. A download of one of those versions returns `403`.
 The JSON `error` string gives each deciding rule or integrity category once, with a short cause
 and a count of rejection entries. The configured operator help follows the summary.
 

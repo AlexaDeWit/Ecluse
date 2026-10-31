@@ -38,6 +38,7 @@ import Ecluse.Composition.Support (
     fixedNow,
     overrideEnv,
     pubUrlEnv,
+    rubyGemsCodeArtifactMirrorEnv,
     rubyGemsMirrorEnv,
     rubyInstallRefusal,
     scopedName,
@@ -54,7 +55,6 @@ import Ecluse.Composition.Vet (runVet)
 import Ecluse.Config (
     Config (configMounts),
     ConfigError (..),
-    FirstParty (FirstParty),
     Mount (mountPolicy),
     PolicyError (UnknownRuleType),
     StoreTag (TagRegistry),
@@ -64,19 +64,14 @@ import Ecluse.Config (
 import Ecluse.Core.Credential (ClientCredential (ClientCredential), mkSecret, unSecret)
 import Ecluse.Core.Deadline (newDeadlines)
 import Ecluse.Core.Ecosystem (Ecosystem (..))
-import Ecluse.Core.Package (HashAlg (SHA1, SHA512), mkPackageName, mkScope)
+import Ecluse.Core.Package (HashAlg (SHA1, SHA512))
 import Ecluse.Core.Package.Integrity (
     mkMinIntegrity,
     mkMinTrustedIntegrity,
  )
 import Ecluse.Core.Registry.Adapter (AdapterServe (serveCredential), adapterFor, adapterServe)
-import Ecluse.Core.Registry.Cargo.FirstParty (cargoFirstPartyNames)
-import Ecluse.Core.Registry.FirstParty (FirstPartyEntry (OwnedName), firstPartyName)
-import Ecluse.Core.Registry.Npm.Adapter (npmFirstPartyNames)
-import Ecluse.Core.Registry.PyPI.FirstParty (PyPIFirstParty (PyPIOwnedName), pypiFirstPartyNames)
 import Ecluse.Core.Registry.Request (StoreOperation (StoreRead, StoreWrite), attachCredential, nativePresentation, presentedMapping)
 import Ecluse.Core.Registry.RubyGems.Credential (rubyPublishCredential, rubyReadCredential)
-import Ecluse.Core.Registry.RubyGems.FirstParty (rubyGemsFirstPartyNames)
 import Ecluse.Core.Rules (PreparedRule (prepName), bootOrder, renderBootOrder)
 import Ecluse.Core.Rules.Types (EvalContext (EvalContext), identityEvidence)
 import Ecluse.Core.Security (Limits (maxMetadataBytes, maxNestingDepth, maxVersionCount), defaultLimits)
@@ -576,13 +571,10 @@ mirrorTargetSpec = describe "planPublishTargets (the mirror worker's write targe
 
 -- The one mirror target a writing role plans for a single-mount fixture, its providers minted per slot.
 plannedMirrorTarget :: [(String, String)] -> IO PublishTarget
-plannedMirrorTarget env = do
-    plan <- expectConfig env Nothing >>= expectValidated
-    providers <- initCredentialProviders slotCredentials (const (const noCredentialReporters)) (map vmMount (vpMounts plan)) >>= either (\errs -> fail ("provider init failed: " <> show errs)) pure
-    case planPublishTargets MintMirrorWrite providers plan of
-        Right [target] -> pure target
-        Right targets -> fail ("expected one mirror target, got " <> show (length targets))
-        Left errs -> fail ("mirror target planning refused: " <> show errs)
+plannedMirrorTarget env =
+    plannedMirrorTargets env >>= \case
+        [target] -> pure target
+        targets -> fail ("expected one mirror target, got " <> show (length targets))
 
 -- Every mirror target a writing role plans for a fixture, its providers minted per slot.
 plannedMirrorTargets :: [(String, String)] -> IO [PublishTarget]
@@ -591,41 +583,9 @@ plannedMirrorTargets env = do
     providers <- initCredentialProviders slotCredentials (const (const noCredentialReporters)) (map vmMount (vpMounts plan)) >>= either (\errs -> fail ("provider init failed: " <> show errs)) pure
     either (\errs -> fail ("mirror target planning refused: " <> show errs)) pure (planPublishTargets MintMirrorWrite providers plan)
 
--- 'rubyGemsMirrorEnv' mirroring to a CodeArtifact repository, which mints its own write token.
-rubyGemsCodeArtifactMirrorEnv :: [(String, String)]
-rubyGemsCodeArtifactMirrorEnv =
-    ("ECLUSE_MOUNTS__RUBYGEMS__MIRROR_TARGET__CODE_ARTIFACT__URL", codeArtifactDomain <> "/ruby/mirror/")
-        : filter (not . ("ECLUSE_MOUNTS__RUBYGEMS__MIRROR_TARGET__REGISTRY__" `isPrefixOf`) . fst) rubyGemsMirrorEnv
-
--- | The first-party predicate every consumer reads, pinned per ecosystem: a disagreement would be dependency confusion.
+-- | The mount's serve deps carry the first-party predicate its declaration derives.
 firstPartySpec :: Spec
-firstPartySpec = describe "firstPartyName (the derived first-party predicate)" $ do
-    it "matches an npm scope exactly, refusing a lookalike and an unscoped name" $
-        map
-            (firstPartyName (FirstParty npmFirstPartyNames (mkScope "acme" :| [mkScope "beta"])))
-            [scopedName "acme", scopedName "beta", scopedName "acme-evil", thingName]
-            `shouldBe` [True, True, False, False]
-
-    it "dispatches the PyPI arm to PyPI's own predicate" $
-        -- The arm's matching rules are pinned in "Ecluse.Core.Registry.PyPI.FirstPartySpec". This row
-        -- proves the root hands the declaration to it rather than deciding anything itself.
-        map (firstPartyName (pypiFirstParty ("Acme_Tools" :| [])) . unscopedPyPI) ["acme-tools", "beta"]
-            `shouldBe` [True, False]
-
-    it "dispatches RubyGems ownership without changing native identity" $
-        let owned = mkPackageName RubyGems Nothing "Acme_Tools"
-         in map
-                (firstPartyName (FirstParty rubyGemsFirstPartyNames (OwnedName owned :| [])))
-                [owned, mkPackageName RubyGems Nothing "acme-tools", mkPackageName Npm Nothing "Acme_Tools"]
-                `shouldBe` [True, False, False]
-
-    it "dispatches Cargo ownership through its collision key, refusing another ecosystem" $
-        let owned = mkPackageName Cargo Nothing "acme_tools"
-         in map
-                (firstPartyName (FirstParty cargoFirstPartyNames (OwnedName owned :| [])))
-                [owned, mkPackageName Cargo Nothing "acme-tools", mkPackageName Cargo Nothing "acme-toolsx", mkPackageName RubyGems Nothing "acme_tools"]
-                `shouldBe` [True, True, False, False]
-
+firstPartySpec = describe "the first-party predicate a mount wires" $ do
     it "wires the same predicate onto the mount's serve deps, deny by default" $ do
         let testEnv = [("ECLUSE_MOUNTS__NPM__FIRST_PARTY", "@acme")] <> staticEnvVars
         _ <- expectEnv testEnv
@@ -643,7 +603,3 @@ firstPartySpec = describe "firstPartyName (the derived first-party predicate)" $
                 map (pdFirstParty (bindingPackumentDeps binding)) [scopedName "acme", thingName]
                     `shouldBe` [False, False]
             _ -> expectationFailure "expected a single wired binding"
-
--- A PyPI declaration of exact names.
-pypiFirstParty :: NonEmpty Text -> FirstParty
-pypiFirstParty = FirstParty pypiFirstPartyNames . fmap (PyPIOwnedName . unscopedPyPI)

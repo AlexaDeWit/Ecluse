@@ -44,6 +44,7 @@ import Ecluse.Core.Registry.Request (
     renderAuthMechanism,
     requestAt,
     sealRequest,
+    sendsCredentialUsername,
  )
 import Ecluse.Core.Security.Egress (registryUrlText)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
@@ -129,6 +130,11 @@ servicePresentationSpec = describe "a store-declared service presentation" $ do
         lookup "Authorization" (headersFor StoreRead) `shouldBe` Just "Basic YXdzOnRvay1hYmM="
         lookup "Authorization" (headersFor StoreWrite) `shouldBe` Just "Bearer tok-abc"
         lookup "X-Api-Key" (headersFor StoreWrite) `shouldBe` Nothing
+
+    it "sends the credential's own username only on an operation the store declares nothing for" $ do
+        map (sendsCredentialUsername nativePresentation) [StoreRead, StoreWrite] `shouldBe` [True, True]
+        for_ [AuthBearer, AuthBasic "aws", AuthRawKey] $ \mechanism ->
+            map (sendsCredentialUsername (declaredPresentation (const mechanism))) [StoreRead, StoreWrite] `shouldBe` [False, False]
 
     it "keeps the ecosystem's own recovery under a declared mechanism" $
         credentialRecover (presentedMapping basicReadsBearerWrites StoreWrite apiKeyMapping) [("X-Api-Key", "tok-abc")]

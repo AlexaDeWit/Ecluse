@@ -259,8 +259,14 @@ track which input a survivor came from, so assembly can select its retained sour
     a document for another name, or a document that does not decode or exceeds its bound. The
     private registry answered, so retrying the same request is unlikely to help.
 - **Settled absence.** When the private and the public upstream both answer `404`, no upstream
-  holds the name, and every ecosystem answers `404` for its metadata and artifacts. A public outage
-  beside a private `404` leaves the question open, so that request answers `503`.
+  holds the name, and every ecosystem answers `404` for its metadata and artifacts. A mount with no
+  private upstream settles the name on the public `404` alone. A name the mirror state records
+  answers `404` on its listing too once no recorded version survives in the mirror, for example
+  after a takedown and a Dredger deletion of the stored copies. Its artifact requests keep the
+  managed path. A public outage beside a private `404` leaves the question open, so that request
+  answers `503`. A private `404` beside a public document whose every version the gate refuses is
+  settled as well: the listing answers `404` with the refusals
+  ([Error model](web-layer.md#error-model)).
 - **Public availability.** If the public upstream fails while the private one succeeds, the merge
   serves the private-only union with a degraded signal (readiness stays
   [lenient about public reachability](web-layer.md#meta-routes-ping-health-and-search)). Only when

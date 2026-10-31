@@ -42,7 +42,10 @@ on:
         description: "Synthetic artifact size in bytes for the worker and tarball scenarios (default 363520, about the median popular-package tarball)"
         required: false
       upstream-latency-ms:
-        description: "Fixed upstream latency in ms for both ecosystems, with the round-trip probe off (blank: probe each public registry, as a scheduled run does)"
+        description: "Fixed upstream latency in ms for every ecosystem (blank: 20, the calibrated value). Any other value is not held to the floors."
+        required: false
+      calibration-slot:
+        description: "A calibration dispatch's slot, such as 1, 2 or 3, so dispatches at one ref and pod shape run side by side instead of replacing each other (blank: none)"
         required: false
       sweep:
         description: "A committed capability sweep to run in place of the pod shapes (bench/load/sweeps)"
@@ -58,9 +61,10 @@ on:
     - cron: "17 4 * * *"
 
 # One run per ref and pod-shape choice, or per ref, sweep, and selection of its jobs, so a sweep
-# never waits behind, or replaces, a pod-shape run. Never cancel a scheduled or dispatched run mid-flight.
+# never waits behind, or replaces, a pod-shape run. A calibration slot gives each calibration dispatch
+# a group of its own. Never cancel a scheduled or dispatched run mid-flight.
 concurrency:
-  group: bench-load-${{ github.ref }}-${{ (inputs.sweep == '' || inputs.sweep == 'none') && (inputs.pod-shape || 'all') || format('sweep-{0}-{1}', inputs.sweep, inputs.sweep-select) }}
+  group: bench-load-${{ github.ref }}-${{ (inputs.sweep == '' || inputs.sweep == 'none') && (inputs.pod-shape || 'all') || format('sweep-{0}-{1}', inputs.sweep, inputs.sweep-select) }}${{ inputs.calibration-slot && format('-calibration-{0}', inputs.calibration-slot) || '' }}
   cancel-in-progress: false
 
 # Artifact upload uses the run's runtime token, not the GITHUB_TOKEN. The baseline fetch
@@ -79,8 +83,9 @@ env:
   BENCH_LOAD_PAYLOAD_BYTES: ${{ inputs.payload-bytes || '363520' }}
   BENCH_LOAD_SCENARIOS: ${{ inputs.scenarios }}
   BENCH_LOAD_PROFILE: ${{ inputs.profile || 'full' }}
-  BENCH_LOAD_PROBE_RTT: ${{ inputs.upstream-latency-ms == '' && '1' || '0' }}
-  BENCH_LOAD_UPSTREAM_LATENCY_MS: ${{ inputs.upstream-latency-ms || '5' }}
+  # The probe times each public registry for the report's attribution and never changes the injection.
+  BENCH_LOAD_PROBE_RTT: "1"
+  BENCH_LOAD_UPSTREAM_LATENCY_MS: ${{ inputs.upstream-latency-ms || '20' }}
   BENCH_LOAD_ISOLATE_OHA: "1"
   # The proxy's own cgroups sit beside the harness under this directory (see the steps).
   BENCH_LOAD_CGROUP: /sys/fs/cgroup/ecluse-bench-load

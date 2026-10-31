@@ -2,13 +2,16 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | Reviewed minimum successes by scenario, pass, and pod shape, with calibration provenance.
-A held run fails on a missing floor or a floor that names an unreported count.
+{- | Reviewed success floors by pod shape, scenario, and pass, and the calibration runs they came from.
+A cell holds a floor of the calibration's floor fraction of the median count of the runs it names,
+is uncalibrated, or is flagged report-only. The reader refuses a floor the median does not give. A
+held run fails on a missing cell or a cell that names no count.
 -}
 module Ecluse.BenchLoad.Floors (
     -- * The committed floors
     Pass (..),
     passKey,
+    passNamed,
     PassSelection (..),
     parsePassSelection,
     FloorKey,
@@ -16,13 +19,16 @@ module Ecluse.BenchLoad.Floors (
     RunnerKind (..),
     RunnerReading (..),
     CalibrationRun (..),
-    LatencyCeiling (..),
-    latencyCeilingMs,
+    Confirmation (..),
     Calibration (..),
+    Cell (..),
+    floorFromMedian,
+    medianCount,
     Floors (..),
     floorsPath,
     decodeFloors,
     loadFloors,
+    renderFloorsFile,
 
     -- * What a run brings
     Trigger (..),
@@ -37,16 +43,16 @@ module Ecluse.BenchLoad.Floors (
     enforce,
     FloorCheck (..),
     floorCheck,
+    checkedFloor,
     staleFloorViolations,
     unheldViolations,
     describeEnforcement,
-    describeRetainedConditions,
 ) where
 
 -- relude's prelude exports a Bounded/Enum-based `universe`. The Generic-derived one is used here.
 import Prelude hiding (universe)
 
-import Data.Aeson (FromJSON (parseJSON), eitherDecode, withObject, (.!=), (.:), (.:?))
+import Data.Aeson (FromJSON (parseJSON), Value, eitherDecode, encode, withObject, withScientific, (.!=), (.:), (.:?))
 import Data.Aeson.Types (Parser)
 import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
@@ -55,8 +61,6 @@ import Data.Universe.Class (Universe (universe))
 import Data.Universe.Generic (universeGeneric)
 
 import Ecluse.BenchLoad.Pod (PodShape, ProxyTuning (..), noTuning, parsePodShape, renderPodShape)
-import Ecluse.BenchLoad.Selection (measurementConditionVersion)
-import Ecluse.Core.Ecosystem (Ecosystem (Cargo, Npm, PyPI, RubyGems), ecosystemName)
 
 -- | Which of a scenario's runs a count of successes comes from.
 data Pass
@@ -73,6 +77,10 @@ passKey :: Pass -> Text
 passKey = \case
     Loaded -> "loaded"
     ConcurrencyOne -> "concurrencyOne"
+
+-- | The pass a key in the floors file names.
+passNamed :: Text -> Maybe Pass
+passNamed key = find ((== key) . passKey) universe
 
 -- | A count the floors cover: a scenario's ecosystem-qualified key, and the pass.
 type FloorKey = (Text, Pass)
@@ -96,7 +104,7 @@ data OperatingPoint = OperatingPoint
     , opConcurrency :: Int
     , opPayloadBytes :: Int
     , opUpstreamLatencyMs :: Int
-    -- ^ The configured fallback latency. Each fixture normally injects its own measured round trip.
+    -- ^ The latency every stub upstream injects, except a scenario that fixes its own.
     , opCacheMaxEntries :: Int
     , opWorkingSet :: Int
     , opServeMaxInFlight :: Maybe Int
@@ -175,68 +183,43 @@ data RunnerReading = RunnerReading
 readingOn :: RunnerKind -> RunnerReading
 readingOn kind = RunnerReading (Just "true") (Just (rkOs kind)) (Just (rkArch kind))
 
--- | One run the floors were calibrated from, and the commit it measured.
+-- | A calibration run a floor came from: its GitHub run ID and URL, the commit it measured, and its event.
 data CalibrationRun = CalibrationRun
-    { runUrl :: Text
+    { runId :: Integer
+    , runUrl :: Text
     , runCommit :: Text
+    , runEvent :: Text
     }
     deriving stock (Eq, Show)
 
 instance FromJSON CalibrationRun where
     parseJSON = withObject "CalibrationRun" $ \o -> do
-        run <- CalibrationRun <$> o .: "url" <*> o .: "commit"
-        when (T.null (runUrl run) || T.null (runCommit run)) $
-            fail "a calibration run must state its URL and its commit"
+        run <- CalibrationRun <$> o .: "id" <*> o .: "url" <*> o .: "commit" <*> o .: "event"
+        when (runId run < 1 || any T.null [runUrl run, runCommit run, runEvent run]) $
+            fail "a calibration run must state its ID, its URL, its commit, and its event"
         pure run
 
--- | The highest native injected latency per pod shape and the ceiling for held runs.
-data LatencyCeiling = LatencyCeiling
-    { lcRule :: Text
-    , lcHighestMs :: Map PodShape Int
-    , lcCeilingMs :: Int
+-- | How a held job confirms its breaches.
+data Confirmation = Confirmation
+    { cfReruns :: Int
+    -- ^ Re-runs a scenario pass below its floor gets before its breach fails the run.
+    , cfCap :: Int
+    -- ^ The most first-attempt breaches a job re-runs. Above it, the job re-runs none.
     }
     deriving stock (Eq, Show)
 
-instance FromJSON LatencyCeiling where
-    parseJSON = withObject "LatencyCeiling" $ \o -> do
-        rule <- o .: "rule"
-        highest <- Map.fromList <$> (traverse shapeLatency . Map.toList =<< o .: "highestMs")
-        most <- o .: "ceilingMs"
-        when (T.null rule || any (< 1) highest) $
-            fail "the latency ceiling must state its rule, and a positive highest latency for each pod shape"
-        when (fmap latencyCeilingMs (nonEmpty (Map.elems highest)) /= Just most) $
-            fail "the latency ceiling must be 1.5 times the lowest of the pod shapes' highest latencies, rounded up to 10 ms"
-        pure (LatencyCeiling rule highest most)
-      where
-        shapeLatency :: (Text, Int) -> Parser (PodShape, Int)
-        shapeLatency (name, highest) = (,highest) <$> shapeNamed name
-
--- | Set the ceiling to 1.5 times the lowest per-shape maximum, rounded up to 10 ms.
-latencyCeilingMs :: NonEmpty Int -> Int
-latencyCeilingMs (highest :| others) = (foldl' min highest others * 3 + 19) `div` 20 * 10
-
--- Only the rendered form names a pod shape, so two keys never mean the same one.
-shapeNamed :: Text -> Parser PodShape
-shapeNamed name = case parsePodShape name of
-    Right shape | renderPodShape shape == name -> pure shape
-    _ -> fail ("the floors name a pod shape that is not in its rendered form: " <> toString name)
-
--- | Where the floors were measured, the rule that set them, and what a run must match to be held to them.
+-- | Where the floors were measured, how a floor follows from a median, how a breach is confirmed, and the runs the floors came from.
 data Calibration = Calibration
-    { calRule :: Text
+    { calConditions :: Text
+    -- ^ The harness's measurement conditions the runs were measured under.
     , calRunner :: Text
     -- ^ The runner's label in the workflow, which a run cannot read back.
     , calRunnerKind :: RunnerKind
-    , calRuns :: NonEmpty CalibrationRun
     , calOperatingPoint :: OperatingPoint
-    , calNpmLatency :: LatencyCeiling
-    , calCargoLatency :: Maybe LatencyCeiling
-    , calRubyGemsLatency :: Maybe LatencyCeiling
-    , calPypiLatency :: Maybe LatencyCeiling
-    -- ^ Legacy calibration predates the native PyPI probe.
-    , calConditions :: Text
-    , calRetainedConditions :: Map Text Text
-    -- ^ Unaffected scenario rows retain their earlier measurement identity.
+    , calFloorFraction :: Rational
+    -- ^ The fraction of a cell's median count its floor is.
+    , calConfirmation :: Confirmation
+    , calRuns :: [CalibrationRun]
     }
     deriving stock (Eq, Show)
 
@@ -244,70 +227,190 @@ instance FromJSON Calibration where
     parseJSON = withObject "Calibration" $ \o -> do
         calibration <-
             Calibration
-                <$> o .: "rule"
+                <$> o .: "measurementConditions"
                 <*> o .: "runner"
                 <*> (RunnerKind <$> o .: "runnerOs" <*> o .: "runnerArch")
-                <*> o .: "runs"
                 <*> o .: "operatingPoint"
-                <*> o .: "npmInjectedLatency"
-                <*> o .:? "cargoInjectedLatency"
-                <*> o .:? "rubygemsInjectedLatency"
-                <*> o .:? "pypiInjectedLatency"
-                <*> o .:? "measurementConditions" .!= "legacy-v1"
-                <*> o .:? "retainedFloorConditions" .!= mempty
-        when (any T.null [calRule calibration, calRunner calibration, rkOs (calRunnerKind calibration), rkArch (calRunnerKind calibration)]) $
-            fail "the calibration must state its rule and its runner's label, operating system, and architecture"
-        unless (calConditions calibration `elem` ["legacy-v1", measurementConditionVersion]) $
-            fail "the calibration names unknown measurement conditions"
-        when (calConditions calibration == measurementConditionVersion && isNothing (calPypiLatency calibration)) $
-            fail "unified measurement conditions require a native PyPI latency ceiling"
-        when (any T.null (Map.keys (calRetainedConditions calibration) <> Map.elems (calRetainedConditions calibration))) $
-            fail "retained floor conditions require a scenario and its measurement identity"
+                <*> (withScientific "a fraction" (pure . toRational) =<< o .: "floorFraction")
+                <*> (Confirmation <$> o .: "confirmationReruns" <*> o .: "confirmationCap")
+                <*> o .: "runs"
+        when (any T.null [calConditions calibration, calRunner calibration, rkOs (calRunnerKind calibration), rkArch (calRunnerKind calibration)]) $
+            fail "the calibration must state its measurement conditions and its runner's label, operating system, and architecture"
+        when (cfReruns (calConfirmation calibration) < 0) $
+            fail "the calibration's confirmation re-runs cannot be negative"
+        when (cfCap (calConfirmation calibration) < 0) $
+            fail "the calibration's confirmation cap cannot be negative"
+        unless (calFloorFraction calibration > 0 && calFloorFraction calibration <= 1) $
+            fail "the calibration's floor fraction lies above 0 and at most 1"
+        when (length (ordNub (map runId (calRuns calibration))) /= length (calRuns calibration)) $
+            fail "the calibration lists a run twice"
         pure calibration
 
--- | The calibration, and each count's floor by pod shape.
+-- | One scenario pass under one pod shape.
+data Cell
+    = -- | No floor yet. The pass keeps the zero-success and process checks.
+      Uncalibrated
+    | -- | This floor, the floor fraction of this median count of the runs with these IDs.
+      Floored Int Int (NonEmpty Integer)
+    | -- | Flagged to keep the zero-success and process checks alone, for this reason. A calibration leaves it without a floor.
+      ReportOnlyCell Text
+    deriving stock (Eq, Show)
+
+{- | The floor a median count gives at a floor fraction: that fraction of it, rounded up, so a count breaches
+exactly when it is below that fraction of the median.
+-}
+floorFromMedian :: Rational -> Int -> Int
+floorFromMedian fraction median = ceiling (fromIntegral median * fraction)
+
+-- | The middle count, the lower middle of an even number.
+medianCount :: NonEmpty Int -> Int
+medianCount counts@(fallback :| _) = case drop ((length counts - 1) `div` 2) (sort (toList counts)) of
+    middle : _ -> middle
+    [] -> fallback
+
+-- The cell's JSON form, refusing a floor its median does not give at the fraction or that names an unlisted run.
+-- A median below 1 holds no floor: a calibration never writes one, and a count of 0 fails without a floor.
+parseCell :: Rational -> Set Integer -> Value -> Parser Cell
+parseCell fraction listed = withObject "Cell" $ \o -> do
+    least <- o .: "floor"
+    median <- o .:? "median"
+    from <- o .:? "from" .!= []
+    reason <- o .:? "reportOnly"
+    case (least, median, nonEmpty from, reason) of
+        (Nothing, Nothing, Nothing, Nothing) -> pure Uncalibrated
+        (Nothing, Nothing, Nothing, Just why)
+            | T.null why -> fail "a report-only cell names its reason"
+            | otherwise -> pure (ReportOnlyCell why)
+        (Just f, Just m, Just runs, Nothing)
+            | m < 1 -> fail "a floor's median is at least 1"
+            | f /= floorFromMedian fraction m -> fail ("a floor is the floor fraction of its median, rounded up: " <> show (floorFromMedian fraction m) <> " here")
+            | length (ordNub (toList runs)) /= length runs -> fail "a floor names a run twice"
+            | not (all (`Set.member` listed) runs) -> fail "a floor names a run the calibration does not list"
+            | otherwise -> pure (Floored f m runs)
+        _ -> fail "a cell holds a floor with its median and runs, a report-only reason, or a null floor alone"
+
+-- | The calibration, and each count's cell by pod shape.
 data Floors = Floors
-    { floorsCalibration :: Calibration
-    , floorsByShape :: Map PodShape (Map FloorKey Int)
+    { floorsNote :: Text
+    , floorsCalibration :: Calibration
+    , floorsByShape :: Map PodShape (Map FloorKey Cell)
     }
     deriving stock (Eq, Show)
 
 instance FromJSON Floors where
     parseJSON = withObject "Floors" $ \o -> do
+        note <- o .:? "_note" .!= ""
         calibration <- o .: "calibration"
         shapes <- o .: "floors"
-        byShape <- Map.fromList <$> traverse parseShape (Map.toList shapes)
-        when (any ((/= Map.keysSet byShape) . Map.keysSet . lcHighestMs) (mapMaybe (\(_, entry) -> leCeiling entry calibration) latencyEntries)) $
-            fail "the latency ceiling must record a highest latency for each pod shape the floors hold, and for no other"
-        unless (all (`elem` map fst (concatMap Map.keys (Map.elems byShape))) (Map.keys (calRetainedConditions calibration))) $
-            fail "retained measurement conditions name a scenario without floors"
-        for_ [ecosystem | (ecosystem, entry) <- latencyEntries, leNative entry, isNothing (leCeiling entry calibration)] $ \ecosystem ->
-            when (any (any (T.isPrefixOf (ecosystemName ecosystem <> "/") . fst) . Map.keys) (Map.elems byShape)) $
-                fail (show ecosystem <> " floors require an independently measured native latency ceiling")
-        pure (Floors calibration byShape)
+        let listed = Set.fromList (map runId (calRuns calibration))
+            fraction = calFloorFraction calibration
+        byShape <- Map.fromList <$> traverse (parseShape fraction listed) (Map.toList shapes)
+        let named = Set.fromList [run | cells <- Map.elems byShape, Floored _ _ runs <- Map.elems cells, run <- toList runs]
+        unless (named == listed) $
+            fail "the calibration lists exactly the runs the floors name"
+        pure (Floors note calibration byShape)
       where
-        parseShape :: (Text, Map Text (Map Text Int)) -> Parser (PodShape, Map FloorKey Int)
-        parseShape (name, scenarios) = (,) <$> shapeNamed name <*> (Map.fromList . concat <$> traverse parseScenario (Map.toList scenarios))
-        parseScenario :: (Text, Map Text Int) -> Parser [(FloorKey, Int)]
-        parseScenario (scenario, passes) = traverse (parseFloor scenario) (Map.toList passes)
-        parseFloor :: Text -> (Text, Int) -> Parser (FloorKey, Int)
-        parseFloor scenario (key, least) = case find ((== key) . passKey) universe of
+        parseShape :: Rational -> Set Integer -> (Text, Map Text (Map Text Value)) -> Parser (PodShape, Map FloorKey Cell)
+        parseShape fraction listed (name, scenarios) = (,) <$> shapeNamed name <*> (Map.fromList . concat <$> traverse (parseScenario fraction listed) (Map.toList scenarios))
+        parseScenario fraction listed (scenario, passes) = traverse (parsePass fraction listed scenario) (Map.toList passes)
+        parsePass fraction listed scenario (key, value) = case passNamed key of
             Nothing -> fail ("unknown pass in the floors: " <> toString key)
-            Just whichPass
-                | least >= 1 -> pure ((scenario, whichPass), least)
-                | otherwise -> fail ("a floor must be at least 1: " <> toString scenario <> " " <> toString key)
+            Just whichPass -> ((scenario, whichPass),) <$> parseCell fraction listed value
+
+-- Only the rendered form names a pod shape, so two keys never mean the same one.
+shapeNamed :: Text -> Parser PodShape
+shapeNamed name = case parsePodShape name of
+    Right shape | renderPodShape shape == name -> pure shape
+    _ -> fail ("the floors name a pod shape that is not in its rendered form: " <> toString name)
 
 -- | The committed floors' path, relative to the package root the harness runs from.
 floorsPath :: FilePath
 floorsPath = "bench/load/floors.json"
 
--- | Decode 'Floors' from raw JSON bytes, refusing an unknown pod shape or pass and a floor below 1.
+-- | Decode 'Floors' from raw JSON bytes, refusing a cell its median does not give.
 decodeFloors :: LByteString -> Either Text Floors
 decodeFloors = first toText . eitherDecode
 
 -- | Read and decode the committed floors from 'floorsPath'.
 loadFloors :: IO (Either Text Floors)
 loadFloors = first ((toText floorsPath <> " did not decode: ") <>) . decodeFloors <$> readFileLBS floorsPath
+
+-- | The floors file in its committed layout: one line per cell, so a recalibration diffs by cell.
+renderFloorsFile :: Floors -> Text
+renderFloorsFile floors =
+    T.unlines $
+        ["{", "  \"_note\": " <> string (floorsNote floors) <> ",", "  \"calibration\": {"]
+            <> members (map (map ("    " <>)) calibrationMembers)
+            <> ["  },", "  \"floors\": {"]
+            <> members (map shapeLines (Map.toList (floorsByShape floors)))
+            <> ["  }", "}"]
+  where
+    calibration = floorsCalibration floors
+    point = calOperatingPoint calibration
+    calibrationMembers =
+        map
+            pure
+            [ "\"measurementConditions\": " <> string (calConditions calibration)
+            , "\"runner\": " <> string (calRunner calibration)
+            , "\"runnerOs\": " <> string (rkOs (calRunnerKind calibration))
+            , "\"runnerArch\": " <> string (rkArch (calRunnerKind calibration))
+            , "\"operatingPoint\": "
+                <> inline
+                    [ ("durationSeconds", show (opDurationSeconds point))
+                    , ("concurrency", show (opConcurrency point))
+                    , ("payloadBytes", show (opPayloadBytes point))
+                    , ("upstreamLatencyMs", show (opUpstreamLatencyMs point))
+                    , ("cacheMaxEntries", show (opCacheMaxEntries point))
+                    , ("workingSet", show (opWorkingSet point))
+                    , ("serveMaxInFlight", maybe "null" show (opServeMaxInFlight point))
+                    , ("publicConnectionsPerHost", maybe "null" show (opPublicConnectionsPerHost point))
+                    , ("privateConnectionsPerHost", maybe "null" show (opPrivateConnectionsPerHost point))
+                    , ("scenarios", maybe "null" strings (opScenarios point))
+                    , ("patternOverrides", strings (opPatternOverrides point))
+                    ]
+            , "\"floorFraction\": " <> decimalText (calFloorFraction calibration)
+            , "\"confirmationReruns\": " <> show (cfReruns (calConfirmation calibration))
+            , "\"confirmationCap\": " <> show (cfCap (calConfirmation calibration))
+            ]
+            <> [runsLines]
+    runsLines = case calRuns calibration of
+        [] -> ["\"runs\": []"]
+        runs -> ["\"runs\": ["] <> members [["  " <> inline [("id", show (runId r)), ("url", string (runUrl r)), ("commit", string (runCommit r)), ("event", string (runEvent r))]] | r <- runs] <> ["]"]
+    shapeLines (shape, cells) =
+        ["    " <> string (renderPodShape shape) <> ": {"]
+            <> members (map scenarioLines (Map.toList (Map.fromListWith (flip (<>)) [(scenario, [(whichPass, cell)]) | ((scenario, whichPass), cell) <- Map.toList cells])))
+            <> ["    }"]
+    scenarioLines (scenario, passes) =
+        ["      " <> string scenario <> ": {"]
+            <> members [["        " <> string (passKey whichPass) <> ": " <> cellObject cell] | (whichPass, cell) <- sortOn fst passes]
+            <> ["      }"]
+    cellObject = \case
+        Uncalibrated -> inline [("floor", "null")]
+        Floored least median runs -> inline [("floor", show least), ("median", show median), ("from", "[" <> T.intercalate ", " (map show (toList runs)) <> "]")]
+        ReportOnlyCell why -> inline [("floor", "null"), ("reportOnly", string why)]
+    inline fields = "{ " <> T.intercalate ", " [string key <> ": " <> value | (key, value) <- fields] <> " }"
+    strings items = "[" <> T.intercalate ", " (map string items) <> "]"
+    string :: Text -> Text
+    string = decodeUtf8 . encode
+
+-- A terminating decimal exactly, with at least two places, as a JSON number gives one.
+decimalText :: Rational -> Text
+decimalText x = show whole <> "." <> T.justifyRight places '0' (show fraction)
+  where
+    places = fromMaybe 18 (find (\k -> denominator (x * 10 ^ k) == 1) [2 .. 18])
+    (whole, fraction) = (round (x * 10 ^ places) :: Integer) `quotRem` (10 ^ places)
+
+-- JSON members, one per list of lines: every member but the last takes a comma on its last line.
+members :: [[Text]] -> [Text]
+members groups = concat (zipWith comma [1 :: Int ..] groups)
+  where
+    comma i ls
+        | i == length groups = ls
+        | otherwise = withComma ls
+    withComma = \case
+        [] -> []
+        [line] -> [line <> ","]
+        line : more -> line : withComma more
 
 -- | What started a run. A scheduled run must be held to the floors, so its configuration may not keep it off them.
 data Trigger
@@ -331,40 +434,14 @@ runnerIn environment = RunnerReading (variable "GITHUB_ACTIONS") (variable "RUNN
 patternOverridesIn :: Map Text Text -> [Text]
 patternOverridesIn = filter ("BENCH_PATTERN_" `T.isPrefixOf`) . Map.keys
 
--- | What decides whether a run is held to the floors.
+-- | What decides whether a run is held to the floors. A live probe of the public registries is not part of it.
 data RunFacts = RunFacts
     { rfSettings :: OperatingPoint
     , rfRunner :: RunnerReading
     , rfShape :: PodShape
-    , rfNpmLatencyMs :: Int
-    -- ^ The native measured round trip or declared configured fallback.
-    , rfCargoLatencyMs :: Maybe Int
-    , rfRubyGemsLatencyMs :: Maybe Int
-    , rfPypiLatencyMs :: Int
     , rfConditions :: Text
     }
     deriving stock (Eq, Show)
-
--- How the floors read one ecosystem's injected latency.
-data LatencyEntry = LatencyEntry
-    { leReportOrder :: Int
-    , leNative :: Bool
-    -- ^ Floors for a native fixture need an independent ceiling, and a recorded ceiling needs an observation.
-    , leCeiling :: Calibration -> Maybe LatencyCeiling
-    , leObserved :: RunFacts -> Maybe Int
-    }
-
--- Map an ecosystem to its latency fields. A total match, so a new ecosystem must state its fields here.
-latencyEntry :: Ecosystem -> LatencyEntry
-latencyEntry = \case
-    Npm -> LatencyEntry 0 False (Just . calNpmLatency) (Just . rfNpmLatencyMs)
-    PyPI -> LatencyEntry 1 False calPypiLatency (Just . rfPypiLatencyMs)
-    Cargo -> LatencyEntry 2 True calCargoLatency rfCargoLatencyMs
-    RubyGems -> LatencyEntry 3 True calRubyGemsLatency rfRubyGemsLatencyMs
-
--- Every ecosystem's latency entry, in the order reasons and the report name them.
-latencyEntries :: [(Ecosystem, LatencyEntry)]
-latencyEntries = sortOn (leReportOrder . snd) [(ecosystem, latencyEntry ecosystem) | ecosystem <- universe]
 
 -- | One reason a run is not held to the floors.
 data Unheld
@@ -376,20 +453,14 @@ data Unheld
       ShapeNotCalibrated PodShape
     | -- | It runs the GC-thrash probe in place of the passes, and the probe is never held.
       ThrashProbe
-    | -- | A native fixture injects this many milliseconds, above its own ceiling.
-      LatencyAboveCeiling Ecosystem Int Int
-    | -- | The run uses different measurement conditions from the retained floors.
+    | -- | The floors were measured under the first measurement conditions, and the run under the second.
       ConditionsDiffer Text Text
-    | -- | Calibration supplies no ceiling for a measured native fixture.
-      MissingNativeLatency Ecosystem
-    | -- | A calibrated native fixture supplies no latency observation.
-      MissingNativeObservation Ecosystem
     deriving stock (Eq, Show)
 
 -- | Whether a run is held to the floors.
 data Enforcement
-    = -- | Held, under this pod shape, to these floors.
-      Enforced PodShape (Map FloorKey Int)
+    = -- | Held, under this pod shape, with this confirmation of its breaches, to these cells.
+      Enforced PodShape Confirmation (Map FloorKey Cell)
     | -- | Not held, for every one of these reasons.
       NotHeld (NonEmpty Unheld)
     deriving stock (Eq, Show)
@@ -397,74 +468,59 @@ data Enforcement
 -- | Decide a run's enforcement from its facts, naming every reason it is not held.
 enforce :: Floors -> RunFacts -> Enforcement
 enforce floors facts = case (Map.lookup shape (floorsByShape floors), reasons) of
-    (Just held, []) -> Enforced shape held
+    (Just held, []) -> Enforced shape (calConfirmation calibration) held
     (Just _, reason : more) -> NotHeld (reason :| more)
     (Nothing, more) -> NotHeld (ShapeNotCalibrated shape :| more)
   where
     shape = rfShape facts
     calibration = floorsCalibration floors
-    readings = [(ecosystem, leNative entry, leObserved entry facts, leCeiling entry calibration) | (ecosystem, entry) <- latencyEntries]
-    ceilings = [(ecosystem, injected, latencyBound) | (ecosystem, _, Just injected, Just latencyBound) <- readings]
     reasons =
-        [ reason
-        | (ecosystem, True, injected, latencyBound) <- readings
-        , reason <- [MissingNativeLatency ecosystem | isJust injected, isNothing latencyBound] <> [MissingNativeObservation ecosystem | isNothing injected, isJust latencyBound]
-        ]
-            <> [SettingsDiffer settings | Just settings <- [nonEmpty (differingSettings (calOperatingPoint calibration) (rfSettings facts))]]
+        [SettingsDiffer settings | Just settings <- [nonEmpty (differingSettings (calOperatingPoint calibration) (rfSettings facts))]]
             <> [OtherRunner (calRunner calibration) (calRunnerKind calibration) (rfRunner facts) | rfRunner facts /= readingOn (calRunnerKind calibration)]
             <> [ConditionsDiffer (calConditions calibration) (rfConditions facts) | calConditions calibration /= rfConditions facts]
-            <> [LatencyAboveCeiling ecosystem injected most | (ecosystem, injected, latencyBound) <- ceilings, let most = lcCeilingMs latencyBound, injected > most]
 
 -- | What one scenario's successes are held to in one pass.
 data FloorCheck
     = -- | The run is not held to the floors, so no floor applies.
       Unchecked
-    | -- | The run is held and the floors have none for this pass of the scenario, which fails it.
+    | -- | The run is held and the floors have no cell for this pass of the scenario, which fails it.
       NoFloor Pass
-    | -- | Every load of the scenario must reach this many successes.
-      AtLeast Int
+    | -- | Every load of the scenario must reach this floor, set from this median count.
+      AtLeast Int Int
+    | -- | The cell holds no floor: uncalibrated ('Nothing'), or report-only for this reason.
+      ReportOnly (Maybe Text)
     deriving stock (Eq, Show)
 
 -- | The check for one count of a run.
 floorCheck :: Enforcement -> FloorKey -> FloorCheck
 floorCheck enforcement key@(_, whichPass) = case enforcement of
     NotHeld _ -> Unchecked
-    Enforced _ floors -> maybe (NoFloor whichPass) AtLeast (Map.lookup key floors)
+    Enforced _ _ cells -> case Map.lookup key cells of
+        Nothing -> NoFloor whichPass
+        Just (Floored least median _) -> AtLeast least median
+        Just Uncalibrated -> ReportOnly Nothing
+        Just (ReportOnlyCell why) -> ReportOnly (Just why)
 
--- | One line per floor a held run has for a count outside the ones it checks. A stale floor fails the run.
+-- | The count below which a load breaches, when the cell holds a floor.
+checkedFloor :: FloorCheck -> Maybe Int
+checkedFloor = \case
+    AtLeast least _ -> Just least
+    _ -> Nothing
+
+-- | One line per cell a held run has for a count outside the ones it checks. A stale cell fails the run.
 staleFloorViolations :: Enforcement -> Set FloorKey -> [Text]
 staleFloorViolations enforcement checked = case enforcement of
     NotHeld _ -> []
-    Enforced shape floors ->
-        [ toText floorsPath <> ": the " <> passKey whichPass <> " floor for " <> scenario <> " under " <> renderPodShape shape <> " names no count this run checks"
-        | (scenario, whichPass) <- Set.toList (Map.keysSet floors `Set.difference` checked)
+    Enforced shape _ cells ->
+        [ toText floorsPath <> ": the " <> passKey whichPass <> " cell for " <> scenario <> " under " <> renderPodShape shape <> " names no count this run checks"
+        | (scenario, whichPass) <- Set.toList (Map.keysSet cells `Set.difference` checked)
         ]
 
--- | Fail a scheduled configuration mismatch. A network latency breach keeps it unheld without failing it.
+-- | Fail a scheduled run that is not held, with every reason in one line.
 unheldViolations :: Trigger -> Enforcement -> [Text]
 unheldViolations trigger enforcement = case (trigger, enforcement) of
-    (_, NotHeld reasons) | missing@(_ : _) <- mapMaybe missingNative (toList reasons) -> missing
-    (Scheduled, NotHeld reasons)
-        | faults@(_ : _) <- mapMaybe configurationFault (toList reasons) ->
-            ["a scheduled run must be held to the success floors, and this one is not: " <> T.intercalate ", and " faults]
+    (Scheduled, NotHeld reasons) -> ["a scheduled run must be held to the success floors, and this one is not: " <> T.intercalate ", and " (map describeUnheld (toList reasons))]
     _ -> []
-  where
-    missingNative reason = case reason of
-        MissingNativeLatency _ -> Just (describeUnheld reason)
-        MissingNativeObservation _ -> Just (describeUnheld reason)
-        _ -> Nothing
-
--- A reason as a fault of the run's configuration, which latency above the ceiling is not.
-configurationFault :: Unheld -> Maybe Text
-configurationFault reason = case reason of
-    SettingsDiffer _ -> Just (describeUnheld reason)
-    OtherRunner{} -> Just (describeUnheld reason)
-    ShapeNotCalibrated _ -> Just (describeUnheld reason)
-    ThrashProbe -> Just (describeUnheld reason)
-    LatencyAboveCeiling{} -> Nothing
-    ConditionsDiffer _ _ -> Just (describeUnheld reason)
-    MissingNativeLatency _ -> Just (describeUnheld reason)
-    MissingNativeObservation _ -> Just (describeUnheld reason)
 
 describeUnheld :: Unheld -> Text
 describeUnheld = \case
@@ -480,42 +536,37 @@ describeUnheld = \case
             <> T.intercalate ", " [readAs "GITHUB_ACTIONS" (rrGithubActions reading), readAs "RUNNER_OS" (rrOs reading), readAs "RUNNER_ARCH" (rrArch reading)]
     ShapeNotCalibrated shape -> "the floors hold no entry for the pod shape " <> renderPodShape shape
     ThrashProbe -> "it runs the GC-thrash probe in place of the passes"
-    MissingNativeObservation ecosystem -> "no native latency observation for " <> ecosystemName ecosystem
-    MissingNativeLatency ecosystem -> "no independently measured native latency ceiling for " <> ecosystemName ecosystem
-    ConditionsDiffer calibrated ran -> "its measurement conditions are " <> ran <> ", but the floors retain " <> calibrated
-    LatencyAboveCeiling ecosystem injected most -> "its " <> ecosystemName ecosystem <> " fixture injects " <> show injected <> " ms of upstream latency, above the ceiling of " <> show most <> " ms"
+    ConditionsDiffer calibrated ran -> "its measurement conditions are " <> ran <> ", but the floors were measured under " <> calibrated
   where
     readAs name = maybe (name <> " unset") ((name <> "=") <>)
 
 -- | The report's one line on the floors: what a held run is held to, or every reason a run is not held.
 describeEnforcement :: Calibration -> Enforcement -> Text
 describeEnforcement calibration = \case
-    Enforced _ _ ->
+    Enforced shape _ cells ->
         "This run is held to the success floors in `"
             <> toText floorsPath
             <> "`, calibrated on "
             <> calRunner calibration
-            <> " with provenance for "
-            <> show (length (calRuns calibration))
-            <> " runs at "
-            <> T.intercalate ", " (ordNub (map runCommit (toList (calRuns calibration))))
-            <> ". "
-            <> calRule calibration
-            <> " Measurement conditions: "
+            <> " under measurement conditions "
             <> calConditions calibration
-            <> ". "
-            <> T.intercalate " " [ecosystemName ecosystem <> " latency ceiling: " <> show (lcCeilingMs latencyBound) <> " ms." | (ecosystem, entry) <- latencyEntries, Just latencyBound <- [leCeiling entry calibration]]
-            <> describeRetainedConditions calibration
+            <> provenance
+            <> " Under "
+            <> renderPodShape shape
+            <> ", "
+            <> show (length [() | Floored{} <- Map.elems cells])
+            <> " cells hold a floor, "
+            <> show (length [() | Uncalibrated <- Map.elems cells])
+            <> " are uncalibrated, and "
+            <> show (length [() | ReportOnlyCell{} <- Map.elems cells])
+            <> " are report-only."
     NotHeld reasons ->
         "This run is not held to the success floors in `"
             <> toText floorsPath
             <> "`: "
             <> T.intercalate ", and " (map describeUnheld (toList reasons))
             <> "."
-
--- | Identify unaffected rows that retain conditions from an earlier calibration.
-describeRetainedConditions :: Calibration -> Text
-describeRetainedConditions calibration =
-    if Map.null (calRetainedConditions calibration)
-        then ""
-        else " Retained row conditions: " <> T.intercalate ", " [name <> "=" <> conditionVersion | (name, conditionVersion) <- Map.toList (calRetainedConditions calibration)] <> "."
+  where
+    provenance = case calRuns calibration of
+        [] -> ", from no calibration run yet."
+        runs -> ", from " <> show (length runs) <> " calibration runs at " <> T.intercalate ", " (ordNub (map runCommit runs)) <> "."

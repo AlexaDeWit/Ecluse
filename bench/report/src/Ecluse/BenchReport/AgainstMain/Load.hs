@@ -5,8 +5,8 @@
 {- | The successes, refusals, and latency of a load run under one pod shape beside those of
 the latest run on @main@ under the same shape, in a section for each ecosystem. It reads
 both from the report the harness prints (@renderReports@ in the @bench-load@ executable).
-One runner measures a whole pod shape, and each run injects the upstream latency it probed,
-so each section shows how its scenarios moved together and which operating point rows differ.
+One runner measures a whole pod shape, so each section shows how its scenarios moved together and
+which operating point rows differ.
 -}
 module Ecluse.BenchReport.AgainstMain.Load (
     againstMain,
@@ -191,7 +191,7 @@ notes =
     [ "### Reading the comparison"
     , ""
     , "- **One run stands on each side.** One runner measures a whole pod shape, and the run on `main` had another runner. A whole shape can move together, so read a scenario beside the scenarios the change does not touch."
-    , "- **Injected latency.** Each run injects the upstream latency it probed. When the two differ, the operating point rows show both, and the latency-bound scenarios move with that difference whatever the code does."
+    , "- **Injected latency.** Every stub upstream injects one fixed latency, 20 ms unless a dispatch sets another. When the two runs differ, the operating point rows show both, and the latency-bound scenarios move with that difference whatever the code does."
     , "- **Finite replays.** A pattern scenario replays a fixed trace, so its successes hold and only its latency can move. A replay sends few requests, as its successes show, and its percentiles differ widely between two runs of the same code."
     , "- **Refusals** are `429` and `503` responses. A client retries a refusal at once, so their count follows retry speed."
     , sharedBaselineNote

@@ -90,6 +90,9 @@ spec = do
         it "uploads a credential with no username under the store's declared Basic username" $
             publishWithoutUsername (declaredPresentation (const (AuthBasic "aws")))
                 `shouldReturn` (Right (), [("POST", Just "Basic YXdzOnBhc3N3b3Jk")])
+        it "uploads a credential with no username under a store-declared Bearer" $
+            publishWithoutUsername (declaredPresentation (const AuthBearer))
+                `shouldReturn` (Right (), [("POST", Just "Bearer password")])
         it "refuses a natively presented credential with no username before any request" $
             publishWithoutUsername nativePresentation
                 `shouldReturn` (Left (PublishSourceUnavailable "PyPI upload requires an explicit credential username"), [])

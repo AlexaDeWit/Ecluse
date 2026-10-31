@@ -205,8 +205,10 @@ different tags are refused for every role, because one store has one backend.
 PyPI mirror and publication tags also admit `username`.
 The role requires these fields as described below.
 
-A PyPI mirror or publication target declares the registry root as `url`, from which reads append `simple/`, and the native upload endpoint as `uploadUrl`. A generic static
-write token also declares its Basic `username`. CodeArtifact supplies `aws` at its backend binding.
+A PyPI mirror or publication target declares the registry root as `url`, from which reads append `simple/`, and the native upload endpoint as `uploadUrl`. A write token
+on a `registry` or `verdaccio` target also declares its Basic `username`, which PyPI's own Basic
+presentation sends. A store that declares its own write mechanism needs none: CodeArtifact supplies
+`aws` at its backend binding.
 A CodeArtifact upload URL must name the same domain, account, region and repository as its read root.
 Its supported upload paths are listed in the [configuration reference](#the-configuration-reference).
 The refresh provider still owns only the secret. Client publication posts to `uploadUrl`
@@ -475,8 +477,9 @@ mounts:
 ```
 
 `ECLUSE_MOUNTS__NPM__RULES` and `ECLUSE_MOUNTS__CARGO__RULES` carry the same patch as JSON, for
-example `'{"deny-scripts":{"enabled":false}}'`. Disabling `deny-scripts` or `deny-external-dependencies`
-in the shared `rules` object fails the load because that shared list defines no rule by either name.
+example `'{"deny-external-dependencies":{"enabled":false}}'`, a rule both mounts ship. Disabling
+`deny-scripts` or `deny-external-dependencies` in the shared `rules` object fails the load because
+that shared list defines no rule by either name.
 Mount rules resolve over the shared policy, then the shipped mount rules, then your mount patch.
 To extend an npm deny to stored copies, restate its phases under `mounts.npm.rules`, for example
 `deny-scripts: {appliesTo: [admission, revocation]}`.
@@ -598,7 +601,7 @@ The precedence values, the patch/add/suppress merge model, and the strict valida
 ### Where a rule applies
 
 A new rule applies at two phases unless you limit it. The shipped npm `deny-scripts` and
-`deny-external-dependencies` apply only at admission. Admission is the gate: a listing, an artifact request, and the mirror worker's check before it writes a version to your mirror target.
+`deny-external-dependencies`, and the shipped Cargo `deny-external-dependencies`, apply only at admission. Admission is the gate: a listing, an artifact request, and the mirror worker's check before it writes a version to your mirror target.
 Revocation is the Dredger's check of the versions your stores already hold. The `appliesTo` list
 on a rule names its phases:
 

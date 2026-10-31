@@ -167,7 +167,6 @@ npmPrivateCopy =
         , pcUrl = packageUrl
         , pcPreflight = traverse_ (preflightNpmListing False) . ordNub
         , pcHerdPackage = herdPackage
-        , pcManagedState = Nothing
         }
 
 assembledHitScenario :: Scenario

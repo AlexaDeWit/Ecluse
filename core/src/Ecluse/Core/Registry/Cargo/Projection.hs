@@ -48,9 +48,7 @@ projectCargoRecord requested key discovery value = first invalid $ do
   where
     invalid = mkInvalidEntry InvalidVersionManifest (show key) Null
 
-{- | The first normal or build dependency whose index registry is neither the current index nor crates.io.
-The reader knows no address for Écluse, so a row naming Écluse's index by URL counts too.
--}
+-- A row naming Écluse's own index by URL counts as external: the reader knows no address for Écluse.
 dependencySources :: Value -> DependencySources
 dependencySources = \case
     Object fields

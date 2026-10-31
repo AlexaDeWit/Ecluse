@@ -29,7 +29,7 @@ import Ecluse.Core.Registry.PyPI.Credential (pypiCredential)
 import Ecluse.Core.Registry.PyPI.Metadata (pypiChargeFactors, pypiRead)
 import Ecluse.Core.Registry.PyPI.Request (simpleIndexRequest)
 import Ecluse.Core.Registry.PyPI.UploadMetadata (PyPIUploadMetadata, parseUploadMetadata, uploadFields, uploadMetadataMemoryBytes)
-import Ecluse.Core.Registry.Request (ServicePresentation, StoreOperation (StoreRead, StoreWrite), attachCredential, nativePresentation, parseRequestEither, presentedMapping, presentedRequest)
+import Ecluse.Core.Registry.Request (ServicePresentation, StoreOperation (StoreRead, StoreWrite), attachCredential, parseRequestEither, presentedMapping, presentedRequest, sendsCredentialUsername)
 import Ecluse.Core.Security.Limits (Limits (maxMetadataBytes))
 import Ecluse.Core.Server.Admission.Types (ChargeFactors (cfFullReadPermille))
 
@@ -66,12 +66,12 @@ pypiPublishCodec presentation =
     readAs = presentedMapping presentation StoreRead pypiCredential
 
 {- | Post verified bytes to the exact configured endpoint, presenting the credential as the store
-declares for writes. Only the native Basic pair renders the credential's own username, so only it needs one.
+declares for writes. A credential needs a username only where that presentation sends it.
 -}
 publishRequest :: ServicePresentation -> Text -> Maybe ClientCredential -> MirrorUploadData PyPIUploadMetadata -> Either PublishFault Request
 publishRequest presentation target credential upload = do
     for_ credential $ \presented ->
-        when (presentation == nativePresentation && isNothing (credUsername presented)) $
+        when (sendsCredentialUsername presentation StoreWrite && isNothing (credUsername presented)) $
             Left (PublishSourceUnavailable "PyPI upload requires an explicit credential username")
     base <- first (PublishFetch . FetchUrlUnformable) (parseRequestEither target)
     let filename = artFilename (expectedArtifact (uploadFile upload))

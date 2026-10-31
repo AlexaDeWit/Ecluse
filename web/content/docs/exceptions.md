@@ -30,7 +30,7 @@ mounts:
         identity: example-package@1.2.3
 ```
 
-At its default precedence, this allow overrides the minimum age and scored CVSS/EPSS denies. It does not override the default MAL, npm install-script, or npm external-dependency denies.
+At its default precedence, this allow overrides the minimum age and scored CVSS/EPSS denies. It does not override the default MAL, npm install-script, npm external-dependency, or Cargo external-dependency denies.
 
 An override above precedence `300` can bypass those denies. Use it only after reviewing that wider effect.
 

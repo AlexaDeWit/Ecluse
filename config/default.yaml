@@ -518,7 +518,8 @@ mounts:
     # Unset, it inherits the computed/configured global limit. Exceeding it returns 413.
     # maxRequestBytes: 52428800
     # The read root and native upload endpoint are distinct. The state store above is required.
-    # Generic PyPI write credentials declare their Basic username. CodeArtifact binds aws.
+    # Registry and verdaccio write credentials declare their Basic username. A store that
+    # declares its own write mechanism needs none: CodeArtifact binds aws.
     # CodeArtifact reads use /pypi/{repository}/. Its uploadUrl accepts that root or
     # /pypi/{repository}/legacy/ for the same domain, account, region and repository.
     # mirrorTarget:
@@ -529,7 +530,7 @@ mounts:
     #     token:
     # Client publication posts to uploadUrl and preserves multipart framing. url is the
     # repository's read root, and the CodeArtifact paths above apply here too.
-    # A static token requires server.authToken and an explicit generic username.
+    # A static token requires server.authToken, and a username on a registry or verdaccio target.
     # Without a static token, the complete caller Basic pair passes through unchanged.
     # publicationTarget:
     #   registry:
@@ -707,8 +708,9 @@ rules:
   # pin-fix:
   #   type: AllowByIdentity
   #   identity: left-pad@1.3.0  # a bare name pins every version of that package
-  # The npm install-script and external-dependency denies ship under mounts.npm.rules, at
-  # admission only. Disable or refine deny-scripts and deny-external-dependencies there.
+  # The npm install-script and external-dependency denies ship under mounts.npm.rules, and the
+  # Cargo external-dependency deny under mounts.cargo.rules, all at admission only. Disable or
+  # refine deny-scripts and deny-external-dependencies there.
   # An AllowByIdentity pin needs precedence > 300.
   # Opt-in revoke, absent from this shipped policy. It denies one package, or one
   # package@version, whatever else would admit it. `identity` matches on the same exact
