@@ -633,11 +633,11 @@ The per-byte charges come from realistic listings, so a document of many tiny en
 nothing for them. An npm or PyPI full read pays a floor for each entry it retains instead, 1,152
 bytes for a version or file and 512 bytes for any other entry, and `EntryFloorResidencySpec`
 measures what such a read holds. For each entry kind it writes a document of 10,000 entries in the
-densest form the read retains: npm versions with empty bodies, and npm timestamps and dist-tags whose
-values do not decode, and PyPI files and versions entries that are bare numbers, and number items in
-`alternate-locations` and `meta.tracks`. It also writes 10,000 npm versions and PyPI files with
-minimal valid bodies, of about 90 source bytes each, which hold more per entry than any dense form.
-A fresh child reads each document through the same listing probe as
+densest form the read retains: npm versions with empty bodies, and npm timestamps and dist-tags
+whose values do not decode, and PyPI files and versions entries that are bare numbers, and number
+items in `alternate-locations` and `meta.tracks`. It also writes 10,000 npm versions and PyPI files
+with minimal valid bodies, of about 124 and 98 source bytes each, which hold more per entry than any
+dense form. A fresh child reads each document through the same listing probe as
 [Listing peaks](#listing-peaks). The parent reads it through the production read and takes the
 workspace it paid and the entries its finished document keeps. Each listing reports a
 `metadata-dense-listing` line with the read's peak and its held entry above baseline.
@@ -673,11 +673,11 @@ Cabal `-O1`:
 | PyPI versions | 2.0 | 176.5 | 176.5 |
 | PyPI `alternate-locations` | 2.0 | 74.6 | 69.7 |
 | PyPI `meta.tracks` | 2.0 | 74.5 | 69.7 |
-| npm versions with minimal bodies | 87.8 | 844.5 | 657.9 |
+| npm versions with minimal bodies | 123.7 | 891.0 | 697.2 |
 | PyPI files with minimal bodies | 97.8 | 885.3 | 856.1 |
 
-npm timestamps set the entry floor: 1.25 times 359.3 is 449.1, which rounds up to 512. PyPI files
-with minimal bodies set the release floor: 1.25 times 885.3 is 1,106.7, which rounds up to 1,152. An
+npm timestamps set the entry floor: 1.25 times 359.3 is 449.1, which rounds up to 512. npm versions
+with minimal bodies set the release floor: 1.25 times 891.0 is 1,113.8, which rounds up to 1,152. An
 npm read drops timestamps that name no version when it completes, so its held entry is nearly empty.
 
 The unit specs of each ecosystem's metadata read check the realistic side: the floors for the

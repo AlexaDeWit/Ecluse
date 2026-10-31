@@ -262,14 +262,14 @@ retains, through its workspace, after each piece it parses:
 
 The read counts each entry as it reads it, so a PyPI array of items pays for them before it closes.
 The residency tier reads a dense document of each entry kind, and versions and files with minimal
-valid bodies of about 90 source bytes, and measures what the read holds per entry. Each floor is
-1.25 times the largest figure of the entry kinds it covers, rounded up to 64 bytes. The heaviest of
-the other entries, an npm timestamp whose value does not decode, peaks at 359 bytes per entry while
-read, which gives 512 bytes. A PyPI file with a minimal body peaks at 885, and an npm version with
-one at 845, which gives 1,152 bytes for versions and files. Every corpus listing's bytes pay more
-than the floors for the entries it keeps, so the floors add nothing to what a realistic listing
-keeps. While it reads, `@types/node` holds 69 entries in its first 32 KiB, 43 of them dist-tags, so
-its read pays 15,923 bytes of floor and holds them until it completes. A repeat of an
+valid bodies of about 100 to 125 source bytes, and measures what the read holds per entry. Each
+floor is 1.25 times the largest figure of the entry kinds it covers, rounded up to 64 bytes. The
+heaviest of the other entries, an npm timestamp whose value does not decode, peaks at 359 bytes per
+entry while read, which gives 512 bytes. An npm version with a minimal body peaks at 891, and a PyPI
+file with one at 885, which gives 1,152 bytes for versions and files. Every corpus listing's bytes
+pay more than the floors for the entries it keeps, so the floors add nothing to what a realistic
+listing keeps. While it reads, `@types/node` holds 69 entries in its first 32 KiB, 43 of them
+dist-tags, so its read pays 15,923 bytes of floor and holds them until it completes. A repeat of an
 `alternate-locations` array, a `meta` object or a `tracks` member counts toward no floor, so the
 PyPI read reads its items and holds none of them. The floors are the condition for later dropping
 the version count from listing reads, where it still caps the entries a dense document retains.
