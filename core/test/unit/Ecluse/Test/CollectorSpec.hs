@@ -153,8 +153,33 @@ spec = do
                     )
                     `shouldBe` []
 
+    describe "printedSpans" $ do
+        it "reads the span ID and the trace ID of each link, as the exporter prints them" $
+            map (\item -> (psSpanId item, psLinkTraceIds item)) (printedSpans (linkedSpan "job" [servingTrace, workerTrace] <> contextualSpan "next" "Internal" workerTrace "" []))
+                `shouldBe` [(Just jobSpanId, [servingTrace, workerTrace]), (Nothing, [])]
+        it "keeps links to their own span and drops malformed link trace IDs" $
+            map psLinkTraceIds (printedSpans (linkedSpan "job" ["abc", T.replicate 32 "0", servingTrace] <> linkedSpan "next" []))
+                `shouldBe` [[servingTrace], []]
+        it "reads no link from an event field or a later signal" $
+            map psLinkTraceIds (printedSpans (contextualSpan "job" "Consumer" workerTrace "" [] <> "Events:\nSpanEvent #0\n     -> Trace ID: " <> servingTrace <> "\nMetric #0\nLinks:\nSpanLink #0\n     -> Trace ID: " <> servingTrace <> "\n"))
+                `shouldBe` [[]]
+
 coordinate :: [(Text, Text)]
 coordinate = [("ecluse.package", "Str(pkg)"), ("ecluse.version", "Str(1.0.0)")]
+
+jobSpanId :: Text
+jobSpanId = "00f067aa0ba902b7"
+
+-- A consumer span in the exporter's layout, with one link block per trace ID.
+linkedSpan :: Text -> [Text] -> Text
+linkedSpan name links =
+    "Span #0\n    Trace ID       : "
+        <> workerTrace
+        <> "\n    ID             : "
+        <> jobSpanId
+        <> "\n    Kind           : Consumer\n"
+        <> spanBody name []
+        <> (if null links then "" else "Links:\n" <> T.concat ["SpanLink #" <> show index <> "\n     -> Trace ID: " <> traceKey <> "\n     -> ID: 1111111111111111\n" | (index, traceKey) <- zip [0 :: Int ..] links])
 
 coordinateValues :: [(Text, AttributeValue)]
 coordinateValues = [("ecluse.package", TextValue "pkg"), ("ecluse.version", TextValue "1.0.0")]

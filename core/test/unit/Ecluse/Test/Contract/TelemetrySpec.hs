@@ -15,6 +15,8 @@ import Ecluse.Test.Contract.Telemetry
 spec :: Spec
 spec = do
     readTelemetrySpec
+    domainSpansSpec
+    identitySpec
     privateFetchSpec
 
 readTelemetrySpec :: Spec
@@ -44,6 +46,62 @@ readTelemetrySpec = describe "read telemetry evidence" $ do
     traffic = TrafficDriver (const (pure success)) (pure 200)
     collector output = CollectorDriver (\_ _ -> pure output)
     logs output = LogDriver (\_ _ -> pure output)
+
+domainSpansSpec :: Spec
+domainSpansSpec = describe "domain span correlation" $ do
+    it "accepts a job span linked to the trace of the rule evaluation and the enqueue" $
+        domainSpans (servingSpans servingTrace <> jobSpan [servingTrace])
+    it "rejects a job span with no link back to the enqueueing trace" $
+        domainSpans (servingSpans servingTrace <> jobSpan []) `shouldThrow` anyException
+    it "rejects a job span linked to another trace" $
+        domainSpans (servingSpans servingTrace <> jobSpan [workerTrace]) `shouldThrow` anyException
+    it "rejects a rule evaluation outside the enqueueing trace" $
+        domainSpans (coordinateSpan "ecluse.rule.eval" workerTrace "" <> coordinateSpan "ecluse.mirror.enqueue" servingTrace "" <> jobSpan [servingTrace])
+            `shouldThrow` anyException
+  where
+    domainSpans output =
+        exportsDomainSpans "pkg" "1.0.0" (TrafficDriver (const (pure installed)) (pure 200)) (MirrorTelemetryDriver (const (pure [])) (\_ version -> pure [version])) (CollectorDriver (\_ _ -> pure output))
+    servingSpans traceKey = coordinateSpan "ecluse.rule.eval" traceKey "" <> coordinateSpan "ecluse.mirror.enqueue" traceKey ""
+    jobSpan links = coordinateSpan "ecluse.mirror.job" workerTrace "" <> linkBlock links
+    linkBlock links = if null links then "" else "Links:\n" <> T.concat ["SpanLink #0\n     -> Trace ID: " <> traceKey <> "\n" | traceKey <- links]
+
+identitySpec :: Spec
+identitySpec = describe "Datadog identity and log correlation" $ do
+    it "accepts a log line carrying an exported span's Datadog trace and span IDs" $
+        correlates resourceLines (logLine datadogTraceId datadogSpanId)
+    it "rejects a log line whose trace ID is the span ID" $
+        correlates resourceLines (logLine datadogSpanId datadogSpanId) `shouldThrow` anyException
+    it "rejects a log line for a span the collector never exported" $
+        correlates resourceLines (logLine datadogTraceId "1") `shouldThrow` anyException
+    it "rejects an identity value under another attribute" $
+        correlates (resourceAttributes [("service.name", "ecluse-test"), ("deployment.environment.name", "9.9.9"), ("service.version", "staging")]) (logLine datadogTraceId datadogSpanId)
+            `shouldThrow` anyException
+  where
+    expected = TelemetryIdentity "ecluse-test" "staging" "9.9.9"
+    correlates resource logged =
+        exportsIdentity "pkg" expected (TrafficDriver (const (pure installed)) (pure 200)) (LogDriver (\_ _ -> pure logged)) (CollectorDriver (\_ _ -> pure (resource <> coordinateSpan "request" servingTrace datadogSpanHex)))
+    resourceLines = resourceAttributes [("service.name", "ecluse-test"), ("deployment.environment.name", "staging"), ("service.version", "9.9.9")]
+    resourceAttributes pairs = "Resource attributes:\n" <> T.concat ["     -> " <> key <> ": Str(" <> value <> ")\n" | (key, value) <- pairs]
+    logLine traceKey spanKey = "{\"service\":\"ecluse-test\",\"env\":\"staging\",\"version\":\"9.9.9\",\"dd\":{\"trace_id\":\"" <> traceKey <> "\",\"span_id\":\"" <> spanKey <> "\"}}\n"
+    -- The low 64 bits of 'servingTrace' and the whole of 'datadogSpanHex', each in decimal.
+    datadogTraceId = "12297829382473034410"
+    datadogSpanId = "67667974448284343"
+
+datadogSpanHex :: Text
+datadogSpanHex = "00f067aa0ba902b7"
+
+installed :: ClientResult
+installed = ClientResult "client" ExitSuccess "" ""
+
+-- A span carrying the scenario coordinate, with its trace ID and an optional span ID.
+coordinateSpan :: Text -> Text -> Text -> Text
+coordinateSpan name traceKey spanKey =
+    "Span #0\n     Trace ID: "
+        <> traceKey
+        <> (if T.null spanKey then "" else "\n     ID: " <> spanKey)
+        <> "\n     Name: "
+        <> name
+        <> "\nAttributes:\n     -> ecluse.package: Str(pkg)\n     -> ecluse.version: Str(1.0.0)\n"
 
 privateFetchSpec :: Spec
 privateFetchSpec = describe "native private fetch evidence" $ do
