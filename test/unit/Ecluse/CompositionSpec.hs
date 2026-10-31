@@ -570,13 +570,10 @@ mirrorTargetSpec = describe "planPublishTargets (the mirror worker's write targe
 
 -- The one mirror target a writing role plans for a single-mount fixture, its providers minted per slot.
 plannedMirrorTarget :: [(String, String)] -> IO PublishTarget
-plannedMirrorTarget env = do
-    plan <- expectConfig env Nothing >>= expectValidated
-    providers <- initCredentialProviders slotCredentials (const (const noCredentialReporters)) (map vmMount (vpMounts plan)) >>= either (\errs -> fail ("provider init failed: " <> show errs)) pure
-    case planPublishTargets MintMirrorWrite providers plan of
-        Right [target] -> pure target
-        Right targets -> fail ("expected one mirror target, got " <> show (length targets))
-        Left errs -> fail ("mirror target planning refused: " <> show errs)
+plannedMirrorTarget env =
+    plannedMirrorTargets env >>= \case
+        [target] -> pure target
+        targets -> fail ("expected one mirror target, got " <> show (length targets))
 
 -- Every mirror target a writing role plans for a fixture, its providers minted per slot.
 plannedMirrorTargets :: [(String, String)] -> IO [PublishTarget]
