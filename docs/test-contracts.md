@@ -179,9 +179,9 @@ The npm and PyPI integrity controls alter successful production reads to change 
 A PyPI control also removes distribution files.
 Each control requires an assertion failure and proves that the altered read ran.
 
-Ecluse.Test.Poll.runUntil replaces discarded timeout/poll results in Integration.WorkerLoop. It throws TestContractEscape on progress timeout or early normal worker exit, propagates worker errors, and cancels the worker after progress. Ecluse.Test.PollSpec covers all four outcomes including cleanup.
+Ecluse.Test.Poll.runUntil replaces discarded timeout/poll results in Integration.WorkerLoop. It throws TestContractEscape on progress timeout or early normal worker exit, propagates worker errors, and cancels the worker after progress.
 
-Ecluse.Test.Env.withEnvOverrides hoists Collector save/apply/restore, saves unique keys, preserves override order and restores absent values. Collector, Ministack and withAmbientAws use it. Existing withEnvVars clear/apply/clear semantics stay intact. EnvSpec checks success, typed action failure, assignment failure, cancellation and duplicate override order. Environment callers remain serial. Boot refusal timing and compiler-output isolation are
+Ecluse.Test.Env.withEnvOverrides hoists Collector save/apply/restore, saves unique keys, preserves override order and restores absent values. Collector, Ministack and withAmbientAws use it. Existing withEnvVars clear/apply/clear semantics stay intact. Environment callers remain serial. Boot refusal timing and compiler-output isolation are
 separate concerns tracked by #1349, #1182, and #1329.
 
 ## Smoke and measurement
