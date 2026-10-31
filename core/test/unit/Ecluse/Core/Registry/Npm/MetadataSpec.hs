@@ -95,7 +95,7 @@ import Ecluse.Test.Package (unscopedNpm, validSha1, validSha512Sri)
 import Ecluse.Test.Registry.JsonBytes (damaged, genChunks, genPackumentBytes, genServablePackumentBytes)
 import Ecluse.Test.Registry.JsonStream (byteChunks, testTable, walkJsonChunks, walkWritingChunks)
 import Ecluse.Test.Registry.Metadata.Fetch (captureChunks, heldWorkspacePeak)
-import Ecluse.Test.Registry.Npm (densePackument, minimalPackument)
+import Ecluse.Test.Registry.Npm (densePackument, minimalPackument, timedPackument)
 import Ecluse.Test.Registry.Npm.Metadata (npmFullTestWalk, projectNpmManifest, projectNpmVersion)
 import Ecluse.Test.Registry.Packed (walkedLength)
 import Ecluse.Test.Snapshot (digestOf, readDetails)
@@ -130,6 +130,16 @@ entryFloorSpec = describe "the full-read entry floor" $ do
         (result, _) <- heldWorkspacePeak adapterRead captureRegistry (unscopedNpm "thing") [denseBody]
         manifestRetainedEntries <$> expectRight result `shouldReturn` RetainedEntries 0 entries
 
+    it "counts the created and modified times a finished document serves, and no timestamp that joins its release" $ do
+        let body = timedPackument 3 [("\"created\"", stamp), ("\"modified\"", stamp), ("\"0.0.1\"", stamp)]
+        (result, _) <- heldWorkspacePeak adapterRead captureRegistry (unscopedNpm "thing") [body]
+        manifestRetainedEntries <$> expectRight result `shouldReturn` RetainedEntries 3 2
+
+    it "counts the dropped timestamps a finished document reports under its releases' keys, and no other" $ do
+        let body = timedPackument 3 [("\"0.0.1\"", "0"), ("\"0.0.2\"", "0"), ("\"0.0.3\"", "0"), ("\"x\"", "0")]
+        (result, _) <- heldWorkspacePeak adapterRead captureRegistry (unscopedNpm "thing") [body]
+        manifestRetainedEntries <$> expectRight result `shouldReturn` RetainedEntries 3 3
+
     it "charges no workspace when releases carry more source bytes than their entries' floor" $ do
         let release at = "\"1.0." <> at <> "\":" <> policyRelease [("readme", String (T.replicate 1024 "x"))]
             body = "{\"name\":\"thing\",\"versions\":{" <> BS.intercalate "," [release (show at) | at <- [1 .. 20 :: Int]] <> "}}"
@@ -152,6 +162,7 @@ entryFloorSpec = describe "the full-read entry floor" $ do
     adapterRead = metadataRead (adapterMetadata npmAdapter)
     entries = 300
     denseBody = densePackument entries
+    stamp = "\"2020-01-01T00:00:00.000Z\""
     -- The floor each version pays, which the release floor's measurement sets.
     releaseFloor = 1152
     denseShortfall = entryFloorBytes * 2 * entries - scaleCharge (cfFullReadPermille npmChargeFactors) (BS.length denseBody)
