@@ -15,6 +15,7 @@ module Ecluse.Test.Contract.Serving (
     artifactIntegrityCase,
     artifactDigestCase,
     artifactHeadCase,
+    artifactHeadLengthCase,
 ) where
 
 import Codec.Compression.GZip qualified as GZip
@@ -305,6 +306,13 @@ artifactHeadCase :: ServingResponse -> Expectation
 artifactHeadCase response = do
     responseStatus response `shouldBe` 200
     responseBody response `shouldBe` ""
-    let contentLength = lookup "Content-Length" (responseHeaders response) >>= parseLength
-        parseLength bytes = readMaybe (toString (decodeUtf8 bytes :: Text))
-    (contentLength :: Maybe Integer) `shouldSatisfy` maybe False (> 0)
+    advertisedLength response `shouldSatisfy` maybe False (> 0)
+
+-- | An admitted artifact HEAD advertises the exact length of the artifact's bytes.
+artifactHeadLengthCase :: Integer -> ServingResponse -> Expectation
+artifactHeadLengthCase expected response = do
+    artifactHeadCase response
+    advertisedLength response `shouldBe` Just expected
+
+advertisedLength :: ServingResponse -> Maybe Integer
+advertisedLength response = lookup "Content-Length" (responseHeaders response) >>= readMaybe . toString . decodeUtf8 @Text
