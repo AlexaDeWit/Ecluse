@@ -100,6 +100,7 @@ import Ecluse.Test.Maintenance (
 import Ecluse.Test.Mirror.State (mirrorViewWith)
 import Ecluse.Test.Package (hexSha1Of, leftpadName, npmVersion, requestsName, sampleDetails, sampleManifest, sriSha256Of, sriSha512Of, unsafeFilename)
 import Ecluse.Test.Port (noopMetricsPort, recordingDenials, recordingDivergenceMetricsPort, recordingMetricsPort)
+import Ecluse.Test.Registry.Cargo.Fixtures qualified as Cargo
 import Ecluse.Test.Registry.Npm (VersionSpec (..), packumentValue, versionSpec, versionValue)
 import Ecluse.Test.Registry.Public (PublicFixture (..), newPublicFixture)
 import Ecluse.Test.Registry.PyPI (simpleFile, simpleIndex, withFileKeys)
@@ -1347,29 +1348,47 @@ invalidPublicReplyRoutes privateOrigin =
 
 {- Public replies Écluse cannot use, each with the mount change that makes it one, and the ecosystems
 whose request-wide read budget refuses it with its own 502 before the public leg decides. RubyGems
-reads /info under a budget the size of the document bound.
+reads /info under a budget the size of the document bound. The bound leaves room for an empty private
+document.
 -}
 invalidPublicReplies :: [(String, Response, PackumentDeps -> PackumentDeps, [Ecosystem])]
 invalidPublicReplies =
     [ ("an unfollowed redirect", responseLBS status302 [(hLocation, "http://elsewhere.test/leftpad")] "", id, [])
     , ("an unexpected status", responseLBS status400 [] "", id, [])
     , ("an undecodable document", responseLBS status200 [] "\255 not a registry document", id, [])
-    , ("a document past its bound", responseLBS status200 [] (LBS.replicate 64 0x7b), \deps -> deps{pdLimits = defaultLimits{maxMetadataBytes = 8}}, [RubyGems])
+    , ("a document past its bound", responseLBS status200 [] (LBS.replicate 256 0x20), \deps -> deps{pdLimits = defaultLimits{maxMetadataBytes = 128}}, [RubyGems])
+    , ("an access refusal with HTTP 401", responseLBS status401 [] "", id, [])
+    , ("an access refusal with HTTP 403", responseLBS status403 [] "", id, [])
     ]
 
 -- A private document that admits nothing leaves the listing to the public origin. Its failed read never
 -- reached the gate, so it refuses the listing as an outage, and a public document the gate refuses in full answers 404.
 privateAdmitsNothingSpec :: Spec
-privateAdmitsNothingSpec = describe "an npm packument whose private document admits nothing" $
-    for_ [("every version below the trusted floor", belowFloorApp), ("no version", emptyPrivateApp)] $ \(label, privateApp) -> do
-        for_ [("is unavailable", status503, 503), ("answers HTTP 400", status400, 502)] $ \(failure, publicStatus, expected) ->
-            it ("answers " <> show expected <> " for GET and HEAD when the private document has " <> label <> " and the public origin " <> failure) $
-                listingOver privateApp (\_ respond -> respond (responseLBS publicStatus [] "")) id expected Nothing Unavailable
-        it ("answers 404 for GET and HEAD when the private document has " <> label <> " and the gate refuses every public version") $ do
-            denyAll <- prepare inertRuleDeps []
-            listingOver privateApp upstreamApp (\deps -> deps{pdRules = denyAll}) 404 Nothing Deny
+privateAdmitsNothingSpec = do
+    describe "an npm packument whose private document admits nothing" $
+        for_ [("every version below the trusted floor", belowFloorApp), ("no version", emptyPrivateDocument Npm)] $ \(label, privateApp) -> do
+            for_ [("is unavailable", status503, 503), ("answers HTTP 400", status400, 502), ("answers HTTP 401", status401, 502), ("answers HTTP 403", status403, 502)] $ \(failure, publicStatus, expected) ->
+                it ("answers " <> show expected <> " for GET and HEAD when the private document has " <> label <> " and the public origin " <> failure) $
+                    listingOver privateApp (\_ respond -> respond (responseLBS publicStatus [] "")) id expected Nothing Unavailable
+            it ("answers 404 for GET and HEAD when the private document has " <> label <> " and the gate refuses every public version") $ do
+                denyAll <- prepare inertRuleDeps []
+                listingOver privateApp upstreamApp (\deps -> deps{pdRules = denyAll}) 404 Nothing Deny
+    describe "a public reply Écluse cannot use beside a private document that admits nothing, through ecosystem routes" $
+        invalidPublicReplyRoutes (Just emptyPrivateDocument)
+
+-- Each ecosystem's private document for leftpad that names no version, Cargo's discovery, and 404 for any other path.
+emptyPrivateDocument :: Ecosystem -> Application
+emptyPrivateDocument ecosystem request respond
+    | rawPathInfo request == path = respond (responseLBS status200 [(hContentType, contentType)] body)
+    | ecosystem == Cargo && rawPathInfo request == "/config.json" =
+        respond (responseLBS status200 [(hContentType, "application/json")] (LBS.fromStrict (Cargo.cargoViewDiscovery (selfBaseUrl request) Nothing False)))
+    | otherwise = respond (responseLBS status404 [] "")
   where
-    emptyPrivateApp _ respond = respond (responseLBS status200 [(hContentType, "application/json")] (encode (object ["name" .= ("leftpad" :: Text), "dist-tags" .= object [], "versions" .= object []])))
+    (path, contentType, body) = case ecosystem of
+        Npm -> ("/leftpad", "application/json", encode (object ["name" .= ("leftpad" :: Text), "dist-tags" .= object [], "versions" .= object []]))
+        PyPI -> ("/simple/leftpad/", "application/vnd.pypi.simple.v1+json", encode (simpleIndex "leftpad" []))
+        Cargo -> ("/le/ft/leftpad", "text/plain", "")
+        RubyGems -> ("/info/leftpad", "text/plain", "---\n")
 
 -- A public listing the gate denies in full answers 404 beside a private 404 or with no private origin. The artifact keeps its 403.
 deniedListingSpec :: Spec

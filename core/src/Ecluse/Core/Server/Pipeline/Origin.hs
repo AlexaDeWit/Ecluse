@@ -100,7 +100,9 @@ data OriginResult
       OriginBudgetExceeded LimitError
     | -- | A packument that decoded and whose self-reported name matched the request.
       OriginResolved Manifest
-    | -- | An explicit upstream access refusal, retaining its 401 or 403.
+    | {- | An explicit upstream access refusal, retaining its 401 or 403. A public one refuses a listing
+      with nothing admitted as an invalid reply, because the public read is anonymous.
+      -}
       OriginAuthorisationFailure Int
     | {- | An invalid package identity. A public one contributes a 502 when no valid origin remains,
       and a private one refuses the request.

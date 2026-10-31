@@ -273,7 +273,8 @@ track which input a survivor came from, so assembly can select its retained sour
   [lenient about public reachability](web-layer.md#meta-routes-ping-health-and-search)). Only when
   nothing survives does the request error. The public versions never reached the gate, so a failed
   public read then refuses the listing as a failed private read does: `503` when the public upstream
-  is unavailable, and `502` when its reply is invalid or unusable. That holds on a mount with no
+  is unavailable, and `502` when its reply is invalid or unusable. Écluse reads the public upstream
+  anonymously, so a public `401` or `403` is an unusable reply and answers `502` as well. That holds on a mount with no
   private upstream, beside a private `404`, and beside a private document that admits nothing, such
   as one whose every version fails the trusted floor.
 

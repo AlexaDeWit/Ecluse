@@ -702,18 +702,22 @@ privateDecision = \case
 publicDecision :: OriginResult -> [ServeDecision]
 publicDecision = \case
     OriginBudgetExceeded _ -> [upstreamInvalidDecision]
-    OriginAuthorisationFailure _ -> []
+    -- The public read is anonymous, so its 401 or 403 is a reply Écluse cannot use, as a 400 is.
+    OriginAuthorisationFailure _ -> [publicReadRefusal ReadInvalid]
     OriginNameMismatch -> [upstreamInvalidDecision]
     OriginResolved _ -> []
     OriginNotFound -> []
-    OriginUnresolved failure -> [readFailureRefusal "the public upstream" neededUpstreamUnavailableMessage failure]
+    OriginUnresolved failure -> [publicReadRefusal failure]
     OriginCooling retry -> [upstreamCooling retry]
     OriginAbsent -> []
+  where
+    publicReadRefusal = readFailureRefusal "the public upstream" neededUpstreamUnavailableMessage
 
 -- Whether the public read failed, so that its cause, not a private 404, decides a listing with nothing admitted.
 publicReadFailed :: OriginResult -> Bool
 publicReadFailed = \case
     OriginUnresolved _ -> True
+    OriginAuthorisationFailure _ -> True
     OriginNameMismatch -> True
     _ -> False
 
