@@ -33,8 +33,8 @@ spec = do
             readPeakLimit (1 % 2) `shouldBe` 520
             readPeakLimit (500001 % 1000000) `shouldBe` 521
         it "adds a quarter to the largest dense figure and rounds up to 64 bytes" $ do
-            entryFloor (Map.singleton "kind" (EntryFigures 512 0)) `shouldBe` 640
-            entryFloor (Map.singleton "kind" (EntryFigures 0 (512001 % 1000))) `shouldBe` 704
+            floorRule (Map.singleton "kind" (EntryFigures 512 0)) `shouldBe` 640
+            floorRule (Map.singleton "kind" (EntryFigures 0 (512001 % 1000))) `shouldBe` 704
         it "covers the all-shape maximum when it exceeds the margin" $ do
             fullReadCharge npmCalibration{realisticReadMaximum = 4 % 5, allReadMaximum = 11 % 10} `shouldBe` 1100
             fullReadCharge npmCalibration{realisticReadMaximum = 4 % 5, allReadMaximum = 1100001 % 1000000} `shouldBe` 1200
@@ -76,19 +76,19 @@ spec = do
             keptCharge cargoFigures `shouldBe` 1500
             keptCharge rubyGemsFigures `shouldBe` 17300
         it "pins the entry floor" $ do
-            entryFloor denseFigures `shouldBe` 704
-            toInteger entryFloorBytes `shouldBe` entryFloor denseFigures
-        it "derives the release floor from every dense and minimal-body figure" $ do
+            entryFloor `shouldBe` 512
+            toInteger entryFloorBytes `shouldBe` entryFloor
+        it "derives the release floor from the version and file figures" $ do
             releaseFloor `shouldBe` 1152
             toInteger releaseFloorBytes `shouldBe` releaseFloor
-        it "keeps each minimal-body figure's regression limit below the release floor" $
-            for_ minimalBodyFigures $ \figures -> do
+        it "keeps each version and file figure's regression limit below the release floor" $
+            for_ releaseFloorFigures $ \figures -> do
                 readPeakLimit (entryReadPeak figures) `shouldSatisfy` (< 1000 * releaseFloor)
                 heldLimit (entryHeld figures) `shouldSatisfy` (< 1000 * releaseFloor)
-        it "keeps each dense figure's regression limit below the entry floor" $
-            for_ denseFigures $ \figures -> do
-                readPeakLimit (entryReadPeak figures) `shouldSatisfy` (< 1000 * entryFloor denseFigures)
-                heldLimit (entryHeld figures) `shouldSatisfy` (< 1000 * entryFloor denseFigures)
+        it "keeps each other entry figure's regression limit below the entry floor" $
+            for_ entryFloorFigures $ \figures -> do
+                readPeakLimit (entryReadPeak figures) `shouldSatisfy` (< 1000 * entryFloor)
+                heldLimit (entryHeld figures) `shouldSatisfy` (< 1000 * entryFloor)
         for_ [Npm, PyPI, Cargo, RubyGems] $ \ecosystem ->
             it (show ecosystem <> " keeps its adapter's kept charge") $ do
                 record <- requireResidency ecosystem

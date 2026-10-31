@@ -25,7 +25,7 @@ import Ecluse.Core.Registry.Metadata (Manifest (manifestRetainedEntries))
 import Ecluse.Core.Registry.Metadata.EntryFloor (RetainedEntries (..), entryFloorCharge)
 import Ecluse.Core.Server.Admission.Budget (scaleCharge)
 import Ecluse.Core.Server.Admission.Types (ChargeFactors (cfFullReadPermille, cfKeptPermille))
-import Ecluse.Core.Server.MemoryModel.Calibration (EntryFigures (..), denseFigures, heldLimit, minimalBodyFigures, readPeakLimit)
+import Ecluse.Core.Server.MemoryModel.Calibration (EntryFigures (..), entryFloorFigures, heldLimit, readPeakLimit, releaseFloorFigures)
 import Ecluse.Core.Server.MemoryModel.Probe (ListingPeaks (..), SingleListing (..), measurePathInChild)
 import Ecluse.Core.Server.MemoryModel.ProbeMode qualified as Mode
 import Ecluse.Test.Registry.Metadata.Fetch (heldWorkspacePeak)
@@ -67,7 +67,7 @@ spec = describe "dense listing live bytes" $
             kept `shouldBe` denseKept dense
             readRise `shouldSatisfy` (<= toInteger (max (scaleCharge (cfFullReadPermille factors) size) (entryFloorCharge held)))
             heldRise `shouldSatisfy` (<= toInteger (max (scaleCharge (cfKeptPermille factors) size) (entryFloorCharge kept)))
-            figures <- maybe (fail "no dense listing figures") pure (Map.lookup (label dense) (denseFigures <> minimalBodyFigures))
+            figures <- maybe (fail "no dense listing figures") pure (Map.lookup (label dense) (entryFloorFigures <> releaseFloorFigures))
             (1000 * readRise) `shouldSatisfy` (<= readPeakLimit (entryReadPeak figures) * toInteger total + 1000 * tolerance)
             (1000 * heldRise) `shouldSatisfy` (<= heldLimit (entryHeld figures) * toInteger total + 1000 * tolerance)
 
