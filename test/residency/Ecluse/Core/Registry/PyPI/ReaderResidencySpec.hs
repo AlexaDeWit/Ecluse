@@ -22,6 +22,7 @@ import Ecluse.Core.Security (Limits (maxVersionCount), defaultLimits)
 import Ecluse.Test.Contract.Catalogue (caseLabel)
 import Ecluse.Test.Contract.Retention (boundedRetention)
 import Ecluse.Test.Package (unscopedPyPI)
+import Ecluse.Test.Registry.JsonBytes (commas, render)
 import Ecluse.Test.Registry.JsonStream (testTable)
 import Ecluse.Test.Registry.PyPI.Metadata (projectPyPIChunks)
 import Ecluse.Test.Support (expectRight)
@@ -92,7 +93,4 @@ file suffix position =
         <> "\"}"
 
 index :: Builder.Builder -> ByteString
-index members = toStrict (Builder.toLazyByteString ("{\"name\":\"thing\",\"meta\":{\"api-version\":\"1.1\"}," <> members <> "}"))
-
-commas :: [Builder.Builder] -> Builder.Builder
-commas = mconcat . intersperse ","
+index members = render ("{\"name\":\"thing\",\"meta\":{\"api-version\":\"1.1\"}," <> members <> "}")

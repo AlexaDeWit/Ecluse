@@ -28,6 +28,7 @@ import Ecluse.Core.Server.Admission.Types (ChargeFactors (cfFullReadPermille, cf
 import Ecluse.Core.Server.MemoryModel.Calibration (EntryFigures (..), entryFloorFigures, heldLimit, readPeakLimit, releaseFloorFigures)
 import Ecluse.Core.Server.MemoryModel.Probe (ListingPeaks (..), SingleListing (..), measurePathInChild)
 import Ecluse.Core.Server.MemoryModel.ProbeMode qualified as Mode
+import Ecluse.Test.Registry.JsonBytes (commas, quoted, render)
 import Ecluse.Test.Registry.Metadata.Fetch (heldWorkspacePeak)
 import Ecluse.Test.Registry.Npm (minimalPackument)
 import Ecluse.Test.Registry.PyPI (minimalIndex)
@@ -138,12 +139,3 @@ report dense size retained readRise heldRise =
             , "read_peak_per_entry" .= (fromInteger readRise / fromIntegral retained :: Double)
             , "held_per_entry" .= (fromInteger heldRise / fromIntegral retained :: Double)
             ]
-
-quoted :: Builder.Builder -> Builder.Builder
-quoted text = "\"" <> text <> "\""
-
-commas :: [Builder.Builder] -> Builder.Builder
-commas = mconcat . intersperse ","
-
-render :: Builder.Builder -> ByteString
-render = toStrict . Builder.toLazyByteString
