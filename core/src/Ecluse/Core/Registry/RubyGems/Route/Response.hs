@@ -29,7 +29,7 @@ rubyContract media =
             chooseContract (emptyContract status304 "The admitted representation is unchanged.") $
                 chooseContract (text status401 "Authentication is required.") $
                     chooseContract (text status403 "Access or admission was refused.") $
-                        chooseContract (text status404 "The requested coordinate is absent.") $
+                        chooseContract (text status404 "The requested gem or coordinate is absent, or no version of the gem passed policy and admission.") $
                             chooseContract (text status406 "The representation is unavailable.") $
                                 chooseContract (text status500 "The registry could not decide.") $
                                     chooseContract (text status502 "An origin reply was invalid or unusable.") (text status503 "The registry is temporarily unavailable.")

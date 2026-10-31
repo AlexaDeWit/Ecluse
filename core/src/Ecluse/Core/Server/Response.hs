@@ -142,11 +142,15 @@ artifactHttpStatus = \case
     BadGateway -> status502
     NotFound -> status404
 
--- | The HTTP status a __packument__ request renders to. There is no @404@: absence is decided before the merge.
+-- | The HTTP status a __packument__ request renders to. A name no origin holds is decided before the merge.
 data PackumentStatus
     = -- | @200@: at least one version survived, so the proxy serves the merged, filtered packument.
       PackumentOk
-    | -- | @403@: no version survived and every exclusion was a policy denial. The response body collects the denial reasons.
+    | {- | No version survived and every exclusion was a policy or integrity refusal. A listing answers
+      @404@ and a native coordinate @403@, each with the refusals in its body.
+      -}
+      PackumentDenied
+    | -- | @403@: no version survived and none was excluded, so no exclusion names a cause.
       PackumentForbidden
     | -- | @503@: no version survived and an exclusion can recover. A suggested delay becomes @Retry-After@.
       PackumentUnavailable (Maybe RetryAfter)
@@ -163,18 +167,17 @@ packumentStatus decisions
     | not (null willResolveDelays) = PackumentUnavailable (longestRetry willResolveDelays)
     | tallyUpstreamInvalid tally = PackumentBadGateway
     | tallyWontResolve tally = PackumentServerError
+    | tallyRefused tally = PackumentDenied
     | otherwise = PackumentForbidden
   where
     -- One strict pass collects every signal the guards weigh, so the all-denied path walks
     -- the exclusions once, not once per guard.
     tally :: PackumentTally
-    tally = foldl' weighDecision (PackumentTally False [] False False) decisions
+    tally = foldl' weighDecision (PackumentTally False [] False False False) decisions
 
     willResolveDelays :: [Maybe RetryAfter]
     willResolveDelays = tallyWillResolveDelays tally
 
--- A deny-by-default cause (policy or admission refusal) leaves no signal of its own,
--- because an empty tally is exactly the @403@ floor.
 weighDecision :: PackumentTally -> ServeDecision -> PackumentTally
 weighDecision acc = \case
     Admit -> acc{tallyAdmit = True}
@@ -183,9 +186,9 @@ weighDecision acc = \case
             acc{tallyWillResolveDelays = delay : tallyWillResolveDelays acc}
         UpstreamInvalid -> acc{tallyUpstreamInvalid = True}
         Unavailable WontResolve -> acc{tallyWontResolve = True}
-        ByPolicy{} -> acc
-        MissingIntegrity -> acc
-        BelowIntegrityFloor -> acc
+        ByPolicy{} -> acc{tallyRefused = True}
+        MissingIntegrity -> acc{tallyRefused = True}
+        BelowIntegrityFloor -> acc{tallyRefused = True}
 
 -- The signals 'packumentStatus' weighs, accumulated in one pass. Strict fields keep the tally from
 -- building thunks across a large survivor set.
@@ -198,6 +201,8 @@ data PackumentTally = PackumentTally
     -- ^ An upstream reply was invalid or unusable.
     , tallyWontResolve :: Bool
     -- ^ An exclusion was a permanent ('WontResolve') inability to decide.
+    , tallyRefused :: Bool
+    -- ^ An exclusion was a policy or integrity refusal.
     }
 
 -- | The longest suggested 'RetryAfter' among transient causes, or 'Nothing' when none suggested one.

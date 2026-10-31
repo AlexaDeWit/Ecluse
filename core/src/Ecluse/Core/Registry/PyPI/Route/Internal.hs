@@ -185,9 +185,9 @@ pypiIndexContract =
             ( chooseContract
                 (refusalContract status401 "Edge authentication failed.")
                 ( chooseContract
-                    (refusalContract status403 "Private access was refused, or no release survived policy and admission.")
+                    (refusalContract status403 "Private access was refused, or no release reached policy and admission.")
                     ( chooseContract
-                        (refusalContract status404 "A project neither the private nor the public upstream has, or a first-party project the private upstream does not have, which is never fetched from the public upstream.")
+                        (refusalContract status404 "A project no configured upstream has, a first-party project the private upstream does not have, which is never fetched from the public upstream, or a project with no release that passed policy and admission.")
                         ( chooseContract
                             (refusalContract status406 "The request admits no representation this index serves: only the PEP 691 JSON form exists, in gzip or identity coding.")
                             ( chooseContract

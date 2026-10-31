@@ -112,10 +112,12 @@ resolveCoordinate ticket observe request file = do
             _ -> pure (Left (rubyBadRequest "the native coordinate names more than one admitted artifact"))
         name : names -> do
             rejected <- liftIO (newIORef Nothing)
-            let replies =
+            let candidateDenied headers refusal = CandidateDenied (packumentForbidden rubyReplies headers refusal)
+                replies =
                     (mapPackumentReplies CandidateRefused rubyReplies)
                         { packumentNotFound = \_ _ -> CandidateAbsent
-                        , packumentForbidden = \headers refusal -> CandidateDenied (packumentForbidden rubyReplies headers refusal)
+                        , packumentDenied = candidateDenied
+                        , packumentForbidden = candidateDenied
                         }
                 recordRejected ctx details rejection =
                     when (any (\candidate -> coordinateName candidate == pkgName details && coordinateVersion candidate == pkgVersion details) candidates && any ((== unFilename file) . artFilename) (pkgArtifacts details)) $
@@ -130,7 +132,7 @@ resolveCoordinate ticket observe request file = do
                 continueRejected current@(CoordinateRejection _ _ _ rejection) next
                     | terminalRejection rejection = Left <$> coordinateRefusal deps current
                     | otherwise = next (denied <|> Just (Right current)) names
-            result <- withObservedAdmittedDocument replies ticket observer checkDocument (Just rejectionObserver) name request CandidateAbsent $ \cached sourceBytes origins -> do
+            result <- withObservedAdmittedDocument replies ticket observer checkDocument (Just rejectionObserver) name request (Just CandidateAbsent) $ \cached sourceBytes origins -> do
                 liftIO (charge ticket (scaleCharge (cfOutputPermille (metadataChargeFactors (pdMetadata deps))) sourceBytes))
                 pure (CandidateAdmitted (cached, sourceBytes, origins))
             case result of
@@ -167,7 +169,11 @@ coordinateRefusal deps (CoordinateRejection name version etag rejection) = do
         recordDenials (srMetrics rt) [decision]
         mpServeDecision (srMetrics rt) (statusServeDecision status)
     logDenials name etag [VersionVerdict version decision]
-    pure (noSurvivors rubyReplies (pdHelp deps) status [decision])
+    pure (noSurvivors coordinateReplies (pdHelp deps) status [decision])
+
+-- A coordinate names a version that exists, so its denial keeps the 403 a listing that admitted nothing no longer answers.
+coordinateReplies :: PackumentReplies RubyResponse
+coordinateReplies = rubyReplies{packumentDenied = packumentForbidden rubyReplies}
 
 fetchCompact :: MemoryTicket -> (Int -> IO ()) -> Request -> (GemRow, Provenance) -> Handler RubyResponse
 fetchCompact ticket observe request (row, provenance) = do
