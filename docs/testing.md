@@ -1141,8 +1141,8 @@ Read a red result according to its measurement:
   incomplete, and the job raises a warning. Live documents grow as packages publish, so no budget applies to them. Its
   report separates upstream time from the legs.
 - Load benchmarks use `oha` against a proxy process. A run fails when a required load or ramp step gets no successful response,
-  when a count of successes is below its [success floor](#success-floors), when a scheduled run's configuration keeps it
-  off the floors, when the kernel OOM-kills a proxy, when a proxy exits on heap overflow, and when a proxy ends any other
+  when a scenario pass is below its [success floor](#success-floors) on its first attempt and on its re-run, when a
+  scheduled run is not held to the floors, when the kernel OOM-kills a proxy, when a proxy exits on heap overflow, and when a proxy ends any other
   way than the clean shutdown the harness asks for, early exits included. It also fails when the harness or a proxy cannot
   boot, when `oha` cannot run, and when a fixture preflight sees an unexpected status, index shape, or wheel body. Latency
   and memory have no regression threshold. Shared-runner noise and the load run's cost make it unsuitable as a per-PR
@@ -1221,8 +1221,8 @@ between two runners:
   dispatch there.
 - A bench's `2*stdev` is what one run resolves for it. One run on each side does not resolve a
   smaller change, and a larger one can still be the runner.
-- Each ecosystem injects its own measured public RTT or configured fallback.
-  Its latency-bound scenarios move with that value. The operating point rows show both values when they differ.
+- Every stub upstream injects one fixed latency, 20 ms unless a dispatch sets another. When the
+  two runs differ, the operating point rows show both, and the latency-bound scenarios move with it.
 - A live acceptance document grows as its package publishes, so its legs then read more versions.
 - A finite replay sends the same requests every run, so its successes hold and only its latency
   can show a change. It sends few requests, and its percentiles differ widely between two runs of
@@ -1291,7 +1291,7 @@ They keep the duration, traffic, limits and assertions unchanged.
 Explicit `scenarios` override the profile and appear as `custom` in the native report.
 Named partial profiles remain diagnostic. They do not enforce calibrated floors or produce full completion receipts.
 
-Full nightly runs retain all four pod shapes. Remaining floor values and eligibility checks stay unchanged.
+Full nightly runs retain all four pod shapes.
 The full profile now omits the 5% private-copy cases and default restart replays.
 They remain available through explicit scenario selection. The npm and PyPI grid contains 332 pass observations, down from 356.
 Cargo adds 154 and RubyGems 162 pass observations, giving 648 across the four ecosystems.
@@ -1517,9 +1517,8 @@ the heap. The at-a-glance row shows the burst's successes, and the concurrent lo
 The burst's successes and refusals remain diagnostic, including zero successes. This exception applies
 only to these combined scenarios. All process and memory-failure checks still apply.
 
-The npm and PyPI combined scenarios stay in scheduled coverage.
-Their eight background floors use 12 qualifying source runs, with three observations per scheduled pod shape.
-The [calibration record](../bench/load/floors.json) keeps each measured commit, the earlier source groups, and the native latency provenance.
+The combined scenarios stay in scheduled coverage. Their background loads take floors from a
+calibration, as every cell does ([Success floors](#success-floors)).
 
 #### Capability sweeps
 
@@ -1554,8 +1553,9 @@ never mixes a short check or a second commit into one noise band. For each arm t
 shows:
 
 - each scenario's successes, the anchors' mean, the ratio between them, and the reference shape's
-  loaded floor. The floor applies only to a window of the connections and length the floors were
-  calibrated at, so a short check marks every floor not applicable
+  loaded floor. The floor applies only to a window of the connections, length, and injected latency
+  the floors were calibrated at, so a short check, or a sweep at another latency such as
+  `capability-1634`'s 5 ms, marks every floor not applicable
 - the score: the geometric mean of the ratios over the scored scenarios the job ran. A scored
   scenario without an anchor ratio leaves the arm unscored, and the cell names it
 - whether every proxy reported the expected boot values
@@ -1575,22 +1575,25 @@ alone, and phase `A` also measures the `2cpu-1gib` shape with no placement.
 
 ### Success floors
 
-Each ecosystem requires reviewed minimum successes in [bench/load/floors.json](../bench/load/floors.json).
-A held run requires a floor for every checked scenario, pass, and pod shape.
-A run held to the floors fails when a count is below its floor. A floor catches what the zero-success check cannot: a scenario at a tenth of its normal successes is not at zero. The floors
-are loose. Each is half the lowest count of its reviewed calibration runs, so it leaves room for
-variation between runs and for a change that moves throughput by a few percent. The load test never gates a
-merge: a breach turns only its own scheduled or dispatched run red.
+[bench/load/floors.json](../bench/load/floors.json) holds a cell for every scenario pass the
+`full` profile checks under each scheduled pod shape. A floor catches what the zero-success check
+cannot: a scenario at a tenth of its normal successes is not at zero. The load test never gates a
+merge, so a breach turns only its own scheduled or dispatched run red.
 
-| Count | What its floor holds |
+| Cell | What a held run checks |
 |---|---|
-| Loaded pass | The successes in the scenario's window |
-| Concurrency-one pass | The same count, for each scenario that joins that pass |
-| `npm/ramp`, `pypi/ramp`, `cargo/ramp`, `rubygems/ramp` | Every step. The one floor comes from the lowest step of the calibration runs, and each step must reach it |
-| Each ecosystem's `warm-under-cold` and `slow-readers` | Both loads, the measured one and the one beside it |
-| Each ecosystem's `herd-under-heavy-private` | Only the concurrent `heavy-private` background load. Burst successes and refusals stay diagnostic |
-| `npm/worker-mirroring`, `pypi/worker-mirroring`, `cargo/worker-mirroring`, `rubygems/worker-mirroring` | Complete jobs under `unlimited`, the only shape that runs the in-process worker |
-| The request-pattern replays | A finite trace whose count is the same every night, so the floor is half of it |
+| `{ "floor": 1770, "median": 2950, "from": [<run IDs>] }` | Each required load reaches the floor: 60% (`calibration.floorFraction`, 0.60) of the median of the three calibration runs' counts, rounded down and at least 1 |
+| `{ "floor": null }` | Uncalibrated: zero successes and process failures only |
+| `{ "floor": null, "reportOnly": "<reason>" }` | Zero successes and process failures only, and a calibration leaves the cell without a floor. No cell carries this flag. It exempts a row that a later calibration finds too noisy for a floor |
+
+A pass's count is its lowest required load: every step of a ramp, both loads of `warm-under-cold`
+and `slow-readers`, the background load of `herd-under-heavy-private`, and complete jobs of
+`worker-mirroring`, which runs only under `unlimited`. Zero successes, an OOM kill, a heap overflow,
+an unclean shutdown, and an early exit fail any run, whatever its cells hold.
+
+`Ecluse.BenchLoad.ScenariosSpec`, in the gating unit suite, fails a pull request whose scenarios and
+cells differ, or whose shapes differ from the workflow's scheduled matrix. A held run also fails on a
+missing cell or a cell that names no count.
 
 The PyPI worker row runs in process under `unlimited`. Its admission capacity is `maxBound(Int) / 2`,
 not a constrained worker pod. The three managed-read HTTP rows retain constrained-pod coverage.
@@ -1599,171 +1602,37 @@ reset, queue setup and assertions, while the scenario duration includes that wor
 The Cargo worker uses the same in-process scope and nonbinding admission capacity.
 It copies one crate archive, with native discovery, metadata, archive inspection, upload, conditional state writes, and completion proof.
 
-The floor checks fail closed over the routine full profile:
+#### What holds a run
 
-- A run held to the floors fails on a scenario that has no floor for its pass.
-- It fails on a floor for a count that no scenario reports.
-- `Ecluse.BenchLoad.ScenariosSpec`, in the gating unit suite, compares the file with the harness's
-  scenarios and the four scheduled pod shapes. A scenario added without floors therefore fails its
-  pull request instead of the next scheduled run.
-- The same spec compares the four shapes with the workflow's scheduled matrix, which names the
-  baseline artifacts. A shape added to or dropped from the matrix alone fails its pull request.
+A run is held when it matches the file's `calibration` record. Its report's "Success floors" section
+says so, or names every setting that differs:
 
-A run is held to the floors only when it matches what they were calibrated at. The file's
-`calibration` record holds each part, and the harness reads the run's side from its environment:
-
-| Part | A held run | The harness reads |
-|---|---|---|
-| Runner | Runs on GitHub Actions under `runnerOs` and `runnerArch` (Linux, ARM64) | `GITHUB_ACTIONS`, `RUNNER_OS`, `RUNNER_ARCH` |
-| Settings | Uses the `full` profile at `operatingPoint`: 30 seconds, 100 connections, default payload, computed admission and pools. Both passes cover every scenario. The run pins no proxy setting or `BENCH_PATTERN_*` variable. | The `BENCH_LOAD_*` knobs, `BENCH_LOAD_PROFILE`, `BENCH_LOAD_SCENARIOS`, `BENCH_LOAD_PASSES`, the `BENCH_LOAD_PROXY_*` settings, and the names of the `BENCH_PATTERN_*` variables that are set |
-| Pod shape | Runs under a shape that `floors` holds | `BENCH_LOAD_POD` |
-| Measurement conditions | Matches `measurementConditions` | The harness reports `unified-v2` |
-| Native injected latency | Each ecosystem stays below its own ceiling | Each native public RTT, or the declared configured fallback |
-
-The harness skips floors when a calibration condition does not match.
-Report cells read `not held`, and the "Success floors" section names every reason.
-Every other check still runs.
-The harness applies floors to any full-profile dispatch under the four pod shapes when all calibration conditions match.
-Runs on other machines and GC-thrash probes remain unheld.
-
-The harness requires a scheduled run to enforce floors.
-It fails the run if the settings, runner, shape, measurement conditions or GC-thrash probe keep the floors off.
-The violation names the reason.
-An uncalibrated change to the scheduled settings therefore fails the next scheduled run.
-Latency above a ceiling remains the network exception.
-That run stays green and does not enforce floors.
-
-After the calibration conditions match, the harness compares nothing else:
-
-- `BENCH_LOAD_PROBE_RTT` only swaps the probed latency for the configured 5 ms, which is under the
-  ceiling. A run with the probe off, or with a probe that failed, is therefore held, and at 5 ms its
-  latency-bound counts sit so far above their floors (more than thirty times in the concurrency-one
-  pass) that those floors detect nothing on it. The `upstream-latency-ms` dispatch input turns the
-  probe off, and any value but 5 keeps the run off the floors.
-- The workflow fixes `BENCH_LOAD_ISOLATE_OHA` and the harness's `-N`, and no dispatch input changes
-  them.
-- The harness reads the runner's operating system and architecture, not its label, so any Linux
-  ARM64 runner on GitHub Actions counts as the calibrated `ubuntu-26.04-arm`.
-
-All four ecosystems use measurement conditions `unified-v2`:
-
-- Each eviction bound is `min(max(1, configured entries), actual selected project count - 1)`.
-  A selected working set with fewer than two projects fails before capture reads or proxy boot.
-- Each listing pass preflights every distinct selected URL before its measurement callback.
-  npm checks JSON, package identity, native metadata, rewritten artifact URLs, and the private
-  overlay for merged listings. PyPI retains its media, project, file, artifact URL, and overlay checks.
-  Cargo checks nonempty native records, checksum fields, and local archive discovery.
-  RubyGems parses each `/info` reply with an independent reader, runs the Ruby reference decoder,
-  and requires nonempty rows, nonempty versions, and a checksum field on every row.
-  Private-copy listings retain their native checks without requiring a synthetic overlay.
-  Cold admission bursts and ramps remain unprimed.
-- All shared upstream stubs skip the delay at zero or negative latency. Positive delays stay unchanged.
-- Each ecosystem warms a native public listing connection before probing its own RTT.
-  npm fetches packuments. PyPI requests PEP 691 JSON Simple indexes, not the project JSON API.
-  Cargo requests native sparse indexes from `index.crates.io`.
-  RubyGems requests per-gem `/info/` records from `rubygems.org`.
-  Disabled probes, failed warm-ups, and probes with no successful samples report an explicit configured fallback.
-  Each report and observation artifact retains the baseline identity and sample count.
-
-Service attribution still subtracts one public baseline. Extra upstream hops remain in the reported
-proxy overhead. Scenario names, traffic mixes, timed workloads, and workflow cadence stay unchanged.
-The full timed grid remains outside ordinary pull-request CI.
-
-The `calibration.measurementConditions` field identifies the conditions behind the floors.
-Older files without this field mean `legacy-v1`: raw npm eviction bounds, PyPI-only listing preflight,
-an unconditional PyPI delay, and configured PyPI latency. The committed counts retain that identity
-until qualified recalibration replaces the affected rows. A `unified-v2` run against legacy floors
-is not held, even when a dispatched workflow exits green. It is not a qualifying sample by that fact.
-`retainedFloorConditions` maps unaffected scenario names to their earlier condition identity after
-partial recalibration. It records retained row provenance without changing those counts.
-
-Latency-bound counts fall as injected latency rises. Derive each native ceiling separately:
-1.5 times the lowest of its pod shapes' highest qualifying latencies, rounded up to 10 ms.
-`npmInjectedLatency.highestMs`, `pypiInjectedLatency.highestMs`, `cargoInjectedLatency.highestMs`, and `rubygemsInjectedLatency.highestMs` record the per-shape observations.
-The reader checks the formula and pod identities for each ceiling.
-`unified-v2` calibration requires npm and PyPI ceilings. Cargo and RubyGems floors also require their own native ceilings.
-A run above any native ceiling is not held as a whole, including the other ecosystems.
-The report names the ecosystem, its injected latency, and its own ceiling.
-The network exception applies to each ceiling breach.
-A missing calibration or condition mismatch is a configuration fault.
-Missing Cargo or RubyGems calibration or a missing native latency observation fails scheduled and dispatched runs.
-
-To recalibrate, take the last ten scheduled runs of the Load test workflow on `main`, and take the
-next older run in place of each one you leave out:
-
-| Leave out a run | Why |
+| Part | A held run |
 |---|---|
-| That was red, or that the committed floors would fail | A collapse must never lower a floor |
-| With a job above the latency ceiling, which is green and not held | It would lift the recorded latency, and the ceiling with it |
+| Settings | The `full` profile at `operatingPoint`: 30 seconds, 100 connections, the default payload, computed admission and pools, both passes, no pinned proxy setting, and no `BENCH_PATTERN_*` variable |
+| Injected latency | `upstreamLatencyMs`, 20 ms, from every stub upstream. The four `*-ceiling` scenarios inject their own 2 ms |
+| Runner | Linux ARM64 on GitHub Actions, read from `RUNNER_OS` and `RUNNER_ARCH` |
+| Pod shape | One the file holds |
+| Measurement conditions | `measurementConditions`, which the harness reports as `unified-v3` |
 
-Read each pod shape's `bench-load-results.md`:
+A scheduled run that is not held fails. A dispatch at another `upstream-latency-ms`, profile, or
+setting runs unheld. The harness still times one live fetch from each public registry
+(`BENCH_LOAD_PROBE_RTT`), for the report's service-time attribution alone: the probe never changes
+the injected latency or whether a run is held.
 
-| Figure | Where the report shows it |
-|---|---|
-| Loaded pass | The `successes` column of "At a glance" |
-| Each ramp step | The step table in the scenario's own section |
-| The second load of a paired scenario | The "concurrent load: successes" or "slow readers: successes" row in the scenario's own section |
-| Concurrency-one pass | The count of successes in the first "at base concurrency one" column of "Loaded cost against concurrency one" |
-| Native injected latencies | The "injected upstream latency" row in each ecosystem section's operating point |
+#### Breach confirmation
 
-Set each floor to half the lowest count over the ten runs, rounded down, and at least 1. A scenario
-with several required loads takes the lowest count of those loads. The combined probes use only
-their background counts. Then write the `calibration` record:
+A count of at least 1 below its floor is a breach. After the job's last pass, the harness re-runs
+each breached scenario pass once, in a fresh child process with its own proxy and cgroup
+(`calibration.confirmationReruns`). The run fails on the breach only when the re-run breaches too.
+The report's "Breach confirmation" table shows every attempt.
 
-- `runs`: each run's URL with the commit it measured. Ten runs can span commits, so every run
-  carries its own. Keep the exact measured commit when a later patch changes only calibration data or report wording.
-- `rule`, `runner`, `runnerOs`, `runnerArch`, and `operatingPoint`. The rule identifies the run groups
-  that supply retained floors, recalibrated floors, and each native latency record. Historical runs
-  in `runs` do not count as observations under the new conditions.
-- `measurementConditions`: the conditions measured by the new calibration.
-- `retainedFloorConditions`: unaffected rows that retain an earlier calibration identity.
-- `npmInjectedLatency`, `pypiInjectedLatency`, `cargoInjectedLatency`, and `rubygemsInjectedLatency`: each native ecosystem's highest qualifying injected
-  latency by pod shape and its derived ceiling. Preserve the measured baseline and fallback identities
-  when deciding whether an observation qualifies.
+#### Calibration
 
-Two cases have no ten scheduled runs to take.
-Request `profile=full` and `pod-shape=all` for either case:
-
-| Case | Why | What to do |
-|---|---|---|
-| A new scenario | No night has run it | Dispatch the workflow at least three times on the branch that adds it. Those runs go red on the missing floors, and their reports carry the counts all the same. Set the scenario's floors to half its lowest count |
-| A deliberate change of measurement conditions, a knob default, the runner, or the pod shapes | A scheduled run at the changed setting is red by rule until the file matches it | Make the change and the recalibration in one pull request. Dispatch the workflow at least three times on that branch. Dispatched runs are on demand, so the rule does not fail them, and their reports carry every count. Replace only affected floors from those runs. Retain unaffected counts and their provenance |
-
-Compare old and new conditions serially on each supported resource profile before replacing affected floors.
-Retain failed, adverse, and disqualified observations with their exclusion reasons. Do not turn green
-unheld workflow results into qualified measurements or invent calibration values.
-
-In both cases, collect at least three qualifying observations per applicable pod shape. Add their
-run URLs and exact measured commits to `runs`. Preserve earlier source records and their assigned
-floor groups when those floors stay unchanged. A whole run above any applicable native ceiling
-contributes no floor counts or latency maxima, including its otherwise eligible profiles.
-
-For a new native latency policy, select bootstrap samples under the existing applicable constraints.
-A ceiling that does not yet exist cannot exclude those inputs. Derive the new ceiling after selection
-and apply it to future observations. Recorded per-shape maxima can exceed the derived ceiling because
-the formula uses the lowest shape maximum. Do not retrospectively exclude the samples using their
-new ceiling. Apply the same calculation independently to each native ecosystem because its floors
-depend on its own injected RTT.
-
-Each native latency record uses only its assigned qualifying source group. In a partial recalibration,
-a retained latency record keeps its historical source group. New observations qualify against its
-existing ceiling. They do not revise retained per-shape maxima merely because their
-RTT exceeds one historical maximum while remaining below the ceiling. A changed native policy
-receives a separate record derived from its qualifying observations.
-
-For mixed calibrations, `rule` identifies which historical runs supply the retained counts and
-latency record, and which new runs supply the affected counts and changed native latency record.
-The report's provenance count includes both groups. It is not the number of new qualifying samples.
-The next routine recalibration uses ten qualifying scheduled runs. Remove historical source records
-only after no retained floor or latency record refers to them.
-
-After a calibration-only patch, the committed-floor unit checks parse the actual file and verify
-default-condition enforcement under each scheduled shape at every native ceiling. Review and CI
-check the final commit. Keep the measured harness code unchanged and record any later report-only
-change. These checks do not require another timed grid.
-
-A report prints each floor beside the count it holds, so you can read a run against the floors
-without the file.
+Each floor comes from three full dispatches of the Load test workflow. Until the first calibration
+lands, every cell is uncalibrated, and a run checks zero successes and process failures only. A new
+scenario's pull request adds its cells as `{ "floor": null }`, so its passes check zero successes
+and process failures only until a calibration gives them floors.
 
 ### Benchmark captures
 
@@ -2234,9 +2103,8 @@ Benchmark-only `MetadataRendering` separates pure captured assembly and serialis
 Ordinary arm64 CI emits native resource observations before production factors can be calibrated.
 Missing native factors remain failures. Existing npm and PyPI factors and budgets do not supply Cargo values.
 
-Cargo floors and latency policy derive from the standard load workflows with the full profile and every applicable pod shape.
-Each shape needs at least three qualifying observations, and the committed floors carry their source and run provenance.
-Keep adverse and disqualified observations. A provider registration or unmeasured value cannot satisfy calibration.
+Cargo floors come from a calibration, as every ecosystem's do ([Success floors](#success-floors)).
+A provider registration or unmeasured value cannot satisfy calibration.
 
 ## RubyGems native coverage and evidence limits
 
@@ -2260,9 +2128,8 @@ Native coverage must exercise these boundaries:
 Source registration alone supplies no runtime evidence. Backend fixtures supply no live AWS or IAM evidence.
 A completion claim requires the actual native providers, independent obligations, CI receipts for the claimed commit, and measured resource factors.
 Missing providers, observations, factors, or calibration remain failures.
-RubyGems floors come from best-effort real observations.
-`bench/load/floors.json` and `bench/load/rubygems-calibration.json` record their source groups and run provenance.
-Keep original eligibility verdicts and every adverse or excluded observation. Do not relabel failed runs as held receipts.
+RubyGems floors come from a calibration, as every ecosystem's do ([Success floors](#success-floors)).
+Do not relabel failed runs as held receipts.
 Existing ecosystems' factors, budgets, and floors do not supply RubyGems values.
 
 ### Native RubyGems info load
@@ -2325,7 +2192,7 @@ Keep live unavailability distinct from refused product behaviour and planned cov
 | Read evaluation, gating in `ecluse-residency` | The same captures, and an arm for the ecosystem's served-document form in `documentKeys` in [MetadataResidencySpec.hs](../test/residency/Ecluse/Core/Registry/MetadataResidencySpec.hs) | Without that arm, the weak-pointer check of [Read evaluation](#read-evaluation) finds only the document itself and fails. |
 | Work-per-request instance and corpus | Register an `EcosystemBench` in [Ecluse.Test.EcosystemBench](../test/support/Ecluse/Test/EcosystemBench.hs), with frozen bytes under `bench/corpus/<ecosystem>/`, pins in `bench/corpus/pins.json`, and a synthetic byte generator | npm and PyPI run every metadata group through the shared record. [PyPI captures](../bench/corpus/pypi/) use the shipped PEP 691 Simple JSON format. Generator checks cover decoding, projection, selective reads, and artifact URL rewriting. New instances require no changes to the benchmark groups or report renderer. |
 | Allocation budgets | Per-package, per-leg figures in the ecosystem's section of `acceptance/criteria.json`, and osv.dev records for at least one capture under `bench/corpus/advisories/<ecosystem>/`, pinned at `advisories.records.<ecosystem>` in `bench/corpus/pins.json` | The [harness](../acceptance/app/Main.hs) measures every entry of the registered `EcosystemBench` corpus: the committed captures in the gating `captures` mode, and live npm packuments and PyPI PEP 691 Simple JSON documents in the `live` mode. Each ecosystem has its own report section. A new corpus entry needs calibrated figures before the gate passes, and the covered captures join the expected list in `Ecluse.Test.Corpus.AdvisoriesSpec`. |
-| Load fixture | `bench/load/Ecluse/BenchLoad/<Ecosystem>.hs` exporting an `UpstreamFixture`, registered in `bench/load/Ecluse/BenchLoad/Scenarios.hs`, with a [success floor](#success-floors) for each scenario in `bench/load/floors.json` | [npm](../bench/load/Ecluse/BenchLoad/Npm.hs) and [PyPI](../bench/load/Ecluse/BenchLoad/PyPI.hs) run metadata, artifact, and cache scenarios through shared proxy wiring. Each fixture gives `Ecluse.BenchLoad.PrivateCopy` its corpus, stub, listing URL and `Ecluse.Test.Corpus.Subset` cut for the private-copy scenarios. PyPI checks PEP 691 indices and wheel bodies before load, and uses a labelled configured baseline. Its eviction cache stays below the actual corpus working set. PyPI worker mirroring measures four native archive files per job through verified extraction, upload, durable state and final completion proof. |
+| Load fixture | `bench/load/Ecluse/BenchLoad/<Ecosystem>.hs` exporting an `UpstreamFixture`, registered in `bench/load/Ecluse/BenchLoad/Scenarios.hs`, with a [success floor](#success-floors) cell for each scenario pass in `bench/load/floors.json`, uncalibrated until a calibration | [npm](../bench/load/Ecluse/BenchLoad/Npm.hs) and [PyPI](../bench/load/Ecluse/BenchLoad/PyPI.hs) run metadata, artifact, and cache scenarios through shared proxy wiring. Each fixture gives `Ecluse.BenchLoad.PrivateCopy` its corpus, stub, listing URL and `Ecluse.Test.Corpus.Subset` cut for the private-copy scenarios. PyPI checks PEP 691 indices and wheel bodies before load, and uses a labelled configured baseline. Its eviction cache stays below the actual corpus working set. PyPI worker mirroring measures four native archive files per job through verified extraction, upload, durable state and final completion proof. |
 
 The shared residency gate remains in
 [`test/residency/Ecluse/Core/Server/Pipeline/TarballResidencySpec.hs`](../test/residency/Ecluse/Core/Server/Pipeline/TarballResidencySpec.hs).

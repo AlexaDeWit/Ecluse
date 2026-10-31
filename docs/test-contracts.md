@@ -226,7 +226,7 @@ These measurement paths retain their native sampling and verdict logic:
 | Load | `BenchLoad.Harness`, native fixtures, `Scenarios`, and `Verdict` | Process isolation, quotas, affinity, RTS flags, upstream latency, request patterns, concurrency-one passes, success floors, refused/unavailable rows, and gating semantics. |
 | Live native protocol | npm, PyPI and RubyGems registry smoke specs | npm abbreviated parsing, bounded abbreviated fetch, raw SHA-1/SRI syntax, PyPI exact wheel observations, and RubyGems archive coordinate and checksum checks remain native. |
 
-Existing corpus bytes, expected outputs, remaining floor values, and RTS settings stay fixed.
+Existing corpus bytes, expected outputs, and RTS settings stay fixed.
 Provider coverage runs outside measured operations. New PyPI stress rows add samples without changing that boundary.
 
 The `ReadLoadFoundation` scope requires the shared routine read and stress laws for npm, PyPI, Cargo, and RubyGems.
@@ -237,8 +237,7 @@ PyPI also requires its three managed-read comparisons.
 RubyGems replies use no assembled-response retention, so RubyGems omits the assembled-hit, cache-fit and cache-evict laws.
 It adds three per-gem info working sets and a compact specification row.
 The new PyPI ceiling, herd, warm-under-cold and ramp rows use the shared law bodies.
-Their pass floors use three branch observations per pod shape, recorded in `bench/load/floors.json`.
-The existing floors and measured settings stay fixed.
+Their pass floors come from a calibration ([`docs/testing.md`, Success floors](testing.md#success-floors)).
 
 The allocation, live acceptance, benchmark and regular load workflows produce per-ecosystem
 performance receipts after native measurement. Each receipt binds actual observations and
