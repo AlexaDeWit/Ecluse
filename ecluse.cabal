@@ -1623,7 +1623,6 @@ test-suite ecluse-unit
     Ecluse.BenchLoad.RubyGemsSpec
     Ecluse.BenchLoad.RubyGems.DirectorySpec
     Ecluse.BenchLoad.OhaSpec
-    Ecluse.BenchLoad.Cargo.CopyState
     Ecluse.BenchLoad.Cargo.Worker
     Ecluse.BenchLoad.Cargo.WorkerFixture
     Ecluse.BenchLoad.Cargo.WorkerFixtureSpec
@@ -2557,7 +2556,6 @@ executable bench-load
     Ecluse.BenchLoad.RubyGems.Directory
     Ecluse.BenchLoad.RubyGems.Worker
     Ecluse.BenchLoad.RubyGems.WorkerFixture
-    Ecluse.BenchLoad.Cargo.CopyState
     Ecluse.BenchLoad.Cargo.Worker
     Ecluse.BenchLoad.Cargo.WorkerFixture
     Ecluse.BenchLoad.ObjectStore
