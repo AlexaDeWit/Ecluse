@@ -70,7 +70,7 @@ data CacheEntry = CacheEntry
     , entryBodyBytes :: Int
     -- ^ Decompressed source bytes, retained independently of the cache weight.
     , entryRetainedEntries :: RetainedEntries
-    -- ^ The entries the source read retained, which the per-entry floors charge.
+    -- ^ The entries the finished document keeps, which the per-entry floors charge once the read completes.
     , entryDigest :: ContentDigest
     }
     deriving stock (Eq, Show)

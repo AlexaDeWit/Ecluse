@@ -89,14 +89,14 @@ readPyPIFull :: (Int -> IO ()) -> Limits -> PackageName -> DocumentWalk PyPIFull
 readPyPIFull pay limits name bound table readChunk = do
     writer <- stToIO (newWriter Nothing)
     build <- stToIO (fileWriter writer)
-    readFlooredWalk pay (cfFullReadPermille pypiChargeFactors) bound (\entries -> pypiPackedWalk entries writer build limits name table) readChunk
+    readFlooredWalk pay (cfFullReadPermille pypiChargeFactors) bound (\owed -> pypiPackedWalk owed writer build limits name table) readChunk
 
--- | Full reads use the supplied table and writer without materialising file trees, publishing the entries retained.
+-- | Full reads use the supplied table and writer without materialising file trees, publishing the floors their retained entries owe.
 pypiPackedWalk :: PrimVar st Int -> Writer st -> FileWriter st -> Limits -> PackageName -> InternTable -> Cursor -> ST st (Steps (ST st) PyPIFullRead)
-pypiPackedWalk entries writer build limits name table =
+pypiPackedWalk owed writer build limits name table =
     pypiFullWalk build (maxNestingDepth limits) step keepsFile claimsEnvelope fileStep table (emptyProjection name)
   where
-    counted = countingEntries entries retainedEntries
+    counted = countingEntries owed retainedEntries
     step acc field next = counted next (collectField limits acc field)
     fileStep acc position value next = packedFileStep writer limits acc position value (counted next)
 {-# INLINE pypiPackedWalk #-}

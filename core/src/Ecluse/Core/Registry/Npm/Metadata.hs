@@ -97,7 +97,7 @@ type NpmFullRead = Walked PackedRead
 readNpmFull :: (Int -> IO ()) -> Limits -> PackageName -> Text -> DocumentWalk NpmFullRead
 readNpmFull pay limits name base bound table0 readChunk = do
     (table, writer) <- stToIO (npmFullTable base name table0)
-    readFlooredWalk pay (cfFullReadPermille npmChargeFactors) bound (\entries -> npmFullWalk entries writer limits name table) readChunk
+    readFlooredWalk pay (cfFullReadPermille npmChargeFactors) bound (\owed -> npmFullWalk owed writer limits name table) readChunk
 
 -- | Seed the source author pointer and observe policy facts beside the packed writer.
 npmFullTable :: Text -> PackageName -> InternTable -> ST st (InternTable, VersionWriter st)
@@ -106,11 +106,11 @@ npmFullTable base name table0 = (seeded,) <$> newVersionWriter (Just (authorKey,
     Interned authorKey withKey = internName (decodedName "author") table0
     Interned pointer seeded = internName (decodedName (authorPointer base name)) withKey
 
--- | Pack retained releases and collect direct typed facts over the caller's table, publishing the entries retained.
+-- | Pack retained releases and collect direct typed facts over the caller's table, publishing the floors its retained entries owe.
 npmFullWalk :: PrimVar st Int -> VersionWriter st -> Limits -> PackageName -> InternTable -> Cursor -> ST st (Steps (ST st) NpmFullRead)
-npmFullWalk entries writer limits name table = npmWalk writer (maxNestingDepth limits) WholePackument step keepsPackedRelease table emptyPackedRead
+npmFullWalk owed writer limits name table = npmWalk writer (maxNestingDepth limits) WholePackument step keepsPackedRelease table emptyPackedRead
   where
-    step acc field next = packedStep writer limits name acc field (countingEntries entries retainedEntries next)
+    step acc field next = packedStep writer limits name acc field (countingEntries owed retainedEntries next)
 {-# INLINE npmFullWalk #-}
 
 finishNpmFull :: Limits -> PackageName -> Text -> StreamResult NpmFullRead -> Either MetadataError (PackageInfo, CachedDoc)
