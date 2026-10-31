@@ -12,6 +12,8 @@ import Network.Wai qualified as Wai
 import Network.Wai.Handler.Warp qualified as Warp
 
 import Ecluse.Core.Fault.Http (displayFaultT)
+import Ecluse.Runtime.Log (moduleField)
+import Ecluse.Runtime.Server (serverModule)
 
 -- | Warp's exception hook over the process logger. Routine client disconnects stay out of the log, so an aborted download does not spam it.
 warpExceptionHook :: LogEnv -> Maybe Wai.Request -> SomeException -> IO ()
@@ -22,5 +24,6 @@ warpExceptionHook logEnv mRequest err =
                 logFM ErrorS "a fault escaped to the server (a post-commit teardown, or warp's own connection handling)"
   where
     payload =
-        sl "path" (maybe ("unknown" :: Text) (decodeUtf8 . Wai.rawPathInfo) mRequest)
+        moduleField serverModule
+            <> sl "path" (maybe ("unknown" :: Text) (decodeUtf8 . Wai.rawPathInfo) mRequest)
             <> sl "detail" (displayFaultT err)

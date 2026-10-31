@@ -20,6 +20,7 @@ module Ecluse.Runtime.Server.Internal (
     runWarp,
     serveBound,
     proxyListener,
+    serverModule,
     listeningPrefix,
     raceServerAgainstLoop,
     probeApplication,
@@ -224,11 +225,10 @@ observePerimeterFault env ctx request fault = do
     runInRequest env ctx . katipAddContext (perimeterPayload request fault) $
         logFM ErrorS "the request perimeter answered an escaped pre-commit fault with the neutral 500"
 
--- The fields mirror the denial audit line, so an operator triages both surfaces with one
--- vocabulary. The @module@ key names the public module, because operators filter on it.
+-- The fields mirror the denial audit line, so an operator triages both surfaces with one vocabulary.
 perimeterPayload :: Request -> RequestFault -> SimpleLogPayload
 perimeterPayload request fault =
-    sl "module" ("Ecluse.Runtime.Server" :: Text)
+    moduleField serverModule
         <> sl "path" (decodeUtf8 (rawPathInfo request) :: Text)
         <> sl "perimeterCause" (show (rqCause fault) :: Text)
         <> sl "perimeterDetail" (rqDetail fault)
@@ -323,11 +323,15 @@ serveBound logEnv listener settings app =
             port <- socketPort socket
             Warp.runSettingsSocket (Warp.setBeforeMainLoop (announce port) settings) socket app
   where
-    announce port = moduleLog logEnv "Ecluse.Runtime.Server" InfoS (listeningPrefix listener <> show (fromIntegral port :: Int))
+    announce port = moduleLog logEnv serverModule InfoS (listeningPrefix listener <> show (fromIntegral port :: Int))
 
 -- | The proxy's listener name, which starts the line it logs once bound.
 proxyListener :: Text
 proxyListener = "proxy"
+
+-- | The @module@ field of the front door's own lines, named for the public module so an operator's saved filter keeps matching.
+serverModule :: Text
+serverModule = "Ecluse.Runtime.Server"
 
 -- | The start of the line a named listener logs once bound, followed by the port.
 listeningPrefix :: Text -> Text
