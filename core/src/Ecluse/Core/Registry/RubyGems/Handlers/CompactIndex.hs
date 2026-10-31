@@ -40,7 +40,7 @@ import Ecluse.Core.Server.Context
 import Ecluse.Core.Server.Metadata (recordedFetch)
 import Ecluse.Core.Server.Pipeline.Diagnostics (logDirectoryFailure, logDirectoryInvalidEntries)
 import Ecluse.Core.Server.Pipeline.Origin (ReadFailure (ReadInvalid, ReadUnavailable), metadataReadFailure, publicSource)
-import Ecluse.Core.Server.Pipeline.Packument (PackumentReplies (..), answerDigestedMetadataBytes, mapPackumentReplies, withObservedAdmittedDocument)
+import Ecluse.Core.Server.Pipeline.Packument (PackumentReplies (..), answerDigestedMetadataBytes, mapPackumentReplies, unheldNameRefusal, withObservedAdmittedDocument)
 import Ecluse.Core.Server.Pipeline.Shared (flightOf, forwardedCredential, retryAfterHeaders, withListingAdmission)
 import Ecluse.Core.Server.Response (Refusal, mkRefusal)
 import Ecluse.Core.Telemetry.Metrics qualified as Metric
@@ -154,7 +154,10 @@ serveInfo name request respond =
                     )
             case selected of
                 Left refusal -> pure refusal
-                Right Nothing -> answerCompact deps ticket request "---\n"
+                Right Nothing
+                    -- With a private origin, a settled absence means both origins answered 404. A mount without one keeps the empty listing.
+                    | isJust (pdPrivateBase deps) -> pure (packumentNotFound rubyReplies [] (unheldNameRefusal (pdHelp deps)))
+                    | otherwise -> answerCompact deps ticket request "---\n"
                 Right (Just (cached, document)) -> do
                     let size = BS.length (gemHeader document) + sum [BS.length (grSource row) + 1 | row <- gemRows document]
                     liftIO (charge ticket (2 * size + 4096))
