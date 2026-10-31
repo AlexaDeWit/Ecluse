@@ -218,13 +218,13 @@ environmentSpec = describe "proxyEnvironment" $ do
             lookup (registryKey ecosystem "PRIVATE_UPSTREAM" "URL") environment `shouldBe` Just "https://127.0.0.1:9002"
             lookup "ECLUSE_MIRROR_STATE__URL" environment `shouldBe` Nothing
             filter (("__MIRROR_TARGET__" `isInfixOf`) . fst) environment `shouldBe` []
-    it "overrides only the public hostname with or without durable state" $
-        for_ [(ecosystem, statePort) | ecosystem <- [Npm, PyPI, Cargo, RubyGems], statePort <- [Nothing, Just 9003]] $ \(ecosystem, statePort) -> do
-            let pinned = (proxySettings ecosystem 3600){psPublicHost = Just "127.0.0.2", psMirrorStatePort = statePort}
-                environment = proxyEnvironment pinned Unlimited 3 "/tmp/proxy" (8080, 8081, 8082) 9001 (Just 9002) []
-            lookup (registryKey ecosystem "PUBLIC_UPSTREAM" "URL") environment `shouldBe` Just "https://127.0.0.2:9001"
+    it "gives every ecosystem with durable state the same upstream host pair, and a mirror target at the private stub" $
+        for_ [Npm, PyPI, Cargo, RubyGems] $ \ecosystem -> do
+            let managed = (proxySettings ecosystem 3600){psMirrorStatePort = Just 9003}
+                environment = proxyEnvironment managed Unlimited 3 "/tmp/proxy" (8080, 8081, 8082) 9001 (Just 9002) []
+            lookup (registryKey ecosystem "PUBLIC_UPSTREAM" "URL") environment `shouldBe` Just "https://localhost:9001"
             lookup (registryKey ecosystem "PRIVATE_UPSTREAM" "URL") environment `shouldBe` Just "https://127.0.0.1:9002"
-            lookup (registryKey ecosystem "MIRROR_TARGET" "URL") environment `shouldBe` ("https://127.0.0.1:9002" <$ statePort)
+            lookup (registryKey ecosystem "MIRROR_TARGET" "URL") environment `shouldBe` Just "https://127.0.0.1:9002"
     it "sets no mirror uploadUrl where the protocol uploads below its url" $
         for_ [Npm, RubyGems] $ \ecosystem -> do
             let managed = (proxySettings ecosystem 3600){psMirrorStatePort = Just 9003}
