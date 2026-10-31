@@ -29,7 +29,7 @@ import Ecluse.Core.Server.Admission.Budget (scaleCharge)
 
 -- | The bytes each retained entry other than a version or file costs at least. A residency case measures dense listings to set it: see @docs/testing.md@.
 entryFloorBytes :: Int
-entryFloorBytes = 704
+entryFloorBytes = 512
 
 -- | The bytes each retained npm version or PyPI file costs at least, which the residency tier measures on minimal valid bodies.
 releaseFloorBytes :: Int
