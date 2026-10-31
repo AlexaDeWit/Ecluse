@@ -17,7 +17,7 @@ import Ecluse.BenchLoad.Floors (
     Trigger (OnDemand, Scheduled),
     Unheld (SettingsDiffer),
  )
-import Ecluse.BenchLoad.Support (floorsAtTwoCores, slowNetwork, twoCores)
+import Ecluse.BenchLoad.Support (floorsAtTwoCores, otherLatency, twoCores)
 import Ecluse.BenchLoad.Verdict (Attempts, Outcome, ProxyEnding (..), RunEvidence (..), attemptClean, classifyEnding, confirmBreaches, rerunsDue, runVerdict, runViolations)
 
 spec :: Spec
@@ -100,7 +100,7 @@ spec = do
                            , "bench/load/floors.json: the concurrencyOne cell for pypi/index-cold under 2cpu-1gib names no count this run checks"
                            ]
         it "holds a run that is not held to no floor, and keeps its other invariants" $
-            runVerdict OnDemand slowNetwork Set.empty (once [(("npm/merge-cold", Loaded), Right healthy{reSuccesses = [("", 1)]}), (("pypi/index-cold", Loaded), Right pypi{reSuccesses = [("", 0)]})])
+            runVerdict OnDemand otherLatency Set.empty (once [(("npm/merge-cold", Loaded), Right healthy{reSuccesses = [("", 1)]}), (("pypi/index-cold", Loaded), Right pypi{reSuccesses = [("", 0)]})])
                 `shouldBe` ["pypi/index-cold (2cpu-1gib, 100 connections): no successful responses"]
         it "leads with the one line of a scheduled run its configuration keeps off the floors" $
             runVerdict Scheduled (NotHeld (SettingsDiffer ("durationSeconds" :| []) :| [])) Set.empty (once [(("pypi/index-cold", Loaded), Right pypi{reSuccesses = [("", 0)]})])
@@ -129,7 +129,7 @@ spec = do
                 rerunsDue held [(mergeCold, attempt :| [])] `shouldBe` []
         it "does not re-run a pass at its floor, a pass without a floor, or any pass of a run that is not held" $ do
             rerunsDue held [(mergeCold, Right (counted 338) :| []), (("npm/herd", Loaded), Right (counted 1) :| []), (("pypi/slow-readers", Loaded), Right (counted 1) :| [])] `shouldBe` []
-            rerunsDue slowNetwork [(mergeCold, Right (counted 1) :| [])] `shouldBe` []
+            rerunsDue otherLatency [(mergeCold, Right (counted 1) :| [])] `shouldBe` []
         it "reads an attempt as clean on its loads and its ending alone, whatever its floor" $ do
             map attemptClean [Right (counted 1), Right (counted 0), Right (counted 9){reOomKills = 1}, Right (counted 9){reEnding = Nothing}, Left "exited 1"] `shouldBe` [True, False, False, True, False]
 
@@ -146,7 +146,7 @@ spec = do
             runVerdict OnDemand held checked confirmed
                 `shouldBe` ["npm/merge-cold (2cpu-1gib, 100 connections): 330 successful responses, then 320 and 310 on the re-runs, all below the floor of 338"]
         it "re-runs nothing for a run that is not held" $
-            snd (scripted slowNetwork [1] [(mergeCold, Right (counted 1) :| [])]) `shouldBe` []
+            snd (scripted otherLatency [1] [(mergeCold, Right (counted 1) :| [])]) `shouldBe` []
   where
     held = Enforced twoCores 1 floorsAtTwoCores
     checked = Map.keysSet floorsAtTwoCores

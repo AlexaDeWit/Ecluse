@@ -7,7 +7,7 @@ module Ecluse.BenchLoad.Support (
     twoCores,
     floorsAtTwoCores,
     calibrationRunIds,
-    slowNetwork,
+    otherLatency,
     scenarioReport,
     loadedSection,
     proxyWithPeak,
@@ -49,8 +49,8 @@ calibrationRunIds :: NonEmpty Integer
 calibrationRunIds = 1 :| [2, 3]
 
 -- | A run whose injected latency differs from the calibrated 20 ms, so it is not held.
-slowNetwork :: Enforcement
-slowNetwork = NotHeld (SettingsDiffer ("upstreamLatencyMs" :| []) :| [])
+otherLatency :: Enforcement
+otherLatency = NotHeld (SettingsDiffer ("upstreamLatencyMs" :| []) :| [])
 
 -- | Build a loaded report with successful p50 and p99 latency in milliseconds.
 scenarioReport :: Text -> Int -> Int -> Double -> Double -> ScenarioReport
@@ -90,7 +90,7 @@ scenarioReport name successes refusals p50 p99 =
             , lsNote = ""
             }
 
--- | A loaded-pass section under 'twoCores' and 'slowNetwork', with this injected latency in microseconds.
+-- | A loaded-pass section under 'twoCores' and 'otherLatency', with this injected latency in microseconds.
 loadedSection :: Ecosystem -> Int -> [ScenarioReport] -> Section
 loadedSection ecosystem latencyMicros loaded =
     Section
@@ -99,7 +99,7 @@ loadedSection ecosystem latencyMicros loaded =
         , sectionProcessors = 4
         , sectionShape = twoCores
         , sectionEcosystem = ecosystem
-        , sectionEnforcement = slowNetwork
+        , sectionEnforcement = otherLatency
         , sectionConcurrencyOne = []
         , sectionLoaded = loaded
         }
