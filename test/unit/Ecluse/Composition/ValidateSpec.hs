@@ -8,6 +8,7 @@ module Ecluse.Composition.ValidateSpec (spec) where
 import Data.List (lookup)
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
+import Data.Traversable (for)
 import Network.HTTP.Client qualified as Client
 import Test.Hspec
 
@@ -153,10 +154,41 @@ mirrorCapabilitiesSpec = describe "role-specific mirror capabilities" $ do
         let app = (configApp config){cfgMirrorState = Nothing}
         for_ [BootStorePruner, BootStorePreview, BootWithoutPipeline] $ \role ->
             capabilityResult role app `shouldBe` Right ()
+    it "requires an upload username exactly where the write target's store supplies none" $ do
+        observed <- for ["REGISTRY", "VERDACCIO", "CODE_ARTIFACT"] $ \tag -> do
+            config <- expectConfig (pypiWriteTargetsEnv tag) Nothing
+            pure (tag, capabilityResult (BootMirrorPipeline ServeAndMirror) (configApp config))
+        observed
+            `shouldBe` [ ("REGISTRY", Left [UploadConfigurationRequired PyPI "mirrorTarget.registry.username", UploadConfigurationRequired PyPI "publicationTarget.registry.username"])
+                       , ("VERDACCIO", Left [UploadConfigurationRequired PyPI "mirrorTarget.verdaccio.username", UploadConfigurationRequired PyPI "publicationTarget.verdaccio.username"])
+                       , ("CODE_ARTIFACT", Right ())
+                       ]
   where
     withoutWriteUsername eco app = app{cfgMounts = Map.adjust stripUsername eco (cfgMounts app)}
     stripUsername mount = mount{mntMirrorTarget = fmap (\endpoint -> endpoint{meUsername = Nothing}) (mntMirrorTarget mount)}
     capabilityResult role = snd . runVet (registryRoleOf role) . vetMirrorCapabilities role
+
+-- PyPI mirror and publication targets under one store tag, each with a static or minted token and no username.
+pypiWriteTargetsEnv :: String -> [(String, String)]
+pypiWriteTargetsEnv tag =
+    [ ("ECLUSE_MOUNTS__PYPI__ENABLED", "true")
+    , ("ECLUSE_MIRROR_STATE__URL", "s3://mirror-state/records")
+    , ("ECLUSE_MOUNTS__PYPI__FIRST_PARTY", "acme-*")
+    , ("ECLUSE_MOUNTS__PYPI__PRIVATE_UPSTREAM__REGISTRY__URL", "https://private.example.test/pypi/")
+    , (mirror <> "URL", mirrorUrl)
+    , (mirror <> "UPLOAD_URL", mirrorUrl)
+    , (publication <> "URL", publicationUrl)
+    , (publication <> "UPLOAD_URL", publicationUrl)
+    , (publication <> "TOKEN", "publish-token")
+    ]
+        <> [(mirror <> "TOKEN", "mirror-token") | tag /= "CODE_ARTIFACT"]
+        <> publicGateEnv
+  where
+    mirror = "ECLUSE_MOUNTS__PYPI__MIRROR_TARGET__" <> tag <> "__"
+    publication = "ECLUSE_MOUNTS__PYPI__PUBLICATION_TARGET__" <> tag <> "__"
+    (mirrorUrl, publicationUrl)
+        | tag == "CODE_ARTIFACT" = (codeArtifactDomain <> "/pypi/mirror/", codeArtifactDomain <> "/pypi/internal/")
+        | otherwise = ("https://mirror.example.test/pypi/", "https://publish.example.test/pypi/")
 
 publicationCapabilitiesSpec :: Spec
 publicationCapabilitiesSpec = describe "PyPI publication credentials by boot role" $ do
