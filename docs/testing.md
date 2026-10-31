@@ -1466,7 +1466,9 @@ lists it right after that counterpart, so their allocations per success sit side
 | `rubygems/revalidate-not-modified-advisories` | `rubygems/revalidate-not-modified` | The shipped policy | The captured advisories for `rails`, the first gem in the working set |
 
 The load harness boots the shipped mount policy. npm therefore also carries the admission-only
-`deny-scripts` and `deny-external-dependencies` rules, while PyPI, Cargo, and RubyGems carry only the shared defaults. Two captured npm versions declare
+`deny-scripts` and `deny-external-dependencies` rules, Cargo carries the admission-only
+`deny-external-dependencies`, and PyPI and RubyGems carry only the shared defaults. No captured
+crates.io row names another registry. Two captured npm versions declare
 `postinstall` and the default denies them. No captured npm version has a git or URL dependency. Check a scheduled-equivalent npm run against the existing
 success floors when changing this default, keeping every failure visible.
 
@@ -2218,7 +2220,7 @@ Authority negatives cover public, neighbouring, read, upload, and artifact coord
 Publication cases bind native metadata, body lengths, manifest, archive root, digest, and first-party authority before writes.
 They preserve distinct read and upload roots and bound charged archive/TOML work.
 Policy cases prove that boot and `check-config` refuse active `DenyInstallTimeExecution`, `DenyIfDeprecated`, and `AllowScope` rules with the adapter's reasons.
-They also prove that an active `DenyExternalDependencies` entry boots and denies a public row whose normal or build dependency names another registry.
+They also prove that the shipped `deny-external-dependencies` entry, or one from the shared rules, boots and denies a public row whose normal or build dependency names another registry.
 
 Mirror cases require exact source rows, SHA-256 archive proof, retry, lost replies, restart, and public outage.
 Yank and timestamp controls change target metadata and verify retained original-source facts with fresh client state.

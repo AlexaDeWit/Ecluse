@@ -372,7 +372,9 @@ install-script and external-dependency denies still apply.
 The npm mount adds `deny-scripts` (`DenyInstallTimeExecution`) and `deny-external-dependencies`
 (`DenyExternalDependencies`) at admission only. They do not activate a mount. The operator can
 disable either under `mounts.npm.rules`, widen its phases, or add an `AllowByIdentity` pin with
-explicit precedence above 300. The shared layer cannot disable either, because it defines neither. PyPI has no shipped mount rules.
+explicit precedence above 300. The shared layer cannot disable either, because it defines neither.
+The Cargo mount adds `deny-external-dependencies` the same way, under `mounts.cargo.rules`. PyPI
+and RubyGems have no shipped mount rules.
 Every remaining built-in rule is off and opts in by name. The scored advisory denies (`DenyIfCve`
 and `DenyIfEpss`) in particular can deny historical versions an existing build depends on, if an
 operator enables them before the mirror is warm. Read their
