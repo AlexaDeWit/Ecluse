@@ -35,6 +35,7 @@ import Ecluse.Test.Registry.JsonStream (parseJsonChunks, readOutcome, testTable,
 import Ecluse.Test.Registry.PyPI (filesNamed, simpleIndexWith)
 import Ecluse.Test.Registry.PyPI.Metadata (projectPyPIPackedChunks)
 import Ecluse.Test.Registry.PyPI.Streaming (pypiFields)
+import Ecluse.Test.Support (expectRight)
 
 spec :: Spec
 spec = describe "pypiWalk" $ do
@@ -54,6 +55,15 @@ spec = describe "pypiWalk" $ do
         case actual of
             Right (_, Right fields) -> fields `shouldContain` [EnvelopeField "meta" (object ["api-version" .= ("1.1" :: Text)])]
             other -> expectationFailure ("large-key read did not complete: " <> show other)
+
+    it "builds no value for a repeated alternate-locations array, meta object or tracks member" $ do
+        let items = "0,0,0"
+            body = "{\"meta\":{\"api-version\":\"1.1\",\"tracks\":[" <> items <> "],\"tracks\":[" <> items <> ",0]},\"name\":\"thing\",\"alternate-locations\":[],\"alternate-locations\":[" <> items <> "],\"meta\":{\"tracks\":[" <> items <> "]},\"files\":[]}"
+            envelopes key events = [value | EnvelopeField named value <- events, named == key]
+        streamed <- expectRight (walkJsonChunks (MetadataBodyLimit (BS.length body)) (pypiWalk 64 FullRead (\seen field -> Right (field : seen)) (const False) (testTable fileUniqueFields) []) [body])
+        events <- reverse <$> expectRight (streamValue streamed)
+        envelopes "alternate-locations" events `shouldBe` [toJSON ([] :: [Int])]
+        envelopes "meta" events `shouldBe` [object ["api-version" .= ("1.1" :: Text), "tracks" .= ([0, 0, 0] :: [Int])]]
 
     it "fails a number past json-stream's digit limit across pieces, as json-stream does" $ do
         let body = "{\"name\":" <> BS.replicate 300000 0x31 <> "}"
