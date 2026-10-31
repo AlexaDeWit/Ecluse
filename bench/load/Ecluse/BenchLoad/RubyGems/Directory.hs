@@ -3,7 +3,7 @@
 -- SPDX-License-Identifier: MIT
 
 -- | Focused directory replay uses an immutable public capture and an empty authorised private view.
-module Ecluse.BenchLoad.RubyGems.Directory (rubyGemsDirectoryScenario, directoryEntries, directoryNames, directoryStub) where
+module Ecluse.BenchLoad.RubyGems.Directory (rubyGemsDirectoryScenario, directoryEntries, directoryStub) where
 
 import Data.ByteString qualified as BS
 import Data.Map.Strict qualified as Map
@@ -62,10 +62,6 @@ captureBytes = 24528874
 
 captureDigest :: Text
 captureDigest = "e5d7e406eec7ed3d15f043041474ff3a182f6023f1e3b9baf44b6fa24c4838e1"
-
--- | Names include only histories with at least one remaining version.
-directoryNames :: ByteString -> Either Text (Set Text)
-directoryNames = fmap Map.keysSet . directoryEntries
 
 -- | This independent reader reconciles journal additions and removals without the production parser.
 directoryEntries :: ByteString -> Either Text (Map Text (Set Text))

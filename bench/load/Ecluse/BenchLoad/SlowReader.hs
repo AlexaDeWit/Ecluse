@@ -6,8 +6,6 @@
 module Ecluse.BenchLoad.SlowReader (
     slowReaders,
     slowReaderDescription,
-    SlowRead (..),
-    slowRead,
 ) where
 
 import Control.Concurrent (threadDelay)
@@ -53,10 +51,6 @@ data SlowRead
     = Answered Int Double
     | Failed Text
     deriving stock (Eq, Show)
-
--- | Send one GET with @Connection: close@ and read the response to its end at the rate, in bytes per second.
-slowRead :: Int -> Text -> IO SlowRead
-slowRead rate url = target url >>= readTarget rate
 
 -- Where one URL's request goes, and its bytes on the wire.
 data Target = Target [AddrInfo] ByteString
