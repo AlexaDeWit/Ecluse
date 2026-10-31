@@ -715,15 +715,15 @@ namedKeyFailure key = T.isInfixOf key . toText . displayException
 
 availabilitySpec :: Spec
 availabilitySpec = describe "admission-only yank policy" $ do
-    for_ [(False, status200), (True, status403)] $ \(allYanked, expected) ->
+    for_ [(False, status200, status200), (True, status404, status403)] $ \(allYanked, listed, downloaded) ->
         it (caseLabel ("integration/pypi/native-020/" <> (if allYanked then "all-yanked" else "available")) (toText ("gates listings and distribution files with all files yanked=" <> show allYanked :: String))) $ do
             rules <- prepare inertRuleDeps [admissionOnly (atDefaultPrecedence DenyIfYanked), atDefaultPrecedence (AllowIfOlderThan 0)]
             withPyPIProxyOver (yankedIndex allYanked) publicPypiDeps $ \proxy -> do
                 let app = proxyWithDeps proxy (\deps -> deps{pdRules = rules})
                 listing <- getIndex app
-                simpleStatus listing `shouldBe` expected
+                simpleStatus listing `shouldBe` listed
                 artifact <- getPath sdistPath app
-                simpleStatus artifact `shouldBe` expected
+                simpleStatus artifact `shouldBe` downloaded
                 when allYanked $ for_ [listing, artifact] $ \response ->
                     decodeUtf8 (LBS.toStrict (simpleBody response)) `shouldSatisfy` (not . T.isInfixOf "withdrawn notice must not enter refusals")
     it (caseLabel "integration/pypi/native-021" "keeps a previously mirrored yanked release retrievable from trusted metadata") $ do

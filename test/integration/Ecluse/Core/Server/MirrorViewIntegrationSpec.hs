@@ -12,7 +12,7 @@ import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Data.Time (UTCTime (UTCTime), fromGregorian)
 import Network.HTTP.Client (defaultManagerSettings, newManager)
-import Network.HTTP.Types (Status, methodHead, status200, status304, status403, status404, status503)
+import Network.HTTP.Types (Status, methodGet, methodHead, status200, status304, status403, status404, status503)
 import Network.Wai (Application, defaultRequest, pathInfo, rawPathInfo, requestHeaders, responseLBS)
 import Network.Wai.Handler.Warp (testWithApplication)
 import Network.Wai.Test (SResponse (simpleBody, simpleHeaders, simpleStatus))
@@ -354,39 +354,51 @@ pypiReads = describe "managed PyPI mirror reads" $ do
                 getPath path app >>= \response -> simpleStatus response `shouldBe` status503
         readIORef calls `shouldReturn` 0
 
+    for_ [("absent-public", status404, status404), ("unavailable-public", status503, status503)] $ \(identifier, publicStatus, expected) ->
+        it (caseLabel ("integration/mirror-view/native-022/" <> identifier) "answers a recorded project 404 only when both origins answer 404 and no recorded version survives") $ do
+            inventory <- mirrorSample [1, 2] False "https://public.test/" "source"
+            record <- expectRight (extendProjectRecord pypiStateFormat defaultLimits target inventory Nothing)
+            view <- testView (pure (Right (StateLoaded revision record)))
+            withManagedProxy view False (native status404 []) (native publicStatus []) $ \app ->
+                recordedListingAnswers expected "/pypi/simple/demo/" app
+
 newFilePaths :: [ByteString]
 newFilePaths = [path, path <> ".metadata"]
   where
     path = "/pypi/simple/demo/" <> encodeUtf8 (mirrorFilename 3)
 
 cargoReads :: Spec
-cargoReads = describe "managed Cargo mirror reads" $
+cargoReads = describe "managed Cargo mirror reads" $ do
     it (caseLabel "integration/mirror-view/native-019" "restores retained Cargo rows in original index order on the merged listing during public outage") $ do
-        let name = mkPackageName Cargo Nothing "thing"
-            release = Cargo.minimalCargoRelease "thing"
-            original version = Cargo.cargoIndexRecord (release version)
-            crateTarget = stateTarget "https://private.test/cargo"
-        record <- cargoMirrorRecord crateTarget name (Cargo.releaseArchive (release "1.9.0")) [(0, original "1.9.0"), (1, original "1.10.0")]
-        view <- testViewAt cargoStateFormat cargoMirrorDocuments crateTarget (pure (Right (StateLoaded (StateRevision crateTarget name "complete") record)))
+        view <- recordedCrateView
         adapter <- requiredAdapter Cargo
         withMountProxy Cargo adapter (\deps -> deps{pdEgressUrl = Right . loopbackRegistryUrl}) view (crateIndex (map republished [original "1.10.0", original "1.9.0"])) unavailable $ \app -> do
             response <- getPath "/cargo/th/in/thing" app
             simpleStatus response `shouldBe` status200
             rows <- traverse (expectRight . Reference.indexValue) (Reference.referenceIndex (toStrict (simpleBody response)))
             map Object rows `shouldBe` [original "1.9.0", original "1.10.0"]
+    for_ [("absent-public", native status404 [], status404), ("unavailable-public", unavailable, status503)] $ \(identifier, public, expected) ->
+        it (caseLabel ("integration/mirror-view/native-023/" <> identifier) "answers a recorded crate 404 only when both origins answer 404 and no recorded version survives") $ do
+            view <- recordedCrateView
+            adapter <- requiredAdapter Cargo
+            withMountProxy Cargo adapter (\deps -> deps{pdEgressUrl = Right . loopbackRegistryUrl}) view crateDiscovery public $
+                recordedListingAnswers expected "/cargo/th/in/thing"
   where
+    name = mkPackageName Cargo Nothing "thing"
+    release = Cargo.minimalCargoRelease "thing"
+    original version = Cargo.cargoIndexRecord (release version)
+    crateTarget = stateTarget "https://private.test/cargo"
+    recordedCrateView = do
+        record <- cargoMirrorRecord crateTarget name (Cargo.releaseArchive (release "1.9.0")) [(0, original "1.9.0"), (1, original "1.10.0")]
+        testViewAt cargoStateFormat cargoMirrorDocuments crateTarget (pure (Right (StateLoaded (StateRevision crateTarget name "complete") record)))
     republished = \case
         Object fields -> Object (KeyMap.insert "pubtime" (String "2026-10-01T00:00:00Z") fields)
         other -> other
 
 rubyGemsReads :: Spec
-rubyGemsReads = describe "managed RubyGems mirror reads" $
+rubyGemsReads = describe "managed RubyGems mirror reads" $ do
     it (caseLabel "integration/mirror-view/native-020" "restores every retained RubyGems platform row and publication time on /info during public outage") $ do
-        fixture <- rubyStateProbeFixture
-        let gemTarget = rubyStateTarget fixture
-            name = rubyStatePackage fixture
-        record <- chargedDecodeProjectRecord rubyGemsStateFormat (const pass) defaultLimits gemTarget name (rubyStateEncodedRecord fixture) >>= expectRight
-        view <- testViewAt rubyGemsStateFormat rubyGemsMirrorDocuments gemTarget (pure (Right (StateLoaded (StateRevision gemTarget name "complete") record)))
+        view <- recordedGemView
         original <- readFileBS "test/fixtures/rubygems/info/ecluse-fixture-platform"
         let republished = encodeUtf8 (T.replace "created_at:2020-" "created_at:2026-" (decodeUtf8 original))
         adapter <- requiredAdapter RubyGems
@@ -397,8 +409,27 @@ rubyGemsReads = describe "managed RubyGems mirror reads" $
             expected <- either (fail . toString) pure (referenceInfo original)
             length expected `shouldBe` 4
             map unpositioned served `shouldMatchList` map unpositioned expected
+    for_ [("absent-public", native status404 [], status404), ("unavailable-public", unavailable, status503)] $ \(identifier, public, expected) ->
+        it (caseLabel ("integration/mirror-view/native-024/" <> identifier) "answers a recorded gem's /info 404 only when both origins answer 404 and no recorded version survives") $ do
+            view <- recordedGemView
+            adapter <- requiredAdapter RubyGems
+            withMountProxy RubyGems adapter id view (native status404 []) public $
+                recordedListingAnswers expected "/rubygems/info/ecluse-fixture-platform"
   where
     unpositioned row = row{rowPosition = 0}
+    recordedGemView = do
+        fixture <- rubyStateProbeFixture
+        let gemTarget = rubyStateTarget fixture
+            name = rubyStatePackage fixture
+        record <- chargedDecodeProjectRecord rubyGemsStateFormat (const pass) defaultLimits gemTarget name (rubyStateEncodedRecord fixture) >>= expectRight
+        testViewAt rubyGemsStateFormat rubyGemsMirrorDocuments gemTarget (pure (Right (StateLoaded (StateRevision gemTarget name "complete") record)))
+
+-- A recorded name's listing answers GET and HEAD with this status.
+recordedListingAnswers :: Status -> ByteString -> Application -> Expectation
+recordedListingAnswers expected path app =
+    for_ [methodGet, methodHead] $ \method -> do
+        response <- requestAt method path defaultRequest app
+        simpleStatus response `shouldBe` expected
 
 sourceEnvelope, privateEnvelope :: Object
 sourceEnvelope = KeyMap.fromList [("name", String "demo"), ("meta", object ["api-version" .= ("1.0" :: Text)]), ("project-status", object ["status" .= ("active" :: Text)]), ("alternate-locations", fromListValue [String "https://alternate.test/simple/demo/"])]
@@ -449,8 +480,13 @@ nativeWith companion bytes status numbers request respond = case dropWhileEnd T.
 -- Cargo discovery and one LF index file at the private upstream's root.
 crateIndex :: [Value] -> Application
 crateIndex rows request respond = case rawPathInfo request of
-    "/config.json" -> respond (responseLBS status200 [] (toLazy (Cargo.cargoViewDiscovery (selfBaseUrl request) Nothing False)))
     "/th/in/thing" -> respond (responseLBS status200 [] (foldMap (\row -> encode row <> "\n") rows))
+    _ -> crateDiscovery request respond
+
+-- Cargo discovery at the private upstream's root, which holds no index file.
+crateDiscovery :: Application
+crateDiscovery request respond = case rawPathInfo request of
+    "/config.json" -> respond (responseLBS status200 [] (toLazy (Cargo.cargoViewDiscovery (selfBaseUrl request) Nothing False)))
     _ -> respond (responseLBS status404 [] "")
 
 gemInfo :: ByteString -> Application

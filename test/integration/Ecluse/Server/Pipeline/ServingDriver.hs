@@ -48,6 +48,7 @@ import Ecluse.Core.Registry.PyPI.Adapter (pypiAdapter)
 import Ecluse.Core.Rules (prepare)
 import Ecluse.Core.Rules.Types (Rule)
 import Ecluse.Core.Security (defaultLimits)
+import Ecluse.Core.Security.Egress (RegistryUrl)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Core.Server.Context (PackumentDeps (..))
 import Ecluse.Core.Server.Encoding (CodingChoice (ServeCoding), ContentCoding (GzipCoding), MetadataCompression (GzipWhenAccepted), chooseCoding, gzipEncodingHeader)
@@ -113,7 +114,7 @@ nativeByteDriver ecosystem acquireAdapter mount clientMetadataPath upstreamMetad
                 env <- newTestEnvWithQueue deadlines queue manager
                 prepared <- prepare inertRuleDeps (map atDefaultPrecedence rules)
                 let deps =
-                        (serveDepsFor adapter (Just (loopbackRegistryUrl (localhost privatePort))) (loopbackRegistryUrl (localhost publicPort)) NoMirrorWrite prepared (pure now))
+                        (serveDepsFor adapter (configuredPrivate faults privatePort) (loopbackRegistryUrl (localhost publicPort)) NoMirrorWrite prepared (pure now))
                             { pdMountBaseUrl = "http://ecluse.test" <> decodeUtf8 mount
                             , pdEgressUrl = Right . loopbackRegistryUrl
                             , pdMetadataCompression = compression
@@ -135,12 +136,19 @@ nativeByteDriver ecosystem acquireAdapter mount clientMetadataPath upstreamMetad
             respond (artifactResponse (Wai.requestHeaders request) (releaseBytes release))
         | otherwise = respond (responseLBS status404 [] "")
 
--- Answer every request with the fault, or leave the origin as it is.
+-- Answer every request with the fault, or leave the origin as it is. An unconfigured origin is never read.
 faulted :: Maybe OriginFault -> Wai.Application -> Wai.Application
 faulted fault app = case fault of
     Nothing -> app
     Just (FaultStatus code) -> \_ respond -> respond (responseLBS (mkStatus code "") [] "")
     Just FaultClosed -> \_ respond -> respond closedResponse
+    Just FaultUnconfigured -> app
+
+-- The private origin the mount configures, unless the faults leave it out.
+configuredPrivate :: ServingFaults -> Int -> Maybe RegistryUrl
+configuredPrivate faults port
+    | privateFault faults == Just FaultUnconfigured = Nothing
+    | otherwise = Just (loopbackRegistryUrl (localhost port))
 
 -- A CDN can gzip archive responses. HEAD needs an explicit length because Warp cannot infer it.
 artifactResponse :: RequestHeaders -> ByteString -> Wai.Response
@@ -276,12 +284,11 @@ cargoDriver =
                 manager <- newManager defaultManagerSettings
                 env <- newTestEnvWithQueue deadlines queue manager
                 prepared <- prepare inertRuleDeps (map atDefaultPrecedence rules)
-                let privateUrl = loopbackRegistryUrl (localhost privatePort)
-                    publicUrl = loopbackRegistryUrl (localhost publicPort)
+                let publicUrl = loopbackRegistryUrl (localhost publicPort)
                     origin = originClient defaultLimits (untracedClient manager deadlines) publicUrl Nothing
                 view <- cargoManagedView adapter origin (localhost privatePort) privateReleases publicReleases
                 let deps =
-                        (serveDepsFor adapter (Just privateUrl) publicUrl NoMirrorWrite prepared (pure now))
+                        (serveDepsFor adapter (configuredPrivate faults privatePort) publicUrl NoMirrorWrite prepared (pure now))
                             { pdMountBaseUrl = "http://ecluse.test/cargo"
                             , pdMirrorState = Just view
                             , pdEgressUrl = Right . loopbackRegistryUrl

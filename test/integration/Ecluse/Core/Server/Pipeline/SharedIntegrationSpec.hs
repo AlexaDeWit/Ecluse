@@ -68,13 +68,13 @@ effectfulSpec = describe "effectful rule tier" $ do
             status resp `shouldBe` 503
             status resp `shouldNotBe` 404
 
-    it (caseLabel "integration/pipeline-faults/native-002" "excludes a version a reachable effectful deny rejects (403 when nothing else survives)") $ do
+    it (caseLabel "integration/pipeline-faults/native-002" "excludes a version a reachable effectful deny rejects (404 when nothing else survives)") $ do
         rule <- denyingEffectfulRule
         privateUp <- servingUpstream (encodePackument (privatePackument [] "0.0.0"))
         publicUp <- servingUpstream (encodePackument (admittingPublic "1.0.0"))
         withProxyEffectful [rule] privateUp publicUp $ \app -> do
             resp <- getThing Nothing app
-            status resp `shouldBe` 403
+            status resp `shouldBe` 404
 
     it (caseLabel "integration/pipeline-faults/native-003" "serves a version a reachable effectful allow admits (a 200 with that version)") $ do
         rule <- allowingEffectfulRule
