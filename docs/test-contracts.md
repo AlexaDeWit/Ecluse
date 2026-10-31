@@ -172,12 +172,7 @@ Consent gating, first-party protection, dry-run, cap charging and sweep recovery
 No automatic test verifies a real AWS token mint or the Datadog SaaS.
 Credential tests use local HTTP stubs. Telemetry tests use the local Collector and process logs.
 
-### Negative controls and lifecycle
-
-CodeArtifact registration checks reject a missing PyPI or Cargo profile before fixture acquisition.
-The npm and PyPI integrity controls alter successful production reads to change bytes, digests or consumer metadata.
-A PyPI control also removes distribution files.
-Each control requires an assertion failure and proves that the altered read ran.
+### Lifecycle
 
 Ecluse.Test.Poll.runUntil replaces discarded timeout/poll results in Integration.WorkerLoop. It throws TestContractEscape on progress timeout or early normal worker exit, propagates worker errors, and cancels the worker after progress.
 

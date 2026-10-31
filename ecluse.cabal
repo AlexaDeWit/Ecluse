@@ -1677,8 +1677,6 @@ test-suite ecluse-runtime-unit
   hs-source-dirs:     runtime/test/unit
   other-modules:
     SpecHook
-    Ecluse.Runtime.Test.Contract.UnitCatalogueSpec
-    Ecluse.Runtime.Test.PackageStoreSpec
     Ecluse.Runtime.Aws.Env.InternalSpec
     Ecluse.Runtime.Aws.FaultSpec
     Ecluse.Runtime.Aws.S3.ConditionalSpec
@@ -1692,6 +1690,7 @@ test-suite ecluse-runtime-unit
     Ecluse.Runtime.Cve.Sync.StepSpec
     Ecluse.Runtime.LogSpec
     Ecluse.Runtime.Maintenance.CodeArtifact.DecideSpec
+    Ecluse.Runtime.Maintenance.CodeArtifact.InternalSpec
     Ecluse.Runtime.Maintenance.CodeArtifact.ReadSpec
     Ecluse.Runtime.Maintenance.CodeArtifact.Support
     Ecluse.Runtime.Maintenance.CodeArtifactSpec

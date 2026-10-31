@@ -11,7 +11,6 @@ module Ecluse.Test.Contract.PackageStore (
     FullPackageStoreDriver (..),
     fullPackageStoreContract,
     packageStoreSpec,
-    packageStoreIntegrityLaw,
     packageStoreCatalogue,
     packageStoreCatalogueFor,
     packageStoreCompletion,
@@ -160,7 +159,7 @@ packageStoreLaws driver =
     contractCase family suffix description = it (caseLabel (identifier driver family <> "/" <> suffix) description)
     declare family spec = (family, around (psdWithSession driver) spec)
 
--- | Negative controls execute the same complete-file expectation as the registered integrity case.
+-- Every artifact byte and verified digest survives a write and a read.
 packageStoreIntegrityLaw :: FullPackageStoreDriver -> PackageStoreSession -> Expectation
 packageStoreIntegrityLaw driver session = do
     psoWrite (pssOperations session) primary `shouldReturn` Right ()
