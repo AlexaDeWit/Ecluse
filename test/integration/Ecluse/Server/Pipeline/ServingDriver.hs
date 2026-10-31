@@ -24,11 +24,9 @@ import Data.List (lookup)
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Data.Time (UTCTime (UTCTime), fromGregorian)
-import Network.HTTP.Client (defaultManagerSettings, newManager)
 import Network.HTTP.Types (Method, RequestHeaders, hContentLength, methodHead, mkStatus, status200, status204, status205, status304, status404, statusCode, statusIsInformational)
 import Network.Wai (rawPathInfo, responseLBS)
 import Network.Wai qualified as Wai
-import Network.Wai.Handler.Warp (testWithApplication)
 import Network.Wai.Test (SResponse (..))
 
 import Ecluse.Core.Ecosystem (Ecosystem (Cargo, Npm, PyPI))
@@ -54,9 +52,9 @@ import Ecluse.Core.Server.Encoding (CodingChoice (ServeCoding), ContentCoding (G
 import Ecluse.Core.Server.MirrorView (MirrorView)
 import Ecluse.Core.Server.Upstream (MirrorServePlan (NoMirrorWrite))
 import Ecluse.Core.Version (mkVersion)
-import Ecluse.Server.Pipeline.TestSupport (newTestEnvWithQueue, packument, proxyApplication, publishedDaysAgo, requestAt)
+import Ecluse.Server.Pipeline.TestSupport (newTestEnvWithQueue, packument, proxyApplication, publishedDaysAgo, requestAt, withUpstreams)
 import Ecluse.Test.Contract.Serving (OriginFault (..), ServingDriver (..), ServingFaults (..), ServingRelease (..), ServingResponse (..), ServingSession (..), ServingSetup (..))
-import Ecluse.Test.Deadline (untracedClient, withSweeper)
+import Ecluse.Test.Deadline (untracedClient)
 import Ecluse.Test.Json (fieldAt, textAtPath)
 import Ecluse.Test.Mirror.State (mirrorViewWith)
 import Ecluse.Test.Package (hexSha256Of, sriSha256Of)
@@ -104,20 +102,18 @@ nativeByteDriver ecosystem acquireAdapter mount clientMetadataPath upstreamMetad
     origins :: ServingFaults -> [ServingRelease] -> [ServingRelease] -> ((ServingSetup -> IO ServingSession) -> IO a) -> IO a
     origins faults privateReleases publicReleases use = do
         adapter <- acquireAdapter
-        testWithApplication (pure (faulted (privateFault faults) (upstream privateReleases))) $ \privatePort ->
-            testWithApplication (pure (faulted (publicFault faults) (upstream publicReleases))) $ \publicPort -> withSweeper $ \deadlines -> do
-                manager <- newManager defaultManagerSettings
-                use $ \setup -> do
-                    env <- newTestMemoryQueue >>= \queue -> newTestEnvWithQueue deadlines queue manager
-                    deps <- setupDeps setup (serveDepsFor adapter (Just (loopbackRegistryUrl (localhost privatePort))) (loopbackRegistryUrl (localhost publicPort)) NoMirrorWrite)
-                    let app = proxyApplication ecosystem env deps{pdMountBaseUrl = "http://ecluse.test" <> decodeUtf8 mount}
-                        raw method path headers = requestAt method (mount <> path) Wai.defaultRequest{Wai.requestHeaders = headers} app
-                        artifact method headers version = raw method (artifactPath version) headers
-                    pure
-                        ServingSession
-                            { requestMetadata = \method headers -> raw method clientMetadataPath headers >>= observeNativeMetadata observe artifact method
-                            , requestArtifact = \method headers version -> artifact method headers version >>= observeNativeArtifact observe method
-                            }
+        withUpstreams (faulted (privateFault faults) (upstream privateReleases)) (faulted (publicFault faults) (upstream publicReleases)) $ \privatePort publicPort deadlines manager ->
+            use $ \setup -> do
+                env <- newTestMemoryQueue >>= \queue -> newTestEnvWithQueue deadlines queue manager
+                deps <- setupDeps setup (serveDepsFor adapter (Just (loopbackRegistryUrl (localhost privatePort))) (loopbackRegistryUrl (localhost publicPort)) NoMirrorWrite)
+                let app = proxyApplication ecosystem env deps{pdMountBaseUrl = "http://ecluse.test" <> decodeUtf8 mount}
+                    raw method path headers = requestAt method (mount <> path) Wai.defaultRequest{Wai.requestHeaders = headers} app
+                    artifact method headers version = raw method (artifactPath version) headers
+                pure
+                    ServingSession
+                        { requestMetadata = \method headers -> raw method clientMetadataPath headers >>= observeNativeMetadata observe artifact method
+                        , requestArtifact = \method headers version -> artifact method headers version >>= observeNativeArtifact observe method
+                        }
     upstream releases request respond
         | BS.dropWhileEnd (== 47) (rawPathInfo request) == upstreamMetadataPath =
             respond (responseLBS status200 [] (toLazy (document (selfBaseUrl request) releases)))
@@ -276,24 +272,22 @@ cargoDriver =
   where
     origins :: ServingFaults -> [ServingRelease] -> [ServingRelease] -> ((ServingSetup -> IO ServingSession) -> IO a) -> IO a
     origins faults privateReleases publicReleases use =
-        testWithApplication (pure (faulted (privateFault faults) (cargoUpstream privateReleases))) $ \privatePort ->
-            testWithApplication (pure (faulted (publicFault faults) (cargoUpstream publicReleases))) $ \publicPort -> withSweeper $ \deadlines -> do
-                adapter <- requiredAdapter Cargo
-                manager <- newManager defaultManagerSettings
-                let privateUrl = loopbackRegistryUrl (localhost privatePort)
-                    publicUrl = loopbackRegistryUrl (localhost publicPort)
-                    origin = originClient defaultLimits (untracedClient manager deadlines) publicUrl Nothing
-                view <- cargoManagedView adapter origin (localhost privatePort) privateReleases publicReleases
-                use $ \setup -> do
-                    env <- newTestMemoryQueue >>= \queue -> newTestEnvWithQueue deadlines queue manager
-                    deps <- setupDeps setup (serveDepsFor adapter (Just privateUrl) publicUrl NoMirrorWrite)
-                    let app = proxyApplication Cargo env deps{pdMountBaseUrl = "http://ecluse.test/cargo", pdMirrorState = Just view}
-                        request method path headers = cargoObservation method <$> requestAt method ("/cargo" <> path) Wai.defaultRequest{Wai.requestHeaders = headers} app
-                    pure
-                        ServingSession
-                            { requestMetadata = (`request` "/th/in/thing")
-                            , requestArtifact = \method headers version -> request method (cargoArtifact version) headers
-                            }
+        withUpstreams (faulted (privateFault faults) (cargoUpstream privateReleases)) (faulted (publicFault faults) (cargoUpstream publicReleases)) $ \privatePort publicPort deadlines manager -> do
+            adapter <- requiredAdapter Cargo
+            let privateUrl = loopbackRegistryUrl (localhost privatePort)
+                publicUrl = loopbackRegistryUrl (localhost publicPort)
+                origin = originClient defaultLimits (untracedClient manager deadlines) publicUrl Nothing
+            view <- cargoManagedView adapter origin (localhost privatePort) privateReleases publicReleases
+            use $ \setup -> do
+                env <- newTestMemoryQueue >>= \queue -> newTestEnvWithQueue deadlines queue manager
+                deps <- setupDeps setup (serveDepsFor adapter (Just privateUrl) publicUrl NoMirrorWrite)
+                let app = proxyApplication Cargo env deps{pdMountBaseUrl = "http://ecluse.test/cargo", pdMirrorState = Just view}
+                    request method path headers = cargoObservation method <$> requestAt method ("/cargo" <> path) Wai.defaultRequest{Wai.requestHeaders = headers} app
+                pure
+                    ServingSession
+                        { requestMetadata = (`request` "/th/in/thing")
+                        , requestArtifact = \method headers version -> request method (cargoArtifact version) headers
+                        }
 
 cargoUpstream :: [ServingRelease] -> Wai.Application
 cargoUpstream releases request respond
