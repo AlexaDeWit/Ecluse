@@ -14,23 +14,18 @@ import Data.Map.Strict qualified as Map
 import Network.HTTP.Types (Header, Status, status200, status400, status401, status404, status503)
 
 import Ecluse.Core.Credential (ClientCredential (..), mkSecret)
-import Ecluse.Core.Package (Artifact (..), HashAlg (SHA256), PackageDetails (pkgArtifacts), PackageInfo (infoVersions), hashAlg, hashValue)
-import Ecluse.Core.Registry.CachedDocument (cargoCached)
+import Ecluse.Core.Registry.CachedDocument (CachedDoc, cargoCached)
 import Ecluse.Core.Registry.Cargo.Document (cargoRecords)
 import Ecluse.Core.Registry.Cargo.Metadata (prepareCargoRead)
 import Ecluse.Core.Registry.Cargo.Publish (cargoPublishCodec)
 import Ecluse.Core.Registry.Cargo.Request (cargoArtifactRequest)
-import Ecluse.Core.Registry.Maintenance (StoreMaintenance, StoreManifestRead, storeFaultOfMetadata)
-import Ecluse.Core.Registry.Metadata (MetadataError (MetadataAbsent), VersionDoc (..), VersionRead (vrVersion))
-import Ecluse.Core.Registry.Metadata.Fetch.Preparation (prepareManifest, prepareVersion)
-import Ecluse.Core.Registry.MirrorUpload (ExpectedMirrorFile, expectedArtifact, expectedTargetMatchesWith, inventoryFiles, verifyMirrorBytes)
+import Ecluse.Core.Registry.Maintenance (StoreMaintenance, StoreManifestRead)
 import Ecluse.Core.Registry.Origin (OriginClient (..), ocBaseUrl, originClient)
-import Ecluse.Core.Registry.Publish (MirrorPublish (..), MirrorTransport (..), PreparedMirrorVersion, PublishPlan (..), newMirrorPublish, pmvInventory, pmvPrepareUpload, publishPrepared)
+import Ecluse.Core.Registry.Publish (MirrorTransport (..), newMirrorPublish)
 import Ecluse.Core.Registry.Request (nativePresentation)
 import Ecluse.Core.Security (BodyLimit (MirrorArtifactBodyLimit), defaultLimits)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Core.Server.Admission.Types (ChargeFactors (ChargeFactors))
-import Ecluse.Core.Version (Version)
 import Ecluse.Test.Contract.PackageStore
 import Ecluse.Test.Contract.PackageStore.Cargo.Fixtures
 import Ecluse.Test.Contract.PackageStore.Provider
@@ -58,12 +53,7 @@ withCargoSession maintenance use = do
     writes <- newIORef []
     failWrite <- newIORef False
     failDelete <- newIORef False
-    let boundary =
-            StoreBoundary
-                { sbReleases = map storeRelease . Map.elems <$> readIORef held
-                , sbRemove = \versions -> modifyIORef' held (\releases -> foldr Map.delete releases versions)
-                , sbTakeDeleteFailure = takeStoreFailure failDelete
-                }
+    let boundary = heldBoundary storeRelease held failDelete
     withStoreSession ((== "/registry/index/" <> encodeUtf8 (cargoShard packageText)) . capPath) (reply held writes failWrite) (build boundary) (reverse <$> readIORef writes) failWrite failDelete use
   where
     build boundary base exchanges = do
@@ -72,73 +62,21 @@ withCargoSession maintenance use = do
             publisher = newMirrorPublish (MirrorTransport exchanges (pure (Just credential)) defaultLimits passthroughTracingPort) (ocBaseUrl origin) (loopbackRegistryUrl (base <> "/registry")) (cargoPublishCodec (ChargeFactors 1000 1000 1000) nativePresentation)
             readArchive version _ = fetchStoredArtifact (MirrorArtifactBodyLimit 32768) origin (cargoArtifactRequest (ocToken origin) (base <> "/registry/" <> cargoArchivePathFor packageText version))
         store <- maintenance origin boundary
-        pure (storeOperations packageName cargoTestVersion (readRelease origin) readArchive (writeRelease source publisher) store)
+        pure (storeOperations packageName cargoTestVersion (readNativeRelease cargoRead origin) readArchive (publishNativeRelease cargoRead source publisher) store)
 
 -- | Prepare discovery under the authenticated store origin supplied by backend composition.
 readCargoStoreManifestOver :: OriginClient -> StoreManifestRead
-readCargoStoreManifestOver origin name =
-    first storeFaultOfMetadata <$> prepareManifest prepareCargoRead passthroughTracingPort origin name
+readCargoStoreManifestOver = prepareStoreManifestOver prepareCargoRead
 
-readRelease :: OriginClient -> Text -> IO (Either Text (Maybe PackageStoreRelease))
-readRelease origin rawVersion =
-    prepareVersion prepareCargoRead passthroughTracingPort origin packageName (cargoTestVersion rawVersion) >>= \case
-        Left MetadataAbsent -> pure (Right Nothing)
-        Left fault -> pure (Left (show fault))
-        Right found -> case vrVersion found of
-            Nothing -> pure (Right Nothing)
-            Just document -> do
-                files <- traverse (readArtifact origin) (pkgArtifacts (vdDetails document))
-                pure $ do
-                    artifacts <- sequence files
-                    raw <- maybeToRight "production read lost Cargo source metadata" (vdRaw document >>= snd cargoCached)
-                    metadata <- case cargoRecords raw of
-                        [(_, Object fields)] -> metadataOf fields
-                        _ -> Left "production selected read did not retain exactly one native row"
-                    pure (Just (PackageStoreRelease rawVersion metadata artifacts))
+cargoRead :: NativeStoreRead
+cargoRead = NativeStoreRead prepareCargoRead cargoArtifactRequest packageName cargoTestVersion selectedFields
 
-readArtifact :: OriginClient -> Artifact -> IO (Either Text PackageStoreArtifact)
-readArtifact origin artifact = do
-    response <- fetchStoreArtifact (MirrorArtifactBodyLimit 32768) origin (cargoArtifactRequest (ocToken origin) (artUrl artifact))
-    pure $ do
-        bytes <- response
-        digest <- maybeToRight "stored Cargo archive has no SHA-256" (hashValue <$> find ((== SHA256) . hashAlg) (artHashes artifact))
-        unless (hexSha256Of bytes == digest) (Left "stored Cargo bytes differ from the native checksum")
-        pure (PackageStoreArtifact (artFilename artifact) bytes digest)
-
-writeRelease :: OriginClient -> MirrorPublish -> PackageStoreRelease -> IO (Either Text ())
-writeRelease source publisher release = do
-    let version = cargoTestVersion (psrVersion release)
-    selected <- prepareVersion prepareCargoRead passthroughTracingPort source packageName version
-    case first show selected >>= maybeToRight "source fixture has no native release" . vrVersion >>= first show . mpPrepareVersion publisher packageName version of
-        Left fault -> pure (Left fault)
-        Right prepared -> do
-            target <- mpProbeInventory publisher (const (pure ())) packageName
-            case target of
-                Left MetadataAbsent -> uploadFiles version prepared release
-                Left fault -> pure (Left (show fault))
-                Right inventory ->
-                    if maybe False (matchesInventory (inventoryFiles (pmvInventory prepared))) (Map.lookup (psrVersion release) (infoVersions inventory))
-                        then pure (Right ())
-                        else uploadFiles version prepared release
-
-matchesInventory :: NonEmpty ExpectedMirrorFile -> PackageDetails -> Bool
-matchesInventory expected stored =
-    length expected == length (pkgArtifacts stored)
-        && all (\file -> any (expectedTargetMatchesWith file Nothing) (pkgArtifacts stored)) expected
-
-uploadFiles :: Version -> PreparedMirrorVersion -> PackageStoreRelease -> IO (Either Text ())
-uploadFiles version prepared release = fmap (void . sequence) $ forM (inventoryFiles (pmvInventory prepared)) $ \file ->
-    case find ((== artFilename (expectedArtifact file)) . psaFilename) (psrArtifacts release) of
-        Nothing -> pure (Left "Cargo upload inventory names an absent source archive")
-        Just artifact -> case first show (verifyMirrorBytes file (psaBytes artifact)) of
-            Left fault -> pure (Left fault)
-            Right bytes ->
-                pmvPrepareUpload prepared (const (pure ())) file bytes >>= \case
-                    Left fault -> pure (Left (show fault))
-                    Right upload -> first show <$> publishPrepared upload (PublishPlan version)
-
-metadataOf :: Object -> Either Text (Map Text Text)
-metadataOf fields = do
+selectedFields :: CachedDoc -> Either Text (Map Text Text)
+selectedFields cached = do
+    raw <- maybeToRight "production read lost Cargo source metadata" (snd cargoCached cached)
+    fields <- case cargoRecords raw of
+        [(_, Object record)] -> Right record
+        _ -> Left "production selected read did not retain exactly one native row"
     features <- maybeToRight "native metadata lacks features" (KeyMap.lookup "features" fields)
     rustVersion <- fieldText "rust_version" fields
     pure (Map.fromList [("features", decodeUtf8 (toStrict (encode features))), ("rust_version", rustVersion)])

@@ -15,7 +15,7 @@ import Network.HTTP.Types (Header, Status, status200, status400, status401, stat
 import Network.Wai.Parse (FileInfo (fileContent, fileName))
 
 import Ecluse.Core.Credential (ClientCredential (..), mkSecret)
-import Ecluse.Core.Package (Artifact (..), HashAlg (SHA256), PackageDetails (pkgArtifacts), PackageInfo (infoVersions), PackageName, hashAlg, hashValue)
+import Ecluse.Core.Package (Artifact (..), PackageDetails (pkgArtifacts), PackageInfo (infoVersions), PackageName)
 import Ecluse.Core.Registry.CachedDocument (pypiSimpleCached)
 import Ecluse.Core.Registry.Maintenance (StoreMaintenance, StoreManifestRead, storeFaultOfMetadata)
 import Ecluse.Core.Registry.Metadata (MetadataError (MetadataAbsent), VersionDoc (..), VersionRead (vrVersion))
@@ -90,7 +90,7 @@ readRelease origin version = case canonicalReleaseVersion version of
             Right found -> case vrVersion found of
                 Nothing -> pure (Right Nothing)
                 Just document -> do
-                    artifacts <- traverse (readArtifact origin) (pkgArtifacts (vdDetails document))
+                    artifacts <- traverse (readStoreArtifact artifactRequestByUrl origin) (pkgArtifacts (vdDetails document))
                     pure $ do
                         files <- sequence artifacts
                         raw <- maybeToRight "production read lost PyPI metadata" (vdRaw document >>= snd pypiSimpleCached)
@@ -101,15 +101,6 @@ readRelease origin version = case canonicalReleaseVersion version of
         (Just (String filename), Just (String requirement)) -> Right (filename, requirement)
         _ -> Left "production read lost a consumer metadata field"
     metadataOf _ = Left "production read returned a non-object file"
-
-readArtifact :: OriginClient -> Artifact -> IO (Either Text PackageStoreArtifact)
-readArtifact origin artifact = do
-    response <- fetchStoreArtifact (MirrorArtifactBodyLimit 32768) origin (artifactRequestByUrl (ocToken origin) (artUrl artifact))
-    pure $ do
-        bytes <- response
-        digest <- maybeToRight "stored artifact has no SHA-256 digest" (hashValue <$> find ((== SHA256) . hashAlg) (artHashes artifact))
-        unless (hexSha256Of bytes == digest) (Left "stored artifact bytes disagree with its digest")
-        pure (PackageStoreArtifact (artFilename artifact) bytes digest)
 
 writeRelease :: MirrorPublish -> PackageStoreRelease -> IO (Either Text ())
 writeRelease publisher release = case prepare of
