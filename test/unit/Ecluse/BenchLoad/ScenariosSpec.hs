@@ -69,7 +69,7 @@ spec = do
         it "cover the pod shapes a scheduled run measures, and no other" $
             withCommitted $ \floors ->
                 Map.keys (floorsByShape floors) `shouldMatchList` scheduledPodShapes
-        it "hold a floor for every count a scheduled run checks, and for no other" $
+        it "hold a cell for every count a scheduled run checks, and for no other" $
             withCommitted $ \floors ->
                 for_ scheduledPodShapes $ \shape -> do
                     let held = Map.keysSet (Map.findWithDefault Map.empty shape (floorsByShape floors))
