@@ -19,7 +19,6 @@ module Ecluse.Service (
 ) where
 
 import Katip (LogEnv, katipAddNamespace)
-import Network.HTTP.Client (Manager)
 
 import Ecluse.Boot (BootEnv (beDeadlines, beLogEnv, beTelemetry), logBootWarning)
 import Ecluse.Composition (BootWiring (bwBindings, bwPublishTargets))
@@ -38,19 +37,16 @@ import Ecluse.Composition.MirrorQueue (MirrorRuntimePlan (MirrorWith, NoMirrorin
 import Ecluse.Composition.MirrorRole (enqueuesJobs, spawnsWorker)
 import Ecluse.Composition.MirrorState (bindMirrorStates, newMirrorStates)
 import Ecluse.Composition.Plan (
-    BootPlan (bpCacheConfig, bpLimits, bpMemoryPlan, bpMirrorRuntime, bpPrivateConnections, bpPublicConnections, bpS3Endpoint, bpValidated),
+    BootPlan (bpCacheConfig, bpLimits, bpMemoryPlan, bpMirrorRuntime, bpS3Endpoint, bpValidated),
  )
-import Ecluse.Composition.Sizing (newPooledManager)
 import Ecluse.Composition.Sizing qualified as Composition
 import Ecluse.Composition.Types (MirrorRole)
 import Ecluse.Composition.Validate (ValidatedPlan (vpMounts, vpSettings))
 import Ecluse.Composition.Worker (workerPoliciesWithState)
-import Ecluse.Config (AppConfig (cfgEgress), EgressSettings (egrOperatorContact))
-import Ecluse.Core.BuildIdentity (identityManagerSettings, renderUserAgent)
+import Ecluse.Config (AppConfig)
 import Ecluse.Core.Credential.Refresh (CredentialError (Unconfigured))
 import Ecluse.Core.Deadline (Deadlines)
 import Ecluse.Core.Ecosystem (Ecosystem, prefixFor)
-import Ecluse.Core.Fault.Http (typedTlsManagerSettings)
 import Ecluse.Core.Queue (MirrorQueue)
 import Ecluse.Core.Queue.Buffer (newEnqueueBuffer, reportWorthy)
 import Ecluse.Core.Registry.Adapter (
@@ -90,6 +86,7 @@ import Ecluse.Runtime.Telemetry.Reporters (
     deferredMirrorEnqueueFailure,
     installMetrics,
  )
+import Ecluse.Service.Internal (dataPlaneManagers)
 
 -- | Everything a role needs to start its own tasks, built once by 'withServiceRuntime'. The background tasks arrive already wrapped in their supervision policy.
 data ServiceRuntime = ServiceRuntime
@@ -197,14 +194,6 @@ memoryAdmission deadlines memoryPlan = do
                 , ssWindowPeriods = shareWindowPeriods
                 }
         )
-
-{- The two data-plane managers, each pooled at its own bound. They stay split because public reads
-are anonymous and private reads forward the caller's credential. -}
-dataPlaneManagers :: BootPlan -> IO (Manager, Manager)
-dataPlaneManagers bootPlan = (,) <$> pooled (bpPublicConnections bootPlan) <*> pooled (bpPrivateConnections bootPlan)
-  where
-    renderedAgent = renderUserAgent (egrOperatorContact (cfgEgress (vpSettings (bpValidated bootPlan))))
-    pooled connections = newPooledManager connections (identityManagerSettings renderedAgent typedTlsManagerSettings)
 
 -- | The @\/livez@ arm a process answers from, given whether it runs the worker ('spawnsWorker'): the consume-loop heartbeat where it does, the listener alone where it does not.
 workerLiveness :: Bool -> WorkerHeartbeat -> IO Liveness
