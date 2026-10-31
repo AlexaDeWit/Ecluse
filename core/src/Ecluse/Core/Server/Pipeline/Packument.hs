@@ -673,26 +673,22 @@ noSurvivors replies help status decisions = case status of
 
 collectDecisions :: OriginResult -> OriginResult -> [ServeDecision] -> [ServeDecision]
 collectDecisions privResult pubResult exclusions =
-    privateLeg <> publicLeg <> exclusions
+    privateLeg <> publicDecision pubResult <> exclusions
   where
-    -- A private 404 beside a public document the gate refused in full is settled, so the refusals decide.
+    -- A private 404 leaves the listing to the public origin. A public document the gate refused in
+    -- full settles it, and a failed public read refuses it by its own cause.
     privateLeg = case (privResult, pubResult) of
         (OriginNotFound, OriginResolved _) | packumentStatus exclusions == PackumentDenied -> []
+        (OriginNotFound, _) | publicReadFailed pubResult -> []
         _ -> privateDecision privResult
-    -- An unread public origin never reached the gate. With no private origin, or beside a private
-    -- document that admitted nothing, its failed read refuses as a private one does.
-    publicLeg = case (privResult, pubResult) of
-        (OriginAbsent, OriginUnresolved failure) -> [publicReadRefusal failure]
-        (OriginResolved _, OriginUnresolved failure) -> [publicReadRefusal failure]
-        _ -> publicDecision pubResult
-    publicReadRefusal = readFailureRefusal "the public upstream" neededUpstreamUnavailableMessage
 
 privateDecision :: OriginResult -> [ServeDecision]
 privateDecision = \case
     OriginBudgetExceeded _ -> [upstreamInvalidDecision]
     OriginAuthorisationFailure _ -> []
     OriginResolved _ -> []
-    -- Unless the public origin settles the name, a private 404 with no public survivor keeps the outage refusal.
+    -- Unless the public origin settled the name or failed with its own cause, a private 404 with no
+    -- public survivor keeps the outage refusal.
     OriginNotFound -> [neededUpstreamUnavailable Nothing]
     OriginUnresolved failure -> [readFailureRefusal "the private upstream" neededUpstreamUnavailableMessage failure]
     OriginCooling retry -> [upstreamCooling retry]
@@ -701,6 +697,8 @@ privateDecision = \case
     -- nothing was needed, so nothing is unavailable.
     OriginAbsent -> []
 
+-- A public read that failed never reached the gate, so whatever the private side held, its cause
+-- refuses the listing as a failed private read would.
 publicDecision :: OriginResult -> [ServeDecision]
 publicDecision = \case
     OriginBudgetExceeded _ -> [upstreamInvalidDecision]
@@ -708,9 +706,16 @@ publicDecision = \case
     OriginNameMismatch -> [upstreamInvalidDecision]
     OriginResolved _ -> []
     OriginNotFound -> []
-    OriginUnresolved _ -> []
+    OriginUnresolved failure -> [readFailureRefusal "the public upstream" neededUpstreamUnavailableMessage failure]
     OriginCooling retry -> [upstreamCooling retry]
     OriginAbsent -> []
+
+-- Whether the public read failed, so that its cause, not a private 404, decides a listing with nothing admitted.
+publicReadFailed :: OriginResult -> Bool
+publicReadFailed = \case
+    OriginUnresolved _ -> True
+    OriginNameMismatch -> True
+    _ -> False
 
 neededUpstreamUnavailable :: Maybe RetryAfter -> ServeDecision
 neededUpstreamUnavailable retry = rejectUnavailable (WillResolve retry) neededUpstreamUnavailableMessage

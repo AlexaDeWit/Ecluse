@@ -109,8 +109,8 @@ data OriginResult
     | -- | The origin answered 404, so it holds no such package. It degrades to no contribution.
       OriginNotFound
     | {- | The origin was not read, for this cause. A private one refuses the request. A public one
-      contributes nothing. When no version survives and no private 404 already refused the listing,
-      its cause refuses it as a private one would.
+      contributes nothing, and when no version survives its cause refuses the listing as a private
+      one would.
       -}
       OriginUnresolved ReadFailure
     | -- | Public reads are suspended until the authority cooldown expires.

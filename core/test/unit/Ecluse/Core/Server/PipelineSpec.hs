@@ -1202,25 +1202,48 @@ pypiPrivateArtifactSpec = describe "PyPI first-party private artifacts" $ do
                     LBS.toStrict body `shouldSatisfy` BS.isInfixOf ("the private upstream for this first-party artifact " <> expectedWords)
             readIORef publicHits `shouldReturn` 0
 
--- Both origins answering 404 settle the name as absent on every ecosystem. A public outage beside a private 404 does not.
+-- Both origins answering 404 settle the name as absent on every ecosystem. A failed public read beside a
+-- private 404 does not, so its own cause answers: 503 with the public delay, or 502 for a reply Écluse cannot use.
 absentNameSpec :: Spec
-absentNameSpec = describe "a name the private origin answers 404 for, through ecosystem routes" $
-    for_ absentNameRoutes $ \(ecosystem, router, credential, listing, artifacts) -> do
-        let named = toString (ecosystemName ecosystem) <> " "
-            capturedAfter publicStatus metrics path =
-                withAbsentPrivate ecosystem router credential publicStatus metrics $ \rt binding ->
-                    traverse (\method -> captureRouted rt binding method path) [methodGet, methodHead]
-        for_ [(status404, 404), (status503, 503)] $ \(publicStatus, expectedStatus) ->
-            for_ (listing : artifacts) $ \(route, path) ->
-                it (named <> route <> " answers " <> show expectedStatus <> " for GET and HEAD when the public origin answers " <> show (statusCode publicStatus)) $ do
-                    responses <- capturedAfter publicStatus noopMetricsPort path
-                    map (statusCode . responseStatus) responses `shouldBe` [expectedStatus, expectedStatus]
-        it (named <> fst listing <> " records an unavailable decision and its denial for GET and HEAD when neither origin holds the name") $ do
-            (recording, decisions) <- recordingMetricsPort
-            (metrics, denials) <- recordingDenials recording
-            void (capturedAfter status404 metrics (snd listing))
-            decisions `shouldReturn` [Unavailable, Unavailable]
-            denials `shouldReturn` replicate 2 (Nothing, Metric.ReasonUnavailable)
+absentNameSpec = do
+    describe "a name the private origin answers 404 for, through ecosystem routes" $
+        for_ absentNameRoutes $ \(ecosystem, router, credential, listing, artifacts) -> do
+            let named = toString (ecosystemName ecosystem) <> " "
+                capturedAfter publicStatus metrics path =
+                    withAbsentPrivate ecosystem router credential publicStatus metrics $ \rt binding ->
+                        traverse (\method -> captureRouted rt binding method path) [methodGet, methodHead]
+            for_ [(status404, 404), (status503, 503)] $ \(publicStatus, expectedStatus) ->
+                for_ (listing : artifacts) $ \(route, path) ->
+                    it (named <> route <> " answers " <> show expectedStatus <> " for GET and HEAD when the public origin answers " <> show (statusCode publicStatus)) $ do
+                        responses <- capturedAfter publicStatus noopMetricsPort path
+                        map (statusCode . responseStatus) responses `shouldBe` [expectedStatus, expectedStatus]
+            it (named <> fst listing <> " records an unavailable decision and its denial for GET and HEAD when neither origin holds the name") $ do
+                (recording, decisions) <- recordingMetricsPort
+                (metrics, denials) <- recordingDenials recording
+                void (capturedAfter status404 metrics (snd listing))
+                decisions `shouldReturn` [Unavailable, Unavailable]
+                denials `shouldReturn` replicate 2 (Nothing, Metric.ReasonUnavailable)
+            it (named <> fst listing <> " answers 503 with the public Retry-After for GET and HEAD when the public origin answers 500 with one") $ do
+                responses <-
+                    withPrivateOrigin (Just notFoundOrigin) $ \privatePort ->
+                        withPublicReply ecosystem router credential privatePort (responseLBS status500 [(hRetryAfter, "120")] "") id noopMetricsPort $ \rt binding ->
+                            traverse (\method -> captureRouted rt binding method (snd listing)) [methodGet, methodHead]
+                map (\response -> (statusCode (responseStatus response), lookup hRetryAfter (responseHeaders response))) responses
+                    `shouldBe` replicate 2 (503, Just "120")
+    describe "a public reply Écluse cannot use beside a private 404, through ecosystem routes" $
+        invalidPublicReplyRoutes (Just (const notFoundOrigin))
+    it "answers the npm packument 502 for GET and HEAD beside a private 404 when the public document names another package" $
+        listingOver notFoundOrigin (\_ respond -> respond (responseLBS status200 [(hContentType, "application/json")] (encode misnamedPackument))) id 502 Nothing Unavailable
+
+-- An origin that answers 404 for every path.
+notFoundOrigin :: Application
+notFoundOrigin _ respond = respond (responseLBS status404 [] "")
+
+-- Run with this private origin listening and its port, or with none.
+withPrivateOrigin :: Maybe Application -> (Maybe Int -> IO a) -> IO a
+withPrivateOrigin = \case
+    Nothing -> ($ Nothing)
+    Just origin -> \use -> testWithApplication (pure origin) (use . Just)
 
 -- Each ecosystem's router, credential, listing route and artifact routes for a request naming leftpad 1.0.0.
 absentNameRoutes :: [(Ecosystem, MountRouter, CredentialMapping, (String, [Text]), [(String, [Text])])]
@@ -1273,25 +1296,7 @@ unconfiguredPrivateSpec = do
                     captureRouted rt binding methodGet path >>= responseBytes
                 LBS.toStrict body `shouldSatisfy` BS.isInfixOf "a needed upstream was unavailable"
     describe "a public reply Écluse cannot use on a mount with no private origin, through ecosystem routes" $
-        for_ invalidPublicReplies $ \(cause, reply, change, budgeted) ->
-            for_ absentNameRoutes $ \(ecosystem, router, credential, (route, path), _) -> do
-                let named = toString (ecosystemName ecosystem) <> " " <> route
-                    withReply = withPublicReply ecosystem router credential Nothing reply change
-                    publicLegDecides = ecosystem `notElem` budgeted
-                    recorded = if publicLegDecides then ", recording an unavailable decision and its denial" else ""
-                it (named <> " answers 502 for GET and HEAD after " <> cause <> recorded) $ do
-                    (recording, decisions) <- recordingMetricsPort
-                    (metrics, denials) <- recordingDenials recording
-                    responses <- withReply metrics $ \rt binding -> traverse (\method -> captureRouted rt binding method path) [methodGet, methodHead]
-                    map (statusCode . responseStatus) responses `shouldBe` [502, 502]
-                    when publicLegDecides $ do
-                        decisions `shouldReturn` [Unavailable, Unavailable]
-                        denials `shouldReturn` replicate 2 (Nothing, Metric.ReasonUnavailable)
-                -- A PyPI refusal body carries only the configured help message.
-                when (publicLegDecides && ecosystem /= PyPI) $
-                    it (named <> " names the public upstream in its body after " <> cause) $ do
-                        body <- withReply noopMetricsPort $ \rt binding -> captureRouted rt binding methodGet path >>= responseBytes
-                        LBS.toStrict body `shouldSatisfy` BS.isInfixOf "the public upstream returned an invalid or unusable reply"
+        invalidPublicReplyRoutes Nothing
   where
     -- Every route answers this status for GET and HEAD, and the listing records an unavailable decision and its denial.
     publicOnlyRoutes :: Status -> Int -> Spec
@@ -1311,6 +1316,34 @@ unconfiguredPrivateSpec = do
                 void (captured metrics (snd listing))
                 decisions `shouldReturn` [Unavailable, Unavailable]
                 denials `shouldReturn` replicate 2 (Nothing, Metric.ReasonUnavailable)
+
+{- Each listing route's answer to every public reply Écluse cannot use, for GET and HEAD, beside this
+ecosystem's private origin or none: 502, an unavailable decision and its denial, and a body that names
+the public upstream.
+-}
+invalidPublicReplyRoutes :: Maybe (Ecosystem -> Application) -> Spec
+invalidPublicReplyRoutes privateOrigin =
+    for_ invalidPublicReplies $ \(cause, reply, change, budgeted) ->
+        for_ absentNameRoutes $ \(ecosystem, router, credential, (route, path), _) -> do
+            let named = toString (ecosystemName ecosystem) <> " " <> route
+                withReply metrics action =
+                    withPrivateOrigin (($ ecosystem) <$> privateOrigin) $ \privatePort ->
+                        withPublicReply ecosystem router credential privatePort reply change metrics action
+                publicLegDecides = ecosystem `notElem` budgeted
+                recorded = if publicLegDecides then ", recording an unavailable decision and its denial" else ""
+            it (named <> " answers 502 for GET and HEAD after " <> cause <> recorded) $ do
+                (recording, decisions) <- recordingMetricsPort
+                (metrics, denials) <- recordingDenials recording
+                responses <- withReply metrics $ \rt binding -> traverse (\method -> captureRouted rt binding method path) [methodGet, methodHead]
+                map (statusCode . responseStatus) responses `shouldBe` [502, 502]
+                when publicLegDecides $ do
+                    decisions `shouldReturn` [Unavailable, Unavailable]
+                    denials `shouldReturn` replicate 2 (Nothing, Metric.ReasonUnavailable)
+            -- A PyPI refusal body carries only the configured help message.
+            when (publicLegDecides && ecosystem /= PyPI) $
+                it (named <> " names the public upstream in its body after " <> cause) $ do
+                    body <- withReply noopMetricsPort $ \rt binding -> captureRouted rt binding methodGet path >>= responseBytes
+                    LBS.toStrict body `shouldSatisfy` BS.isInfixOf "the public upstream returned an invalid or unusable reply"
 
 {- Public replies Écluse cannot use, each with the mount change that makes it one, and the ecosystems
 whose request-wide read budget refuses it with its own 502 before the public leg decides. RubyGems

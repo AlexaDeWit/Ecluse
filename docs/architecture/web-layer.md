@@ -355,8 +355,8 @@ wins:
 - Otherwise `502` if a responding upstream returned an invalid response: a packument whose
   self-reported name is for a different package (see
   [name validation](registry-model.md#the-route-name-is-the-served-names-validation-authority)),
-  or a public reply Écluse cannot use when the mount has no private upstream or the private
-  document admits nothing.
+  or a public reply Écluse cannot use beside a private `404`, beside a private document that admits
+  nothing, or with no private upstream.
 - Otherwise `500` if none is retryable but an exclusion is a permanent inability.
 - Otherwise `404` if every exclusion is a policy or integrity refusal. The body names the
   refusals on npm, Cargo and RubyGems. A PyPI body carries only the operator's help message, so

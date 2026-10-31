@@ -263,8 +263,9 @@ track which input a survivor came from, so assembly can select its retained sour
   private upstream settles the name on the public `404` alone. A name the mirror state records
   answers `404` on its listing too once no recorded version survives in the mirror, for example
   after a takedown and a Dredger deletion of the stored copies. Its artifact requests keep the
-  managed path. A public outage beside a private `404` leaves the question open, so that request
-  answers `503`. A private `404` beside a public document whose every version the gate refuses is
+  managed path. A failed public read beside a private `404` leaves the question open, so the public
+  cause answers: `503` with the public `Retry-After` when the public upstream is unavailable, and
+  `502` when its reply is invalid or unusable. A private `404` beside a public document whose every version the gate refuses is
   settled as well: the listing answers `404` with the refusals
   ([Error model](web-layer.md#error-model)).
 - **Public availability.** If the public upstream fails while the private one succeeds, the merge
@@ -273,9 +274,8 @@ track which input a survivor came from, so assembly can select its retained sour
   nothing survives does the request error. The public versions never reached the gate, so a failed
   public read then refuses the listing as a failed private read does: `503` when the public upstream
   is unavailable, and `502` when its reply is invalid or unusable. That holds on a mount with no
-  private upstream, and beside a private document that admits nothing, such as one whose every
-  version fails the trusted floor. Beside a private `404` the request answers `503`, as settled
-  absence above describes.
+  private upstream, beside a private `404`, and beside a private document that admits nothing, such
+  as one whose every version fails the trusted floor.
 
 A packument request filters but never mirrors. See
 [Applying verdicts to a packument](rules-engine.md#applying-verdicts-to-a-packument).
