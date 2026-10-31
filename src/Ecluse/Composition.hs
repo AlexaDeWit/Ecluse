@@ -289,7 +289,7 @@ data PublishTarget = PublishTarget
     , ptPresentation :: ServicePresentation
     -- ^ How the mirror target's store asks for the write token on reads and writes.
     , ptUsername :: Maybe Text
-    -- ^ The backend credential convention retained beside the refreshing secret provider.
+    -- ^ The mirror target's configured username, if any. A store that declares its mechanism renders its own.
     , ptCredentials :: CredentialProvider
     -- ^ The provider minting the mirror-target write token.
     }
