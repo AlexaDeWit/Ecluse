@@ -1577,9 +1577,14 @@ merge, so a breach turns only its own scheduled or dispatched run red.
 
 | Cell | What a held run checks |
 |---|---|
-| `{ "floor": 1770, "median": 2950, "from": [<run IDs>] }` | Each required load reaches the floor: 60% (`calibration.floorFraction`, 0.60) of the median of the three calibration runs' counts, rounded down and at least 1 |
+| `{ "floor": 1770, "median": 2950, "from": [<run IDs>] }` | Each required load reaches the floor: 60% (`calibration.floorFraction`, 0.60) of the median of the three calibration runs' counts, rounded up |
 | `{ "floor": null }` | Uncalibrated: zero successes and process failures only |
 | `{ "floor": null, "reportOnly": "<reason>" }` | Zero successes and process failures only, and a calibration leaves the cell without a floor. No cell carries this flag. It exempts a row that a later calibration finds too noisy for a floor |
+
+Rounding up makes a breach mean exactly "below 60% of the median". A median of 2950 gives a floor
+of 1770, a median of 9 gives 6 (60% is 5.4), and a replay of 3 requests gives 2 (60% is 1.8), so 2
+of its 3 requests must succeed. The file refuses a median below 1, which a calibration never writes,
+so every floor is at least 1.
 
 A pass's count is its lowest required load: every step of a ramp, both loads of `warm-under-cold`
 and `slow-readers`, the background load of `herd-under-heavy-private`, and complete jobs of
@@ -1621,6 +1626,12 @@ each breached scenario pass once, in a fresh child process with its own proxy an
 (`calibration.confirmationReruns`). The run fails on the breach only when the re-run breaches too.
 The report's "Breach confirmation" table shows every attempt.
 
+A job re-runs at most `calibration.confirmationCap` (20) first-attempt breaches. With more, it
+re-runs none, and each breach fails the run. A breach that broad needs no confirmation, and its
+re-runs could carry the job past its 180-minute timeout, which would lose its report. The report
+says that the cap stopped the re-runs and how many passes breached, and its table and the
+observations still list every breach.
+
 #### Calibration
 
 Each floor comes from three full dispatches of the Load test workflow. Until the first calibration
@@ -1637,7 +1648,7 @@ lands, every cell is uncalibrated, and a run checks zero successes and process f
 
 2. Once all three finish, run `task performance:load-floors -- <run-id>,<run-id>,<run-id>`. It
    downloads each run's record and `bench-load-results-*` artifacts into `scratchpad/load-floors/`,
-   sets each unflagged cell to 60% of the median of its three first-attempt counts,
+   sets each unflagged cell to 60% of the median of its three first-attempt counts, rounded up,
    lists the runs in `calibration.runs`, and prints the cells that changed. A run that went red on
    older floors still counts. It refuses each of these and names the run or pass at fault:
 
@@ -1662,13 +1673,13 @@ A change to the operating point, a knob default, the runner, the pod shapes, or 
 conditions changes what the `calibration` record must match. Make it with a recalibration of every
 cell in one pull request.
 
-A change to `floorFraction` changes what every floor must be. After you edit it, a floor that its
-median does not give at the new fraction fails to decode, so the harness and
+A change to `floorFraction`, or to how `floorFromMedian` rounds, changes what every floor must be.
+After the change, a floor that its median does not give fails to decode, so the harness and
 `task performance:load-floors` both refuse the file. Recalibrate every cell in one pull request, in
 this order:
 
-1. Dispatch the three calibration runs before you edit the fraction, as in step 1 above.
-2. Set `floorFraction`, reset every cell that holds a floor to `{ "floor": null }`, and empty
+1. Dispatch the three calibration runs before you make the change, as in step 1 above.
+2. Make the change, reset every cell that holds a floor to `{ "floor": null }`, and empty
    `calibration.runs`, which lists exactly the runs the floors name.
 3. Run `task performance:load-floors` on the three runs, and commit the file with the printed table.
 
