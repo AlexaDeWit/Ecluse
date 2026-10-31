@@ -48,7 +48,7 @@ data Manifest = Manifest
     , manifestBodyBytes :: Int
     -- ^ Decompressed byte count from the source read, before projection.
     , manifestRetainedEntries :: RetainedEntries
-    -- ^ The entries the source read retained, which the per-entry floors charge. None where no floor applies.
+    -- ^ The entries the finished document keeps, which the per-entry floors charge once the read completes. None where no floor applies.
     , manifestDigest :: ContentDigest
     -- ^ Digest of the wire bytes behind 'manifestInfo' and 'manifestRaw'.
     }

@@ -49,7 +49,7 @@ data EcosystemRead = forall full selected. EcosystemRead
     , erFinishFull :: Limits -> PackageName -> Text -> StreamResult full -> Either MetadataError (PackageInfo, CachedDoc)
     -- ^ A full walk's typed view and served document, located against the origin's base URL.
     , erRetainedEntries :: full -> RetainedEntries
-    -- ^ The entries a full walk retained, which the per-entry floors charge. None where no floor applies.
+    -- ^ The entries a full walk's finished document keeps, which the per-entry floors charge once the read completes. None where no floor applies.
     , erWalkSelected :: Limits -> PackageName -> Version -> DocumentWalk selected
     -- ^ The walk that keeps one version.
     , erFinishSelected :: Limits -> PackageName -> Text -> Version -> StreamResult selected -> Either MetadataError VersionRead

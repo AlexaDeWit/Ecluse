@@ -230,7 +230,7 @@ keepingRead deps part result = do
     liftIO (stepDown part (keptCharge deps settled))
     pure settled
 
--- A manifest's bytes at the kept charge, or the entry floor for the entries it retained when that is larger.
+-- A manifest's bytes at the kept charge, or the floors for the entries its finished document keeps when that is larger.
 keptCharge :: PackumentDeps -> OriginResult -> Int
 keptCharge deps = \case
     OriginResolved manifest -> max (scaleCharge (cfKeptPermille (chargeFactors deps)) (manifestBodyBytes manifest)) (entryFloorCharge (manifestRetainedEntries manifest))
