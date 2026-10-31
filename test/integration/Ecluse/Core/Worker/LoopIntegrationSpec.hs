@@ -5,6 +5,8 @@
 -- | Worker publication and queue disposition against real SQS and loopback HTTP.
 module Ecluse.Core.Worker.LoopIntegrationSpec (spec) where
 
+import Data.Aeson (Value, object, (.=))
+import Data.ByteString.Lazy qualified as LBS
 import Data.Map.Strict qualified as Map
 import Ecluse.Core.Deadline (Deadlines)
 import Ecluse.Test.Contract.Catalogue (caseLabel)
@@ -30,6 +32,7 @@ import Ecluse.Integration.Ministack (
     withMinistack,
  )
 import Ecluse.Integration.WorkerLoop (
+    TargetMemory (ForgetsPublication, RetainsPublication),
     mirrorPoliciesAt,
     mirrorPoliciesUnderAt,
     newQueueEnv,
@@ -39,11 +42,13 @@ import Ecluse.Integration.WorkerLoop (
     runLoopFor,
     runLoopUntil,
     withMirrorTarget,
+    withObservedMirrorTarget,
  )
 import Ecluse.Runtime.Env (envWorkerHeartbeat, lastPoll)
 import Ecluse.Service (runWorker)
 import Ecluse.Test.Deadline (withSweeper)
-import Ecluse.Test.Package (sriSha512Of, unsafeFilename, unsafeHash)
+import Ecluse.Test.Json (fieldAt, textAtPath)
+import Ecluse.Test.Package (base64Of, sriSha512Of, unsafeFilename, unsafeHash)
 import Ecluse.Test.Poll (runUntil)
 import Ecluse.Test.Rules (admitRule, denyRule)
 import Ecluse.Test.Stub (allCaptured, stubBaseUrl, withStub)
@@ -57,7 +62,7 @@ spec pool =
         describe "mirror worker (ministack + WAI stubs)" $ do
             it (caseLabel "integration/worker/native-001" "fetches, verifies, publishes, and acks a faithful job (via the loop)") $ \container ->
                 withUpstream $ \upstreamUrl ->
-                    withMirrorTarget status201 $ \mirrorUrl publishLog -> withSweeper $ \deadlines -> do
+                    withObservedMirrorTarget RetainsPublication status201 $ \mirrorUrl publishLog sentDocuments -> withSweeper $ \deadlines -> do
                         queue <- freshQueue container "worker-success" defaultQueueOptions
                         (observedQueue, acknowledged) <- observeAcknowledgement queue
                         env <- newQueueEnv deadlines observedQueue
@@ -67,6 +72,10 @@ spec pool =
                         acknowledged `shouldReturn` True
                         published <- readIORef publishLog
                         length published `shouldBe` 1
+                        -- The one publication carries the verified bytes under the verified digest.
+                        documents <- sentDocuments
+                        map (fieldAt "_attachments") documents `shouldBe` [Just verifiedAttachment]
+                        map (textAtPath ["versions", "1.3.0", "dist", "integrity"]) documents `shouldBe` [Just trueSri]
                         -- The worker acked the job, so it does not redeliver.
                         leftover <- expectRightIO (receive queue)
                         leftover `shouldBe` []
@@ -101,7 +110,7 @@ spec pool =
                         published `shouldBe` []
 
             it (caseLabel "integration/worker/native-003" "requires target identity proof after a 409 and acknowledges the whole version") $ \container ->
-                withUpstream $ \upstreamUrl ->
+                withUpstream $ \upstreamUrl -> do
                     withMirrorTarget status409 $ \mirrorUrl _publishLog -> withSweeper $ \deadlines -> do
                         queue <- freshQueue container "worker-idempotent" defaultQueueOptions
                         (observedQueue, acknowledged) <- observeAcknowledgement queue
@@ -112,6 +121,19 @@ spec pool =
                         acknowledged `shouldReturn` True
                         leftover <- expectRightIO (receive queue)
                         leftover `shouldBe` []
+                    -- A 409 from a target whose inventory then lacks the version proves nothing, so
+                    -- the job is released for retry and publishes again rather than being acknowledged.
+                    withObservedMirrorTarget ForgetsPublication status409 $ \mirrorUrl publishLog _ -> withSweeper $ \deadlines -> do
+                        queue <- freshQueue container "worker-unproven-conflict" defaultQueueOptions
+                        (observedQueue, acknowledged) <- observeAcknowledgement queue
+                        env <- newQueueEnv deadlines observedQueue
+                        policies <- faithfulPolicies deadlines mirrorUrl
+                        expectRightIO (enqueue queue job)
+                        runLoopUntil (workerSourceAt upstreamUrl policies) env ((||) <$> acknowledged <*> publishedAtLeast publishLog 2)
+                        acknowledged `shouldReturn` False
+                        published <- readIORef publishLog
+                        length published `shouldSatisfy` (>= 2)
+                        published `shouldSatisfy` all (== npmPublishPath)
 
             it (caseLabel "integration/worker/native-004" "leaves a transiently-rejected job un-acked, so it redelivers") $ \container ->
                 withUpstream $ \upstreamUrl ->
@@ -233,6 +255,18 @@ trueSri = sriSha512Of (toStrict tarballBytes)
 -- digest the served bytes cannot satisfy, distinct from a malformed digest.
 mismatchSri :: Text
 mismatchSri = sriSha512Of "completely-different-bytes"
+
+-- The npm attachment that carries exactly the served bytes.
+verifiedAttachment :: Value
+verifiedAttachment =
+    object
+        [ "left-pad-1.3.0.tgz"
+            .= object
+                [ "content_type" .= ("application/octet-stream" :: Text)
+                , "data" .= base64Of (toStrict tarballBytes)
+                , "length" .= LBS.length tarballBytes
+                ]
+        ]
 
 -- Policies whose re-admitted artifact carries the served bytes' true digest, so
 -- verification passes and the pipeline publishes at that mirror target.
