@@ -18,14 +18,14 @@ import Ecluse.Test.Registry.JsonStream (heldChunks)
 
 spec :: Spec
 spec = describe "the full-read entry floor" $ do
-    it "charges each retained entry at least 704 bytes" $
-        entryFloorBytes `shouldBe` 704
+    it "charges each retained entry other than a version or file at least 512 bytes" $
+        entryFloorBytes `shouldBe` 512
 
     it "charges each npm version and PyPI file at least 1152 bytes" $
         releaseFloorBytes `shouldBe` 1152
 
     it "owes the release floor for each version or file and the entry floor for every other entry" $ do
-        entryFloorCharge (RetainedEntries 2 3) `shouldBe` 2 * 1152 + 3 * 704
+        entryFloorCharge (RetainedEntries 2 3) `shouldBe` 2 * 1152 + 3 * 512
         entryFloorCharge noRetainedEntries `shouldBe` 0
 
     it "saturates the floors at the largest charge" $
@@ -39,7 +39,7 @@ spec = describe "the full-read entry floor" $ do
     it "raises the workspace after each piece to the floor less the per-byte charge so far" $ do
         (result, payments) <- floored 1000 ["{,,,,", ",,,}"]
         result `shouldBe` Right (StreamResult (Right 7) 9)
-        payments `shouldBe` [4 * 704 - 5, 7 * 704 - 9]
+        payments `shouldBe` [4 * 512 - 5, 7 * 512 - 9]
 
     it "publishes the floors of an accepted state's entries and leaves a refused one unpublished" $ do
         counts <- stToIO $ do
@@ -48,7 +48,7 @@ spec = describe "the full-read entry floor" $ do
             accepted <- countingEntries counter entries (const (readPrimVar counter)) (Right [(), (), ()])
             refused <- countingEntries counter entries (const (readPrimVar counter)) (Left (TooManyVersions 2 1))
             pure (accepted, refused)
-        counts `shouldBe` (3 * 704, 3 * 704)
+        counts `shouldBe` (3 * 512, 3 * 512)
 
 -- The walk result and every workspace payment, in order, for a read at @permille@ per byte.
 floored :: Int -> [ByteString] -> IO (Either LimitError (StreamResult Int), [Int])
