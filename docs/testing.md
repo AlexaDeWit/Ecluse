@@ -1830,10 +1830,6 @@ copies a chunk of at most 8160 bytes into the buffer. It hands a larger chunk to
 and Warp sends such a chunk without a copy on the serve path too. The 16384-byte and 65536-byte
 rows therefore copy no body bytes.
 
-`Ecluse.Core.StreamBench.SinkSpec` in `ecluse-core-unit` checks that every pump sends the exact body,
-in order, at every chunk size. It compares the sent bytes with the body itself, never with another
-pump's output. It also checks that every chunk size cuts the body into equal, distinct chunks.
-
 The [comparison against main](#comparison-against-main) pairs rows by name, so it lists a row with
 no namesake under "Only in this run" or "Only on `main`" and compares no figure for it. The first
 run on `main` that holds these rows is their baseline. No allocation budget covers them.
