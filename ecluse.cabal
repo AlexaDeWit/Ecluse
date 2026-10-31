@@ -1174,8 +1174,7 @@ test-suite ecluse-core-unit
   type:               exitcode-stdio-1.0
   main-is:            Spec.hs
   -- Extra roots supply declarations for coverage audits, not discovered executable examples.
-  -- The bench root supplies the streaming bench's sink model, which a spec here checks.
-  hs-source-dirs:     core/test/unit test/smoke test/residency bench
+  hs-source-dirs:     core/test/unit test/smoke test/residency
   other-modules:
     SpecHook
     Ecluse.Core.Registry.CargoSmokeSpec
@@ -1188,7 +1187,6 @@ test-suite ecluse-core-unit
     Ecluse.Core.Registry.RubyGems.ReaderResidencySpec
     Ecluse.Core.Registry.Json.WalkProbe
     Ecluse.Core.Server.MemoryModel.HeapSample
-    Ecluse.Core.StreamBench.Sink
     Ecluse.Test.Contract.Artifact.IdentitySpec
     Ecluse.Test.Contract.Artifact.AttemptSpec
     Ecluse.Test.Contract.BindingSpec
@@ -1465,7 +1463,6 @@ test-suite ecluse-core-unit
     Ecluse.Core.Server.RouteSpec
     Ecluse.Core.Server.StreamSpec
     Ecluse.Core.Server.UpstreamSpec
-    Ecluse.Core.StreamBench.SinkSpec
     Ecluse.Core.StreamSpec
     Ecluse.Core.StrictSpec
     Ecluse.Core.Supervision.InternalSpec
@@ -1586,10 +1583,6 @@ test-suite ecluse-unit
   other-modules:
     Ecluse.Test.ContainersSpec
     Ecluse.Test.ExpositionSpec
-    Ecluse.Report.MarkdownSpec
-    Ecluse.Report.BenchLabelsSpec
-    Ecluse.AcceptanceSpec
-    Ecluse.Acceptance.EvidenceSpec
     EcluseSpec
     Ecluse.BootSpec
     Ecluse.CLISpec
@@ -1656,13 +1649,10 @@ test-suite ecluse-unit
   autogen-modules:    Paths_ecluse
   build-tool-depends: hspec-discover:hspec-discover ^>=2.11
   build-depends:
-    , ecluse:ecluse-report-format
     , zlib ^>=0.7
     , amazonka ^>=2.0
     , amazonka-s3 ^>=2.0
     , ecluse
-    , ecluse:ecluse-acceptance
-    , ecluse:ecluse-bench-report
     , optparse-applicative
     , ecluse:ecluse-core
     , ecluse:ecluse-runtime
@@ -2564,7 +2554,6 @@ library ecluse-report-format
   build-depends: text ^>=2.1
 
 -- Native report rendering and typed receipt assembly stay outside the shipped library.
--- The unit suite tests their independent obligations and artifact checks.
 library ecluse-bench-report
   import:          shared
   hs-source-dirs:  bench/report/src
@@ -2607,10 +2596,9 @@ executable bench-report
 
 -- Live performance-acceptance harness: the PURE evaluation core. The
 -- version-controlled acceptance criteria, the per-package budget verdict, and the
--- run-summary rendering. An INTERNAL sublibrary, following the ecluse-manifest pattern,
--- so the gating unit suite can test the acceptance decision deterministically. The live
--- fetch and timing stay in the perf-acceptance executable. Links ecluse-core only, and
--- stays out of the shipped library closure.
+-- run-summary rendering. An INTERNAL sublibrary, following the ecluse-manifest pattern.
+-- The live fetch and timing stay in the perf-acceptance executable. Links ecluse-core
+-- only, and stays out of the shipped library closure.
 library ecluse-acceptance
   import:          shared
   hs-source-dirs:  acceptance/src
