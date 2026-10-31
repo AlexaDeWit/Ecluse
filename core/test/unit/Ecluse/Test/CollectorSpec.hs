@@ -155,14 +155,36 @@ spec = do
 
     describe "printedSpans" $ do
         it "reads the span ID and the trace ID of each link, as the exporter prints them" $
-            map (\item -> (psSpanId item, psLinkTraceIds item)) (printedSpans (linkedSpan "job" [servingTrace, workerTrace] <> contextualSpan "next" "Internal" workerTrace "" []))
+            map (\item -> (psSpanId item, map fst (psLinks item))) (printedSpans (linkedSpan "job" [servingTrace, workerTrace] <> contextualSpan "next" "Internal" workerTrace "" []))
                 `shouldBe` [(Just jobSpanId, [servingTrace, workerTrace]), (Nothing, [])]
         it "keeps links to their own span and drops malformed link trace IDs" $
-            map psLinkTraceIds (printedSpans (linkedSpan "job" ["abc", T.replicate 32 "0", servingTrace] <> linkedSpan "next" []))
+            map (map fst . psLinks) (printedSpans (linkedSpan "job" ["abc", T.replicate 32 "0", servingTrace] <> linkedSpan "next" []))
                 `shouldBe` [[servingTrace], []]
         it "reads no link from an event field or a later signal" $
-            map psLinkTraceIds (printedSpans (contextualSpan "job" "Consumer" workerTrace "" [] <> "Events:\nSpanEvent #0\n     -> Trace ID: " <> servingTrace <> "\nMetric #0\nLinks:\nSpanLink #0\n     -> Trace ID: " <> servingTrace <> "\n"))
+            map (map fst . psLinks) (printedSpans (contextualSpan "job" "Consumer" workerTrace "" [] <> "Events:\nSpanEvent #0\n     -> Trace ID: " <> servingTrace <> "\n     -> ID: " <> enqueueId <> "\nMetric #0\nLinks:\nSpanLink #0\n     -> Trace ID: " <> servingTrace <> "\n     -> ID: " <> enqueueId <> "\n"))
                 `shouldBe` [[]]
+
+    describe "linkedMirrorTraces" $ do
+        it "keeps the trace a rule evaluation and enqueue share when the job links to that enqueue" $
+            linked (ruleEval <> enqueue <> mirrorJob [(servingTrace, enqueueId)]) `shouldBe` [servingTrace]
+        it "requires the job to link back to the enqueue" $
+            linked (ruleEval <> enqueue <> mirrorJob []) `shouldBe` []
+        for_ [("another trace", (workerTrace, enqueueId)), ("another span", (servingTrace, "2222222222222222"))] $ \(label, link) ->
+            it ("rejects a job link to " <> label) $
+                linked (ruleEval <> enqueue <> mirrorJob [link]) `shouldBe` []
+        it "requires the rule evaluation in the enqueue's trace" $
+            linked (tracedSpan "ecluse.rule.eval" workerTrace "3333333333333333" coordinate [] <> enqueue <> mirrorJob [(servingTrace, enqueueId)]) `shouldBe` []
+        it "requires every span to carry the coordinate" $
+            linked (ruleEval <> enqueue <> tracedSpan "ecluse.mirror.job" workerTrace "4444444444444444" [("ecluse.package", "Str(other)"), ("ecluse.version", "Str(1.0.0)")] [(servingTrace, enqueueId)])
+                `shouldBe` []
+        it "does not borrow a link from the next span" $
+            linked (ruleEval <> enqueue <> mirrorJob [] <> tracedSpan "unrelated" workerTrace "5555555555555555" [] [(servingTrace, enqueueId)]) `shouldBe` []
+        it "does not read a link from the span's events" $
+            linked (ruleEval <> enqueue <> mirrorJob [] <> "Events:\nSpanEvent #0\n     -> Trace ID: " <> servingTrace <> "\n     -> ID: " <> enqueueId <> "\n")
+                `shouldBe` []
+        it "rejects zero and malformed link IDs" $
+            for_ [(T.replicate 32 "0", enqueueId), (servingTrace, "zz"), ("abc", enqueueId)] $ \link ->
+                linked (ruleEval <> tracedSpan "ecluse.mirror.enqueue" servingTrace (snd link) coordinate [] <> mirrorJob [link]) `shouldBe` []
 
 coordinate :: [(Text, Text)]
 coordinate = [("ecluse.package", "Str(pkg)"), ("ecluse.version", "Str(1.0.0)")]
@@ -179,7 +201,7 @@ linkedSpan name links =
         <> jobSpanId
         <> "\n    Kind           : Consumer\n"
         <> spanBody name []
-        <> (if null links then "" else "Links:\n" <> T.concat ["SpanLink #" <> show index <> "\n     -> Trace ID: " <> traceKey <> "\n     -> ID: 1111111111111111\n" | (index, traceKey) <- zip [0 :: Int ..] links])
+        <> (if null links then "" else "Links:\n" <> T.concat ["SpanLink #" <> show index <> "\n     -> Trace ID: " <> traceKey <> "\n     -> ID: " <> enqueueId <> "\n" | (index, traceKey) <- zip [0 :: Int ..] links])
 
 coordinateValues :: [(Text, AttributeValue)]
 coordinateValues = [("ecluse.package", TextValue "pkg"), ("ecluse.version", TextValue "1.0.0")]
@@ -216,6 +238,36 @@ workerTrace = T.replicate 32 "b"
 contextualSpan :: Text -> Text -> Text -> Text -> [(Text, Text)] -> Text
 contextualSpan name kind traceKey parent attributes =
     "Span #0\n     Trace ID: " <> traceKey <> "\n     Parent ID: " <> parent <> "\n     Kind: " <> kind <> "\n" <> spanBody name attributes
+
+linked :: Text -> [Text]
+linked = linkedMirrorTraces "pkg" "1.0.0"
+
+enqueueId :: Text
+enqueueId = "1111111111111111"
+
+ruleEval, enqueue :: Text
+ruleEval = tracedSpan "ecluse.rule.eval" servingTrace "0000000000000001" coordinate []
+enqueue = tracedSpan "ecluse.mirror.enqueue" servingTrace enqueueId coordinate []
+
+mirrorJob :: [(Text, Text)] -> Text
+mirrorJob = tracedSpan "ecluse.mirror.job" workerTrace "6666666666666666" coordinate
+
+-- A span in the debug exporter's detailed layout, with its links after its attributes.
+tracedSpan :: Text -> Text -> Text -> [(Text, Text)] -> [(Text, Text)] -> Text
+tracedSpan name traceKey spanKey attributes links =
+    "Span #0\n    Trace ID       : "
+        <> traceKey
+        <> "\n    Parent ID      : \n    ID             : "
+        <> spanKey
+        <> "\n    Name           : "
+        <> name
+        <> "\n    Kind           : Internal\nAttributes:\n"
+        <> T.concat ["     -> " <> key <> ": " <> value <> "\n" | (key, value) <- attributes]
+        <> (if null links then "" else "Links:\n")
+        <> T.concat
+            [ "SpanLink #" <> show index <> "\n     -> Trace ID: " <> linkTrace <> "\n     -> ID: " <> linkSpan <> "\n     -> TraceState: \n     -> DroppedAttributesCount: 0\n"
+            | (index, (linkTrace, linkSpan)) <- zip [0 :: Int ..] links
+            ]
 
 lookupAnswers :: Text -> [AttributeValue]
 lookupAnswers = privateLookupAnswers "mirror" "/ec/lu/ecluse-e2e-macro"
