@@ -186,7 +186,7 @@ data MirrorEndpoint = MirrorEndpoint
     , meUploadUrl :: Maybe RegistryUrl
     -- ^ Where uploads go. The load requires it on a protocol with a separate upload endpoint and refuses it elsewhere.
     , meUsername :: Maybe Text
-    -- ^ The configured Basic username. A store that declares its mechanism renders its own.
+    -- ^ The configured Basic username. A store that declares its write mechanism never sends it.
     }
     deriving stock (Eq, Show)
 

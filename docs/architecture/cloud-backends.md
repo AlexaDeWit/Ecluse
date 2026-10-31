@@ -349,9 +349,12 @@ Verdaccio stores declare nothing, so the protocol's own scheme applies to them.
 
 The codec invents no username. Configuration supplies a generic store's username, and the
 CodeArtifact table carries `aws` in every Basic row. Configuration validation reads the same value,
-so a CodeArtifact target refuses any other username. A new ecosystem adds one row to the
-CodeArtifact table, and composition names no ecosystem. Caller credentials keep their native
-presentation. Hostname guessing cannot select a service credential scheme.
+so a CodeArtifact target refuses any other username. Only the protocol's own scheme sends a
+configured username, so boot requires one only for a write that keeps that scheme. The PyPI upload
+applies the same rule, and boot never asks for a username the upload would not send. A new
+ecosystem adds one row to the CodeArtifact table, and composition names no ecosystem. Caller
+credentials keep their native presentation. Hostname guessing cannot select a service credential
+scheme.
 
 Each credential provider serialises its mints and keeps its own breaker. During healthy minting,
 expired callers wait for the current mint. After cooldown, one mint owns recovery. Other expired
