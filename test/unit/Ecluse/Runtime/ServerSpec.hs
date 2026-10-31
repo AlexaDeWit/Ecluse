@@ -45,7 +45,7 @@ import Ecluse.Core.Credential (mkSecret)
 import Ecluse.Core.Cve.Slot (swapIn)
 import Ecluse.Core.Cve.Types (DbEtag (DbEtag))
 import Ecluse.Core.Deadline (Deadlines)
-import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
+import Ecluse.Core.Ecosystem (Ecosystem (Cargo, Npm, PyPI, RubyGems), ecosystemName)
 import Ecluse.Core.Fault (TransportCause (TransportUnreachable), transportFault)
 import Ecluse.Core.Package (mkScope)
 import Ecluse.Core.Registry.Adapter.Capability (AdapterMetadata (metadataSerialise), AdapterPublish (publishRelay))
@@ -102,7 +102,7 @@ import Ecluse.Runtime.Test.Support (newTestEnv, newTestEnvLogging)
 import Ecluse.Service (mountBindingFor)
 import Ecluse.Test.Cve (fakeCveDb)
 import Ecluse.Test.Deadline (withSweeper)
-import Ecluse.Test.Log (captureJsonLog, memoryLogEnv, newTestLogEnv)
+import Ecluse.Test.Log (captureJsonLog, lineField, lineWhere, memoryLogEnv, newTestLogEnv)
 import Ecluse.Test.Osv (mkDbWithWrongEpoch, mkMinimalValidDbWithMeta)
 import Ecluse.Test.Package (validSha256, validSha256Sri)
 import Ecluse.Test.Poll (awaitUntil, pollUntil)
@@ -111,7 +111,7 @@ import Ecluse.Test.Queue (newTestMemoryQueue)
 import Ecluse.Test.Registry.Npm (VersionSpec (vsIntegrity), packumentValue, publishedDaysAgo, versionSpec, versionValue)
 import Ecluse.Test.Registry.Npm.Publish (npmReleaseDocument)
 import Ecluse.Test.Rules (atDefaultPrecedence, inertRuleDeps)
-import Ecluse.Test.Server.Mount (inertDepsFor, inertPackumentDeps, npmServeDeps, pypiServeDeps)
+import Ecluse.Test.Server.Mount (inertDepsFor, inertPackumentDeps, npmServeDeps, pypiServeDeps, requiredAdapter)
 import Ecluse.Test.Stub (Captured (capHeaders, capPath), stubLocalhostUrl, withRoutedStub)
 import Ecluse.Test.Wai (bodyContainsAll, freePort, selfBaseUrlOf, servedVersions, status, withSweptApp)
 
@@ -250,6 +250,7 @@ spec = do
     partialAdvisorySpec
     startupAdvisorySpec
     refusedRenderSpec
+    requestLogContextSpec
     runWarpDrainWiringSpec
     listeningLineSpec
     raceServerAgainstLoopSpec
@@ -785,12 +786,35 @@ refusedRenderSpec = describe "a served document whose render the adapter refuses
 refusingRenderApp :: Deadlines -> Text -> LogEnv -> IO Application
 refusingRenderApp deadlines upstreamBase logEnv = do
     rules <- prepare inertRuleDeps [atDefaultPrecedence (AllowIfOlderThan 0)]
+    let deps = npmServeDeps Nothing (loopbackRegistryUrl upstreamBase) NoMirrorWrite rules (pure servedAt)
+    loggingMountApp deadlines logEnv Npm deps{pdMetadata = (pdMetadata deps){metadataSerialise = const (Left RenderRefused)}}
+
+-- One mount of the ecosystem over the given dependencies, logging to the given environment.
+loggingMountApp :: Deadlines -> LogEnv -> Ecosystem -> PackumentDeps -> IO Application
+loggingMountApp deadlines logEnv ecosystem deps = do
     queue <- newTestMemoryQueue
     manager <- newManager defaultManagerSettings
     env <- newTestEnvLogging deadlines logEnv queue (manager, manager) telemetryDisabled
-    let deps = npmServeDeps Nothing (loopbackRegistryUrl upstreamBase) NoMirrorWrite rules (pure servedAt)
-        refusing = deps{pdMetadata = (pdMetadata deps){metadataSerialise = const (Left RenderRefused)}}
-    pure (application (mkServerConfig (maybeToList (mountBindingFor Npm refusing Nothing))) env)
+    pure (application (mkServerConfig (maybeToList (mountBindingFor ecosystem deps Nothing))) env)
+
+requestLogContextSpec :: Spec
+requestLogContextSpec = describe "the request log context" $ do
+    for_ [(Npm, "/npm/leftpad"), (PyPI, "/pypi/simple/leftpad/"), (Cargo, "/cargo/le/ft/leftpad"), (RubyGems, "/rubygems/info/leftpad")] $ \(ecosystem, path) ->
+        it ("names the emitting module on every line of a " <> toString (ecosystemName ecosystem) <> " metadata request") $ do
+            adapter <- requiredAdapter ecosystem
+            (_, logged) <- captureJsonLog $ \logEnv -> withSweeper $ \deadlines -> do
+                app <- loggingMountApp deadlines logEnv ecosystem (inertDepsFor adapter)
+                requestPath app path
+            lines logged `shouldSatisfy` (not . null)
+            filter (isNothing . lineField ["data", "module"]) (lines logged) `shouldBe` []
+
+    it "keeps a log site's own module over the request's" $
+        withRoutedStub upstreamReply $ \stub -> do
+            (_, logged) <- captureJsonLog $ \logEnv -> withSweeper $ \deadlines -> do
+                app <- refusingRenderApp deadlines (stubLocalhostUrl stub) logEnv
+                requestPath app "/npm/leftpad"
+            (lineField ["data", "module"] =<< lineWhere ["data", "perimeterCause"] "RenderFault" logged) `shouldBe` Just "Ecluse.Runtime.Server"
+            (lineField ["data", "module"] =<< lineWhere ["msg"] "serving packument request for leftpad" logged) `shouldBe` Just "Ecluse.Server.Pipeline"
 
 -- | Bind both mounts to their advisory handles, with the named ecosystems initially loaded.
 advisoryApp :: Deadlines -> Text -> [PrecededRule] -> [Ecosystem] -> Bool -> IO (Application, Map.Map Ecosystem CveSyncHandle)

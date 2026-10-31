@@ -251,7 +251,7 @@ resolveGlobalPolicy shared overridesAst = do
 
 sharedPolicyErrors :: [PolicyError] -> [ConfigError]
 sharedPolicyErrors errors
-    | any ((`elem` errors) . SuppressUnknownRule) npmShippedRules = [SharedPolicyErrors errors]
+    | any ((`elem` errors) . SuppressUnknownRule . fst) shippedMountRules = [SharedPolicyErrors errors]
     | otherwise = [PolicyErrors errors]
 
 -- The resolved mounts, and the source-activated rules any of them runs.

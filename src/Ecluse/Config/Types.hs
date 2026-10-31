@@ -62,7 +62,7 @@ module Ecluse.Config.Types (
     Config (..),
     ConfigError (..),
     renderConfigError,
-    npmShippedRules,
+    shippedMountRules,
 ) where
 
 import Data.IP (IPRange)
@@ -80,7 +80,7 @@ import Ecluse.Config.Resolve (mountDocRef, mountKeyRef)
 import Ecluse.Config.Rule (PolicyError (SuppressUnknownRule), renderPolicyError)
 import Ecluse.Core.BuildIdentity (OperatorContact)
 import Ecluse.Core.Credential (Secret)
-import Ecluse.Core.Ecosystem (Ecosystem (Npm), ecosystemName)
+import Ecluse.Core.Ecosystem (Ecosystem (Cargo, Npm), ecosystemName)
 import Ecluse.Core.Osv.Provenance (SourcePathRecording)
 import Ecluse.Core.Osv.Publication (Percent)
 import Ecluse.Core.Package.Integrity (MinIntegrity, MinTrustedIntegrity)
@@ -604,16 +604,18 @@ renderConfigError (UploadUrlRefused eco path) =
         <> ecosystemName eco
         <> " derives its write address from url: remove uploadUrl and keep the registry address in url"
 
--- | The rule names @config/default.yaml@ ships under @mounts.npm.rules@, which the shared layer does not define.
-npmShippedRules :: [Text]
-npmShippedRules = ["deny-scripts", "deny-external-dependencies"]
+-- | The rule names @config/default.yaml@ ships under mount rules, with the mounts that ship each. The shared layer defines none.
+shippedMountRules :: [(Text, NonEmpty Ecosystem)]
+shippedMountRules = [("deny-scripts", Npm :| []), ("deny-external-dependencies", Npm :| [Cargo])]
 
 renderSharedPolicyError :: PolicyError -> Text
 renderSharedPolicyError err@(SuppressUnknownRule name)
-    | name `elem` npmShippedRules =
+    | Just (_, mounts) <- find ((== name) . fst) shippedMountRules =
         renderPolicyError err
-            <> ". Disable the shipped npm default with enabled: false under "
-            <> keyRef Npm "rules"
+            <> ". Disable the shipped "
+            <> T.intercalate " or " (map ecosystemName (toList mounts))
+            <> " default with enabled: false under "
+            <> T.intercalate " or " (map (`keyRef` "rules") (toList mounts))
             <> " instead."
 renderSharedPolicyError err = renderPolicyError err
 

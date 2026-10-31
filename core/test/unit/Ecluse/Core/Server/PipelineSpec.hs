@@ -20,11 +20,14 @@ import Ecluse.Core.Credential (ClientCredential (credSecret), bareCredential, mk
 import Ecluse.Core.Cve (AdvisoryRange (AdvisoryRange))
 import Ecluse.Core.Cve.Types (DbEtag (DbEtag))
 import Ecluse.Core.Deadline (Deadlines)
+import Ecluse.Core.Ecosystem (Ecosystem (Cargo, Npm, PyPI, RubyGems), ecosystemName)
 import Ecluse.Core.Mirror.State (stateTarget)
 import Ecluse.Core.Osv.Types (UpperBound (Unbounded))
 import Ecluse.Core.Package (HashAlg (SHA512))
 import Ecluse.Core.Package.Integrity (mkMinIntegrity)
 import Ecluse.Core.Registry.Adapter.Capability (AdapterArtifact (artifactHosts))
+import Ecluse.Core.Registry.Cargo.Credential (cargoCredential)
+import Ecluse.Core.Registry.Cargo.Route (cargoRouter)
 import Ecluse.Core.Registry.Maintenance (ConsentVerdict (ConsentWithheld), StoreClass (StorePreserved), StoreFacts (factBackend))
 import Ecluse.Core.Registry.Metadata (VersionDoc (vdRaw), VersionRead (vrVersion))
 import Ecluse.Core.Registry.Npm.Credential (npmCredential)
@@ -40,6 +43,8 @@ import Ecluse.Core.Registry.PyPI.Mirror (pypiMirrorDocuments, pypiStateFormat)
 import Ecluse.Core.Registry.PyPI.Route (pypiRouter)
 import Ecluse.Core.Registry.PyPI.Route.Internal (artifactCoordinate)
 import Ecluse.Core.Registry.Request (CredentialMapping, credentialMapping)
+import Ecluse.Core.Registry.RubyGems.Credential (rubyReadCredential)
+import Ecluse.Core.Registry.RubyGems.Route (rubyGemsRouter)
 import Ecluse.Core.Registry.Sweep (sweepCycle)
 import Ecluse.Core.Registry.Sweep.Outcome (CycleOutcome (outcomeTally), SweepTally (tallyDeleted, tallyExamined))
 import Ecluse.Core.Registry.Sweep.Types (SweepMount (smFirstParty), SweepPacing (swpShape), SweepShape (SweepCandidates, SweepEverything), deletingCache)
@@ -57,6 +62,7 @@ import Ecluse.Core.Server.Cache (Source (Source))
 import Ecluse.Core.Server.Cache.VersionWeight (weighVersion)
 import Ecluse.Core.Server.Context (
     MountBinding (..),
+    MountRouter,
     PackumentDeps (..),
     RequestCtx (RequestCtx),
     ResponseAction (RunPipeline),
@@ -99,7 +105,7 @@ import Ecluse.Test.Registry.PyPI (simpleFile, simpleIndex, withFileKeys)
 import Ecluse.Test.Rules (admittedBy, atDefaultPrecedence, atPrecedence, blockedBy, evalRules, inertRuleDeps, isUndecidable, servingRuleDeps)
 import Ecluse.Test.Server.Cache (cachedMetadata, cachedVersion)
 import Ecluse.Test.Server.Handler (MissingFixtureResponse (MissingFixtureResponse), captureServe, captureServeWithLog, responseBytes, testServeRuntime, testServeRuntimeWith)
-import Ecluse.Test.Server.Mount (npmServeDeps, pypiServeDeps, withPrivateBaseUrl)
+import Ecluse.Test.Server.Mount (npmServeDeps, pypiServeDeps, requiredAdapter, serveDepsFor, withPrivateBaseUrl)
 import Ecluse.Test.Sweep (RecordedSweep (recPorts, recTargetResults), recordingPorts, testMount, testPacing, withPrivateCache)
 import Ecluse.Test.Wai (countingUpstream, selfBaseUrl)
 import Network.HTTP.Types.Header (RequestHeaders, hAcceptEncoding, hConnection, hContentEncoding, hContentRange, hDate, hETag, hHost, hIfNoneMatch, hLocation)
@@ -125,6 +131,7 @@ spec = describe "Ecluse.Core.Server.Pipeline (core handlers over a ServeRuntime)
     sharedCacheSpec
     pypiPrivateArtifactSpec
     publicControlSpec
+    absentNameSpec
 
     for_ [(status200, Admit), (status304, Admit), (status401, Deny), (status403, Deny)] $ \(upstreamStatus, expected) ->
         it ("records private artifact HTTP " <> show (statusCode upstreamStatus) <> " as " <> show expected <> " for GET and HEAD") $
@@ -1190,6 +1197,40 @@ pypiPrivateArtifactSpec = describe "PyPI first-party private artifacts" $ do
                     LBS.toStrict body `shouldSatisfy` BS.isInfixOf ("the private upstream for this first-party artifact " <> expectedWords)
             readIORef publicHits `shouldReturn` 0
 
+-- Both origins answering 404 settle the name as absent on every ecosystem. A public outage beside a private 404 does not.
+absentNameSpec :: Spec
+absentNameSpec = describe "a name the private origin answers 404 for, through ecosystem routes" $
+    for_ absentNameRoutes $ \(ecosystem, router, credential, routes) ->
+        for_ [(status404, 404), (status503, 503)] $ \(publicStatus, expectedStatus) ->
+            for_ routes $ \(route, path) ->
+                it (toString (ecosystemName ecosystem) <> " " <> route <> " answers " <> show expectedStatus <> " for GET and HEAD when the public origin answers " <> show (statusCode publicStatus)) $
+                    testWithApplication (pure (\_ respond -> respond (responseLBS status404 [] ""))) $ \privatePort ->
+                        testWithApplication (pure (\_ respond -> respond (responseLBS publicStatus [] ""))) $ \publicPort -> withSweeper $ \deadlines -> do
+                            rt <- testServeRuntime deadlines noopMetricsPort
+                            adapter <- requiredAdapter ecosystem
+                            let origin port = loopbackRegistryUrl ("http://localhost:" <> show port)
+                                deps = (serveDepsFor adapter (Just (origin privatePort)) (origin publicPort) NoMirrorWrite [] (pure fixedNow)){pdMountBaseUrl = "http://proxy.test"}
+                                binding = (mountUnder credential deps){bindingRouter = router}
+                            for_ [methodGet, methodHead] $ \method -> do
+                                response <- captureRouted rt binding method path
+                                statusCode (responseStatus response) `shouldBe` expectedStatus
+
+-- Each ecosystem's router, credential and the name-bearing routes a request for leftpad 1.0.0 takes.
+absentNameRoutes :: [(Ecosystem, MountRouter, CredentialMapping, [(String, [Text])])]
+absentNameRoutes =
+    [ (Npm, npmRouter, npmCredential, [("packument", ["leftpad"]), ("tarball", ["leftpad", "-", "leftpad-1.0.0.tgz"])])
+    , (PyPI, pypiRouter, pypiCredential, [("index", ["simple", "leftpad"]), ("distribution", ["simple", "leftpad", "leftpad-1.0.0.tar.gz"]), ("companion", ["simple", "leftpad", "leftpad-1.0.0.tar.gz.metadata"])])
+    , (Cargo, cargoRouter, cargoCredential, [("sparse index", ["le", "ft", "leftpad"]), ("archive", ["crates", "leftpad", "1.0.0", "leftpad-1.0.0.crate"])])
+    , (RubyGems, rubyGemsRouter, rubyReadCredential, [("info", ["info", "leftpad"]), ("compact specification", ["quick", "Marshal.4.8", "leftpad-1.0.0.gemspec.rz"]), ("archive", ["gems", "leftpad-1.0.0.gem"])])
+    ]
+
+-- A request through the binding's own router, carrying the method so a HEAD takes the bodiless contract.
+captureRouted :: ServeRuntime -> MountBinding -> Method -> [Text] -> IO Response
+captureRouted rt binding method path =
+    case bindingRouter binding method [] path of
+        RouteAction contract (RunPipeline _ action) -> captureServe contract rt binding (action defaultRequest{requestMethod = method})
+        _ -> throwIO MissingFixtureResponse
+
 -- A merged listing whose public origin admits leftpad and whose private origin gives one fixed answer.
 mergedListingAfter :: Response -> Int -> Maybe ByteString -> Decision -> Expectation
 mergedListingAfter privateResponse expectedStatus expectedRetry expectedDecision = withSweeper $ \deadlines -> do
@@ -1230,10 +1271,7 @@ pypiPrivateDeps privatePort publicPort =
         }
 
 capturePypiArtifact :: ServeRuntime -> PackumentDeps -> Method -> IO Response
-capturePypiArtifact rt deps method =
-    case pypiRouter method [] ["simple", "requests", "requests-1.0.0.tar.gz"] of
-        RouteAction contract (RunPipeline _ action) -> captureServe contract rt (pypiBinding deps) (action defaultRequest)
-        _ -> throwIO MissingFixtureResponse
+capturePypiArtifact rt deps method = captureRouted rt (pypiBinding deps) method ["simple", "requests", "requests-1.0.0.tar.gz"]
 
 -- The companion of the requests sdist under npm's error body, because a PyPI refusal carries no words to read.
 captureWordedCompanion :: ServeRuntime -> PackumentDeps -> IO Response

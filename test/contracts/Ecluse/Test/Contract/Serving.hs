@@ -143,7 +143,7 @@ servingContract provider driver = describe "shared serving contract" $ do
             artifact <- requestArtifact session methodGet [] "1.2.3"
             responseStatus artifact `shouldBe` 200
             responseBody artifact `shouldBe` "private bytes"
-    contractExample "private-availability" "refuses on a failing private origin, and serves after a private 404 or a public outage" $ do
+    contractExample "private-availability" "refuses on a failing private origin, serves after a private 404 or a public outage, and answers 404 when neither origin holds the name" $ do
         -- An unavailable private origin answers 503, and an invalid private reply answers 502.
         for_ [(FaultStatus 429, 503), (FaultStatus 500, 503), (FaultStatus 503, 503), (FaultClosed, 503), (FaultStatus 302, 502), (FaultStatus 400, 502)] $ \(fault, refusal) ->
             faulted (ServingFaults (Just fault) Nothing) [] [old] $ \session -> do
@@ -156,6 +156,13 @@ servingContract provider driver = describe "shared serving contract" $ do
             (responseStatus response, responseVersions response) `shouldBe` (200, ["1.2.3"])
             artifact <- requestArtifact session methodGet [] "1.2.3"
             responseStatus artifact `shouldBe` 200
+        -- A public 404 beside the private one settles the name as absent. A public outage leaves it open.
+        for_ [(404, 404), (503, 503)] $ \(public, settled) ->
+            faulted (ServingFaults (Just (FaultStatus 404)) (Just (FaultStatus public))) [] [] $ \session -> do
+                response <- requestMetadata session methodGet []
+                (responseStatus response, responseVersions response) `shouldBe` (settled, [])
+                artifact <- requestArtifact session methodGet [] "1.2.3"
+                responseStatus artifact `shouldBe` settled
         -- Each ecosystem's exact refusal status is pinned beside its native routes.
         for_ [401, 403] $ \refused ->
             faulted (ServingFaults (Just (FaultStatus refused)) Nothing) [] [old] $ \session -> do

@@ -17,9 +17,11 @@ module Ecluse.Test.Log (
     runJsonLog,
     runJsonLogAt,
     lineMessage,
+    lineField,
+    lineWhere,
 ) where
 
-import Data.Aeson (Object, eitherDecodeStrict, (.:))
+import Data.Aeson (Key, Object, decodeStrict', eitherDecodeStrict, (.:))
 import Data.Aeson.Types (parseMaybe)
 import Data.Text.Lazy.Builder (toLazyText)
 import GHC.IO.Handle (hClose, hDuplicate, hDuplicateTo)
@@ -45,6 +47,8 @@ import Katip (
 import Katip.Scribes.Handle (jsonFormat, mkHandleScribeWithFormatter)
 import UnliftIO (bracket)
 import UnliftIO.Temporary (withSystemTempFile)
+
+import Ecluse.Test.Json (textAtPath)
 
 -- | A scribe-free 'LogEnv', so nothing a spec logs reaches the run's output.
 newTestLogEnv :: IO LogEnv
@@ -130,3 +134,11 @@ lineMessage :: Text -> Maybe Text
 lineMessage line = case eitherDecodeStrict (encodeUtf8 line) of
     Right o -> parseMaybe (\fields -> fields .: "message" <|> fields .: "msg") (o :: Object)
     Left _ -> Nothing
+
+-- | The string at a key path into one JSONL line. A line that is not JSON yields 'Nothing'.
+lineField :: [Key] -> Text -> Maybe Text
+lineField path line = textAtPath path =<< decodeStrict' (encodeUtf8 line)
+
+-- | The first captured line whose string at a key path is the given value.
+lineWhere :: [Key] -> Text -> Text -> Maybe Text
+lineWhere path value = find ((== Just value) . lineField path) . lines

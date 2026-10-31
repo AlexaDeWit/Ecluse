@@ -582,13 +582,16 @@ mounts:
     # AllowScope: Cargo package names have no scope.
     # Move supported types from shared rules into mounts.npm.rules, or disable its configured
     # entry with enabled: false under mounts.cargo.rules (ECLUSE_MOUNTS__CARGO__RULES).
-    # Optional external-dependency deny, disabled unless added. No parameters. Default precedence: 300.
-    # It denies a public crate whose normal or build dependency names a registry other than
-    # crates.io in its index row. crates.io refuses such crates, so it acts on another publicUpstream.
-    # rules:
-    #   deny-external-dependencies:
-    #     type: DenyExternalDependencies
-    #     appliesTo: [admission]
+    # ECLUSE_MOUNTS__CARGO__RULES refines the shared policy, then this shipped rule. It refuses at
+    # admission, at precedence 300, and keeps stored copies. deny-external-dependencies refuses a
+    # public crate whose normal or build dependency names a registry other than crates.io in its
+    # index row. crates.io refuses such crates, so it acts on another publicUpstream.
+    rules:
+      deny-external-dependencies:
+        type: DenyExternalDependencies
+        appliesTo: [admission]
+      # Disable it here with deny-external-dependencies: { enabled: false }, not under shared rules.
+      # Or add an AllowByIdentity pin here with explicit precedence above 300.
   # Bundler 2.6.9 and 4.0.23 use /versions discovery and on-demand /info metadata.
   # Compact specifications and .gem downloads stay under this mount. No full specification index is served.
   # Native publication posts the original built .gem to /api/v1/gems below the target root.

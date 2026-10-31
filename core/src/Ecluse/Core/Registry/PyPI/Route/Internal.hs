@@ -187,7 +187,7 @@ pypiIndexContract =
                 ( chooseContract
                     (refusalContract status403 "Private access was refused, or no release survived policy and admission.")
                     ( chooseContract
-                        (refusalContract status404 "A first-party project the private upstream does not have. It is never fetched from the public upstream.")
+                        (refusalContract status404 "A project neither the private nor the public upstream has, or a first-party project the private upstream does not have, which is never fetched from the public upstream.")
                         ( chooseContract
                             (refusalContract status406 "The request admits no representation this index serves: only the PEP 691 JSON form exists, in gzip or identity coding.")
                             ( chooseContract

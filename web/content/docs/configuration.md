@@ -384,7 +384,7 @@ one:
 | `DenyIfDeprecated` | No | Denies a version carrying the npm deprecation flag, including whole packages and release lines. | None |
 | `DenyIfYanked` | No | Denies a yanked Cargo version or a PyPI release whose every file is yanked. | None |
 | `DenyInstallTimeExecution` | npm only | `deny-scripts` denies npm install scripts at admission. Stored copies stay. | None |
-| `DenyExternalDependencies` | npm only | `deny-external-dependencies` denies a public npm version whose `dependencies`, `optionalDependencies` or `peerDependencies` name a git source, a remote tarball URL or an unsupported scheme such as `jsr:`, at admission. Stored copies stay. On Cargo, an entry you add denies a public crate whose normal or build dependency names a registry other than crates.io. | None |
+| `DenyExternalDependencies` | npm and Cargo | `deny-external-dependencies` denies a public npm version whose `dependencies`, `optionalDependencies` or `peerDependencies` name a git source, a remote tarball URL or an unsupported scheme such as `jsr:`, at admission. On Cargo it denies a public crate whose normal or build dependency names a registry other than crates.io. Stored copies stay. | None |
 | `DenyIfKnownMalicious` | With `advisories.url` | Denies affected versions named by an active primary `MAL-` advisory. Named `deny-known-malicious`, precedence 300, both phases. | `onUnavailable` |
 | `AllowByIdentity` | No | Admits a package or `package@version`, and a bare name matches every version. It overrides scored advisory denies. Override MAL denial with precedence above 300. | `identity` |
 | `DenyIfCve` | No | Denies a version that a synced advisory marks as affected at or above a CVSS threshold. | `minCvss` (0-10), `onUnavailable` |
@@ -431,8 +431,8 @@ result: a first-party npm version keeps its `deprecated` member, and a PyPI file
 `yanked` status.
 
 The npm mount adds `deny-scripts` and `deny-external-dependencies`, each at precedence 300 with
-`appliesTo: [admission]`. These defaults apply only when you enable the npm mount. They do not
-enable a mount themselves.
+`appliesTo: [admission]`. The Cargo mount adds `deny-external-dependencies` the same way. These
+defaults apply only when you enable their mount. They do not enable a mount themselves.
 PyPI inherits only the shared defaults, so an admitted release keeps its source distributions and wheels.
 
 `deny-external-dependencies` denies a public version whose installable dependencies a client would
@@ -444,16 +444,15 @@ as pnpm's `jsr:` or one a client adds later, trigger it. It reads the specs the 
 carries, so it adds no fetch. `devDependencies`, which consumers do not install, do not trigger it.
 PyPI and RubyGems block the type at boot, as the table of blocked types below lists.
 
-The Cargo mount ships no `deny-external-dependencies` entry. An entry you add under shared `rules`
-or `mounts.cargo.rules` denies a public crate whose index row names a registry other than crates.io
-for a normal or build dependency, which a client would fetch from directly. A null registry, which
-names the index the row came from, either crates.io spelling and every development dependency pass.
-crates.io refuses such crates at upload, so the entry acts on a `publicUpstream` other than
-crates.io. The index reader knows no address for Écluse, so a row that names Écluse's own index by
-URL is denied too.
+On the Cargo mount, `deny-external-dependencies` denies a public crate whose index row names a
+registry other than crates.io for a normal or build dependency, which a client would fetch from
+directly. A null registry, which names the index the row came from, either crates.io spelling and
+every development dependency pass. crates.io refuses such crates at upload, so the rule acts on a
+`publicUpstream` other than crates.io. The index reader knows no address for Écluse, so a row that
+names Écluse's own index by URL is denied too.
 
-Disable either default under `mounts.npm.rules`, or admit a named package with an `AllowByIdentity`
-pin whose explicit `precedence` is above 300:
+Disable a default under its mount's rules, `mounts.npm.rules` or `mounts.cargo.rules`, or admit a
+named package with an `AllowByIdentity` pin whose explicit `precedence` is above 300:
 
 ```yaml
 mounts:
@@ -475,8 +474,8 @@ mounts:
         precedence: 301
 ```
 
-`ECLUSE_MOUNTS__NPM__RULES` carries the same patch as JSON, for example
-`'{"deny-scripts":{"enabled":false}}'`. Disabling `deny-scripts` or `deny-external-dependencies`
+`ECLUSE_MOUNTS__NPM__RULES` and `ECLUSE_MOUNTS__CARGO__RULES` carry the same patch as JSON, for
+example `'{"deny-scripts":{"enabled":false}}'`. Disabling `deny-scripts` or `deny-external-dependencies`
 in the shared `rules` object fails the load because that shared list defines no rule by either name.
 Mount rules resolve over the shared policy, then the shipped mount rules, then your mount patch.
 To extend an npm deny to stored copies, restate its phases under `mounts.npm.rules`, for example

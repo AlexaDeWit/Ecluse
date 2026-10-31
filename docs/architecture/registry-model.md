@@ -258,6 +258,9 @@ track which input a survivor came from, so assembly can select its retained sour
   - `502` when its reply is invalid or unusable: an unfollowed redirect, another unexpected status,
     a document for another name, or a document that does not decode or exceeds its bound. The
     private registry answered, so retrying the same request is unlikely to help.
+- **Settled absence.** When the private and the public upstream both answer `404`, no upstream
+  holds the name, and every ecosystem answers `404` for its metadata and artifacts. A public outage
+  beside a private `404` leaves the question open, so that request answers `503`.
 - **Public availability.** If the public upstream fails while the private one succeeds, the merge
   serves the private-only union with a degraded signal (readiness stays
   [lenient about public reachability](web-layer.md#meta-routes-ping-health-and-search)). Only when
