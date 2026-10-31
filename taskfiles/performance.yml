@@ -20,6 +20,12 @@ tasks:
     cmds:
       - bash scripts/load-cgroup.sh prepare
 
+  # task performance:load-floors -- <run-id>,<run-id>,<run-id> [<scenario>,...]
+  load-floors:
+    desc: Write bench/load/floors.json from three calibration runs of the Load test workflow
+    cmds:
+      - bash scripts/load-floors.sh {{.CLI_ARGS}}
+
   allocation-measure:
     vars:
       RUN_ID:
