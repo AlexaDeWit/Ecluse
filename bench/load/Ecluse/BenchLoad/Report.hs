@@ -206,7 +206,7 @@ glanceRow floorOf r =
   where
     load = srLoad r
 
--- The floor in force, with the loads it holds and the window it came from, or why the cell holds none.
+-- The floor in force, with the loads it holds and the median it was set from, or why the cell holds none.
 floorCell :: ScenarioReport -> FloorCheck -> Text
 floorCell r = \case
     Unchecked -> "not held"
