@@ -1660,8 +1660,18 @@ scenario's name, gives them floors. To exempt a noisy row, set `reportOnly` with
 cells. To give it a floor again, delete the reason and recalibrate it.
 
 A change to the operating point, a knob default, the runner, the pod shapes, or the measurement
-conditions changes what the `calibration` record must match. A change to `floorFraction` changes
-what every floor must be. Make either with a recalibration of every cell in one pull request.
+conditions changes what the `calibration` record must match. Make it with a recalibration of every
+cell in one pull request.
+
+A change to `floorFraction` changes what every floor must be. After you edit it, a floor that its
+median does not give at the new fraction fails to decode, so the harness and
+`task performance:load-floors` both refuse the file. Recalibrate every cell in one pull request, in
+this order:
+
+1. Dispatch the three calibration runs before you edit the fraction, as in step 1 above.
+2. Set `floorFraction`, reset every cell that holds a floor to `{ "floor": null }`, and empty
+   `calibration.runs`, which lists exactly the runs the floors name.
+3. Run `task performance:load-floors` on the three runs, and commit the file with the printed table.
 
 ### Benchmark captures
 
