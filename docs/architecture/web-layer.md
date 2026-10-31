@@ -361,8 +361,9 @@ wins:
 - Otherwise `404` if every exclusion is a policy or integrity refusal. The body names the
   refusals on npm, Cargo and RubyGems. A PyPI body carries only the operator's help message, so
   there the reasons are in the logs only: each refused version gets a `denied` line at debug level
-  on every ecosystem. The serve decision and denial metrics record a denial. A private `404` beside
-  such a public document is settled too, so it does not turn the answer into `503`.
+  on every ecosystem, with the deciding rule and the reason class but not the refusal text. The
+  serve decision and denial metrics record a denial. A private `404` beside such a public document
+  is settled too, so it does not turn the answer into `503`.
 - Otherwise `403`, when nothing was excluded and no version reached the gate.
 
 A listing that admits nothing answers `404` because no installable package exists under that name

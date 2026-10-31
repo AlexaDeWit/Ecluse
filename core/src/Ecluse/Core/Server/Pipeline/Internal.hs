@@ -163,7 +163,7 @@ denialLabels :: RejectReason -> (Maybe Text, Metric.ReasonClass)
 denialLabels = \case
     ByPolicy (RuleName name) _ -> (Just name, Metric.ReasonPolicy)
     MissingIntegrity -> (Nothing, Metric.ReasonMissingIntegrity)
-    BelowIntegrityFloor -> (Nothing, Metric.ReasonMissingIntegrity)
+    BelowIntegrityFloor -> (Nothing, Metric.ReasonBelowIntegrityFloor)
     Unavailable _ -> (Nothing, Metric.ReasonUnavailable)
     UpstreamInvalid -> (Nothing, Metric.ReasonUnavailable)
 

@@ -55,6 +55,7 @@
       "reason_class": [
         "policy",
         "missing_integrity",
+        "below_integrity_floor",
         "unavailable",
         "limit"
       ],

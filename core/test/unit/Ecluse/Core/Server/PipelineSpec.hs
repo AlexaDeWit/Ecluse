@@ -1417,14 +1417,16 @@ deniedListingSpec = describe "a public listing the gate denies in full" $
                 responses <- traverse (\method -> captureRouted rt binding method ["leftpad", "-", "leftpad-1.0.0.tgz"]) [methodGet, methodHead]
                 map (statusCode . responseStatus) responses `shouldBe` [403, 403]
 
--- An integrity refusal that empties a listing writes the denied line a policy denial writes, naming its version.
+-- An integrity refusal that empties a listing writes the denied line a policy denial writes, naming its
+-- version and its own reason class: a digest too weak for the floor is not a missing one.
 integrityDenialLogSpec :: Spec
 integrityDenialLogSpec = describe "the denied lines of an npm listing an integrity floor empties"
     $ for_
-        [ ("the public version below the public floor, with no private origin", Nothing, belowFloorApp)
-        , ("the private version below the trusted floor, beside a public 404", Just belowFloorApp, \_ respond -> respond (responseLBS status404 [] ""))
+        [ ("the public version below the public floor, with no private origin", Nothing, belowFloorApp, "ReasonBelowIntegrityFloor")
+        , ("the private version below the trusted floor, beside a public 404", Just belowFloorApp, \_ respond -> respond (responseLBS status404 [] ""), "ReasonBelowIntegrityFloor")
+        , ("the public version with no digest, with no private origin", Nothing, publicAppOver ["1.0.0"] "1.0.0" (\v -> v{vsIntegrity = Nothing, vsShasum = Nothing}), "ReasonMissingIntegrity")
         ]
-    $ \(label, private, public) ->
+    $ \(label, private, public, reasonClass) ->
         it ("names " <> label) $ withSweeper $ \deadlines -> do
             rt <- testServeRuntime deadlines noopMetricsPort
             testWithApplication (pure public) $ \publicPort ->
@@ -1435,7 +1437,7 @@ integrityDenialLogSpec = describe "the denied lines of an npm listing an integri
                         captureServeWithLog logEnv npmPackumentContract rt (mountWith deps) (servePackument npmPackumentReplies leftpadName defaultRequest)
                     statusCode (responseStatus response) `shouldBe` 404
                     [(lineField ["data", "version"] line, lineField ["data", "reason_class"] line) | line <- lines logged, lineMessage line == Just "denied"]
-                        `shouldBe` [(Just "1.0.0", Just "ReasonMissingIntegrity")]
+                        `shouldBe` [(Just "1.0.0", Just reasonClass)]
 
 -- An origin serving leftpad 1.0.0 with only a SHA-1 digest, below the public and the default trusted floor.
 belowFloorApp :: Application

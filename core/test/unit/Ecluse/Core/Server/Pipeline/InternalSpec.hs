@@ -146,7 +146,7 @@ spec = do
         it "carries the deciding rule name only for a policy denial" $ do
             denialLabels (ByPolicy (RuleName "min-age") [ScopeNotAllowListed (mkScope "myorg")]) `shouldBe` (Just "min-age", Metric.ReasonPolicy)
             denialLabels MissingIntegrity `shouldBe` (Nothing, Metric.ReasonMissingIntegrity)
-            denialLabels BelowIntegrityFloor `shouldBe` (Nothing, Metric.ReasonMissingIntegrity)
+            denialLabels BelowIntegrityFloor `shouldBe` (Nothing, Metric.ReasonBelowIntegrityFloor)
             denialLabels (Unavailable (WillResolve Nothing)) `shouldBe` (Nothing, Metric.ReasonUnavailable)
             denialLabels UpstreamInvalid `shouldBe` (Nothing, Metric.ReasonUnavailable)
 

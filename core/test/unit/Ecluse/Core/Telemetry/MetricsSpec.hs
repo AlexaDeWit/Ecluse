@@ -127,8 +127,9 @@ renderSpec = describe "renderLabel" $ do
         renderLabel (LProvider ProviderCodeArtifact) `shouldBe` ("provider", "codeArtifact")
         renderLabel (LProvider ProviderVerdaccio) `shouldBe` ("provider", "verdaccio")
 
-    it "buckets a denial reason into a bounded class, never the message" $
+    it "buckets a denial reason into a bounded class, never the message" $ do
         renderLabel (LReasonClass ReasonMissingIntegrity) `shouldBe` ("reason_class", "missing_integrity")
+        renderLabel (LReasonClass ReasonBelowIntegrityFloor) `shouldBe` ("reason_class", "below_integrity_floor")
 
     it "renders an advisory sync attempt's outcome, never the artifact it fetched" $ do
         renderLabel (LAdvisorySyncResult AdvisorySwapped) `shouldBe` ("result", "swapped")
