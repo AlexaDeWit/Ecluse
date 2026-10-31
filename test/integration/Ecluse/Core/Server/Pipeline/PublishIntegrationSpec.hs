@@ -1,7 +1,7 @@
 -- SPDX-FileCopyrightText: 2026 Alexandra de Wit
 --
 -- SPDX-License-Identifier: MIT
--- TupleSections pairs optional media-type values with their header names.
+-- TupleSections pairs header names with optional media types, and a response with its pull count.
 {-# LANGUAGE TupleSections #-}
 
 -- | Publish routing and credentials through the application and a captured target.
@@ -20,6 +20,7 @@ import Network.Wai (
     RequestBodyLength (ChunkedBody, KnownLength),
     consumeRequestBodyStrict,
     responseLBS,
+    setRequestBodyChunks,
  )
 import Network.Wai.Handler.Warp (testWithApplication)
 import Network.Wai.Test (
@@ -30,6 +31,7 @@ import Network.Wai.Test (
     setPath,
     srequest,
  )
+import Network.Wai.Test qualified as WaiTest (request)
 import Test.Hspec
 import UnliftIO (async, timeout, wait)
 import UnliftIO.Concurrent (threadDelay)
@@ -110,9 +112,18 @@ cappedProxyWith deadlines cap =
 putPublish :: ByteString -> Maybe Text -> LByteString -> Application -> IO SResponse
 putPublish = putPublishAs ChunkedBody
 
-putPublishKnownLength :: ByteString -> Maybe Text -> LByteString -> Application -> IO SResponse
-putPublishKnownLength path bearer body =
-    putPublishAs (KnownLength (fromIntegral (LBS.length body))) path bearer body
+-- | A known-length publish whose body counts the chunks the route pulls from it.
+putPublishCounted :: ByteString -> LByteString -> Application -> IO (SResponse, Int)
+putPublishCounted path body app = do
+    chunks <- newIORef (LBS.toChunks body)
+    pulls <- newIORef (0 :: Int)
+    let pull = modifyIORef' pulls (+ 1) >> atomicModifyIORef' chunks (\case [] -> ([], mempty); chunk : rest -> (rest, chunk))
+        req =
+            (setPath defaultRequest{requestMethod = methodPut, requestHeaders = [(hAuthorization, "Bearer publisher-token")]} path)
+                { requestBodyLength = KnownLength (fromIntegral (LBS.length body))
+                }
+    resp <- runSession (WaiTest.request (setRequestBodyChunks pull req)) app
+    (resp,) <$> readIORef pulls
 
 putPublishAs :: RequestBodyLength -> ByteString -> Maybe Text -> LByteString -> Application -> IO SResponse
 putPublishAs bodyLen path bearer body =
@@ -185,10 +196,11 @@ npmPublishSpec = describe "first-party npm publication relay" $ do
 
     it (caseLabel "integration/publication/native-003" "answers an over-cap known-length publish with the documented 413 (Content-Length fast-fail)") $ withSweeper $ \deadlines -> do
         -- A declared Content-Length over the cap fails closed before the route reads a byte.
-        -- Both over-cap shapes render the same 413 through the route contract.
+        -- The bounded read renders the same 413, so only the pull count tells the two apart.
         app <- cappedProxyWith deadlines 8
-        resp <- putPublishKnownLength "/npm/@acme/widget" (Just "publisher-token") publishBody app
+        (resp, pulls) <- putPublishCounted "/npm/@acme/widget" publishBody app
         status resp `shouldBe` 413
+        pulls `shouldBe` 0
 
     it (caseLabel "integration/publication/native-004" "relays an in-scope publish with the publisher's forwarded credential and returns the target's response") $
         withTarget 201 "{\"success\":true}" $ \targetPort target -> withSweeper $ \deadlines -> do
@@ -231,25 +243,13 @@ npmPublishSpec = describe "first-party npm publication relay" $ do
             targetSaw target `shouldReturn` []
 
     it (caseLabel "integration/publication/native-008" "refuses an out-of-scope publish with 403 BEFORE any upstream write (anti-shadowing guard)") $
-        withTarget 201 "{\"success\":true}" $ \targetPort target -> withSweeper $ \deadlines -> do
-            app <- proxyWith deadlines (Just (publishDepsAt targetPort Nothing))
-            resp <- putPublish "/npm/@other/widget" (Just "publisher-token") publishBody app
-            status resp `shouldBe` 403
-            targetSaw target `shouldReturn` []
+        refusesOutOfScope "@other/widget"
 
     it (caseLabel "integration/publication/native-009" "refuses an unscoped publish with 403 (an unscoped name is within no scope)") $
-        withTarget 201 "{\"success\":true}" $ \targetPort target -> withSweeper $ \deadlines -> do
-            app <- proxyWith deadlines (Just (publishDepsAt targetPort Nothing))
-            resp <- putPublish "/npm/widget" (Just "publisher-token") publishBody app
-            status resp `shouldBe` 403
-            targetSaw target `shouldReturn` []
+        refusesOutOfScope "widget"
 
     it (caseLabel "integration/publication/native-010" "refuses a scope that only prefixes an allowed one (@acme-evil vs the allowed @acme) -- exact match") $
-        withTarget 201 "{\"success\":true}" $ \targetPort target -> withSweeper $ \deadlines -> do
-            app <- proxyWith deadlines (Just (publishDepsAt targetPort Nothing))
-            resp <- putPublish "/npm/@acme-evil/widget" (Just "publisher-token") publishBody app
-            status resp `shouldBe` 403
-            targetSaw target `shouldReturn` []
+        refusesOutOfScope "@acme-evil/widget"
 
     it (caseLabel "integration/publication/native-011" "sends no Authorization header for an anonymous in-scope publish without a static token") $
         withTarget 201 "{\"success\":true}" $ \targetPort target -> withSweeper $ \deadlines -> do
@@ -381,6 +381,16 @@ npmPublishSpec = describe "first-party npm publication relay" $ do
             resp <- putPublish "/npm/@acme/widget" (Just "publisher-token") body app
             status resp `shouldBe` 201
             targetSaw target `shouldReturn` [(Just "Bearer publisher-token", LBS.toStrict body)]
+
+-- The body agrees with the path, so the body-name guard passes and only the scope guard can refuse.
+refusesOutOfScope :: Text -> IO ()
+refusesOutOfScope name =
+    withTarget 201 "{\"success\":true}" $ \targetPort target -> withSweeper $ \deadlines -> do
+        app <- proxyWith deadlines (Just (publishDepsAt targetPort Nothing))
+        resp <- putPublish ("/npm/" <> encodeUtf8 name) (Just "publisher-token") (npmReleaseDocument name name name) app
+        status resp `shouldBe` 403
+        decodeUtf8 (LBS.toStrict (simpleBody resp)) `shouldSatisfy` T.isInfixOf ("refusing to publish '" <> name <> "': its name is outside the first-party namespaces")
+        targetSaw target `shouldReturn` []
 
 pypiProxy :: Deadlines -> Maybe (ByteAdmission -> PublishDeps) -> IO Application
 pypiProxy deadlines build = do
