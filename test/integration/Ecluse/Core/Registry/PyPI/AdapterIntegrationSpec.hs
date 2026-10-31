@@ -737,24 +737,30 @@ namedKeyFailure :: Text -> SomeException -> Bool
 namedKeyFailure key = T.isInfixOf key . toText . displayException
 
 availabilitySpec :: Spec
-availabilitySpec = describe "admission-only yank policy" $ do
-    for_ [(False, status200, status200), (True, status404, status403)] $ \(allYanked, listed, downloaded) ->
-        it (caseLabel ("integration/pypi/native-020/" <> (if allYanked then "all-yanked" else "available")) (toText ("gates listings and distribution files with all files yanked=" <> show allYanked :: String))) $ do
-            rules <- prepare inertRuleDeps [admissionOnly (atDefaultPrecedence DenyIfYanked), atDefaultPrecedence (AllowIfOlderThan 0)]
-            withPyPIProxyOver (yankedIndex allYanked) publicPypiDeps $ \proxy -> do
-                let app = proxyWithDeps proxy (\deps -> deps{pdRules = rules})
-                listing <- getIndex app
-                simpleStatus listing `shouldBe` listed
-                artifact <- getPath sdistPath app
-                simpleStatus artifact `shouldBe` downloaded
-                when allYanked $ for_ [listing, artifact] $ \response ->
-                    decodeUtf8 (LBS.toStrict (simpleBody response)) `shouldSatisfy` (not . T.isInfixOf "withdrawn notice must not enter refusals")
-    it (caseLabel "integration/pypi/native-021" "keeps a previously mirrored yanked release retrievable from trusted metadata") $ do
-        rules <- prepare inertRuleDeps [admissionOnly (atDefaultPrecedence DenyIfYanked), atDefaultPrecedence (AllowIfOlderThan 0)]
-        withPrivatePyPIProxy (yankedIndex True) $ \proxy -> do
-            let app = proxyWithDeps proxy (\deps -> deps{pdRules = rules})
-            simpleStatus <$> getIndex app `shouldReturn` status200
-            simpleStatus <$> getPath sdistPath app `shouldReturn` status200
+availabilitySpec = do
+    describe "admission-only yank policy" $
+        for_ [(False, status200), (True, status403)] $ \(allYanked, expected) ->
+            it (caseLabel ("integration/pypi/native-020/" <> (if allYanked then "all-yanked" else "available")) (toText ("gates listings and distribution files with all files yanked=" <> show allYanked :: String))) $ do
+                rules <- prepare inertRuleDeps [admissionOnly (atDefaultPrecedence DenyIfYanked), atDefaultPrecedence (AllowIfOlderThan 0)]
+                withPyPIProxyOver (yankedIndex allYanked) publicPypiDeps $ \proxy -> do
+                    let app = proxyWithDeps proxy (\deps -> deps{pdRules = rules})
+                    listing <- getIndex app
+                    simpleStatus listing `shouldBe` expected
+                    artifact <- getPath sdistPath app
+                    simpleStatus artifact `shouldBe` expected
+                    when allYanked $ for_ [listing, artifact] $ \response ->
+                        decodeUtf8 (LBS.toStrict (simpleBody response)) `shouldSatisfy` (not . T.isInfixOf "withdrawn notice must not enter refusals")
+
+    describe "yank policy on the private serve path" $
+        it (caseLabel "integration/pypi/native-021" "serves a trusted private release its metadata marks yanked under a yank rule at either reach") $ do
+            served <- forM [("admission only", admissionOnly), ("admission and revocation", id)] $ \(reach, limitTo) -> do
+                rules <- prepare inertRuleDeps [limitTo (atDefaultPrecedence DenyIfYanked), atDefaultPrecedence (AllowIfOlderThan 0)]
+                withPrivatePyPIProxy (yankedIndex True) $ \proxy -> do
+                    let app = proxyWithDeps proxy (\deps -> deps{pdRules = rules})
+                    listing <- getIndex app
+                    artifact <- getPath sdistPath app
+                    pure (reach, statusOf listing, length (servedFiles listing), statusOf artifact)
+            served `shouldBe` [("admission only" :: Text, 200, 2, 200), ("admission and revocation", 200, 2, 200)]
 
 yankedIndex :: Bool -> Text -> Value
 yankedIndex allYanked authority = withKeys ["files" .= files] (publicIndex authority)
