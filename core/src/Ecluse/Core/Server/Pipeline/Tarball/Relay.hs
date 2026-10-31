@@ -38,6 +38,7 @@ import Ecluse.Core.Registry.Exchange.Types (ExchangeClient)
 import Ecluse.Core.Registry.Public (PublicControl, ReadControl (Controlled))
 import Ecluse.Core.Security (ProgressFloor)
 import Ecluse.Core.Server.Conditional (isNotModified)
+import Ecluse.Core.Server.Pipeline.Internal (pipelineModule)
 import Ecluse.Core.Server.Stream (RelayResponder (..), UpstreamBody (NoBody, StreamBody), UpstreamResult, withUpstreamResult, withUpstreamResultUsing)
 import Ecluse.Core.Telemetry.Metrics qualified as Metric
 import Ecluse.Core.Telemetry.Record (MetricsPort (mpPublicRelayAnomaly))
@@ -152,6 +153,6 @@ observeRelayAnomaly metrics name version = \case
         liftIO (mpPublicRelayAnomaly metrics cls)
         katipAddContext payload (logFM WarningS (ls message))
     payload =
-        sl "module" ("Ecluse.Core.Server.Pipeline.Tarball.Relay" :: Text)
+        sl "module" pipelineModule
             <> sl "package" (renderPackageName name)
             <> sl "version" (renderVersion version)
