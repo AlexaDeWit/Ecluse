@@ -16,21 +16,21 @@ import Network.HTTP.Types (status403)
 import Network.Wai (responseLBS)
 import Network.Wai.Test (SResponse (..), simpleBody)
 import Test.Hspec
-import UnliftIO.Exception (impureThrow, throwIO)
+import UnliftIO.Exception (throwIO)
 
 import Ecluse.Core.Breaker (noBreakerReporter)
 import Ecluse.Core.Cve (CveQueryFault (CveQueryFault))
-import Ecluse.Core.Registry.Adapter.Capability (AdapterMetadata (metadataAssemble))
-import Ecluse.Core.Rules (PreparedRule, Resilience (..))
+import Ecluse.Core.Rules (PackageRead (prVerdict), PreparedRule, Resilience (..))
 import Ecluse.Core.Rules.Effectful (EffectfulConfig (..), defaultEffectfulConfig, newBreaker)
-import Ecluse.Core.Rules.Types (FailureAlignment (..), Reason (FixesNoAdvisory), RuleVerdict (..))
+import Ecluse.Core.Rules.Types (FailureAlignment (..), Inability (EvaluationFailed), Reason (FixesNoAdvisory), RuleEvidence (evVersion), RuleVerdict (..))
 import Ecluse.Core.Security (Limits (..), defaultLimits)
 import Ecluse.Core.Server.Context (PackumentDeps (..))
+import Ecluse.Core.Version (renderVersion)
 import Ecluse.Runtime.Log (DdContext (DdContext), LogFormat (JsonLog), LogLevel (InfoLevel), newLogEnv)
 import Ecluse.Test.Json (textAtPath)
 import Ecluse.Test.Log (captureStdout)
 import Ecluse.Test.Queue (newTestMemoryQueue)
-import Ecluse.Test.Rules (packageRule, remediation, revocation)
+import Ecluse.Test.Rules (mapPackageRead, packageRule, remediation, revocation)
 import Katip (Environment (Environment), closeScribes)
 
 spec :: Spec
@@ -58,6 +58,17 @@ allowingEffectfulRule :: IO PreparedRule
 allowingEffectfulRule =
     mkEffectful "AllowAdvisory" 400 defaultEffectfulConfig FailNoDecision pass (Allow remediation)
 
+-- A reachable advisory rule that cannot vet one version and abstains on the rest.
+undecidableFor :: Text -> IO PreparedRule
+undecidableFor undecided = mapPackageRead (\packageRead -> packageRead{prVerdict = verdict}) <$> mkEffectful "PartialAdvisory" 400 defaultEffectfulConfig FailDeny pass (NoDecision FixesNoAdvisory)
+  where
+    verdict _ evidence
+        | renderVersion (evVersion evidence) == undecided = CannotVet FailDeny EvaluationFailed
+        | otherwise = NoDecision FixesNoAdvisory
+
+siblings :: [Text]
+siblings = ["1.0.0", "2.0.0"]
+
 effectfulSpec :: Spec
 effectfulSpec = describe "effectful rule tier" $ do
     it (caseLabel "integration/pipeline-faults/native-001" "filters an Undecidable version out of a packument and 503s when nothing survives") $ do
@@ -68,6 +79,13 @@ effectfulSpec = describe "effectful rule tier" $ do
             resp <- getThing Nothing app
             status resp `shouldBe` 503
             status resp `shouldNotBe` 404
+        -- One Undecidable version among admitted siblings drops alone, and the siblings serve.
+        partial <- undecidableFor "1.0.0"
+        siblingsUp <- servingUpstream (encodePackument (packument [(v, plainVersion v) | v <- siblings] "2.0.0" [(v, publishedDaysAgo 30) | v <- siblings]))
+        withProxyEffectful [partial] privateUp siblingsUp $ \app -> do
+            resp <- getThing Nothing app
+            status resp `shouldBe` 200
+            servedVersions resp `shouldBe` ["2.0.0"]
 
     it (caseLabel "integration/pipeline-faults/native-002" "excludes a version a reachable effectful deny rejects (404 when nothing else survives)") $ do
         rule <- denyingEffectfulRule
@@ -118,20 +136,6 @@ tightLimits =
 
 withLimits :: Limits -> PackumentDeps -> PackumentDeps
 withLimits limits d = d{pdLimits = limits}
-
-{- | The typed impure exception the bottoming assembly hook plants: a stand-in
-for an invariant break inside the pure render.
--}
-newtype AssembleBottom = AssembleBottom Text
-    deriving stock (Show)
-
-instance Exception AssembleBottom
-
--- A deps transform that breaks the metadataAssemble never-throws contract on purpose, for
--- the request-perimeter case: the assembled render bottoms when forced.
-withBottomingAssemble :: PackumentDeps -> PackumentDeps
-withBottomingAssemble d =
-    d{pdMetadata = (pdMetadata d){metadataAssemble = \_ _ _ _ -> impureThrow (AssembleBottom "simulated render invariant break")}}
 
 oversizedPackument :: Text -> LByteString
 oversizedPackument v =

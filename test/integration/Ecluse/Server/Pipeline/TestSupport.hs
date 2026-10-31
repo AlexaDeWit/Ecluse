@@ -67,6 +67,8 @@ module Ecluse.Server.Pipeline.TestSupport (
     proxyApplication,
     withProxyOver,
     withProxyOverRuntime,
+    withProxyMounts,
+    withBottomingAssemble,
     withProxyEnvQueueDeps,
     withProxyEnvQueue,
     withProxyEnv,
@@ -116,6 +118,7 @@ import Network.HTTP.Types.Header (hETag, hHost)
 import Network.Wai (Application, Request (rawPathInfo, requestHeaders, requestMethod), Response, responseLBS, responseRaw)
 import Network.Wai.Handler.Warp (testWithApplication)
 import Network.Wai.Test (SResponse, defaultRequest, request, runSession, setPath)
+import UnliftIO.Exception (impureThrow)
 
 import Ecluse.Core.Credential (mkSecret)
 import Ecluse.Core.Deadline (Deadlines)
@@ -127,6 +130,7 @@ import Ecluse.Core.Queue (
     MirrorQueue (enqueue, receive),
     QueueMessage (msgJob),
  )
+import Ecluse.Core.Registry.Adapter.Capability (AdapterMetadata (metadataAssemble))
 import Ecluse.Core.Rules (PreparedRule, prepare)
 import Ecluse.Core.Rules.Types (
     PrecededRule,
@@ -554,12 +558,37 @@ withProxyOverRuntime ::
     (PackumentDeps -> PackumentDeps) ->
     (forall a. (Application -> Env -> Int -> IO a) -> IO a)
 withProxyOverRuntime tweakEnv logEnv queue privateUp publicUp inbound tweakDeps k =
+    withProxyMounts tweakEnv logEnv queue privateUp publicUp inbound (\mount -> k (mount tweakDeps))
+
+{- | Hand the continuation a mount for each dependency change it applies, all over one runtime.
+The mounts share the runtime's caches, so one mount can serve what another assembled.
+-}
+withProxyMounts ::
+    (Env -> Env) ->
+    LogEnv ->
+    MirrorQueue ->
+    Upstream ->
+    Upstream ->
+    Maybe Text ->
+    (forall a. (((PackumentDeps -> PackumentDeps) -> Application) -> Env -> Int -> IO a) -> IO a)
+withProxyMounts tweakEnv logEnv queue privateUp publicUp inbound k =
     testWithApplication (pure (upApp privateUp)) $ \privatePort ->
         testWithApplication (pure (upApp publicUp)) $ \publicPort -> withSweeper $ \deadlines -> do
             manager <- newManager defaultManagerSettings
             env <- tweakEnv <$> newTestEnvLogging deadlines logEnv queue (manager, manager) telemetryDisabled
             baseDeps <- deps privatePort publicPort inbound
-            k (proxyApplication Npm env (tweakDeps baseDeps)) env publicPort
+            k (\tweakDeps -> proxyApplication Npm env (tweakDeps baseDeps)) env publicPort
+
+-- | A typed exception the bottoming assembly plants: a stand-in for an invariant break inside the pure render.
+newtype AssembleBottom = AssembleBottom Text
+    deriving stock (Show)
+
+instance Exception AssembleBottom
+
+-- | Break the never-throws contract of 'metadataAssemble' on purpose: the render bottoms when forced.
+withBottomingAssemble :: PackumentDeps -> PackumentDeps
+withBottomingAssemble d =
+    d{pdMetadata = (pdMetadata d){metadataAssemble = \_ _ _ _ -> impureThrow (AssembleBottom "simulated render invariant break")}}
 
 -- | Mount one ecosystem over the supplied runtime and native dependencies.
 proxyApplication :: Ecosystem -> Env -> PackumentDeps -> Application
