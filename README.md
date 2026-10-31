@@ -28,8 +28,9 @@ Registries hold the package archives. Écluse does not host them.
   freshness, and remaining advisories still affect the result.
 - **npm denies install scripts and dependencies fetched from outside the registry by default.**
   The second covers git sources, remote tarball URLs and unsupported schemes such as `jsr:`.
-  These admission rules also apply without an advisory source. Scored CVSS and EPSS denies are
-  separate opt-in rules.
+  Cargo denies dependencies from a registry other than crates.io by default. These admission
+  rules also apply without an advisory source. Scored CVSS and EPSS denies are separate opt-in
+  rules.
 - **Private packages use the trusted path.** They bypass public admission policy, while caller
   authorisation and applicable integrity and completion checks still apply.
 - **Mirroring keeps admitted public versions in your registry.** A complete copy can remain
