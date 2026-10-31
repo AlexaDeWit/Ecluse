@@ -7,7 +7,6 @@ module Ecluse.BenchLoad.Fixture (
     withProxyOverStubs,
     withProxyConfigured,
     withProxyPortsConfigured,
-    ProxyConfigure,
     withLoopbackStub,
     httpTarget,
     longCacheTtl,
@@ -72,11 +71,8 @@ withProxyOverStubs ecosystem knobs ttl entries =
 withProxyConfigured :: Ecosystem -> LoadKnobs -> (Int -> IO (ProxySettings -> ProxySettings)) -> Application -> Application -> (Int -> [Text]) -> (ProxyProcess -> [Text] -> IO a) -> IO a
 withProxyConfigured ecosystem knobs configure = withProxyPortsConfigured ecosystem knobs (const configure)
 
--- | Settings derived from the private and the public registry port, in that order, before the proxy boots.
-type ProxyConfigure = Int -> Int -> IO (ProxySettings -> ProxySettings)
-
--- | Configure a measured proxy after both registry ports are available.
-withProxyPortsConfigured :: Ecosystem -> LoadKnobs -> ProxyConfigure -> Application -> Application -> (Int -> [Text]) -> (ProxyProcess -> [Text] -> IO a) -> IO a
+-- | Configure a measured proxy from the private and the public registry port, in that order, before it boots.
+withProxyPortsConfigured :: Ecosystem -> LoadKnobs -> (Int -> Int -> IO (ProxySettings -> ProxySettings)) -> Application -> Application -> (Int -> [Text]) -> (ProxyProcess -> [Text] -> IO a) -> IO a
 withProxyPortsConfigured ecosystem knobs configure privateApp publicApp mkMix body =
     withLoopbackStub privateApp $ \privatePort ->
         withLoopbackStub publicApp $ \publicPort -> do

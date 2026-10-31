@@ -9,7 +9,6 @@ private copy, because a private read passes the caller's credentials through.
 -}
 module Ecluse.BenchLoad.PrivateCopy (
     PrivateCopy (..),
-    ManagedCopyState (..),
     privateCopyScenarios,
     herdUnderWholeCopy,
     CopyStubs (..),
@@ -20,9 +19,9 @@ import Data.Aeson (Value)
 import Data.Ratio ((%))
 import Network.Wai (Application)
 
-import Ecluse.BenchLoad.Fixture (ProxyConfigure, httpTarget, loadCorpusBodies, loadCorpusCuts, weightedMix, withProxyPortsConfigured)
+import Ecluse.BenchLoad.Fixture (httpTarget, loadCorpusBodies, loadCorpusCuts, weightedMix, withProxyOverStubs)
 import Ecluse.BenchLoad.Harness (Driver (DriveBurstUnder), LoadKnobs (lkUpstreamLatencyMicros), Scenario (scenarioServiceTime), burstReadingMs, proxied, scenario, urlLoad)
-import Ecluse.BenchLoad.ProxyProcess (ProxyProcess, ProxySettings (..), proxyPort)
+import Ecluse.BenchLoad.ProxyProcess (ProxyProcess, proxyPort)
 import Ecluse.BenchLoad.Stress (herdSize)
 import Ecluse.Core.Ecosystem (Ecosystem)
 import Ecluse.Core.Package (PackageName)
@@ -46,12 +45,7 @@ data PrivateCopy = PrivateCopy
     -- ^ Checks the listings before load, failing the scenario on a wrong response.
     , pcHerdPackage :: Text
     -- ^ The package whose listing the ecosystem's herd requests.
-    , pcManagedState :: Maybe ManagedCopyState
-    -- ^ Durable mirror state for the copy's proxies. 'Nothing' boots them without state or a mirror target.
     }
-
--- | Serves durable mirror state around a proxy, with settings derived once both stub ports exist.
-newtype ManagedCopyState = ManagedCopyState (forall a. LoadKnobs -> (ProxyConfigure -> IO a) -> IO a)
 
 -- | The private copies from the smallest share to the whole capture.
 privateCopyScenarios :: PrivateCopy -> [Scenario]
@@ -113,15 +107,9 @@ copyStubs copy loadPrivate latency = do
 withStubs :: PrivateCopy -> (Int -> IO CopyStubs) -> LoadKnobs -> (ProxyProcess -> [Text] -> IO a) -> IO a
 withStubs copy makeStubs knobs body = do
     stubs <- makeStubs (lkUpstreamLatencyMicros knobs)
-    withManagedState $ \configure ->
-        withProxyPortsConfigured (pcEcosystem copy) knobs (\privatePort publicPort -> (. uncached) <$> configure privatePort publicPort) (csPrivate stubs) (csPublic stubs) (weightedMix cpWeight (pcUrl copy) (pcPackages copy)) $ \proxy urls -> do
-            pcPreflight copy urls
-            body proxy urls
-  where
-    withManagedState use = case pcManagedState copy of
-        Nothing -> use (\_ _ -> pure id)
-        Just (ManagedCopyState managed) -> managed knobs use
-    uncached settings = settings{psCacheTtlSeconds = 0, psCacheMaxEntries = Nothing}
+    withProxyOverStubs (pcEcosystem copy) knobs 0 Nothing (csPrivate stubs) (csPublic stubs) (weightedMix cpWeight (pcUrl copy) (pcPackages copy)) $ \proxy urls -> do
+        pcPreflight copy urls
+        body proxy urls
 
 wholeStubs :: PrivateCopy -> Int -> IO CopyStubs
 wholeStubs copy = copyStubs copy loadCorpusBodies

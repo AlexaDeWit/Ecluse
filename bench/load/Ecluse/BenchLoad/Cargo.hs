@@ -24,7 +24,6 @@ import Network.HTTP.Types (hContentType, status200, status404)
 import Network.Wai (Application, Request, Response, pathInfo, rawPathInfo, responseLBS)
 
 import Ecluse.BenchLoad.CapturedArtifact (SelectedArtifact (..), selectedArtifact)
-import Ecluse.BenchLoad.Cargo.CopyState (withCopyState)
 import Ecluse.BenchLoad.Cargo.Worker (cargoWorkerScenario)
 import Ecluse.BenchLoad.Contract.Driver (LoadReadDriver (..), readLoadContract)
 import Ecluse.BenchLoad.Error (benchFail)
@@ -32,7 +31,7 @@ import Ecluse.BenchLoad.Fixture (artifactBytes, delayUpstream, fetchChecked, htt
 import Ecluse.BenchLoad.Harness (Driver (DriveBurst, DriveRamp), LoadKnobs (..), Scenario (..), UpstreamFixture, proxied, scenario, urlLoad)
 import Ecluse.BenchLoad.Listing (ListingSetup (..), cacheEvictsLoad, cacheFitsLoad, listingLoad, listingWorkingSet, revalidateLoad, slowReaderScenario, withListingStubs)
 import Ecluse.BenchLoad.PatternScenario (PatternProvider (..))
-import Ecluse.BenchLoad.PrivateCopy (ManagedCopyState (ManagedCopyState), PrivateCopy (..))
+import Ecluse.BenchLoad.PrivateCopy (PrivateCopy (..))
 import Ecluse.BenchLoad.ProxyProcess (ProxyProcess)
 import Ecluse.BenchLoad.Selection (evictionEntries)
 import Ecluse.BenchLoad.Stress (WarmLoadDriver (..), herdSize, pairedLoad, rampSteps)
@@ -105,7 +104,7 @@ cargoListing =
 -- | State the effective eviction size and the limits of the service-time attribution.
 cargoLoadNotes :: LoadKnobs -> Text
 cargoLoadNotes knobs =
-    "Captured index rows retain their source fields. HTTP relay fixtures replace only checksums with hashes of owned payloads and preserve wire sizes. Only the private-copy rows read durable mirror state, which records the private rows that match their public source and verifies their archive bytes. These payloads model relays, not native client installation.\n\nService attribution subtracts one public baseline. Extra private or public hops remain in reported overhead, which is not intrinsic proxy CPU time.\n\n"
+    "Captured index rows retain their source fields. HTTP relay fixtures replace only checksums with hashes of owned payloads and preserve wire sizes. These payloads model relays, not native client installation.\n\nService attribution subtracts one public baseline. Extra private or public hops remain in reported overhead, which is not intrinsic proxy CPU time.\n\n"
         <> "Cache working set: "
         <> show count
         <> " projects. Eviction entry bound: "
@@ -139,7 +138,6 @@ cargoPrivateCopy =
         , pcUrl = indexUrl
         , pcPreflight = traverse_ (void . checkedIndex) . ordNub
         , pcHerdPackage = herdPackage
-        , pcManagedState = Just (ManagedCopyState withCopyState)
         }
 
 revalidateScenario :: Scenario

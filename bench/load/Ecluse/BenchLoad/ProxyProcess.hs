@@ -148,8 +148,6 @@ data ProxySettings = ProxySettings
     , psPublicConnections :: Maybe Int
     , psPublicHost :: Maybe Text
     -- ^ An override for the public leg only. 'Nothing' dials 'publicStubHost'.
-    , psPrivateHost :: Maybe Text
-    -- ^ An override for the private and mirror target legs. 'Nothing' dials 'privateStubHost'.
     , psPrivateConnections :: Maybe Int
     , psClock :: Maybe UTCTime
     -- ^ A fixed evaluation clock for the rules, 'Nothing' for the wall clock.
@@ -171,7 +169,6 @@ proxySettings ecosystem ttl =
         , psServeMaxInFlight = Nothing
         , psPublicConnections = Nothing
         , psPublicHost = Nothing
-        , psPrivateHost = Nothing
         , psPrivateConnections = Nothing
         , psClock = Nothing
         , psMirrorStatePort = Nothing
@@ -411,7 +408,7 @@ proxyEnvironment settings shape capabilities dir (port, controlPort, scrapePort)
     upstreamHost :: Text -> Text
     upstreamHost leg
         | leg == "PUBLIC_UPSTREAM" = fromMaybe publicStubHost (psPublicHost settings)
-        | otherwise = fromMaybe privateStubHost (psPrivateHost settings)
+        | otherwise = privateStubHost
     fixed =
         [ ("ECLUSE_SERVER__PORT", show port)
         , ("ECLUSE_SERVER__PUBLIC_URL", "https://bench.proxy")
