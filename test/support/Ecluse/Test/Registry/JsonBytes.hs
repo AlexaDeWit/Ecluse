@@ -15,6 +15,11 @@ module Ecluse.Test.Registry.JsonBytes (
     damaged,
     genChunks,
     releaseKeys,
+
+    -- * Builders
+    render,
+    quoted,
+    commas,
 ) where
 
 import Data.ByteString qualified as BS
@@ -180,8 +185,13 @@ genChunks body = Gen.frequency [(1, pure [body]), (4, pieces body)]
             size <- Gen.frequency [(4, Gen.int (Range.linear 1 8)), (2, Gen.int (Range.linear 9 64)), (1, Gen.int (Range.linear 65 4096))]
             (BS.take size rest :) <$> pieces (BS.drop size rest)
 
+-- | The bytes a builder writes.
 render :: Builder.Builder -> ByteString
 render = toStrict . Builder.toLazyByteString
+
+-- | The builders joined by commas, as JSON items or members.
+commas :: [Builder.Builder] -> Builder.Builder
+commas = mconcat . intersperse ","
 
 genValue :: [ByteString] -> Int -> Gen Builder.Builder
 genValue names depth =
@@ -229,6 +239,7 @@ genKey names
     | null names = genString
     | otherwise = Gen.frequency [(6, quoted . Builder.byteString <$> Gen.element names), (2, genString)]
 
+-- | The builder in double quotes, as a JSON string or key whose text needs no escapes.
 quoted :: Builder.Builder -> Builder.Builder
 quoted text = "\"" <> text <> "\""
 
