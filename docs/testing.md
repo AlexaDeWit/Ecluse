@@ -1639,9 +1639,14 @@ lands, every cell is uncalibrated, and a run checks zero successes and process f
 2. Once all three finish, run `task performance:load-floors -- <run-id>,<run-id>,<run-id>`. It
    downloads each run's record and `bench-load-results-*` artifacts into `scratchpad/load-floors/`,
    sets each unflagged cell to 60% of the median of its three first-attempt counts,
-   lists the runs in `calibration.runs`, and prints the cells that changed. It refuses a job that
-   was not held, and a pass whose first attempt had no successes or a process failure, naming
-   each. A run that went red on older floors still counts.
+   lists the runs in `calibration.runs`, and prints the cells that changed. A run that went red on
+   older floors still counts. It refuses each of these and names the run or pass at fault:
+
+   - runs that measured different commits
+   - a run that was not a `workflow_dispatch`
+   - a job that was not held
+   - a pass whose first attempt had no successes or a process failure
+
 3. Commit `bench/load/floors.json` in a pull request, with the printed table.
 
 A pull request that deliberately changes performance recalibrates the cells it affects from three
