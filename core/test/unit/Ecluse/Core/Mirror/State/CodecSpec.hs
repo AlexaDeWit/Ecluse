@@ -123,7 +123,7 @@ spec = describe "durable record codec" $ do
     it "rejects excessive dimensions before paying for domain restoration" $ do
         (record, _) <- recordFixture
         bytes <- expectRight (encodeProjectRecord pypiStateFormat defaultLimits record)
-        for_ [(defaultLimits{maxVersionCount = 0}, TooManyVersions 1 0), (defaultLimits{maxArtifactCount = 0}, TooManyArtifacts 1 0)] $ \(bounds, fault) -> do
+        for_ [(defaultLimits{maxVersionCount = 0}, TooManyVersions 1 0), (defaultLimits{mirrorStateFileCeiling = 0}, TooManyArtifacts 1 0)] $ \(bounds, fault) -> do
             paid <- newIORef ([] :: [Int])
             chargedDecodeProjectRecord pypiStateFormat (\cost -> modifyIORef' paid (cost :)) bounds target mirrorPackage bytes
                 `shouldReturn` Left (StateBound fault)

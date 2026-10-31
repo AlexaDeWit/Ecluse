@@ -78,7 +78,7 @@ spec = describe "archiveMetadata" $ do
     it "rejects missing metadata and exceeded metadata or entry budgets" $ do
         bytes <- zipBytes [("example-1.dist-info/METADATA", metadata), ("example/data", "x")]
         extract defaultLimits{maxMetadataBytes = 20} "example-1-py3-none-any.whl" bytes >>= (`shouldSatisfy` isLeft)
-        extract defaultLimits{maxArtifactCount = 1} "example-1-py3-none-any.whl" bytes >>= (`shouldSatisfy` isLeft)
+        extract defaultLimits{archiveEntryCeiling = 1} "example-1-py3-none-any.whl" bytes >>= (`shouldSatisfy` isLeft)
         absent <- zipBytes [("example/data", "x")]
         extract defaultLimits "example-1-py3-none-any.whl" absent >>= (`shouldSatisfy` isLeft)
     it "checks the whole ZIP directory and compressed trailer" $ do

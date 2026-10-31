@@ -16,7 +16,6 @@ module Ecluse.Core.Security.Limits (
     LimitError (..),
     boundedRead,
     checkVersionCountOf,
-    checkArtifactCount,
     withinCeiling,
 
     -- * Upstream progress
@@ -36,7 +35,9 @@ import Data.ByteString.Builder (byteString, toLazyByteString)
 import Data.ByteString.Lazy qualified as BSL
 import Data.Time (NominalDiffTime)
 
--- | Byte ceilings by operation, structural metadata backstops, and the upstream progress floor.
+{- | Byte ceilings by operation, structural metadata backstops, and the upstream progress floor.
+The @*Ceiling@ fields are fixed in code: no configuration key sets them, so raising one takes a release.
+-}
 data Limits = Limits
     { maxMetadataBytes :: Int
     -- ^ Decompressed registry metadata and control-response bytes.
@@ -45,11 +46,19 @@ data Limits = Limits
     , maxMirrorArtifactBytes :: Int
     -- ^ Artifact bytes buffered for mirror verification and publication.
     , maxVersionCount :: Int
-    -- ^ npm source versions, PyPI full releases, or PyPI selected source file positions.
-    , maxArtifactCount :: Int
-    -- ^ Valid projected artifacts. Selected PyPI uses its source-file scan count instead.
+    -- ^ Source entry positions in one package's metadata, and its inventory across Dredger pages.
     , maxNestingDepth :: Int
     -- ^ Retained JSON nesting depth. Skipped metadata fields do not use this bound.
+    , archiveEntryCeiling :: Int
+    -- ^ Members of one inspected tar archive, or entries of one ZIP archive.
+    , compressedMemberCeiling :: Int
+    -- ^ gzip or bzip2 members of one compressed archive.
+    , inertNodeCeiling :: Int
+    -- ^ Nodes and alias or reference work of one Marshal or YAML decode, and one declared collection length.
+    , multipartPartCeiling :: Int
+    -- ^ Parts of one multipart upload.
+    , mirrorStateFileCeiling :: Int
+    -- ^ Files, and each per-file dimension, of one durable mirror-state record.
     , progressFloor :: ProgressFloor
     -- ^ The body bytes an upstream exchange must deliver per window, and the serve path's cap.
     }
@@ -63,8 +72,12 @@ defaultLimits =
         , maxPublishRequestBytes = 12 * 1024 * 1024
         , maxMirrorArtifactBytes = 12 * 1024 * 1024
         , maxVersionCount = 1_000_000
-        , maxArtifactCount = 1_000_000
         , maxNestingDepth = 64
+        , archiveEntryCeiling = 1_000_000
+        , compressedMemberCeiling = 1_000_000
+        , inertNodeCeiling = 1_000_000
+        , multipartPartCeiling = 1_000_000
+        , mirrorStateFileCeiling = 1_000_000
         , progressFloor = ProgressFloor (fromInteger (toMicros 10)) (1024 * 1024) (fromInteger (toMicros (fromIntegral serveCapSeconds)))
         }
 
@@ -89,9 +102,9 @@ bodyLimitBytes = \case
 data LimitError
     = -- | The selected body role exceeded its configured byte ceiling.
       BodyTooLarge BodyLimit
-    | -- | More than 'maxVersionCount' versions. Carries the count seen and the ceiling.
+    | -- | More entries than 'maxVersionCount', or a fixed name ceiling, allows. Carries the count seen and the ceiling.
       TooManyVersions Int Int
-    | -- | More than 'maxArtifactCount' artifacts across the versions, then the ceiling.
+    | -- | More files in a mirror-state record than 'mirrorStateFileCeiling'. Carries the count seen and the ceiling.
       TooManyArtifacts Int Int
     | -- | JSON nesting exceeded 'maxNestingDepth'. Carries the ceiling.
       TooDeeplyNested Int
@@ -117,12 +130,6 @@ has not projected, as the selective decoders do while they skip them.
 -}
 checkVersionCountOf :: Limits -> Int -> Either LimitError ()
 checkVersionCountOf limits = withinCeiling TooManyVersions (maxVersionCount limits)
-
-{- | The artifact ceiling over a count of the artifacts across every version of one document.
-Adapters check version counts before applying it.
--}
-checkArtifactCount :: Limits -> Int -> Either LimitError ()
-checkArtifactCount limits = withinCeiling TooManyArtifacts (maxArtifactCount limits)
 
 -- | Refuse a count over its ceiling. The breach names the count seen, then the ceiling.
 withinCeiling :: (Int -> Int -> LimitError) -> Int -> Int -> Either LimitError ()

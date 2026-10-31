@@ -108,7 +108,7 @@ checkDimensions limits bytes = do
                 VerifiedStart -> (versions, artifacts, fragments, sources, companions, verified + 1)
                 ContainerEnd -> (versions, artifacts, fragments, sources, companions, verified)
         checkVersionCountOf limits v
-        traverse_ (checkArtifactCount limits) [a, f, s, c, h]
+        traverse_ (checkStateFiles limits) [a, f, s, c, h]
         pure updated
 
 -- | Charge the durable graph separately from active-work reservations.
@@ -215,7 +215,7 @@ checkRecord limits size record = do
     when (toInteger size + companionBytes record > toInteger (maxMetadataBytes limits)) $
         Left (StateBound (BodyTooLarge (MetadataBodyLimit (maxMetadataBytes limits))))
     first StateBound (checkVersionCountOf limits (Map.size (recordVersions record)))
-    first StateBound (checkArtifactCount limits (sum (map countFiles (Map.elems (recordVersions record)))))
+    first StateBound (checkStateFiles limits (sum (map countFiles (Map.elems (recordVersions record)))))
   where
     countFiles version = sum [length (pkgArtifacts details) | StoredMirrorFragment details _ _ <- toList (versionFragments version)]
 

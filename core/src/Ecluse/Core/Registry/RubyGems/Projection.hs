@@ -11,23 +11,20 @@ import Data.Map.Strict qualified as Map
 
 import Ecluse.Core.Package (Artifact (..), Availability (Available), CodeExecSignal (CodeExecUnknown), DependencySources (DependencySourcesUnknown), PackageDetails (..), PackageInfo (..), PackageName, renderPackageName)
 import Ecluse.Core.Package.Entry (distinctKeys)
-import Ecluse.Core.Registry.Metadata (MetadataError (MetadataBoundExceeded, MetadataNameMismatch, MetadataUndecodable))
+import Ecluse.Core.Registry.Metadata (MetadataError (MetadataNameMismatch, MetadataUndecodable))
 import Ecluse.Core.Registry.RubyGems.Document (GemRow (..))
 import Ecluse.Core.Registry.RubyGems.Project (coordinateFilename, coordinateName, coordinateVersion)
 import Ecluse.Core.Registry.RubyGems.Request (gemArtifactUrl)
 import Ecluse.Core.Registry.WireSupport (newestUpload)
-import Ecluse.Core.Security (Limits, checkArtifactCount, checkVersionCountOf)
 import Ecluse.Core.Server.Path (unFilename)
 import Ecluse.Core.Strict (strictElements)
 import Ecluse.Core.Version (renderVersion)
 
 -- | Group exact raw versions and preserve unknown age whenever any platform time is missing.
-projectGemRows :: Limits -> PackageName -> Text -> [GemRow] -> Either MetadataError PackageInfo
-projectGemRows limits name base rows = do
-    first MetadataBoundExceeded (checkArtifactCount limits (length rows))
+projectGemRows :: PackageName -> Text -> [GemRow] -> Either MetadataError PackageInfo
+projectGemRows name base rows = do
     unless (distinctKeys (map (unFilename . coordinateFilename . grCoordinate) rows) && distinctKeys (map grEntryKey rows)) (Left MetadataUndecodable)
     versions <- foldM insert Map.empty rows
-    first MetadataBoundExceeded (checkVersionCountOf limits (Map.size versions))
     let !settled = Map.map settle versions
     pure (PackageInfo name settled Map.empty [])
   where

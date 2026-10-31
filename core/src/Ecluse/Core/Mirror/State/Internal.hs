@@ -43,6 +43,7 @@ module Ecluse.Core.Mirror.State.Internal (
     declaredCompanion,
     declaredSourceCompanion,
     verifySourceCompanionBytes,
+    checkStateFiles,
 ) where
 
 import Data.Aeson (Object)
@@ -60,7 +61,7 @@ import Ecluse.Core.Package.Integrity (IntegrityResult (..), verifyIntegrity)
 import Ecluse.Core.Registry (CompanionRequirement (DeclaredCompanions, NativeCompanions))
 import Ecluse.Core.Registry.MirrorUpload
 import Ecluse.Core.Registry.MirrorUpload.Internal (restoreMirrorFragment)
-import Ecluse.Core.Security (LimitError, Limits (..), checkArtifactCount, checkVersionCountOf)
+import Ecluse.Core.Security (LimitError (TooManyArtifacts), Limits (..), checkVersionCountOf, withinCeiling)
 import Ecluse.Core.Version (Version, renderVersion)
 
 -- | A digest of the configured target, never a credential or caller authorisation.
@@ -180,8 +181,12 @@ extendProjectRecord format limits target inventory previous = do
     let (envelope, _) = envelopeSplit (msfEnvelope format) (inventoryReadData inventory)
         result = record{projectEnvelope = envelope, projectVersions = Map.insert key updated (recordVersions record)}
     first StateBound (checkVersionCountOf limits (Map.size (recordVersions result)))
-    first StateBound (checkArtifactCount limits (sum (map (Map.size . versionFiles) (Map.elems (recordVersions result)))))
+    first StateBound (checkStateFiles limits (sum (map (Map.size . versionFiles) (Map.elems (recordVersions result)))))
     pure result
+
+-- | Refuse a record count over the fixed mirror-state file ceiling, so every write stays readable.
+checkStateFiles :: Limits -> Int -> Either LimitError ()
+checkStateFiles limits = withinCeiling TooManyArtifacts (mirrorStateFileCeiling limits)
 
 extendVersion :: MirrorStateFormat -> MirrorInventory -> Maybe MirrorVersion -> Either MirrorStateFault MirrorVersion
 extendVersion format inventory previous = do

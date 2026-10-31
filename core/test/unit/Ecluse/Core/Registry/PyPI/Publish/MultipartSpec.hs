@@ -56,7 +56,7 @@ namesSpec = describe "uploadClaims names" $ do
         decode (names <> filePart <> part "name" "allowed") `shouldReturn` Right ["allowed"]
     it "enforces byte and part limits" $ do
         uploadClaims defaultLimits{maxPublishRequestBytes = 10} contentType (fileUpload <> part "name" "allowed" <> end) >>= (`shouldSatisfy` isMalformedBody)
-        uploadClaims defaultLimits{maxArtifactCount = 2} contentType (fileUpload <> part "name" "allowed" <> filePart <> end) >>= (`shouldSatisfy` isMalformedBody)
+        uploadClaims defaultLimits{multipartPartCeiling = 2} contentType (fileUpload <> part "name" "allowed" <> filePart <> end) >>= (`shouldSatisfy` isMalformedBody)
   where
     decode body = uploadClaims defaultLimits contentType (fileUpload <> part "version" "1.0" <> body <> end)
 

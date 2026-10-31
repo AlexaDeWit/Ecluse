@@ -229,7 +229,7 @@ accountedFullBytes :: EcosystemRead -> Text -> CorpusPackage -> LByteString -> I
 accountedFullBytes eco upstreamBase package bytes =
     bimap show weigh <$> heldManifest eco defaultLimits upstreamBase (cpPackage package) [LBS.toStrict bytes]
   where
-    weigh manifest = weighCacheEntry (CacheEntry (manifestInfo manifest) (manifestRaw manifest) (manifestBodyBytes manifest) (manifestDigest manifest))
+    weigh manifest = weighCacheEntry (CacheEntry (manifestInfo manifest) (manifestRaw manifest) (manifestBodyBytes manifest) (manifestRetainedEntries manifest) (manifestDigest manifest))
 
 patternClock :: UTCTime -> IO UTCTime
 patternClock fallback =

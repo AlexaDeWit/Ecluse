@@ -24,6 +24,14 @@ module Ecluse.Core.Server.MemoryModel.Calibration (
     rubyGemsFigures,
     SyntheticListingFigures (..),
     rubyGemsSyntheticFigures,
+
+    -- * The entry floors
+    EntryFigures (..),
+    floorRule,
+    entryFloor,
+    entryFloorFigures,
+    releaseFloor,
+    releaseFloorFigures,
 ) where
 
 import Data.Map.Strict qualified as Map
@@ -373,3 +381,44 @@ rubyGemsSyntheticFigures =
             , syntheticSingleOutput = 6554160 % 2315422
             , syntheticMergedOutputs = Map.fromList [(Identical, 8371680 % 2315422), (Overlapping, 6627408 % 2315417), (Disjoint, 5757712 % 2315426), (PublishOrder, 6654600 % 2315422)]
             }
+
+-- | A dense listing's live bytes per retained entry: through its read, and once the read completes.
+data EntryFigures = EntryFigures
+    { entryReadPeak :: Rational
+    , entryHeld :: Rational
+    }
+
+-- | Cover the largest figure with a 25% margin, rounded up to 64 bytes.
+floorRule :: Map Text EntryFigures -> Integer
+floorRule figures = 64 * ceiling (foldl' max 0 [figure | entry <- Map.elems figures, figure <- [entryReadPeak entry, entryHeld entry]] * 5 / 256)
+
+-- | The floor each retained entry other than an npm version or PyPI file pays: the rule over the figures of those entries.
+entryFloor :: Integer
+entryFloor = floorRule entryFloorFigures
+
+-- | The floor npm versions and PyPI files pay: the rule over the figures of versions and files.
+releaseFloor :: Integer
+releaseFloor = floorRule releaseFloorFigures
+
+-- | Dense listing figures for the entries the entry floor covers, each bytes over retained entries.
+entryFloorFigures :: Map Text EntryFigures
+entryFloorFigures =
+    -- Measured on amd64 with GHC 9.10.3 and Cabal -O1, where the read peaks of two runs differed by under 0.01%.
+    Map.fromList
+        [ ("npm/timestamps", EntryFigures (3593680 % 10001) (1448 % 10001))
+        , ("npm/dist-tags", EntryFigures (3513408 % 10001) (2961448 % 10001))
+        , ("pypi/versions", EntryFigures (1765608 % 10001) (1765608 % 10001))
+        , ("pypi/alternate-locations", EntryFigures (746192 % 10001) (697000 % 10001))
+        , ("pypi/tracks", EntryFigures (745520 % 10001) (696984 % 10001))
+        ]
+
+-- | Figures for npm versions and PyPI files: their densest forms, and the smallest valid bodies that outweigh them.
+releaseFloorFigures :: Map Text EntryFigures
+releaseFloorFigures =
+    -- Measured as the entry figures were, where repeated runs gave the same held bytes and read peaks within 0.03%.
+    Map.fromList
+        [ ("npm/versions", EntryFigures (5244360 % 10000) (3379688 % 10000))
+        , ("pypi/files", EntryFigures (2769456 % 10001) (2565608 % 10001))
+        , ("npm/minimal-versions", EntryFigures (8910312 % 10000) (6971776 % 10000))
+        , ("pypi/minimal-files", EntryFigures (8853320 % 10000) (8560928 % 10000))
+        ]

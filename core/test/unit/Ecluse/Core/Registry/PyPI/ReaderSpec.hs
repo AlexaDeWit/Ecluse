@@ -25,8 +25,8 @@ import Ecluse.Core.Registry.PyPI.Document (packedSimpleDocument)
 import Ecluse.Core.Registry.PyPI.Metadata (projectPyPIPacked, projectPyPIStream)
 import Ecluse.Core.Registry.PyPI.Project (fcVersionKey, fileCoordinate)
 import Ecluse.Core.Registry.PyPI.Reader (fileUniqueFields, pypiWalk)
-import Ecluse.Core.Registry.PyPI.Streaming (PyPIField (EnvelopeField, FileField), PyPIRead (..))
-import Ecluse.Core.Registry.PyPI.StreamingProjection (PyPIProjection, collectField, emptyProjection, keepsFile)
+import Ecluse.Core.Registry.PyPI.Streaming (PyPIField (EnvelopeField, EnvelopeItem, FileField), PyPIRead (..))
+import Ecluse.Core.Registry.PyPI.StreamingProjection (PyPIProjection, claimsEnvelope, collectField, emptyProjection, keepsFile)
 import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), LimitError (BodyTooLarge, TooManyVersions), Limits (..), defaultLimits)
 import Ecluse.Core.Version (canonicalPep440, renderVersion)
 import Ecluse.Test.Package (unscopedPyPI)
@@ -35,6 +35,7 @@ import Ecluse.Test.Registry.JsonStream (parseJsonChunks, readOutcome, testTable,
 import Ecluse.Test.Registry.PyPI (filesNamed, simpleIndexWith)
 import Ecluse.Test.Registry.PyPI.Metadata (projectPyPIPackedChunks)
 import Ecluse.Test.Registry.PyPI.Streaming (pypiFields)
+import Ecluse.Test.Support (expectRight)
 
 spec :: Spec
 spec = describe "pypiWalk" $ do
@@ -54,6 +55,16 @@ spec = describe "pypiWalk" $ do
         case actual of
             Right (_, Right fields) -> fields `shouldContain` [EnvelopeField "meta" (object ["api-version" .= ("1.1" :: Text)])]
             other -> expectationFailure ("large-key read did not complete: " <> show other)
+
+    it "emits fields and items only for the first alternate-locations array, meta object and tracks member" $ do
+        let items = "0,0,0"
+            body = "{\"meta\":{\"api-version\":\"1.1\",\"tracks\":[" <> items <> "],\"tracks\":[" <> items <> ",0]},\"name\":\"thing\",\"alternate-locations\":[],\"alternate-locations\":[" <> items <> "],\"meta\":{\"tracks\":[" <> items <> "]},\"files\":[]}"
+            envelopes key events = [value | EnvelopeField named value <- events, named == key]
+        streamed <- expectRight (walkJsonChunks (MetadataBodyLimit (BS.length body)) (pypiWalk 64 FullRead (\seen field -> Right (field : seen)) (const False) (\seen key -> not (null (envelopes key seen))) (testTable fileUniqueFields) []) [body])
+        events <- reverse <$> expectRight (streamValue streamed)
+        envelopes "alternate-locations" events `shouldBe` [toJSON ([] :: [Int])]
+        envelopes "meta" events `shouldBe` [object ["api-version" .= ("1.1" :: Text), "tracks" .= ([0, 0, 0] :: [Int])]]
+        [key | EnvelopeItem key <- events] `shouldBe` replicate 3 "meta"
 
     it "fails a number past json-stream's digit limit across pieces, as json-stream does" $ do
         let body = "{\"name\":" <> BS.replicate 300000 0x31 <> "}"
@@ -90,10 +101,9 @@ packedParitySpec = modifyMaxSuccess (const 2000) $
             chunks <- forAll (genChunks body)
             depth <- forAll (Gen.frequency [(3, pure 64), (2, Gen.int (Range.constant 0 6))])
             versions <- forAll (Gen.int (Range.constant 0 20))
-            artifacts <- forAll (Gen.int (Range.constant 0 30))
-            let limits = defaultLimits{maxNestingDepth = depth, maxVersionCount = versions, maxArtifactCount = artifacts, maxMetadataBytes = BS.length body}
+            let limits = defaultLimits{maxNestingDepth = depth, maxVersionCount = versions, maxMetadataBytes = BS.length body}
                 bound = MetadataBodyLimit (BS.length body)
-                referenceRead = first MetadataBoundExceeded (parseJsonChunks bound (pypiFields depth FullRead) (collectField limits FullRead) (emptyProjection thing) chunks)
+                referenceRead = first MetadataBoundExceeded (parseJsonChunks bound (pypiFields depth FullRead) (collectField limits) (emptyProjection thing) chunks)
                 expected = (\stream -> (streamBytes stream, second Just <$> projectPyPIStream limits thing stream)) <$> referenceRead
                 actual = (\stream -> (streamBytes stream, second packedSimpleDocument <$> projectPyPIPacked limits thing stream)) <$> projectPyPIPackedChunks limits thing chunks
             actual === expected
@@ -236,7 +246,7 @@ data Reading = Reading Int PyPIRead (Maybe Int) Bool
 
 walked :: Reading -> BodyLimit -> [ByteString] -> Outcome
 walked reading@(Reading depth mode _ production) bound =
-    emitted . walkJsonChunks bound (pypiWalk depth mode (collect reading) keeps (testTable fileUniqueFields) start)
+    emitted . walkJsonChunks bound (pypiWalk depth mode (collect reading) keeps (claimsEnvelope . fst) (testTable fileUniqueFields) start)
   where
     keeps (projection, _) = not production || keepsFile projection
 
@@ -247,11 +257,15 @@ reference reading@(Reading depth mode _ _) bound = emitted . parseJsonChunks bou
 start :: (PyPIProjection, [PyPIField])
 start = (emptyProjection thing, [])
 
+-- The reference takes an envelope array whole, and reads a repeat the walk drops, so the walk's events
+-- for an array's items and both reads' repeats stay out of the comparison.
 collect :: Reading -> (PyPIProjection, [PyPIField]) -> PyPIField -> Either LimitError (PyPIProjection, [PyPIField])
-collect (Reading _ mode cap _) (projection, events) field = do
-    projected <- collectField defaultLimits mode projection field
-    case cap of
-        Just most | length events >= most -> Left (TooManyVersions (length events) most)
+collect (Reading _ _ cap _) (projection, events) field = do
+    projected <- collectField defaultLimits projection field
+    case (field, cap) of
+        (EnvelopeItem _, _) -> Right (projected, events)
+        (EnvelopeField key _, _) | claimsEnvelope projection key -> Right (projected, events)
+        (_, Just most) | length events >= most -> Left (TooManyVersions (length events) most)
         _ -> Right (projected, field : events)
 
 emitted :: Either LimitError (StreamResult (PyPIProjection, [PyPIField])) -> Outcome

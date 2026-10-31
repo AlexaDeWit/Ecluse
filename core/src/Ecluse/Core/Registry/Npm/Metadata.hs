@@ -12,7 +12,8 @@ typed projection with the selected version object, which the mirror write republ
 -}
 module Ecluse.Core.Registry.Npm.Metadata (
     -- * What the read driver runs
-    npmRead,
+    npmReadWith,
+    prepareNpmRead,
 
     -- * The memory budget
     npmChargeFactors,
@@ -36,6 +37,7 @@ import Data.Aeson.Key qualified as Key
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.JsonStream.Lexer (Cursor)
 import Data.Map.Strict qualified as Map
+import Data.Primitive.PrimVar (PrimVar)
 
 import Ecluse.Core.Package (PackageInfo (..), PackageName, renderPackageName)
 import Ecluse.Core.Package.Filter (enforceArtifactLocations, enforceArtifactLocationsOf)
@@ -43,29 +45,37 @@ import Ecluse.Core.Registry.CachedDocument (CachedDoc, npmCached, npmPacked)
 import Ecluse.Core.Registry.Json.Intern (InternTable, Interned (..), decodedName, internName, tableTexts)
 import Ecluse.Core.Registry.Json.Packed (docTable)
 import Ecluse.Core.Registry.Json.Shape (Trees (..))
-import Ecluse.Core.Registry.Json.Walk (Step, Steps, Walked (..), pureStep, readJsonWalk, readJsonWalkST)
+import Ecluse.Core.Registry.Json.Walk (Step, Steps, Walked (..), pureStep, readJsonWalk)
 import Ecluse.Core.Registry.JsonStream (StreamResult (..))
 import Ecluse.Core.Registry.Metadata (MetadataError, VersionDoc (..), VersionRead (..))
+import Ecluse.Core.Registry.Metadata.EntryFloor (countingEntries, readFlooredWalk)
+import Ecluse.Core.Registry.Metadata.Fetch.Preparation (PrepareRead (PrepareRead))
 import Ecluse.Core.Registry.Metadata.Fetch.Types (DocumentWalk, EcosystemRead (..))
 import Ecluse.Core.Registry.Metadata.Projection (streamError)
 import Ecluse.Core.Registry.Npm.Document (PackedPackument)
 import Ecluse.Core.Registry.Npm.Reader (PackumentRead (..), npmWalk, releaseUniqueFields)
 import Ecluse.Core.Registry.Npm.Request (MetadataForm (Full), metadataRequestUnder, npmArtifactHosts, packageUrl)
-import Ecluse.Core.Registry.Npm.StreamingProjection (PackedRead, TreeRead, emptyPackedRead, emptyTreeRead, finishPacked, finishTree, keepsPackedRelease, keepsTreeRelease, packedStep, treeStep)
+import Ecluse.Core.Registry.Npm.StreamingProjection (PackedRead, TreeRead, emptyPackedRead, emptyTreeRead, finishPacked, finishTree, keepsPackedRelease, keepsTreeRelease, keptEntries, packedStep, retainedEntries, treeStep)
 import Ecluse.Core.Registry.Npm.VersionWriter (VersionWriter, newVersionWriter)
+import Ecluse.Core.Registry.Origin (OriginClient (ocChargeFullReadWorkspace))
 import Ecluse.Core.Registry.ServedDocument (objectField)
 import Ecluse.Core.Security (AllowedHostPorts, Limits, ecosystemArtifactAuthorities, maxNestingDepth)
 import Ecluse.Core.Server.Admission.Types (ChargeFactors (..))
 import Ecluse.Core.Version (Version, renderVersion)
 
--- | What the read driver needs to read a packument: the request, both walks, and their finishes.
-npmRead :: EcosystemRead
-npmRead =
+-- | Bind the selected origin's full-read workspace, which pays the per-entry floor.
+prepareNpmRead :: PrepareRead
+prepareNpmRead = PrepareRead (pure . Right . npmReadWith . ocChargeFullReadWorkspace)
+
+-- | What the read driver needs to read a packument, with the full read's absolute workspace payer.
+npmReadWith :: (Int -> IO ()) -> EcosystemRead
+npmReadWith pay =
     EcosystemRead
         { erRequest = \base token -> metadataRequestUnder base token Full
         , erUniqueFields = releaseUniqueFields
-        , erWalkFull = readNpmFull
+        , erWalkFull = readNpmFull pay
         , erFinishFull = finishNpmFull
+        , erRetainedEntries = \(Walked _ acc) -> keptEntries acc
         , erWalkSelected = \limits name version -> readNpmPackument limits name (OneRelease (renderVersion version))
         , erFinishSelected = finishNpmVersion
         }
@@ -84,10 +94,10 @@ npmPackumentWalk limits name mode table = npmWalk Trees (maxNestingDepth limits)
 -- | What a full read finishes with: the read's table, and its typed facts and packed releases.
 type NpmFullRead = Walked PackedRead
 
-readNpmFull :: Limits -> PackageName -> Text -> DocumentWalk NpmFullRead
-readNpmFull limits name base bound table0 readChunk = do
+readNpmFull :: (Int -> IO ()) -> Limits -> PackageName -> Text -> DocumentWalk NpmFullRead
+readNpmFull pay limits name base bound table0 readChunk = do
     (table, writer) <- stToIO (npmFullTable base name table0)
-    readJsonWalkST stToIO bound (npmFullWalk writer limits name table) readChunk
+    readFlooredWalk pay (cfFullReadPermille npmChargeFactors) bound (\owed -> npmFullWalk owed writer limits name table) readChunk
 
 -- | Seed the source author pointer and observe policy facts beside the packed writer.
 npmFullTable :: Text -> PackageName -> InternTable -> ST st (InternTable, VersionWriter st)
@@ -96,9 +106,11 @@ npmFullTable base name table0 = (seeded,) <$> newVersionWriter (Just (authorKey,
     Interned authorKey withKey = internName (decodedName "author") table0
     Interned pointer seeded = internName (decodedName (authorPointer base name)) withKey
 
--- | Pack retained releases and collect direct typed facts over the caller's table.
-npmFullWalk :: VersionWriter st -> Limits -> PackageName -> InternTable -> Cursor -> ST st (Steps (ST st) NpmFullRead)
-npmFullWalk writer limits name table = npmWalk writer (maxNestingDepth limits) WholePackument (packedStep writer limits name) keepsPackedRelease table emptyPackedRead
+-- | Pack retained releases and collect direct typed facts over the caller's table, publishing the floors its retained entries owe.
+npmFullWalk :: PrimVar st Int -> VersionWriter st -> Limits -> PackageName -> InternTable -> Cursor -> ST st (Steps (ST st) NpmFullRead)
+npmFullWalk owed writer limits name table = npmWalk writer (maxNestingDepth limits) WholePackument step keepsPackedRelease table emptyPackedRead
+  where
+    step acc field next = packedStep writer limits name acc field (countingEntries owed retainedEntries next)
 {-# INLINE npmFullWalk #-}
 
 finishNpmFull :: Limits -> PackageName -> Text -> StreamResult NpmFullRead -> Either MetadataError (PackageInfo, CachedDoc)
@@ -109,7 +121,7 @@ finishNpmFull limits name base streamed =
 projectNpmPacked :: Limits -> PackageName -> Text -> StreamResult NpmFullRead -> Either MetadataError (PackageInfo, PackedPackument)
 projectNpmPacked limits name base streamed = do
     Walked table acc <- first (streamError limits) (streamValue streamed)
-    finishPacked limits name (authorPointer base name) (docTable (tableTexts table)) acc
+    finishPacked name (authorPointer base name) (docTable (tableTexts table)) acc
 
 finishNpmVersion :: Limits -> PackageName -> Text -> Version -> StreamResult (Walked TreeRead) -> Either MetadataError VersionRead
 finishNpmVersion limits name base version streamed = do
@@ -121,7 +133,7 @@ finishNpmVersion limits name base version streamed = do
 projectNpmStream :: Limits -> PackageName -> Text -> StreamResult (Walked TreeRead) -> Either MetadataError (PackageInfo, Value)
 projectNpmStream limits name base streamed = do
     Walked _ acc <- first (streamError limits) (streamValue streamed)
-    finishTree limits name (authorPointer base name) acc
+    finishTree name (authorPointer base name) acc
 
 -- | Pair one release with its compact source object and the same document's latest tag.
 selectNpmRead :: Version -> Int -> (PackageInfo, Value) -> VersionRead

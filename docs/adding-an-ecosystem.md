@@ -88,7 +88,8 @@ Keep native refusal bodies, denial wording, media types, and route descriptions 
 ## 4. Supply reads, retained documents, and assembly
 
 Supply a `PrepareRead` through `AdapterMetadata.metadataRead`.
-Static adapters use `staticRead`. Discovery-based adapters prepare the pure `EcosystemRead` under the selected origin's existing authority.
+A full listing read that keeps many small entries binds the origin's `ocChargeFullReadWorkspace` in a `PrepareRead` and pays the per-entry floor through `readFlooredWalk`, as `prepareNpmRead` and `preparePyPIRead` do. `staticRead` binds no workspace, so use it only for a read with no such floor.
+Discovery-based adapters prepare the pure `EcosystemRead` under the selected origin's existing authority.
 Prepare private reads after caller authentication and service reads after credential minting. Do not perform discovery at boot.
 Declare `AdmittedIndexedArtifactLocation` when private artifact selection requires discovery or a native workspace reservation.
 It requires metadata admission before the lookup. `IndexedArtifactLocation` retains static private lookups outside admission unless managed mirror state requires it.

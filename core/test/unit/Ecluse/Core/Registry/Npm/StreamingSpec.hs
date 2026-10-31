@@ -23,7 +23,7 @@ import Ecluse.Core.Registry.JsonStream (StreamResult (..), nestingLimit)
 import Ecluse.Core.Registry.Metadata (VersionDoc (vdRaw), VersionRead (vrVersion))
 import Ecluse.Core.Registry.Npm.Adapter (npmAdapter)
 import Ecluse.Core.Registry.Npm.Filter (assembleMergedPackument)
-import Ecluse.Core.Registry.Npm.Metadata (npmRead, selectNpmVersionDoc)
+import Ecluse.Core.Registry.Npm.Metadata (selectNpmVersionDoc)
 import Ecluse.Core.Registry.Npm.Publish (npmPublishDocument)
 import Ecluse.Core.Registry.Npm.Streaming
 import Ecluse.Core.Registry.Npm.StreamingProjection (emptyTreeRead, finishTree, treeStep)
@@ -40,7 +40,7 @@ import Ecluse.Test.Json (fieldAt, withKeys)
 import Ecluse.Test.Package (unscopedNpm, validSha1, validSha512Sri)
 import Ecluse.Test.Registry.JsonStream (byteChunks, parseJsonChunks, sameTexts, sharesKey, sharesString, sliceChunks, walkJsonChunks)
 import Ecluse.Test.Registry.Metadata.Rendering (renderingOf)
-import Ecluse.Test.Registry.Npm.Metadata (projectNpmManifest, projectNpmVersion)
+import Ecluse.Test.Registry.Npm.Metadata (npmRead, projectNpmManifest, projectNpmVersion)
 import Ecluse.Test.Registry.Npm.Project (parsePackageInfoFromValue, parseVersionBytes)
 import Ecluse.Test.Registry.Npm.Streaming (NpmRead (..), npmFields)
 import Ecluse.Test.Registry.Publish (checkedNpmUpload)
@@ -204,7 +204,7 @@ spec = describe "npmFields" $ do
                     (byteChunks body)
                 )
         projected <- expectRight (streamValue streamed)
-        (info, _) <- expectRight (finishTree defaultLimits name "See source" projected)
+        (info, _) <- expectRight (finishTree name "See source" projected)
         Map.keys (infoVersions info) `shouldBe` ["1.0.0"]
 
     it "retains no sibling release objects on selected reads" $ do
@@ -218,7 +218,7 @@ spec = describe "npmFields" $ do
                     [body]
                 )
         projected <- expectRight (streamValue streamed)
-        (_, compact) <- expectRight (finishTree defaultLimits name "See source" projected)
+        (_, compact) <- expectRight (finishTree name "See source" projected)
         fieldAt "versions" compact `shouldBe` Just (Object mempty)
 
     forM_

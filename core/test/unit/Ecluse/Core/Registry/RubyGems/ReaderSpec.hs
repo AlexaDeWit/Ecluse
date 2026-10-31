@@ -68,8 +68,10 @@ spec = describe "RubyGems complete named reads" $ do
             Map.keys (infoVersions (gemReadInfo unrelated)) `shouldBe` ["2.0"]
     it "counts trailing unselected artifacts and complete source bytes" $ do
         let bytes = "---\n" <> row "1.0" "2026-01-01T00:00:00Z" <> "\n" <> row "2.0" "2026-01-01T00:00:00Z"
-        parse defaultLimits{maxArtifactCount = 1} (SelectedRead (mkVersion RubyGems "1.0")) [bytes] `shouldReturn` Left (TooManyArtifacts 2 1)
+            platforms = "---\n" <> row "1.0" "2026-01-01T00:00:00Z" <> "\n" <> row "1.0-java" "2026-01-01T00:00:00Z"
+        parse defaultLimits{maxVersionCount = 1} (SelectedRead (mkVersion RubyGems "1.0")) [bytes] `shouldReturn` Left (TooManyVersions 2 1)
         parse defaultLimits{maxVersionCount = 1} FullRead [bytes] `shouldReturn` Left (TooManyVersions 2 1)
+        parse defaultLimits{maxVersionCount = 1} FullRead [platforms] `shouldReturn` Left (TooManyVersions 2 1)
         parse defaultLimits{maxMetadataBytes = BS.length bytes - 1} FullRead [bytes] `shouldReturn` Left (BodyTooLarge (MetadataBodyLimit (BS.length bytes - 1)))
     it "keeps selected workspace independent of eightfold distinct dropped history" $ do
         let target = row "1.0" "2026-01-01T00:00:00Z"

@@ -10,6 +10,7 @@ import Ecluse.Core.Registry (UrlFormationError (UnparseableUrl))
 import Ecluse.Core.Registry.CachedDocument (CachedDoc, rubyGemsCached)
 import Ecluse.Core.Registry.JsonStream (StreamResult (..))
 import Ecluse.Core.Registry.Metadata (MetadataError)
+import Ecluse.Core.Registry.Metadata.EntryFloor (noRetainedEntries)
 import Ecluse.Core.Registry.Metadata.Fetch.Preparation (PrepareRead (..), bindToOrigin)
 import Ecluse.Core.Registry.Metadata.Fetch.Types (EcosystemRead (..))
 import Ecluse.Core.Registry.Metadata.Projection (finishSelectedVersion, streamError)
@@ -42,6 +43,7 @@ gemReadWith fullPay selectedPay sourceBase =
             , erUniqueFields = []
             , erWalkFull = \limits name _ -> readGemInfoCharged fullPay limits name sourceBase FullRead
             , erFinishFull = finishGemFull
+            , erRetainedEntries = const noRetainedEntries
             , erWalkSelected = \limits name version -> readGemInfoCharged selectedPay limits name sourceBase (SelectedRead version)
             , erFinishSelected = \limits _ _ -> finishSelectedVersion gemReadInfo (\version result -> fst rubyGemsCached <$> selectGemVersion version (gemReadDocument result)) limits
             }

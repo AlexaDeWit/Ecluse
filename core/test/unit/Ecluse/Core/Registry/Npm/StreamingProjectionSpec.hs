@@ -116,7 +116,7 @@ publishedAt value = (\(info, _) -> Map.lookup "1.0.0" (infoVersions info) >>= pk
 project :: [NpmField] -> Either Text (PackageInfo, Value)
 project fields = do
     collected <- first show (foldM (treeStep defaultLimits name) emptyTreeRead fields)
-    first show (finishTree defaultLimits name "See source" collected)
+    first show (finishTree name "See source" collected)
   where
     name = unscopedNpm "thing"
 

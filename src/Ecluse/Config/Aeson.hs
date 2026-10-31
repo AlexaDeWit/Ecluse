@@ -164,7 +164,6 @@ limitsDecoder =
     LimitsSettings
         <$> optionalKey "maxResponseBytes" parsePositiveInt
         <*> requiredKey "maxVersionCount" parsePositiveInt
-        <*> requiredKey "maxArtifactCount" parsePositiveInt
         <*> requiredKey "maxNestingDepth" parsePositiveInt
         <*> requiredKey "maxAdvisoryDatabaseBytes" parsePositiveInt
         <*> optionalKey "maxRequestBytes" parsePositiveInt

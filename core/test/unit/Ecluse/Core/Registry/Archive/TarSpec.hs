@@ -22,9 +22,9 @@ spec :: Spec
 spec = describe "scanTar" $ do
     it "accepts exact entry, path-depth, and inflated-byte ceilings" $ do
         bytes <- BSL.toStrict <$> tarBytes [("example-1/data", payload)]
-        let limits = defaultLimits{maxArtifactCount = 1, maxNestingDepth = 2, maxMirrorArtifactBytes = BS.length bytes}
+        let limits = defaultLimits{archiveEntryCeiling = 1, maxNestingDepth = 2, maxMirrorArtifactBytes = BS.length bytes}
         scan limits [bytes] `shouldReturn` Right selected
-        scan limits{maxArtifactCount = 0} [bytes] `shouldReturn` Left (ParseError "archive entry count exceeds its bound")
+        scan limits{archiveEntryCeiling = 0} [bytes] `shouldReturn` Left (ParseError "archive entry count exceeds its bound")
         scan limits{maxNestingDepth = 1} [bytes] `shouldReturn` Left (ParseError "tar path depth exceeds its bound")
         scan limits{maxMirrorArtifactBytes = BS.length bytes - 1} [bytes] `shouldReturn` Left (ParseError "archive inflated bytes exceed their bound")
     it "bounds the path inventory independently of selected content and payload bytes" $ do

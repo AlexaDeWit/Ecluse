@@ -25,7 +25,7 @@ import Ecluse.Core.Registry.Cargo.Document (cargoRecords)
 import Ecluse.Core.Registry.Cargo.Reader (CargoIndexResult (..), CargoRead (..), readCargoIndexCharged)
 import Ecluse.Core.Registry.Cargo.Serving (serialiseCargoDocument)
 import Ecluse.Core.Registry.JsonStream (StreamResult (..))
-import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), LimitError (BodyTooLarge, TooDeeplyNested, TooManyArtifacts, TooManyVersions), Limits (maxArtifactCount, maxMetadataBytes, maxNestingDepth, maxVersionCount), defaultLimits)
+import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), LimitError (BodyTooLarge, TooDeeplyNested, TooManyVersions), Limits (maxMetadataBytes, maxNestingDepth, maxVersionCount), defaultLimits)
 import Ecluse.Core.Server.MemoryModel (bufferedChunkCharge, decodedDocumentCharge)
 import Ecluse.Core.Version (renderVersion)
 import Ecluse.Server.Admission.Support (ChargeRefused (..), refuseCharge)
@@ -78,10 +78,8 @@ spec = describe "readCargoIndex" $ do
         let limits = defaultLimits{maxVersionCount = 1}
         result <- readCargoChunks limits (SelectedRead (cargoTestVersion "1.0.0")) [row "1.0.0" <> "\n{broken}"]
         result `shouldBe` Left (TooManyVersions 2 1)
-    it "enforces the artifact and complete source byte limits" $ do
+    it "enforces the complete source byte limit" $ do
         let body = row "1.0.0" <> "\n" <> row "2.0.0"
-        artifacts <- readCargoChunks defaultLimits{maxArtifactCount = 1} FullRead [body]
-        artifacts `shouldBe` Left (TooManyArtifacts 2 1)
         bytes <- readCargoChunks defaultLimits{maxMetadataBytes = BS.length body - 1} FullRead [body]
         bytes `shouldBe` Left (BodyTooLarge (MetadataBodyLimit (BS.length body - 1)))
     it "does not intercept asynchronous cancellation while waiting for the source" $ do
@@ -179,7 +177,7 @@ differentialSpec :: Spec
 differentialSpec = modifyMaxSuccess (const 2000) $
     it "matches declared native meanings and exact limits across generated full and selected reads" $
         hedgehog $ do
-            boundary <- forAll (Gen.element [BodyAt, BodyBelow, VersionsAt, VersionsBelow, ArtifactsAt, ArtifactsBelow, DepthAt, DepthBelow])
+            boundary <- forAll (Gen.element [BodyAt, BodyBelow, VersionsAt, VersionsBelow, DepthAt, DepthBelow])
             generated <- forAll (genCargoIndex (if boundary `elem` [DepthAt, DepthBelow] then SoundRows else MixedRows))
             chunks <- forAll (JsonBytes.genChunks (generatedBody generated))
             cover 20 "multiple nonempty chunks" (length (filter (not . BS.null) chunks) > 1)
@@ -202,7 +200,6 @@ differentialSpec = modifyMaxSuccess (const 2000) $
             cover 10 "nested additive fields" (any (\case Object fields -> KeyMap.member "native-extra" fields; _ -> False) values)
             cover 3 "body refusal" (boundary == BodyBelow && isJust refusal)
             cover 3 "version refusal" (boundary == VersionsBelow && isJust refusal)
-            cover 3 "artifact refusal" (boundary == ArtifactsBelow && isJust refusal)
             cover 3 "nesting refusal" (boundary == DepthBelow && isJust refusal)
             for_ rows $ \(_, nativeRow) -> for_ (nativeExpected nativeRow) $ \(value, _, _, _) -> do
                 parsed <- evalEither (parseJsonChunks (MetadataBodyLimit (BS.length (nativeBytes nativeRow))) (J.value :: J.Parser Value) (\held item -> Right (item : held)) [] [nativeBytes nativeRow])
@@ -217,7 +214,7 @@ differentialSpec = modifyMaxSuccess (const 2000) $
                         result <- evalEither (streamValue streamed)
                         matchesGenerated generated mode result
 
-data NativeBoundary = BodyAt | BodyBelow | VersionsAt | VersionsBelow | ArtifactsAt | ArtifactsBelow | DepthAt | DepthBelow
+data NativeBoundary = BodyAt | BodyBelow | VersionsAt | VersionsBelow | DepthAt | DepthBelow
     deriving stock (Eq, Show)
 
 generatedLimits :: Int -> NativeBoundary -> GeneratedIndex -> (Limits, Maybe LimitError)
@@ -226,14 +223,11 @@ generatedLimits depth boundary generated = case boundary of
     BodyBelow -> (base{maxMetadataBytes = short bytes}, BodyTooLarge (MetadataBodyLimit (short bytes)) <$ guard (bytes > 0))
     VersionsAt -> (base{maxVersionCount = length rows}, Nothing)
     VersionsBelow -> (base{maxVersionCount = short (length rows)}, TooManyVersions (length rows) (short (length rows)) <$ guard (not (null rows)))
-    ArtifactsAt -> (base{maxArtifactCount = artifacts}, Nothing)
-    ArtifactsBelow -> (base{maxArtifactCount = short artifacts}, TooManyArtifacts artifacts (short artifacts) <$ guard (artifacts > 0))
     DepthAt -> (base{maxNestingDepth = depth}, Nothing)
     DepthBelow -> (base{maxNestingDepth = short depth}, TooDeeplyNested (short depth) <$ guard (depth > 0))
   where
     rows = physicalRows generated
     bytes = BS.length (generatedBody generated)
-    artifacts = length [() | (_, nativeRow) <- rows, isJust (nativeExpected nativeRow)]
     short count = max 0 (count - 1)
     base = defaultLimits{maxMetadataBytes = bytes + 1}
 

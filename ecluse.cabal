@@ -354,6 +354,7 @@ library ecluse-core
     Ecluse.Core.Registry.RubyGems.Archive
     Ecluse.Core.Registry.RubyGems.Archive.Metadata
     Ecluse.Core.Registry.RubyGems.Archive.Yaml
+    Ecluse.Core.Registry.Metadata.EntryFloor
     Ecluse.Core.Registry.Metadata.RecordStream
     Ecluse.Core.Registry.RubyGems.CompactSpec
     Ecluse.Core.Registry.RubyGems.Marshal
@@ -1020,6 +1021,7 @@ library ecluse-test-support
     , katip             ^>=0.8.8
     , mtl               ^>=2.3
     , network           ^>=3.2
+    , primitive         ^>=0.9
     , process           ^>=1.6
     , ram               ^>=0.22
     , resourcet         ^>=1.3
@@ -1370,6 +1372,7 @@ test-suite ecluse-core-unit
     Ecluse.Core.Registry.RubyGems.Archive.MetadataSpec
     Ecluse.Core.Registry.RubyGems.Archive.YamlSpec
     Ecluse.Core.Registry.RubyGems.ArchiveSpec
+    Ecluse.Core.Registry.Metadata.EntryFloorSpec
     Ecluse.Core.Registry.Metadata.RecordStreamSpec
     Ecluse.Core.Registry.RubyGems.CompactSpecSpec
     Ecluse.Core.Registry.RubyGems.DocumentSpec
@@ -2005,6 +2008,7 @@ test-suite ecluse-residency
     Ecluse.Core.Registry.JsonStreamResidencySpec
     Ecluse.Core.Server.Response.SummaryResidencySpec
     Ecluse.Core.Registry.MetadataResidencySpec
+    Ecluse.Core.Registry.Metadata.EntryFloorResidencySpec
     Ecluse.Core.Registry.Npm.ReaderResidencySpec
     Ecluse.Core.Registry.PyPI.ReaderResidencySpec
     Ecluse.Core.Registry.Cargo.ReaderResidencySpec

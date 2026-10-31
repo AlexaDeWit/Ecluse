@@ -52,12 +52,12 @@ import Ecluse.Core.Registry (
 import Ecluse.Core.Registry.CachedDocument (npmCached)
 import Ecluse.Core.Registry.JsonStream (isJsonSpace)
 import Ecluse.Core.Registry.Metadata (VersionDoc (vdRaw))
-import Ecluse.Core.Registry.Metadata.Fetch.Preparation (presentedRead, staticRead)
+import Ecluse.Core.Registry.Metadata.Fetch.Preparation (presentedRead)
 import Ecluse.Core.Registry.MirrorUpload
 import Ecluse.Core.Registry.MirrorUpload.Internal (checkedMirrorUploadData)
 import Ecluse.Core.Registry.Npm.Credential (npmCredential)
 import Ecluse.Core.Registry.Npm.DependencySource (externalDependencyOf, renderExternalDependency)
-import Ecluse.Core.Registry.Npm.Metadata (npmChargeFactors, npmRead)
+import Ecluse.Core.Registry.Npm.Metadata (npmChargeFactors, prepareNpmRead)
 import Ecluse.Core.Registry.Npm.Project qualified as Project
 import Ecluse.Core.Registry.Npm.Request (MetadataForm (Abbreviated), jsonPutRequest, metadataRequest, packageUrl)
 import Ecluse.Core.Registry.Npm.VersionListReader (npmVersionListWalk)
@@ -102,7 +102,7 @@ npmPublishCodec presentation =
         , pcPrepareUpload = \_ _ _ inventory metadata file bytes -> pure (prepareNpmUpload inventory metadata file bytes)
         , pcMirrorCompanion = Nothing
         , pcNativeComplete = nativeNpmComplete
-        , pcTargetRead = presentedRead readAs (staticRead npmRead)
+        , pcTargetRead = presentedRead readAs prepareNpmRead
         , pcTargetReadPermille = cfFullReadPermille npmChargeFactors
         , pcProbeRequest = \targetUrl credential name -> presentedRequest readAs credential (\anonymous -> metadataRequest targetUrl anonymous Abbreviated name)
         , pcVersionListWalk = Just (\limits -> npmVersionListWalk limits (collectVersionList limits) emptyVersionList)

@@ -11,7 +11,7 @@ import Ecluse.Core.Package (PackageInfo (infoVersions))
 import Ecluse.Core.Registry (ParseError (ParseError))
 import Ecluse.Core.Registry.Metadata (Manifest (manifestInfo), MetadataError (MetadataBoundExceeded, MetadataNameMismatch, MetadataUndecodable))
 import Ecluse.Core.Registry.WireSupport (Projection (NameMismatch, Projected))
-import Ecluse.Core.Security (LimitError (TooDeeplyNested, TooManyArtifacts, TooManyVersions), Limits (maxArtifactCount, maxNestingDepth, maxVersionCount), defaultLimits)
+import Ecluse.Core.Security (LimitError (TooDeeplyNested, TooManyVersions), Limits (maxNestingDepth, maxVersionCount), defaultLimits)
 import Ecluse.Test.Package (sampleManifest, thingName, v1_0_0)
 import Ecluse.Test.Registry.Metadata.Projection (projectMetadata)
 import Test.Hspec
@@ -36,13 +36,9 @@ spec = do
             projectMetadata (const (Right (NameMismatch "Other.Project"))) noEntries "{}"
                 `shouldBe` Left (MetadataNameMismatch "Other.Project")
 
-        it "checks version count before artifact count with exact counts" $
+        it "checks version count with exact counts" $
             projectMetadata (const (Right (Projected oneVersion))) noEntries "{}"
                 `shouldBe` Left (MetadataBoundExceeded (TooManyVersions 1 0))
-
-        it "checks artifact count after an accepted version count" $
-            projectMetadata (const (Right (Projected oneVersion))) defaultLimits{maxArtifactCount = 0} "{}"
-                `shouldBe` Left (MetadataBoundExceeded (TooManyArtifacts 1 0))
 
         it "counts projected entries rather than raw fields" $
             projectMetadata (const (Right (Projected emptyInfo))) noEntries "{\"raw\":[1,2,3]}"
@@ -55,7 +51,7 @@ spec = do
                 `shouldBe` Right (oneVersion, raw)
 
 noEntries :: Limits
-noEntries = defaultLimits{maxVersionCount = 0, maxArtifactCount = 0}
+noEntries = defaultLimits{maxVersionCount = 0}
 
 oneVersion :: PackageInfo
 oneVersion = manifestInfo (sampleManifest thingName [v1_0_0])
