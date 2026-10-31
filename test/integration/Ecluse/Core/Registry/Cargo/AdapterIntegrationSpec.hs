@@ -83,10 +83,11 @@ discoverySpec = describe "native sparse discovery" $ do
     native "008" "checks the edge credential before trusted discovery or data reads" $
         withCargoProxy defaultReply defaultReply $ \proxy -> do
             let secured = proxyWith proxy (\deps -> deps{pdInboundToken = Just (mkSecret "edge")})
-            for_ ["/cargo/config.json", indexPath, archivePath] $ \path -> do
-                response <- getPath path secured
-                simpleStatus response `shouldBe` status401
-                lookup "WWW-Authenticate" (simpleHeaders response) `shouldBe` Just "Cargo"
+            for_ ["/cargo/config.json", indexPath, archivePath] $ \path ->
+                for_ [[], [("Authorization", "wrong-edge")]] $ \headers -> do
+                    response <- getPathWith headers path secured
+                    simpleStatus response `shouldBe` status401
+                    lookup "WWW-Authenticate" (simpleHeaders response) `shouldBe` Just "Cargo"
             publicCalls proxy `shouldReturn` []
             privateCalls proxy `shouldReturn` []
     native "011" "answers discovery locally with authentication required when a private upstream is configured" $
