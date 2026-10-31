@@ -24,6 +24,7 @@ import Ecluse.Core.Registry.Cargo.Reader (CargoIndexResult (..), CargoRead (..),
 import Ecluse.Core.Registry.Cargo.Request (cargoIndexRequest)
 import Ecluse.Core.Registry.JsonStream (StreamResult (..))
 import Ecluse.Core.Registry.Metadata (MetadataError)
+import Ecluse.Core.Registry.Metadata.EntryFloor (noRetainedEntries)
 import Ecluse.Core.Registry.Metadata.Fetch.Preparation (PrepareRead (..), bindToOrigin, presentedRead)
 import Ecluse.Core.Registry.Metadata.Fetch.Types (EcosystemRead (..))
 import Ecluse.Core.Registry.Metadata.Projection (finishSelectedVersion, streamError)
@@ -60,7 +61,7 @@ cargoReadWith fullPay selectedPay discovery =
             , erUniqueFields = []
             , erWalkFull = \limits name _ -> readCargoIndexCharged fullPay discovery limits name FullRead
             , erFinishFull = \limits _ _ -> finishCargoFull limits
-            , erRetainedEntries = const mempty
+            , erRetainedEntries = const noRetainedEntries
             , erWalkSelected = \limits name version -> readCargoIndexCharged selectedPay discovery limits name (SelectedRead version)
             , erFinishSelected = \limits _ _ -> finishSelectedVersion cargoIndexInfo (\version result -> selectCargoVersionDoc version (cargoIndexDocument result)) limits
             }

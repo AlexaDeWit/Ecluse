@@ -28,6 +28,7 @@ import Ecluse.Core.Registry.CachedDocument (CachedDoc, cargoCached, pypiPacked, 
 import Ecluse.Core.Registry.Cargo.Document (cargoDocument, cargoRecords)
 import Ecluse.Core.Registry.Cargo.Mirror (cargoMirrorDocuments, cargoStateFormat)
 import Ecluse.Core.Registry.Metadata (Manifest (..), VersionDoc (..))
+import Ecluse.Core.Registry.Metadata.EntryFloor (noRetainedEntries)
 import Ecluse.Core.Registry.MirrorUpload
 import Ecluse.Core.Registry.PyPI.Document (simpleFiles)
 import Ecluse.Core.Registry.PyPI.Mirror (pypiMirrorDocuments, pypiStateFormat)
@@ -63,7 +64,7 @@ spec = do
             fmap (fmap cargoRecords . (snd cargoCached <=< vdRaw)) restored `shouldBe` Just (fmap cargoRecords (vdRaw original >>= snd cargoCached))
             let reopenedRevision = StateRevision target (pkgName (vdDetails original)) "reopened"
                 details = vdDetails current
-                manifest = Manifest (PackageInfo (pkgName details) (Map.singleton "1.0.0" details) mempty []) (fromMaybe (fst cargoCached (cargoDocument [])) (vdRaw current)) 0 mempty (digestOf "target")
+                manifest = Manifest (PackageInfo (pkgName details) (Map.singleton "1.0.0" details) mempty []) (fromMaybe (fst cargoCached (cargoDocument [])) (vdRaw current)) 0 noRetainedEntries (digestOf "target")
             (_, managed, incomplete) <- expectRight (mirrorProjectViews cargoMirrorDocuments reopenedRevision reopened (Just manifest))
             Map.null incomplete `shouldBe` True
             let rows = concat [cargoRecords source | value <- maybeToList managed, source <- maybeToList (snd cargoCached (manifestRaw value))]
@@ -129,7 +130,7 @@ spec = do
         it "keeps restored listing contributions packed and binds their validator to revision" $ do
             inventory <- mirrorSample [1, 2] False "https://private.test/" "source"
             record <- expectRight (extendProjectRecord defaultLimits target inventory Nothing)
-            let private = Manifest (info inventory) (raw inventory) 1024 mempty (digestOf "private")
+            let private = Manifest (info inventory) (raw inventory) 1024 noRetainedEntries (digestOf "private")
             (_, initialManifest, incompleteVersions) <- expectRight (mirrorProjectViews pypiMirrorDocuments revision record (Just private))
             (_, updatedManifest, _) <- expectRight (mirrorProjectViews pypiMirrorDocuments (rev "new") record (Just private))
             incompleteVersions `shouldSatisfy` Map.null
@@ -247,7 +248,7 @@ withTicket action = do
 
 -- The target holds exactly the retained files, so every recorded version is complete.
 retainedManifest :: ProjectMirrorRecord -> CachedDoc -> Manifest
-retainedManifest record listing = Manifest (PackageInfo (recordPackage record) (fmap retained (recordVersions record)) Map.empty []) listing 0 mempty (digestOf "target")
+retainedManifest record listing = Manifest (PackageInfo (recordPackage record) (fmap retained (recordVersions record)) Map.empty []) listing 0 noRetainedEntries (digestOf "target")
   where
     retained version = let fragment :| _ = versionFragments version in fragmentDetails fragment
 

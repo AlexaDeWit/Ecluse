@@ -64,6 +64,7 @@ import Ecluse.Core.Registry.Cargo.Serving (assembleCargoDocument, serialiseCargo
 import Ecluse.Core.Registry.Json.Walk (readJsonWalk)
 import Ecluse.Core.Registry.JsonStream (StreamResult (..))
 import Ecluse.Core.Registry.Metadata (Manifest (..), MetadataError (MetadataUndecodable), VersionDoc (..), VersionRead (vrBodyBytes, vrVersion))
+import Ecluse.Core.Registry.Metadata.EntryFloor (noRetainedEntries)
 import Ecluse.Core.Registry.Metadata.Fetch (readManifest, readVersion)
 import Ecluse.Core.Registry.Metadata.Fetch.Types (Body, EcosystemRead, ReadTerms (..))
 import Ecluse.Core.Registry.Npm.Adapter (npmAdapter)
@@ -221,7 +222,7 @@ residencyFor = \case
                 , residencyFigures = npmFigures
                 , residencyEntryBelowSource = True
                 , residencyLegacyRead = \limits name -> projectMetadata (parsePackageInfoFromValue name) limits
-                , residencyLegacyHeld = \info raw size digest -> HeldShared (CacheEntry info (fst npmCached raw) size mempty digest)
+                , residencyLegacyHeld = \info raw size digest -> HeldShared (CacheEntry info (fst npmCached raw) size noRetainedEntries digest)
                 , residencyIdentity = \name version -> (,mkVersion Npm (toText version)) <$> either (fail . show) pure (Npm.projectName (toText name))
                 , residencyVersionList = readVersionList
                 }
@@ -537,7 +538,7 @@ prepare shape package = do
         Shared -> do
             (info, document) <- project package bytes
             -- The probe's own size and digest: the read's digest keeps a 4 KiB pinned block the gate omits.
-            let entry = CacheEntry info document (BS.length bytes) mempty (digestOf bytes)
+            let entry = CacheEntry info document (BS.length bytes) noRetainedEntries (digestOf bytes)
             _ <- forceShown entry
             compact <- evaluate (LBS.length (encode (diagnosticDocumentValue document)))
             weight <- evaluate (weighCacheEntry entry)
