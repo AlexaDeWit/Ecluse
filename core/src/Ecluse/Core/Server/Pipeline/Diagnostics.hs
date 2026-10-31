@@ -5,9 +5,8 @@
 {- | Operator diagnostics for metadata failures, dropped entries, and integrity divergence.
 Access-refusal logs contain no upstream body, headers, or credential.
 
-The bad-upstream warnings carry 'pipelineInternalModule' as their @module@ filter key and the other
-payload-bearing lines carry 'pipelineModule', both held stable as values rather than source module
-paths, so an operator's saved filter keeps matching.
+The bad-upstream warnings carry 'pipelineInternalModule' as their @module@ filter key and every
+other line carries 'pipelineModule'.
 -}
 module Ecluse.Core.Server.Pipeline.Diagnostics (
     -- * Metadata-read failures
@@ -58,7 +57,7 @@ import Ecluse.Core.Security (
     authorityLabel,
     bodyLimitBytes,
  )
-import Ecluse.Core.Server.Pipeline.Internal (pipelineInternalModule)
+import Ecluse.Core.Server.Pipeline.Internal (pipelineInternalModule, pipelineModule)
 import Ecluse.Core.Telemetry.Record (MetricsPort (..))
 
 -- | Log once per real fetch, inside the single-flight leader's request context.
@@ -269,8 +268,3 @@ renderFingerprint fp = "{" <> T.intercalate ", " (map renderHash (integrityHashe
 
 renderHash :: (Text, Maybe HashAlg, Text) -> Text
 renderHash (file, alg, body) = file <> " " <> maybe "none" renderHashAlg alg <> ":" <> body
-
--- The @module@ filter key for this module's own lines, held stable as this value rather than
--- the source module path, so an operator's saved filter keeps matching.
-pipelineModule :: Text
-pipelineModule = "Ecluse.Server.Pipeline"

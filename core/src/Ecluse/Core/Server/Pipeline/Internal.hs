@@ -10,7 +10,8 @@ The @module@ field on every line emitted here is 'pipelineInternalModule', a fix
 filter key rather than the source module path.
 -}
 module Ecluse.Core.Server.Pipeline.Internal (
-    -- * The operator log-filter key
+    -- * The operator log-filter keys
+    pipelineModule,
     pipelineInternalModule,
 
     -- * Integrity-floor admission (pure)
@@ -76,6 +77,10 @@ import Ecluse.Core.Server.Response (
 import Ecluse.Core.Telemetry.Metrics qualified as Metric
 import Ecluse.Core.Telemetry.Record (MetricsPort, mpRuleDenial, mpRuleEffectfulFailure)
 import Ecluse.Core.Version (renderVersion)
+
+-- | The @module@ field of the pipeline's own lines, and of any line a request logs whose site names none.
+pipelineModule :: Text
+pipelineModule = "Ecluse.Server.Pipeline"
 
 -- | The @module@ field every line in this family carries, held stable so an operator's saved filter keeps matching.
 pipelineInternalModule :: Text
