@@ -28,6 +28,7 @@ module Ecluse.Test.Package (
     sriSha512Of,
     hexSha1OfLazy,
     sriSha512OfLazy,
+    base64Of,
 
     -- * Canonical digest fixtures
     validSha1,
@@ -160,6 +161,10 @@ sriSha512Of bytes = renderSri "sha512-" (hash bytes :: Digest SHA512)
 hexSha1OfLazy, sriSha512OfLazy :: LByteString -> Text
 hexSha1OfLazy bytes = renderBase Base16 (hashlazy bytes :: Digest SHA1)
 sriSha512OfLazy bytes = renderSri "sha512-" (hashlazy bytes :: Digest SHA512)
+
+-- | Standard base64 of fixture bytes, the encoding of an npm publish attachment's @data@.
+base64Of :: ByteString -> Text
+base64Of = renderBase Base64
 
 renderSri :: (ByteArrayAccess digest) => Text -> digest -> Text
 renderSri prefix digest = prefix <> renderBase Base64 digest
