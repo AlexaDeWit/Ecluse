@@ -11,7 +11,7 @@ import Data.List (dropWhileEnd, lookup)
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Data.Time (UTCTime (UTCTime), fromGregorian)
-import Network.HTTP.Types (Status, methodHead, status200, status304, status403, status404, status503)
+import Network.HTTP.Types (Status, methodGet, methodHead, status200, status304, status403, status404, status503)
 import Network.Wai (Application, defaultRequest, pathInfo, rawPathInfo, requestHeaders, responseLBS)
 import Network.Wai.Test (SResponse (simpleBody, simpleHeaders, simpleStatus))
 import Test.Hspec
@@ -79,7 +79,7 @@ pypiReads = describe "managed PyPI mirror reads" $ do
         -- The store answers a read that names its revision as unchanged, as the production store does,
         -- so the second read serves the record the first one retained.
         stateReads <- newIORef []
-        present <- mirrorViewWith pypiMirrorDocuments target $ \_ held -> do
+        present <- mirrorViewWith pypiStateFormat pypiMirrorDocuments target $ \_ held -> do
             modifyIORef' stateReads (<> [held])
             pure $ Right $ case held of
                 Just seen | seen == revision -> StateUnchanged revision
@@ -377,27 +377,28 @@ newFilePaths = [path, path <> ".metadata"]
 cargoReads :: Spec
 cargoReads = describe "managed Cargo mirror reads" $ do
     it (caseLabel "integration/mirror-view/native-019" "restores retained Cargo rows in original index order on the merged listing during public outage") $ do
-        let name = mkPackageName Cargo Nothing "thing"
-            release = Cargo.minimalCargoRelease "thing"
-            original version = Cargo.cargoIndexRecord (release version)
-            crateTarget = stateTarget "https://private.test/cargo"
-        -- A backport recorded after 1.10.0. The index order differs from version-text order, its
-        -- reverse, semver order and the private origin's order.
-        record <- cargoMirrorRecord crateTarget name (Cargo.releaseArchive (release "1.9.0")) [(0, original "1.9.0"), (1, original "1.10.0"), (2, original "1.9.1")]
-        view <- testViewAt cargoMirrorDocuments crateTarget (pure (Right (StateLoaded (StateRevision crateTarget name "complete") record)))
+        view <- recordedCrateView
         adapter <- requiredAdapter Cargo
         withMountProxy Cargo adapter (\deps -> deps{pdEgressUrl = Right . loopbackRegistryUrl}) view (crateIndex (map republished [original "1.9.1", original "1.10.0", original "1.9.0"])) unavailable $ \app -> do
             response <- getPath "/cargo/th/in/thing" app
             simpleStatus response `shouldBe` status200
             rows <- traverse (expectRight . Reference.indexValue) (Reference.referenceIndex (toStrict (simpleBody response)))
             map Object rows `shouldBe` [original "1.9.0", original "1.10.0", original "1.9.1"]
+    for_ [("absent-public", native status404 [], status404), ("unavailable-public", unavailable, status503)] $ \(identifier, public, expected) ->
+        it (caseLabel ("integration/mirror-view/native-023/" <> identifier) "answers a recorded crate 404 only when both origins answer 404 and no recorded version survives") $ do
+            view <- recordedCrateView
+            adapter <- requiredAdapter Cargo
+            withMountProxy Cargo adapter (\deps -> deps{pdEgressUrl = Right . loopbackRegistryUrl}) view crateDiscovery public $
+                recordedListingAnswers expected "/cargo/th/in/thing"
   where
     name = mkPackageName Cargo Nothing "thing"
     release = Cargo.minimalCargoRelease "thing"
     original version = Cargo.cargoIndexRecord (release version)
     crateTarget = stateTarget "https://private.test/cargo"
+    -- A backport recorded after 1.10.0. The index order differs from version-text order, its
+    -- reverse, semver order and the private origin's order.
     recordedCrateView = do
-        record <- cargoMirrorRecord crateTarget name (Cargo.releaseArchive (release "1.9.0")) [(0, original "1.9.0"), (1, original "1.10.0")]
+        record <- cargoMirrorRecord crateTarget name (Cargo.releaseArchive (release "1.9.0")) [(0, original "1.9.0"), (1, original "1.10.0"), (2, original "1.9.1")]
         testViewAt cargoStateFormat cargoMirrorDocuments crateTarget (pure (Right (StateLoaded (StateRevision crateTarget name "complete") record)))
     republished = \case
         Object fields -> Object (KeyMap.insert "pubtime" (String "2026-10-01T00:00:00Z") fields)

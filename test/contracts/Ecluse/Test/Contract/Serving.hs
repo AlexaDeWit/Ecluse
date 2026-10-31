@@ -112,7 +112,8 @@ servingContract provider driver = describe "shared serving contract" $ do
     contractExample "default-denial" "denies public versions by default, and answers 404 for a listing with nothing admitted beside any private origin" $
         -- A private origin that holds nothing, one that answers 404, and none at all.
         for_ [Nothing, Just (FaultStatus 404), Just FaultUnconfigured] $ \private ->
-            withFaultedServing driver (ServingFaults private Nothing) [] [] [old] $ \session -> do
+            withOrigins driver (ServingFaults private Nothing) [] [old] $ \proxy -> do
+                session <- proxy (servingSetup [])
                 for_ [methodGet, methodHead] $ \method -> do
                     response <- requestMetadata session method []
                     (responseStatus response, responseVersions response) `shouldBe` (404, [])
@@ -207,7 +208,9 @@ servingContract provider driver = describe "shared serving contract" $ do
     contractExample "trusted-integrity" "applies the default integrity floor to trusted-private versions" $ do
         run agePolicy [old{releaseHasIntegrity = False}] [] $ \session -> do
             response <- requestMetadata session methodGet []
-            responseStatus response `shouldBe` 403
+            -- npm and PyPI refuse the version at the trusted floor, so the listing admits nothing.
+            -- Cargo and RubyGems drop a row with no checksum as malformed, so nothing is refused.
+            (responseStatus response, responseVersions response) `shouldBe` (if provider `elem` ["cargo", "rubygems"] then 403 else 404, [])
         -- Cargo and RubyGems parsers refuse a hashless row before any floor, so a SHA-512 trusted floor
         -- over SHA-256 fixtures reaches the floor in every format. The public floor is unchanged.
         sha512Floor <- either (fail . toString) pure (mkMinTrustedIntegrity SHA512)
@@ -290,7 +293,7 @@ servingContract provider driver = describe "shared serving contract" $ do
             unchanged <- under agePolicy >>= replay
             responseStatus unchanged `shouldBe` 304
             refused <- under [] >>= replay
-            responseStatus refused `shouldBe` 403
+            responseStatus refused `shouldBe` 404
             narrowing <- under narrowed
             changed <- replay narrowing
             (responseStatus changed, lookup "Content-Encoding" (responseHeaders changed)) `shouldBe` (200, Just "gzip")
