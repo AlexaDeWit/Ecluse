@@ -26,7 +26,7 @@ module Ecluse.Core.Registry.Request (
     ServicePresentation,
     nativePresentation,
     declaredPresentation,
-    declaredUsername,
+    sendsCredentialUsername,
     presentedMapping,
     presentedRequest,
 
@@ -186,11 +186,11 @@ presentedMapping presentation operation native = case declaredMechanism presenta
     Nothing -> native
     Just mechanism -> native{credentialHeader = hAuthorization, credentialRender = renderAuthMechanism mechanism}
 
--- | The username a store's declared Basic mechanism presents on one operation. 'Nothing' where it declares none.
-declaredUsername :: ServicePresentation -> StoreOperation -> Maybe Text
-declaredUsername presentation operation = case declaredMechanism presentation operation of
-    Just (AuthBasic username) -> Just username
-    _ -> Nothing
+{- | Whether an operation sends the credential's own username. Only the ecosystem's own mapping can:
+a declared mechanism sends the secret alone or the store's own Basic username.
+-}
+sendsCredentialUsername :: ServicePresentation -> StoreOperation -> Bool
+sendsCredentialUsername presentation = isNothing . declaredMechanism presentation
 
 declaredMechanism :: ServicePresentation -> StoreOperation -> Maybe AuthMechanism
 declaredMechanism (ServicePresentation onRead onWrite) = \case
