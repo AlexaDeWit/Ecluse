@@ -1586,9 +1586,8 @@ and `slow-readers`, the background load of `herd-under-heavy-private`, and compl
 `worker-mirroring`, which runs only under `unlimited`. Zero successes, an OOM kill, a heap overflow,
 an unclean shutdown, and an early exit fail any run, whatever its cells hold.
 
-`Ecluse.BenchLoad.ScenariosSpec`, in the gating unit suite, fails a pull request whose scenarios and
-cells differ, or whose shapes differ from the workflow's scheduled matrix. A held run also fails on a
-missing cell or a cell that names no count.
+A held run fails on a missing cell or a cell that names no count, and a scheduled run under a pod
+shape the file does not hold fails as not held. These checks run only in a load run.
 
 The PyPI worker row runs in process under `unlimited`. Its admission capacity is `maxBound(Int) / 2`,
 not a constrained worker pod. The three managed-read HTTP rows retain constrained-pod coverage.
