@@ -156,9 +156,8 @@ checkUploadAgreement limits registry manifest (Object metadata) = do
     unless (expectedRust == actualRust) (parseRefusal "Cargo upload and manifest Rust versions disagree")
 checkUploadAgreement _ _ _ _ = parseRefusal "Cargo upload metadata is not an object"
 
-{- | Refuse a dependency a consumer resolves from a registry other than crates.io or one of this
-proxy's own. A null or absent source is the publication registry, which the caller lists. Run after
-'checkUploadAgreement'.
+{- | Refuse a consumed dependency from a registry other than crates.io or one of this proxy's own. A
+null or absent source is the publication registry. Run after 'checkUploadAgreement'.
 -}
 checkDependencyRegistries :: [Text] -> Value -> Either ParseError ()
 checkDependencyRegistries own (Object metadata) = do
