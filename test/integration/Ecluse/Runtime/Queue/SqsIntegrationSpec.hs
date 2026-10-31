@@ -33,6 +33,7 @@ import Ecluse.Integration.Ministack (
     freshQueue,
     quietLogEnv,
     receiveUntil,
+    receiveUntilWithin,
     withMinistack,
  )
 import Ecluse.Runtime.Aws.Env (AwsEndpoint (AwsEndpoint, endpointHost, endpointPort, endpointSecure))
@@ -82,13 +83,16 @@ spec pool =
                 outcomes `shouldBe` [Just ()]
 
             it (caseLabel "integration/queue-sqs/native-003" "dead-letters a terminal fault without deleting it, so it rides the redrive policy (issue #846)") $ \container -> do
-                -- Redelivery proves the terminal fault remains available to the configured redrive policy.
-                queue <- freshQueue container "mirror-deadletter" defaultQueueOptions{qoVisibilityTimeout = Seconds 30, qoTerminalBackoff = Seconds 1}
+                -- The visibility timeout outlasts the receive budget, so only the terminal backoff
+                -- returns the message in time. The poll straight after shows the backoff hides it first.
+                queue <- freshQueue container "mirror-deadletter" defaultQueueOptions{qoVisibilityTimeout = Seconds 120, qoTerminalBackoff = Seconds 4}
                 expectRightIO (enqueue queue sampleJob)
                 [message] <- receiveUntil queue
                 expectRightIO (deadLetter queue (msgReceipt message))
-                redelivered <- receiveUntil queue
+                expectRightIO (receive queue) `shouldReturn` []
+                redelivered <- receiveUntilWithin 8 queue
                 map msgJob redelivered `shouldBe` [sampleJob]
+                map msgReceiveCount redelivered `shouldBe` [2]
 
             it (caseLabel "integration/queue-sqs/native-004" "probes a queue with no redrive policy as having no dead-letter terminus (issue #935)") $ \container -> do
                 -- A plain CreateQueue leaves nothing to capture a poison message, so

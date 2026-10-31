@@ -133,7 +133,7 @@ Its independent Aeson readers inspect native wire version and artifact digest fi
 | Core Queue.MemorySpec enqueue/receive/ack round trip and every payload field | queue/memory/payload | Same production memory handle, exact job, every field, acknowledgement and empty follow-up poll |
 | Core Queue.MemorySpec terminal drop | queue/memory/terminal-drop | Same production terminal action and empty follow-up poll |
 | New memory profile distinction | queue/memory/destructive-receive | Receipt itself removes a job without acknowledgement, first delivery count |
-| SqsIntegrationSpec enqueue/receive/ack | queue/sqs/payload | Same canonical body as memory, including a job that carries a trace context, real emulator and production SQS handle |
+| SqsIntegrationSpec enqueue/receive/ack | queue/sqs/payload | Same canonical body as memory, including jobs that carry a trace context and a scoped package, real emulator and production SQS handle |
 | SqsIntegrationSpec unacknowledged redelivery and ApproximateReceiveCount | queue/sqs/redelivery | Exact payload on both deliveries and counts 1 then 2, acknowledgement cleanup |
 | Core CredentialSpec static token, repeated token and expiry | credential/static/permanent/token and credential/static/expiring/token | Two independent expected reads, expiry and secret preservation, token Show redaction |
 | Runtime Credential.CodeArtifactSpec token and expiry | credential/codeartifact-stub/token | Same shared token law over real mint request/parser with HTTP stub, no claim of live mint coverage |
