@@ -98,7 +98,7 @@ import Ecluse.Test.Maintenance (
  )
 import Ecluse.Test.Mirror.State (mirrorViewWith)
 import Ecluse.Test.Package (hexSha1Of, leftpadName, npmVersion, requestsName, sampleDetails, sampleManifest, sriSha256Of, sriSha512Of, unsafeFilename)
-import Ecluse.Test.Port (noopMetricsPort, recordingDivergenceMetricsPort, recordingMetricsPort)
+import Ecluse.Test.Port (noopMetricsPort, recordingDenials, recordingDivergenceMetricsPort, recordingMetricsPort)
 import Ecluse.Test.Registry.Npm (VersionSpec (..), packumentValue, versionSpec, versionValue)
 import Ecluse.Test.Registry.Public (PublicFixture (..), newPublicFixture)
 import Ecluse.Test.Registry.PyPI (simpleFile, simpleIndex, withFileKeys)
@@ -1200,29 +1200,42 @@ pypiPrivateArtifactSpec = describe "PyPI first-party private artifacts" $ do
 -- Both origins answering 404 settle the name as absent on every ecosystem. A public outage beside a private 404 does not.
 absentNameSpec :: Spec
 absentNameSpec = describe "a name the private origin answers 404 for, through ecosystem routes" $
-    for_ absentNameRoutes $ \(ecosystem, router, credential, routes) ->
+    for_ absentNameRoutes $ \(ecosystem, router, credential, listing, artifacts) -> do
+        let named = toString (ecosystemName ecosystem) <> " "
+            capturedAfter publicStatus metrics path =
+                withAbsentPrivate ecosystem router credential publicStatus metrics $ \rt binding ->
+                    traverse (\method -> captureRouted rt binding method path) [methodGet, methodHead]
         for_ [(status404, 404), (status503, 503)] $ \(publicStatus, expectedStatus) ->
-            for_ routes $ \(route, path) ->
-                it (toString (ecosystemName ecosystem) <> " " <> route <> " answers " <> show expectedStatus <> " for GET and HEAD when the public origin answers " <> show (statusCode publicStatus)) $
-                    testWithApplication (pure (\_ respond -> respond (responseLBS status404 [] ""))) $ \privatePort ->
-                        testWithApplication (pure (\_ respond -> respond (responseLBS publicStatus [] ""))) $ \publicPort -> withSweeper $ \deadlines -> do
-                            rt <- testServeRuntime deadlines noopMetricsPort
-                            adapter <- requiredAdapter ecosystem
-                            let origin port = loopbackRegistryUrl ("http://localhost:" <> show port)
-                                deps = (serveDepsFor adapter (Just (origin privatePort)) (origin publicPort) NoMirrorWrite [] (pure fixedNow)){pdMountBaseUrl = "http://proxy.test"}
-                                binding = (mountUnder credential deps){bindingRouter = router}
-                            for_ [methodGet, methodHead] $ \method -> do
-                                response <- captureRouted rt binding method path
-                                statusCode (responseStatus response) `shouldBe` expectedStatus
+            for_ (listing : artifacts) $ \(route, path) ->
+                it (named <> route <> " answers " <> show expectedStatus <> " for GET and HEAD when the public origin answers " <> show (statusCode publicStatus)) $ do
+                    responses <- capturedAfter publicStatus noopMetricsPort path
+                    map (statusCode . responseStatus) responses `shouldBe` [expectedStatus, expectedStatus]
+        it (named <> fst listing <> " records an unavailable decision and its denial for GET and HEAD when neither origin holds the name") $ do
+            (recording, decisions) <- recordingMetricsPort
+            (metrics, denials) <- recordingDenials recording
+            void (capturedAfter status404 metrics (snd listing))
+            decisions `shouldReturn` [Unavailable, Unavailable]
+            denials `shouldReturn` replicate 2 (Nothing, Metric.ReasonUnavailable)
 
--- Each ecosystem's router, credential and the name-bearing routes a request for leftpad 1.0.0 takes.
-absentNameRoutes :: [(Ecosystem, MountRouter, CredentialMapping, [(String, [Text])])]
+-- Each ecosystem's router, credential, listing route and artifact routes for a request naming leftpad 1.0.0.
+absentNameRoutes :: [(Ecosystem, MountRouter, CredentialMapping, (String, [Text]), [(String, [Text])])]
 absentNameRoutes =
-    [ (Npm, npmRouter, npmCredential, [("packument", ["leftpad"]), ("tarball", ["leftpad", "-", "leftpad-1.0.0.tgz"])])
-    , (PyPI, pypiRouter, pypiCredential, [("index", ["simple", "leftpad"]), ("distribution", ["simple", "leftpad", "leftpad-1.0.0.tar.gz"]), ("companion", ["simple", "leftpad", "leftpad-1.0.0.tar.gz.metadata"])])
-    , (Cargo, cargoRouter, cargoCredential, [("sparse index", ["le", "ft", "leftpad"]), ("archive", ["crates", "leftpad", "1.0.0", "leftpad-1.0.0.crate"])])
-    , (RubyGems, rubyGemsRouter, rubyReadCredential, [("info", ["info", "leftpad"]), ("compact specification", ["quick", "Marshal.4.8", "leftpad-1.0.0.gemspec.rz"]), ("archive", ["gems", "leftpad-1.0.0.gem"])])
+    [ (Npm, npmRouter, npmCredential, ("packument", ["leftpad"]), [("tarball", ["leftpad", "-", "leftpad-1.0.0.tgz"])])
+    , (PyPI, pypiRouter, pypiCredential, ("index", ["simple", "leftpad"]), [("distribution", ["simple", "leftpad", "leftpad-1.0.0.tar.gz"]), ("companion", ["simple", "leftpad", "leftpad-1.0.0.tar.gz.metadata"])])
+    , (Cargo, cargoRouter, cargoCredential, ("sparse index", ["le", "ft", "leftpad"]), [("archive", ["crates", "leftpad", "1.0.0", "leftpad-1.0.0.crate"])])
+    , (RubyGems, rubyGemsRouter, rubyReadCredential, ("info", ["info", "leftpad"]), [("compact specification", ["quick", "Marshal.4.8", "leftpad-1.0.0.gemspec.rz"]), ("archive", ["gems", "leftpad-1.0.0.gem"])])
     ]
+
+-- A mount of the ecosystem whose private origin answers 404 and whose public origin answers the given status.
+withAbsentPrivate :: Ecosystem -> MountRouter -> CredentialMapping -> Status -> MetricsPort -> (ServeRuntime -> MountBinding -> IO a) -> IO a
+withAbsentPrivate ecosystem router credential publicStatus metrics action =
+    testWithApplication (pure (\_ respond -> respond (responseLBS status404 [] ""))) $ \privatePort ->
+        testWithApplication (pure (\_ respond -> respond (responseLBS publicStatus [] ""))) $ \publicPort -> withSweeper $ \deadlines -> do
+            rt <- testServeRuntime deadlines metrics
+            adapter <- requiredAdapter ecosystem
+            let origin port = loopbackRegistryUrl ("http://localhost:" <> show port)
+                deps = (serveDepsFor adapter (Just (origin privatePort)) (origin publicPort) NoMirrorWrite [] (pure fixedNow)){pdMountBaseUrl = "http://proxy.test"}
+            action rt (mountUnder credential deps){bindingRouter = router}
 
 -- A request through the binding's own router, carrying the method so a HEAD takes the bodiless contract.
 captureRouted :: ServeRuntime -> MountBinding -> Method -> [Text] -> IO Response
