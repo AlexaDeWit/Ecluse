@@ -30,7 +30,6 @@ import Data.Aeson (Value (Object, String), decodeStrict)
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.Char (isDigit)
 import Data.Text qualified as T
-import Numeric (readHex)
 import Test.Hspec (Expectation, SpecWith, it, shouldBe, shouldNotSatisfy, shouldReturn, shouldSatisfy)
 
 import Ecluse.Test.Contract.Catalogue (caseLabel)
@@ -254,16 +253,6 @@ exportsIdentity package expectedIdentity traffic logs collector = do
         , ("env", telemetryEnvironment expectedIdentity)
         , ("version", telemetryVersion expectedIdentity)
         ]
-
-{- | A printed span's IDs as Datadog logs them: the low 64 bits of the trace ID and the span ID,
-each as an unsigned decimal.
--}
-datadogIds :: PrintedSpan -> Maybe (Text, Text)
-datadogIds printed = (,) <$> (decimal . T.takeEnd 16 =<< psTraceId printed) <*> (decimal =<< psSpanId printed)
-  where
-    decimal hex = case readHex (toString hex) of
-        [(value, "")] -> Just (show (value :: Word64))
-        _ -> Nothing
 
 -- | A trace identifier must contain a leading digit rather than an absent or empty value.
 hasPopulatedTraceId :: Text -> Bool
