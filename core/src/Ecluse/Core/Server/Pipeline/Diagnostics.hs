@@ -90,7 +90,7 @@ logFailureOf :: (KatipContext m) => Subject -> Text -> MetadataError -> m ()
 logFailureOf subject baseUrl = \case
     MetadataAbsent -> logHttpFailure subject baseUrl 404 ("the upstream has no metadata for the requested " <> requestedNoun subject)
     MetadataHttpFailure code _ -> logHttpFailure subject baseUrl code "the upstream refused the metadata read"
-    MetadataAuthorisationFailure _ -> logFM WarningS "the upstream refused metadata access"
+    MetadataAuthorisationFailure code -> logHttpFailure subject baseUrl code "the upstream refused metadata access"
     MetadataBoundExceeded err -> logBreach subject err
     MetadataUndecodable -> warnDecodeFailure subject
     MetadataNameMismatch reported -> warnNameMismatch subject baseUrl reported
