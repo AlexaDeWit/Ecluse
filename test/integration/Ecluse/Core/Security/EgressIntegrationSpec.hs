@@ -41,9 +41,10 @@ import Ecluse.Test.Support (expectRight)
 spec :: Spec
 spec = do
     describe "egress over the validating manager (loopback http opt-in)" $ do
-        it (caseLabel "integration/egress/native-001" "reaches a loopback upstream addressed through the test-only http opt-in") $
-            withUpstream $ \upstream -> do
-                withExchangeClient (newManager defaultManagerSettings) $ \exchanges -> do
+        it (caseLabel "integration/egress/native-001" "reaches a loopback upstream addressed through the test-only http opt-in") $ do
+            (public, _) <- productManagers
+            withUpstream $ \upstream ->
+                withExchangeClient (pure public) $ \exchanges -> do
                     response <- fetchMetadata exchanges (loopback (stubPort upstream)) Nothing
                     fmap responseBody response `shouldBe` Right (toStrict (encode packument))
                     map (headerValue "Authorization") <$> allCaptured upstream `shouldReturn` [Nothing]
