@@ -19,8 +19,8 @@ import Test.Hspec
 import UnliftIO (bracket, throwIO)
 
 import Ecluse.BenchLoad.Error (BenchLoadError (BenchLoadError))
-import Ecluse.BenchLoad.Fixture (delayUpstream, loadCorpusBodies, loadCorpusCuts, preflightDistinct, probeBaseline, weightedMix, withLoopbackStub)
-import Ecluse.BenchLoad.Normalise (BaselineSource (InjectedFallback, MeasuredRtt))
+import Ecluse.BenchLoad.Fixture (delayUpstream, loadCorpusBodies, loadCorpusCuts, preflightDistinct, probeLiveFetch, weightedMix, withLoopbackStub)
+import Ecluse.BenchLoad.Normalise (LiveFetch (LiveFetch, NoLiveFetch))
 import Ecluse.BenchLoad.ProxyProcess (privateStubHost, publicStubHost)
 import Ecluse.Core.Package (PackageDetails (pkgPublishedAt), PackageInfo (infoVersions), PackageName, renderPackageName)
 import Ecluse.Core.Registry.Metadata (MetadataError)
@@ -53,18 +53,18 @@ spec = do
         it "does not measure when a native listing fails preflight" $
             preflightDistinct (const (throwIO (BenchLoadError "invalid listing"))) ["a"] (expectationFailure "failed preflight measured")
                 `shouldThrow` (\(BenchLoadError message) -> message == "invalid listing")
-    describe "native RTT baseline" $ do
+    describe "live public fetch time" $ do
         it "warms before timing and counts only successful native samples" $ do
             calls <- newIORef ([] :: [Text])
             let fetch name = do
                     modifyIORef' calls (<> [name])
                     pure (if name == "failed" then Nothing else Just 80)
-            probeBaseline 5 True ["native", "failed"] fetch `shouldReturn` MeasuredRtt 80 1
+            probeLiveFetch True ["native", "failed"] fetch `shouldReturn` LiveFetch 80 1
             readIORef calls `shouldReturn` ["native", "native", "failed"]
-        it "declares fallback for disabled, empty, failed warm-up, and failed measured probes" $ do
-            probeBaseline 5 False ["native"] (const (expectationFailure "disabled probe fetched" >> pure (Just 99))) `shouldReturn` InjectedFallback 5
-            probeBaseline 2 True [] (const (pure (Just 99))) `shouldReturn` InjectedFallback 2
-            probeBaseline 3 True ["native"] (const (pure Nothing)) `shouldReturn` InjectedFallback 3
+        it "reports no live fetch for disabled, empty, failed warm-up, and failed measured probes" $ do
+            probeLiveFetch False ["native"] (const (expectationFailure "disabled probe fetched" >> pure (Just 99))) `shouldReturn` NoLiveFetch
+            probeLiveFetch True [] (const (pure (Just 99))) `shouldReturn` NoLiveFetch
+            probeLiveFetch True ["native"] (const (pure Nothing)) `shouldReturn` NoLiveFetch
             replies <- newIORef [Just 80, Nothing]
             let fetch _ =
                     atomicModifyIORef'
@@ -73,7 +73,7 @@ spec = do
                             [] -> ([], Nothing)
                             result : more -> (more, result)
                         )
-            probeBaseline 4 True ["native"] fetch `shouldReturn` InjectedFallback 4
+            probeLiveFetch True ["native"] fetch `shouldReturn` NoLiveFetch
 
     describe "loadCorpusBodies" $ do
         it "returns the authenticated bytes unchanged for both ecosystems" $ do

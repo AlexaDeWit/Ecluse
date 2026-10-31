@@ -11,7 +11,7 @@ import Data.Set qualified as Set
 import Data.Text qualified as T
 import Test.Hspec
 
-import Ecluse.BenchLoad.Floors (Calibration (calCargoLatency, calNpmLatency, calOperatingPoint, calPypiLatency, calRubyGemsLatency, calRuns), Enforcement (Enforced), Floors (floorsByShape, floorsCalibration), LatencyCeiling (lcCeilingMs), Pass (ConcurrencyOne, Loaded), RunFacts (..), RunnerReading (RunnerReading), Trigger (Scheduled), enforce, loadFloors, unheldViolations)
+import Ecluse.BenchLoad.Floors (Calibration (calConditions, calConfirmationReruns, calFloorFraction, calOperatingPoint), Enforcement (Enforced), Floors (floorsByShape, floorsCalibration), OperatingPoint (opUpstreamLatencyMs), Pass (ConcurrencyOne, Loaded), RunFacts (..), RunnerReading (RunnerReading), Trigger (Scheduled), enforce, floorsPath, loadFloors, renderFloorsFile, unheldViolations)
 import Ecluse.BenchLoad.Harness (Scenario (scenarioName), UpstreamFixture (fixtureEcosystem, fixtureScenarios), defaultLoadKnobs, operatingPoint)
 import Ecluse.BenchLoad.Pod (PodShape (Unlimited), renderPodShape, scheduledPodShapes)
 import Ecluse.BenchLoad.Scenarios (checkFixtureCoverage, checkedCounts, findScenario, fixtures, scenariosForSelection)
@@ -78,35 +78,29 @@ spec = do
         it "were calibrated at the harness's default knobs, over every scenario, with no pattern override" $
             withCommitted $ \floors ->
                 calOperatingPoint (floorsCalibration floors) `shouldBe` operatingPoint defaultLoadKnobs Nothing []
-        it "holds actual default runs at both native ceilings under every scheduled shape" $
+        it "were calibrated at 20 ms of injected latency, under the harness's measurement conditions, at 60% of the median, with one confirmation re-run" $
+            withCommitted $ \floors -> do
+                opUpstreamLatencyMs (calOperatingPoint (floorsCalibration floors)) `shouldBe` 20
+                calFloorFraction (floorsCalibration floors) `shouldBe` 0.6
+                calConditions (floorsCalibration floors) `shouldBe` measurementConditionVersion
+                calConfirmationReruns (floorsCalibration floors) `shouldBe` 1
+        it "hold a default run under every scheduled shape" $
             withCommitted $ \floors ->
-                case calPypiLatency (floorsCalibration floors) of
-                    Nothing -> expectationFailure "the committed calibration has no native PyPI ceiling"
-                    Just pypiBound ->
-                        for_ scheduledPodShapes $ \shape -> do
-                            let facts =
-                                    RunFacts
-                                        { rfSettings = operatingPoint defaultLoadKnobs Nothing []
-                                        , rfRunner = RunnerReading (Just "true") (Just "Linux") (Just "ARM64")
-                                        , rfShape = shape
-                                        , rfNpmLatencyMs = lcCeilingMs (calNpmLatency (floorsCalibration floors))
-                                        , rfRubyGemsLatencyMs = lcCeilingMs <$> calRubyGemsLatency (floorsCalibration floors)
-                                        , rfCargoLatencyMs = lcCeilingMs <$> calCargoLatency (floorsCalibration floors)
-                                        , rfPypiLatencyMs = lcCeilingMs pypiBound
-                                        , rfConditions = measurementConditionVersion
-                                        }
-                                enforcement = enforce floors facts
-                            enforcement `shouldBe` Enforced shape (Map.findWithDefault Map.empty shape (floorsByShape floors))
-                            unheldViolations Scheduled enforcement `shouldBe` []
-        it "records an independent native Cargo latency ceiling" $
-            withCommitted $
-                \floors -> calCargoLatency (floorsCalibration floors) `shouldSatisfy` isJust
-        it "records an independent native RubyGems latency ceiling" $
-            withCommitted $
-                \floors -> calRubyGemsLatency (floorsCalibration floors) `shouldSatisfy` isJust
-        it "record at least the ten runs they were calibrated from" $
-            withCommitted $ \floors ->
-                length (calRuns (floorsCalibration floors)) `shouldSatisfy` (>= 10)
+                for_ scheduledPodShapes $ \shape -> do
+                    let facts =
+                            RunFacts
+                                { rfSettings = operatingPoint defaultLoadKnobs Nothing []
+                                , rfRunner = RunnerReading (Just "true") (Just "Linux") (Just "ARM64")
+                                , rfShape = shape
+                                , rfConditions = measurementConditionVersion
+                                }
+                        enforcement = enforce floors facts
+                    enforcement `shouldBe` Enforced shape 1 (Map.findWithDefault Map.empty shape (floorsByShape floors))
+                    unheldViolations Scheduled enforcement `shouldBe` []
+        it "are in the layout renderFloorsFile writes" $
+            withCommitted $ \floors -> do
+                committed <- decodeUtf8 <$> readFileBS floorsPath
+                renderFloorsFile floors `shouldBe` committed
         it "key the shapes the workflow's scheduled matrix names, and so its baseline artifacts" $ do
             workflow <- decodeUtf8 <$> readFileBS ".github/workflows/bench-load.yml"
             scheduledMatrix workflow `shouldBe` Just (map renderPodShape scheduledPodShapes)

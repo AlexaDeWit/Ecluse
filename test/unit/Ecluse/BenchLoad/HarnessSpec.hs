@@ -25,8 +25,8 @@ spec = do
             let report = combinedReport name
             it (toString name <> " holds only background successes to the floor") $ do
                 reSuccesses (reportEvidence report) `shouldBe` [("concurrent load", 20)]
-                runViolations (AtLeast 20) (reportEvidence report) `shouldBe` []
-                runViolations (AtLeast 21) (reportEvidence report) `shouldSatisfy` any (T.isInfixOf "below the floor of 21")
+                runViolations (AtLeast 20 34) (reportEvidence report) `shouldBe` []
+                runViolations (AtLeast 21 35) (reportEvidence report) `shouldSatisfy` any (T.isInfixOf "below the floor of 21")
                 windowSuccesses report `shouldBe` 20
                 let admitted = report{srLoad = (srLoad report){lsSuccesses = 3}}
                 windowSuccesses admitted `shouldBe` 23
@@ -34,7 +34,7 @@ spec = do
             it (toString name <> " keeps required background and missing-floor failures") $ do
                 let withoutSuccess = report{srCompanion = (\load -> load{lsSuccesses = 0}) <$> srCompanion report}
                 runViolations Unchecked (reportEvidence withoutSuccess) `shouldSatisfy` any (T.isInfixOf "no successful responses (concurrent load)")
-                runViolations (NoFloor Loaded) (reportEvidence report) `shouldSatisfy` any (T.isInfixOf "no loaded floor")
+                runViolations (NoFloor Loaded) (reportEvidence report) `shouldSatisfy` any (T.isInfixOf "no loaded cell")
             it (toString name <> " retains every process failure with a refused burst") $ do
                 for_ [HeapOverflow, StoppedByHarness, ExitedWith 2, KilledBySignal 15] $ \ending ->
                     runViolations Unchecked (reportEvidence report{srProxy = Just (proxyWithPeak 0){pfEnding = ending}}) `shouldSatisfy` (not . null)
@@ -46,7 +46,7 @@ spec = do
             let report = combinedReport "npm/herd-under-heavy-private"
             case eitherDecode (encode report) of
                 Left problem -> expectationFailure problem
-                Right decoded -> runViolations (AtLeast 20) (reportEvidence decoded) `shouldBe` []
+                Right decoded -> runViolations (AtLeast 20 34) (reportEvidence decoded) `shouldBe` []
         it "defaults historical reports to strict success checks" $
             case toJSON (combinedReport "npm/herd-under-heavy-private") of
                 Object fields -> case fromJSON (Object (KeyMap.delete "srDiagnosticBurst" fields)) of
@@ -58,7 +58,7 @@ spec = do
             runViolations Unchecked (reportEvidence report) `shouldSatisfy` any (T.isInfixOf "no successful responses (burst)")
         it "keeps both loads strict for an ordinary paired scenario" $ do
             let report = (combinedReport "npm/warm-under-cold"){srDiagnosticBurst = False}
-            runViolations (AtLeast 21) (reportEvidence report) `shouldSatisfy` ((== 2) . length)
+            runViolations (AtLeast 21 35) (reportEvidence report) `shouldSatisfy` ((== 2) . length)
         it "does not discard success evidence when the background is missing" $ do
             let report = (combinedReport "npm/herd-under-heavy-private"){srCompanion = Nothing}
             runViolations Unchecked (reportEvidence report) `shouldSatisfy` any (T.isInfixOf "no successful responses (burst)")
