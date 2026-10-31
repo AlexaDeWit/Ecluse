@@ -263,7 +263,7 @@ keptFloorSpec :: Spec
 keptFloorSpec = describe "full npm and PyPI read payments" $
     for_ floorListings $ \(ecosystem, mount, name, (shape, body), (releases, others)) ->
         for_ [False, True] $ \public ->
-            it ((if public then "public " else "private ") <> show ecosystem <> " keeps the entry floor for each retained entry once a " <> shape <> " read completes") $ withSweeper $ \deadlines -> do
+            it ((if public then "public " else "private ") <> show ecosystem <> " keeps the floors for the entries its finished document keeps once a " <> shape <> " read completes") $ withSweeper $ \deadlines -> do
                 adapter <- requiredAdapter ecosystem
                 withRoutedStubIO (\_ -> pure (status200, [], toLazy body)) $ \stub -> do
                     original <- testServeRuntime deadlines noopMetricsPort
