@@ -18,7 +18,7 @@ import Ecluse.BenchLoad.Normalise (LiveFetch (LiveFetch, NoLiveFetch))
 import Ecluse.BenchLoad.Pod (CgroupReading (CgroupReading), ProxyTuning (ptCpus), burstMemory, noTuning, parseCpuList)
 import Ecluse.BenchLoad.Report (Section (sectionEnforcement, sectionKnobs), renderConfirmations, renderReports, renderServiceTime)
 import Ecluse.BenchLoad.Scenarios (findScenario)
-import Ecluse.BenchLoad.Support (calibrationRunIds, floorsAtTwoCores, loadedSection, placedWindow, proxyWithPeak, scenarioReport, slowNetwork, twoCores)
+import Ecluse.BenchLoad.Support (calibrationRunIds, floorsAtTwoCores, loadedSection, otherLatency, placedWindow, proxyWithPeak, scenarioReport, twoCores)
 import Ecluse.BenchLoad.Verdict (ProxyEnding (CleanShutdown, HeapOverflow), RunEvidence (RunEvidence))
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 
@@ -94,7 +94,7 @@ confirmationSpec = describe "renderConfirmations" $ do
     it "says no pass breached, and that a run that is not held re-runs nothing" $ do
         renderConfirmations held [(("npm/merge-cold", Loaded), counted "npm/merge-cold" 400 :| []), (("npm/herd", Loaded), Right (RunEvidence "npm/herd" [("", 0)] 0 (Just HeapOverflow) False) :| [])]
             `shouldSatisfy` T.isInfixOf "No scenario pass breached its floor on its first attempt."
-        renderConfirmations slowNetwork [] `shouldSatisfy` T.isInfixOf "This run is not held to the floors, so no breach is re-run."
+        renderConfirmations otherLatency [] `shouldSatisfy` T.isInfixOf "This run is not held to the floors, so no breach is re-run."
 
 serviceTimeSpec :: Spec
 serviceTimeSpec = describe "renderServiceTime" $ do
@@ -102,7 +102,7 @@ serviceTimeSpec = describe "renderServiceTime" $ do
         Nothing -> it "has a ceiling scenario" (expectationFailure "missing npm/tarball-ceiling scenario")
         Just ceilingScenario -> do
             let report = (scenarioReport "npm/tarball-ceiling" 100 0 2.5 4){srPublicLegUnavailableReason = scenarioPublicLegUnavailableReason ceilingScenario}
-            it "keeps raw totals and a reason without subtracting either public baseline" $
+            it "keeps raw totals and a reason without subtracting the injected latency" $
                 for_ [LiveFetch 150 8, NoLiveFetch] $ \live -> do
                     let rendered = renderServiceTime 20_000 live [report]
                     T.lines rendered `shouldSatisfy` elem "| npm/tarball-ceiling | 2.5 ms | n/a | n/a | 4.0 ms | n/a | n/a | n/a | unavailable: the private-hit artifact relay has no public leg |"
@@ -117,7 +117,7 @@ serviceTimeSpec = describe "renderServiceTime" $ do
         T.lines rendered `shouldSatisfy` elem "| npm/merge-cold | 255.0 ms | 20.0 ms (8%) | 235.0 ms (92%) | 300.0 ms | 20.0 ms (7%) | 280.0 ms (93%) | 385.0 ms | available |"
         rendered `shouldSatisfy` T.isInfixOf "p50 is primary. p99 is the tail, GC included."
         T.lines (renderServiceTime 20_000 NoLiveFetch [report]) `shouldSatisfy` elem "| npm/merge-cold | 255.0 ms | 20.0 ms (8%) | 235.0 ms (92%) | 300.0 ms | 20.0 ms (7%) | 280.0 ms (93%) | n/a | available |"
-    it "keeps Ruby ceiling totals without attributing a fixed delay to a different live baseline" $
+    it "keeps Ruby ceiling totals raw, since the fixture's fixed delay replaces the run's injected latency" $
         case findScenario "rubygems/gem-ceiling" of
             Nothing -> expectationFailure "missing rubygems/gem-ceiling scenario"
             Just ceilingScenario -> do

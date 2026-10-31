@@ -41,7 +41,7 @@ import Ecluse.BenchLoad.Floors (
     unheldViolations,
  )
 import Ecluse.BenchLoad.Pod (PodShape (Unlimited), ProxyTuning (..), noTuning, parseCpuList)
-import Ecluse.BenchLoad.Support (calibrationRunIds, floorsAtTwoCores, slowNetwork, twoCores)
+import Ecluse.BenchLoad.Support (calibrationRunIds, floorsAtTwoCores, otherLatency, twoCores)
 
 spec :: Spec
 spec = do
@@ -159,7 +159,7 @@ spec = do
             floorCheck (Enforced twoCores 1 floorsAtTwoCores) ("npm/herd", Loaded) `shouldBe` ReportOnly (Just "its burst successes split between admission levels")
             map (checkedFloor . floorCheck (Enforced twoCores 1 floorsAtTwoCores)) [("pypi/slow-readers", Loaded), ("npm/herd", Loaded), ("npm/merge-cold", Loaded)] `shouldBe` [Nothing, Nothing, Just 338]
         it "checks nothing for a run that is not held" $
-            floorCheck slowNetwork ("pypi/index-cold", Loaded) `shouldBe` Unchecked
+            floorCheck otherLatency ("pypi/index-cold", Loaded) `shouldBe` Unchecked
 
     describe "staleFloorViolations" $ do
         it "passes floors that match the counts the run checks" $
@@ -168,7 +168,7 @@ spec = do
             staleFloorViolations (Enforced twoCores 1 floorsAtTwoCores) (Set.delete ("pypi/index-cold", ConcurrencyOne) (Map.keysSet floorsAtTwoCores))
                 `shouldBe` ["bench/load/floors.json: the concurrencyOne cell for pypi/index-cold under 2cpu-1gib names no count this run checks"]
         it "checks nothing for a run that is not held" $
-            staleFloorViolations slowNetwork Set.empty `shouldBe` []
+            staleFloorViolations otherLatency Set.empty `shouldBe` []
 
     describe "unheldViolations" $ do
         it "fails a scheduled run that its settings, its runner, or its pod shape keep off the floors, in one line" $
@@ -179,7 +179,7 @@ spec = do
             unheldViolations Scheduled (NotHeld (ThrashProbe :| []))
                 `shouldBe` ["a scheduled run must be held to the success floors, and this one is not: it runs the GC-thrash probe in place of the passes"]
         it "fails a scheduled run at another injected latency" $
-            unheldViolations Scheduled slowNetwork
+            unheldViolations Scheduled otherLatency
                 `shouldBe` ["a scheduled run must be held to the success floors, and this one is not: it differs from the calibrated operating point in upstreamLatencyMs"]
         it "passes a scheduled run that is held, and any run on demand" $ do
             unheldViolations Scheduled (Enforced twoCores 1 floorsAtTwoCores) `shouldBe` []
@@ -194,7 +194,7 @@ spec = do
             describeEnforcement calibration{calRuns = []} (Enforced twoCores 1 (Map.singleton ("npm/merge-cold", Loaded) Uncalibrated))
                 `shouldBe` "This run is held to the success floors in `bench/load/floors.json`, calibrated on ubuntu-26.04-arm under measurement conditions unified-v3, from no calibration run yet. Under 2cpu-1gib, 0 cells hold a floor, 1 are uncalibrated, and 0 are report-only."
         it "names the setting for a run at another injected latency" $
-            describeEnforcement calibration slowNetwork
+            describeEnforcement calibration otherLatency
                 `shouldBe` "This run is not held to the success floors in `bench/load/floors.json`: it differs from the calibrated operating point in upstreamLatencyMs."
         it "names every reason a run is not held, with what the harness read of the runner" $
             describeEnforcement calibration (NotHeld (SettingsDiffer ("durationSeconds" :| ["scenarios"]) :| [OtherRunner "ubuntu-26.04-arm" calibratedRunner offGitHub]))
