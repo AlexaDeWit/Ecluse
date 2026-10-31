@@ -37,7 +37,7 @@ cargoPublishName = "ecluse-e2e-build"
 cargoRetainedName = "ecluse-e2e-macro"
 
 {- | Undeclared, and held by the public index at 1.0.0 only: Cargo's duplicate check passes and the upload reaches Écluse.
-A name in no index cannot serve here, because the sparse index answers it 503 before Cargo uploads.
+The sparse index answers a name in no index 404, which Cargo also reads as a new crate.
 -}
 cargoRefusedName, cargoRefusedVersion :: Text
 cargoRefusedName = "ecluse-e2e-extra"
