@@ -125,7 +125,7 @@ denseListings =
     -- One release that renders, beside an object of keys whose values do not decode.
     packument key count =
         render
-            ( "{\"name\":\"thing\",\"versions\":{\"1.0.0\":{\"dist\":{\"tarball\":\"https://registry.npmjs.org/thing/-/thing-1.0.0.tgz\"}}},\""
+            ( "{\"name\":\"thing\",\"versions\":{\"1.0.0\":{\"name\":\"thing\",\"version\":\"1.0.0\",\"dist\":{\"tarball\":\"https://registry.npmjs.org/thing/-/thing-1.0.0.tgz\"}}},\""
                 <> key
                 <> "\":{"
                 <> commas [quoted (Builder.intDec n) <> ":0" | n <- [1 .. count]]

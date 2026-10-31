@@ -415,10 +415,10 @@ entryFloorFigures =
 -- | Figures for npm versions and PyPI files: their densest forms, and the smallest valid bodies that outweigh them.
 releaseFloorFigures :: Map Text EntryFigures
 releaseFloorFigures =
-    -- Measured as the entry figures were, where two runs gave the same held bytes and read peaks within 0.01%.
+    -- Measured as the entry figures were, where repeated runs gave the same held bytes and read peaks within 0.03%.
     Map.fromList
         [ ("npm/versions", EntryFigures (5244360 % 10000) (3379688 % 10000))
         , ("pypi/files", EntryFigures (2769456 % 10001) (2565608 % 10001))
-        , ("npm/minimal-versions", EntryFigures (8444784 % 10000) (6578904 % 10000))
+        , ("npm/minimal-versions", EntryFigures (8910312 % 10000) (6971776 % 10000))
         , ("pypi/minimal-files", EntryFigures (8853320 % 10000) (8560928 % 10000))
         ]

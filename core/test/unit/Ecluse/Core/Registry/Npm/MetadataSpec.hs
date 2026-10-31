@@ -136,7 +136,7 @@ entryFloorSpec = describe "the full-read entry floor" $ do
         manifestRetainedEntries <$> expectRight result `shouldReturn` RetainedEntries 3 2
 
     it "counts the dropped timestamps a finished document reports under its releases' keys, and no other" $ do
-        let body = timedPackument 3 [("\"0.0.1\"", "0"), ("\"0.0.2\"", "0"), ("\"0.0.3\"", "0"), ("\"x\"", "0")]
+        let body = timedPackument 3 [("\"0.0.1\"", undated), ("\"0.0.2\"", undated), ("\"0.0.3\"", undated), ("\"x\"", undated)]
         (result, _) <- heldWorkspacePeak adapterRead captureRegistry (unscopedNpm "thing") [body]
         manifestRetainedEntries <$> expectRight result `shouldReturn` RetainedEntries 3 3
 
@@ -163,6 +163,8 @@ entryFloorSpec = describe "the full-read entry floor" $ do
     entries = 300
     denseBody = densePackument entries
     stamp = "\"2020-01-01T00:00:00.000Z\""
+    -- A publish time no decoder reads as an instant.
+    undated = "\"not-a-date\""
     -- The floor each version pays, which the release floor's measurement sets.
     releaseFloor = 1152
     denseShortfall = entryFloorBytes * 2 * entries - scaleCharge (cfFullReadPermille npmChargeFactors) (BS.length denseBody)
