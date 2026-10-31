@@ -1500,7 +1500,6 @@ test-suite ecluse-core-unit
     Ecluse.Test.CollectorSpec
     Ecluse.Test.Container.ImageSpec
     Ecluse.Test.Corpus.SubsetSpec
-    Ecluse.Test.LogSpec
     Ecluse.Test.MaintenanceSpec
     Ecluse.Test.Registry.PyPI.WireSpec
     Ecluse.Test.Registry.Metadata.ProjectionSpec
