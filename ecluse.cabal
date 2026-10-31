@@ -2509,8 +2509,9 @@ executable bench-load
     , wai              ^>=3.2
     , warp             ^>=3.4
 
--- Pure load-report arithmetic, pod shapes, success floors, and verdicts, shared with the gating
--- unit suite. Live probes, sockets, and process orchestration remain in the bench-load executable.
+-- Pure load-report arithmetic, pod shapes, success floors, and verdicts, shared by the bench-load
+-- executable and the bench-report tools. Live probes, sockets, and process orchestration remain in
+-- the bench-load executable.
 library ecluse-bench-load
   import:          shared
   hs-source-dirs:  bench/load/src
