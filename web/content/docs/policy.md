@@ -52,7 +52,8 @@ PyPI, Cargo, and RubyGems do not support the npm scope, deprecation, or install-
 
 ## When no npm version survives
 
-An npm metadata request returns `403` when every exclusion is a policy or integrity refusal.
+An npm metadata request returns `404` when every exclusion is a policy or integrity refusal, as a
+listing with nothing admitted does on every ecosystem. A download of one of those versions returns `403`.
 The JSON `error` string gives each deciding rule or integrity category once, with a short cause
 and a count of rejection entries. The configured operator help follows the summary.
 
