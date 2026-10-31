@@ -206,7 +206,7 @@ metadataGzipSpec = describe "native metadata gzip over the live listing path" $
                     statusOf <$> serve withPrivate ((hIfNoneMatch, tag) : signed) `shouldReturn` 403
                     publicTag <- validator =<< serve publicOnly signed
                     statusOf <$> serve publicOnly ((hIfNoneMatch, publicTag) : signed) `shouldReturn` 304
-                    statusOf <$> serve publicOnly{pdRules = []} ((hIfNoneMatch, publicTag) : signed) `shouldReturn` 403
+                    statusOf <$> serve publicOnly{pdRules = []} ((hIfNoneMatch, publicTag) : signed) `shouldReturn` 404
         it "returns its admission slot and charges when cancelled while it responds" $ withSweeper $ \deadlines -> do
             admission <- newServeAdmissionTuned deadlines 1 0 0
             rt <- testServeRuntimeWith deadlines admission noopMetricsPort
@@ -341,7 +341,7 @@ noSurvivorsSpec = describe "the refusal for a listing no version survived" $ do
                         let deps = withPrivateBaseUrl (Just (loopbackRegistryUrl ("http://localhost:" <> show privatePort))) original{pdFirstParty = const True, pdHelp = Just (mkHelpMessage "Contact the operator.")}
                         denied <- captureListing rt listing deps methodGet []
                         headed <- captureListing rt listing deps methodHead []
-                        map statusOf [denied, headed] `shouldBe` [403, 403]
+                        map statusOf [denied, headed] `shouldBe` [404, 404]
                         responseBytes headed `shouldReturn` ""
                         responseBytes denied `shouldReturn` encode (object ["error" .= (cause <> " (rejection entries: 1) Contact the operator.")])
 
@@ -355,7 +355,7 @@ noSurvivorsSpec = describe "the refusal for a listing no version survived" $ do
                     let deps = original{pdRules = prepared, pdHelp = Just (mkHelpMessage "Contact the operator.")}
                     denied <- captureListing rt listing deps methodGet []
                     headed <- captureListing rt listing deps methodHead []
-                    map statusOf [denied, headed] `shouldBe` [403, 403]
+                    map statusOf [denied, headed] `shouldBe` [404, 404]
                     responseBytes headed `shouldReturn` ""
                     bytes <- responseBytes denied
                     if listingLabel listing == "npm"

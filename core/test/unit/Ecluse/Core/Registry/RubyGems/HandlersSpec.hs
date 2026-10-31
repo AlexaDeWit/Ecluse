@@ -351,7 +351,7 @@ spec = do
                                 binding = metadataByteCap cap original
                                 deps = bindingPackumentDeps binding
                                 public = binding{bindingPackumentDeps = withPrivateBaseUrl Nothing deps}
-                            runtime <- if warm then warmPublicDocuments uncached public hits [("acme-1", status403)] else pure uncached
+                            runtime <- if warm then warmPublicDocuments uncached public hits [("acme-1", status404)] else pure uncached
                             response <- capture runtime binding method "/info/acme-1" []
                             simpleStatus response `shouldBe` if exact then status200 else status502
                             when exact $
@@ -365,7 +365,7 @@ spec = do
                     privateStatus <- newIORef status200
                     withCoordinateSourceHeader coordinateBudgetHeader (CachedDeniedCandidateSource privateStatus) $ \uncached binding hits release -> do
                         let public = binding{bindingPackumentDeps = withPrivateBaseUrl Nothing (bindingPackumentDeps binding)}
-                        runtime <- warmPublicDocuments uncached public hits [("acme-1", status403)]
+                        runtime <- warmPublicDocuments uncached public hits [("acme-1", status404)]
                         allowed <- capture runtime binding "GET" "/info/acme-1" []
                         simpleStatus allowed `shouldBe` status200
                         simpleBody allowed `shouldBe` fromStrict (BS.drop (BS.length coordinateBudgetHeader) (snd (coordinateListings coordinateBudgetHeader release)))
@@ -381,7 +381,7 @@ spec = do
                 privateStatus <- newIORef status200
                 withCoordinateSourceHeader coordinateBudgetHeader (CachedDeniedCandidateSource privateStatus) $ \uncached original hits release -> do
                     let public = original{bindingPackumentDeps = withPrivateBaseUrl Nothing (bindingPackumentDeps original)}
-                    runtime <- warmPublicDocuments uncached public hits [("acme", status403), ("acme-1", status403)]
+                    runtime <- warmPublicDocuments uncached public hits [("acme", status404), ("acme-1", status404)]
                     owned <- expectRight (projectFirstPartyEntry "acme")
                     let deps = bindingPackumentDeps original
                         binding = original{bindingPackumentDeps = deps{pdFirstParty = rubyGemsFirstPartyName (owned :| [])}}
@@ -513,11 +513,20 @@ spec = do
                         readIORef hits `shouldReturn` [["public", "info", "acme"], ["public", "info", "acme-1"]]
 
     describe "checked no-survivor native admission" $ do
-        it "preserves the ordinary listing refusal after settled private absence" $
-            withCoordinateSources (PublicDeniedPrivateCandidateSource status404) $ \runtime binding hits _ -> do
-                response <- capture runtime binding "GET" "/info/acme-1" []
-                simpleStatus response `shouldBe` status503
-                sort <$> readIORef hits `shouldReturn` [["private", "info", "acme-1"], ["public", "info", "acme-1"]]
+        let unconfigured binding = binding{bindingPackumentDeps = withPrivateBaseUrl Nothing (bindingPackumentDeps binding)}
+        for_ [("after settled private absence", id, [["private", "info", "acme-1"], ["public", "info", "acme-1"]]), ("with no private origin", unconfigured, [["public", "info", "acme-1"]])] $ \(label, configure, expectedReads) ->
+            it ("answers 404 naming the denial for a listing the gate denies in full " <> label) $
+                withCoordinateSources (PublicDeniedPrivateCandidateSource status404) $ \original binding hits _ -> do
+                    (recording, decisions) <- recordingMetricsPort
+                    (metrics, denials) <- recordingDenials recording
+                    let runtime = original{srMetrics = metrics}
+                    response <- capture runtime (configure binding) "GET" "/info/acme-1" []
+                    headed <- capture runtime (configure binding) "HEAD" "/info/acme-1" []
+                    map simpleStatus [response, headed] `shouldBe` [status404, status404]
+                    LBS.toStrict (simpleBody response) `shouldSatisfy` BS.isInfixOf "was denied (no rule allowed it)"
+                    decisions `shouldReturn` [Metric.Deny, Metric.Deny]
+                    denials `shouldReturn` replicate 2 (Just "BlockedByDefault", Metric.ReasonPolicy)
+                    sort . ordNub <$> readIORef hits `shouldReturn` expectedReads
         for_ ["GET", "HEAD"] $ \method ->
             for_ ["/gems/acme-1-2.0.gem", "/quick/Marshal.4.8/acme-1-2.0.gemspec.rz"] $ \path -> do
                 it ("keeps invalid inventory on its existing failure path for " <> show (method, path)) $
@@ -885,7 +894,7 @@ countLimits count binding =
      in binding{bindingPackumentDeps = deps{pdLimits = (pdLimits deps){maxVersionCount = count, maxArtifactCount = count}}}
 
 warmCoordinateCache :: ServeRuntime -> MountBinding -> IORef [[Text]] -> IO ServeRuntime
-warmCoordinateCache uncached binding hits = warmPublicDocuments uncached binding hits [("acme", status403), ("acme-1", status200)]
+warmCoordinateCache uncached binding hits = warmPublicDocuments uncached binding hits [("acme", status404), ("acme-1", status200)]
 
 warmPublicDocuments :: ServeRuntime -> MountBinding -> IORef [[Text]] -> [(Text, Status)] -> IO ServeRuntime
 warmPublicDocuments uncached binding hits documents = do

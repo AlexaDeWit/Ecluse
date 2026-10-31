@@ -61,6 +61,8 @@ data OriginFault
       FaultStatus Int
     | -- | A closed connection with no HTTP response.
       FaultClosed
+    | -- | The mount configures no such origin. Only the private origin can be left out.
+      FaultUnconfigured
     deriving stock (Eq, Show)
 
 -- | The faults that replace a session's private and public origins.
@@ -82,12 +84,15 @@ data ServingDriver = ServingDriver
 -- | Run the shared policy, authority, integrity and conditional response obligations.
 servingContract :: Text -> ServingDriver -> Spec
 servingContract provider driver = describe "shared serving contract" $ do
-    contractExample "default-denial" "denies public versions by default" $
-        run [] [] [old] $ \session -> do
-            response <- requestMetadata session methodGet []
-            responseStatus response `shouldBe` 403
-            artifact <- requestArtifact session methodGet [] "1.2.3"
-            responseStatus artifact `shouldBe` 403
+    contractExample "default-denial" "denies public versions by default, and answers 404 for a listing with nothing admitted beside any private origin" $
+        -- A private origin that holds nothing, one that answers 404, and none at all.
+        for_ [Nothing, Just (FaultStatus 404), Just FaultUnconfigured] $ \private ->
+            withFaultedServing driver (ServingFaults private Nothing) [] [] [old] $ \session -> do
+                for_ [methodGet, methodHead] $ \method -> do
+                    response <- requestMetadata session method []
+                    (responseStatus response, responseVersions response) `shouldBe` (404, [])
+                artifact <- requestArtifact session methodGet [] "1.2.3"
+                responseStatus artifact `shouldBe` 403
     contractExample "identity-precedence" "admits an explicit identity and lets denial take precedence" $ do
         let packageIdentity = servingIdentity driver "1.2.3"
         run [AllowByIdentity packageIdentity] [] [young] $ \session -> do
@@ -96,7 +101,7 @@ servingContract provider driver = describe "shared serving contract" $ do
             responseVersions response `shouldBe` ["1.2.3"]
         run [AllowByIdentity packageIdentity, DenyByIdentity packageIdentity] [] [old] $ \session -> do
             response <- requestMetadata session methodGet []
-            responseStatus response `shouldBe` 403
+            responseStatus response `shouldBe` 404
             artifact <- requestArtifact session methodGet [] "1.2.3"
             responseStatus artifact `shouldBe` 403
     contractExample "authorised-union" "serves the union of trusted-private and gated-public versions" $
@@ -118,7 +123,7 @@ servingContract provider driver = describe "shared serving contract" $ do
             artifact <- requestArtifact session methodGet [] "1.2.3"
             responseStatus artifact `shouldBe` 200
             responseBody artifact `shouldBe` "private bytes"
-    contractExample "private-availability" "refuses on a failing private origin, serves after a private 404 or a public outage, and answers 404 when neither origin holds the name" $ do
+    contractExample "private-availability" "refuses on a failing private origin, serves after a private 404 or a public outage, and answers 404 when no configured origin holds the name" $ do
         -- An unavailable private origin answers 503, and an invalid private reply answers 502.
         for_ [(FaultStatus 429, 503), (FaultStatus 500, 503), (FaultStatus 503, 503), (FaultClosed, 503), (FaultStatus 302, 502), (FaultStatus 400, 502)] $ \(fault, refusal) ->
             faulted (ServingFaults (Just fault) Nothing) [] [old] $ \session -> do
@@ -138,6 +143,13 @@ servingContract provider driver = describe "shared serving contract" $ do
                 (responseStatus response, responseVersions response) `shouldBe` (settled, [])
                 artifact <- requestArtifact session methodGet [] "1.2.3"
                 responseStatus artifact `shouldBe` settled
+        -- With no private origin configured, a public 404 settles the name alone.
+        faulted (ServingFaults (Just FaultUnconfigured) (Just (FaultStatus 404))) [] [] $ \session -> do
+            for_ [methodGet, methodHead] $ \method -> do
+                response <- requestMetadata session method []
+                (responseStatus response, responseVersions response) `shouldBe` (404, [])
+            artifact <- requestArtifact session methodGet [] "1.2.3"
+            responseStatus artifact `shouldBe` 404
         -- Each ecosystem's exact refusal status is pinned beside its native routes.
         for_ [401, 403] $ \refused ->
             faulted (ServingFaults (Just (FaultStatus refused)) Nothing) [] [old] $ \session -> do
@@ -159,7 +171,9 @@ servingContract provider driver = describe "shared serving contract" $ do
     contractExample "trusted-integrity" "applies the default integrity floor to trusted-private versions" $
         run agePolicy [old{releaseHasIntegrity = False}] [] $ \session -> do
             response <- requestMetadata session methodGet []
-            responseStatus response `shouldBe` 403
+            -- npm and PyPI refuse the version at the trusted floor, so the listing admits nothing.
+            -- Cargo and RubyGems drop a row with no checksum as malformed, so nothing is refused.
+            (responseStatus response, responseVersions response) `shouldBe` (if provider `elem` ["cargo", "rubygems"] then 403 else 404, [])
     contractExample "artifact-integrity" "serves the exact artifact bytes and advertised integrity" $
         artifactIntegrityCase driver
     contractExample "artifact-head" "serves artifact HEAD without transferring bytes" $
@@ -228,7 +242,7 @@ servingContract provider driver = describe "shared serving contract" $ do
         gzipTag <- run agePolicy [] [old] $ \session -> requestMetadata session methodGet gzipOffer >>= validator
         run [] [] [old] $ \session -> do
             refused <- requestMetadata session methodGet (("If-None-Match", gzipTag) : gzipOffer)
-            responseStatus refused `shouldBe` 403
+            responseStatus refused `shouldBe` 404
     contractExample "artifact-uncoded" "relays artifact GET and HEAD unchanged to a client that accepts gzip" $
         run agePolicy [] [old] $ \session ->
             for_ [methodGet, methodHead] $ \method -> do
