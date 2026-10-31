@@ -116,6 +116,11 @@ tasks:
     desc: Run the smoke suite (live registries, non-gating)
     cmds:
       - cabal test ecluse-smoke --test-show-details=direct
+  test-smoke-obligations:
+    desc: Check the smoke suite's live measurement obligations without running a case (gating, no network)
+    cmds:
+      # Hspec builds the spec tree under --dry-run, so SpecHook's check runs and no example does.
+      - cabal test ecluse-smoke --test-show-details=direct --test-options=--dry-run
   test-e2e-prepare:
     desc: Build one immutable image archive and the E2E plan
     env:
@@ -517,6 +522,7 @@ tasks:
       # The residency gate runs outside coverage on purpose. It measures live bytes,
       # so its process must not carry hpc's tix apparatus or another suite's heap.
       - task: test-residency
+      - task: test-smoke-obligations
       - task: doctest
       - task: cabal-check
   static-checks:

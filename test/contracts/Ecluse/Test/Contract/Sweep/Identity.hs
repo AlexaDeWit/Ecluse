@@ -61,10 +61,26 @@ identityScenarios IdentityFixture{..} stores@StoreOps{..} ClientOps{..} SweepOps
         run <- runSweep plane Preview (FullIdentity (packageName identityPreview))
         sweepExit run `shouldBe` ExitSuccess
         let output = sweepOutput run
+            preview = packageName identityPreview
+            held = Map.findWithDefault [] preview
+            firstParty = length (Map.findWithDefault [] identityFirstPartyName initial) + length (Map.findWithDefault [] identityFirstPartyName privateInitial)
+            examined = sum (map length (Map.elems initial <> Map.elems privateInitial)) - firstParty
+            condemned = length (held initial) + length (held privateInitial)
         output `shouldSatisfy` T.isInfixOf identityMirrorDiagnostic
         output `shouldSatisfy` T.isInfixOf identityCacheDiagnostic
-        output `shouldSatisfy` T.isInfixOf ("dry run, would delete " <> packageName identityPreview <> "@" <> identityPreviewVersion)
-        output `shouldSatisfy` T.isInfixOf "deleted 2"
+        -- Each store previews its own copies, so the mirror's copy is named apart from the cache's.
+        sort (mapMaybe (previewedIn preview) (sweepAudit run))
+            `shouldBe` sort ([("mirrorTarget", version) | version <- held initial] <> [("privateUpstream", version) | version <- held privateInitial])
+        held initial `shouldSatisfy` (not . null)
+        held privateInitial `shouldSatisfy` elem identityPreviewVersion
+        filter ("mirror sweep cycle " `T.isPrefixOf`) (sweepEvents run)
+            `shouldBe` [ cycleLine
+                            [ "examined " <> show examined
+                            , "deleted " <> show (length (ordNub (held initial <> held privateInitial)))
+                            , "kept " <> show (examined - condemned)
+                            , "guard-skipped " <> show firstParty
+                            ]
+                       ]
         output `shouldSatisfy` (not . T.isInfixOf "counted from partial evidence")
         output `shouldSatisfy` T.isInfixOf "previewing only: this run holds nothing that could delete"
         output `shouldSatisfy` T.isInfixOf "This preview deleted nothing, so it proves no authority to delete"
@@ -131,3 +147,12 @@ assertFullSweep firstPartyName pkg initial run = do
 
 cycleLine :: [Text] -> Text
 cycleLine fields = "mirror sweep cycle complete: " <> T.intercalate ", " fields
+
+-- The store role and version of a labelled preview line for the package, such as
+-- @mirrorTarget <url>: dry run, would delete <package>\@<version>: <reason>@.
+previewedIn :: Text -> Text -> Maybe (Text, Text)
+previewedIn package message = do
+    let (label, rest) = T.breakOn ": " message
+    named <- T.stripPrefix (": dry run, would delete " <> package <> "@") rest
+    role <- find (`T.isPrefixOf` label) ["mirrorTarget ", "privateUpstream "]
+    pure (T.strip role, fst (T.breakOn ": " named))

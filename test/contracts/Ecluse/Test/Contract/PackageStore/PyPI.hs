@@ -67,13 +67,14 @@ withPyPISession maintenance use = do
                 , sbRemove = \versions -> modifyIORef' held (Map.filter (\file -> nativeVersion file `notElem` versions))
                 , sbTakeDeleteFailure = takeStoreFailure failDelete
                 }
-    withStoreSession (reply held order failWrite) (build boundary) observed failWrite failDelete use
+    withStoreSession ((== "/simple/contract-package/") . capPath) (reply held order failWrite) (build boundary) observed failWrite failDelete use
   where
     build boundary base exchanges = do
         let origin = originClient defaultLimits exchanges (loopbackRegistryUrl base) (Just credential)
             publisher = newMirrorPublish (MirrorTransport exchanges (pure (Just credential)) defaultLimits passthroughTracingPort) (ocBaseUrl origin) (loopbackRegistryUrl (base <> "/legacy/")) (pypiPublishCodec nativePresentation)
+            readStoredFile _ filename = fetchStoredArtifact (MirrorArtifactBodyLimit 32768) origin (artifactRequestByUrl (ocToken origin) (base <> decodeUtf8 (filePath filename)))
         store <- maintenance origin boundary
-        pure (storeOperations packageName pypiVersion (readRelease origin) (writeRelease publisher) store)
+        pure (storeOperations packageName pypiVersion (readRelease origin) readStoredFile (writeRelease publisher) store)
 
 -- | Maintenance uses the production PyPI manifest reader independently of upload preparation.
 readPyPIStoreManifestOver :: OriginClient -> StoreManifestRead
@@ -229,7 +230,10 @@ fileEntry base artifact requirement =
         ]
 
 artifactPath :: PackageStoreArtifact -> ByteString
-artifactPath artifact = "/simple/contract-package/" <> encodeUtf8 (psaFilename artifact)
+artifactPath = filePath . psaFilename
+
+filePath :: Text -> ByteString
+filePath filename = "/simple/contract-package/" <> encodeUtf8 filename
 
 credential :: ClientCredential
 credential = ClientCredential (Just "aws") (mkSecret "fixture-token")

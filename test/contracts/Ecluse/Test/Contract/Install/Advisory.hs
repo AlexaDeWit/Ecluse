@@ -13,8 +13,6 @@ module Ecluse.Test.Contract.Install.Advisory (
     Denial (..),
     parseDenial,
     advisoryRefuses,
-    advisoryDenies,
-    advisoryAdmits,
 ) where
 
 import Data.Aeson (Value, decodeStrict')
@@ -31,8 +29,12 @@ import Ecluse.Test.Json (asObject, objectAt, textAt)
 data AdvisoryPolicy
     = -- | Deny the independently scored affected release by CVSS.
       DenyCve
-    | -- | Deny the independently scored affected release by EPSS.
+    | -- | Admit the old affected release under the same CVSS deny: its advisory scores below the threshold.
+      CvssBelowThreshold
+    | -- | Deny the affected release by EPSS, from an advisory with no CVSS score.
       DenyEpss
+    | -- | Admit the old affected release under the same EPSS deny: its advisory is severe but unlikely to be exploited.
+      EpssBelowThreshold
     | -- | Admit the exact fix despite its quarantine age.
       Remediation
     | -- | Keep the exact fix quarantined when remediation is disabled.
@@ -72,9 +74,13 @@ data AdvisoryScenarioDriver = AdvisoryScenarioDriver
 -- | Require scored and MAL denials, and the exact-fix and partial-fix overrides beside their controls.
 advisoryContract :: Text -> SpecWith AdvisoryScenarioDriver
 advisoryContract prefix = do
-    for_ [("deny-cve", DenyCve, "DenyIfCve"), ("deny-epss", DenyEpss, "DenyIfEpss"), ("mal-denial", KnownMaliciousDefault, "DenyIfKnownMalicious")] $ \(suffix, policy, rule) ->
-        it (caseLabel (prefix <> "/" <> suffix) ("denies an affected release by " <> rule)) $ \driver ->
+    for_ [("deny-cve", DenyCve, "DenyIfCve", Just CvssBelowThreshold), ("deny-epss", DenyEpss, "DenyIfEpss", Just EpssBelowThreshold), ("mal-denial", KnownMaliciousDefault, "DenyIfKnownMalicious", Nothing)] $ \(suffix, policy, rule, control) ->
+        it (caseLabel (prefix <> "/" <> suffix) ("denies an affected release by " <> rule)) $ \driver -> do
             advisoryWithPolicy driver policy (advisoryDenies (advisoryCaseForPolicy driver policy) rule)
+            -- The score decides, not the advisory alone: below the threshold the release stays admitted.
+            for_ control $ \below ->
+                advisoryWithPolicy driver below $ \session ->
+                    advisoryRelease session (advisoryAffectedVersion (advisoryCaseForPolicy driver below)) >>= advisoryAdmits
     it (caseLabel (prefix <> "/exact-fix") "admits the exact fix while the disabled control quarantines it") $ \driver -> do
         let fixture = advisoryCaseForPolicy driver Remediation
         advisoryWithPolicy driver Remediation $ \session ->
@@ -91,7 +97,7 @@ advisoryContract prefix = do
             advisoryListedVersions session `shouldReturn` [advisoryAffectedVersion control]
             refuse control session (advisoryFixedVersion control) "BlockedByDefault" (Just (advisoryExpectedId control))
 
--- | A denial retains the unaffected listing and cannot publish into a required mirror.
+-- A denial retains the unaffected listing and cannot publish into a required mirror.
 advisoryDenies :: AdvisoryCase -> Text -> AdvisorySession -> Expectation
 advisoryDenies fixture rule session = do
     advisoryListedVersions session `shouldReturn` [advisoryFixedVersion fixture]
@@ -135,7 +141,7 @@ advisoryRefuses nativeMessage expected driver = do
     observed <- advisoryAwaitDenials driver expected
     observed `shouldSatisfy` elem expected
 
--- | Require the exact native artifact before installing the admitted remediation.
+-- Require the exact native artifact before installing the admitted remediation.
 advisoryAdmits :: AdvisoryDriver -> Expectation
 advisoryAdmits driver = do
     lookup (advisoryExpectedArtifact driver) (advisoryAdvertisedArtifacts driver) `shouldSatisfy` isJust

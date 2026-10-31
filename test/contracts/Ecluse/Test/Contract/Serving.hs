@@ -6,15 +6,19 @@
 -- | Admission, origin authority, HTTP representation and content-coding laws over native request drivers.
 module Ecluse.Test.Contract.Serving (
     ServingDriver (..),
+    ServingSetup (..),
+    servingSetup,
+    withServing,
     ServingSession (..),
     ServingRelease (..),
     ServingResponse (..),
     OriginFault (..),
     ServingFaults (..),
     servingContract,
-    artifactIntegrityCase,
     artifactDigestCase,
     artifactHeadCase,
+    artifactHeadLengthCase,
+    artifactHeadUpstreamCase,
 ) where
 
 import Codec.Compression.GZip qualified as GZip
@@ -26,9 +30,12 @@ import Data.Time (nominalDay)
 import Network.HTTP.Types (Header, Method, methodGet, methodHead)
 import Test.Hspec
 
+import Ecluse.Core.Package (HashAlg (SHA512))
+import Ecluse.Core.Package.Integrity (MinIntegrity, MinTrustedIntegrity, mkMinIntegrity, mkMinTrustedIntegrity)
 import Ecluse.Core.Rules.Types (Rule (AllowByIdentity, AllowIfOlderThan, DenyByIdentity))
 import Ecluse.Core.Server.Encoding (MetadataCompression (GzipWhenAccepted, IdentityOnly))
 import Ecluse.Test.Contract.Catalogue (caseLabel)
+import Ecluse.Test.Package (defaultMinIntegrity, defaultMinTrustedIntegrity)
 
 -- | A release fixture with controlled age, bytes and integrity presence.
 data ServingRelease = ServingRelease
@@ -53,6 +60,8 @@ data ServingResponse = ServingResponse
 data ServingSession = ServingSession
     { requestMetadata :: Method -> [Header] -> IO ServingResponse
     , requestArtifact :: Method -> [Header] -> Text -> IO ServingResponse
+    , artifactUpstreamMethods :: IO [Method]
+    -- ^ The methods the session's origins have received at fixture artifact paths, the private origin's first.
     }
 
 -- | How a faulted origin answers every request.
@@ -72,14 +81,30 @@ data ServingFaults = ServingFaults
     }
     deriving stock (Eq, Show)
 
--- | Native fixture encoding, resource ownership, requests and digest spelling, under a mount's metadata coding.
+-- | A proxy's configuration over its origins.
+data ServingSetup = ServingSetup
+    { setupCompression :: MetadataCompression
+    , setupRules :: [Rule]
+    , setupPublicFloor :: MinIntegrity
+    , setupTrustedFloor :: MinTrustedIntegrity
+    }
+
+-- | Native fixture encoding, resource ownership, requests and digest spelling.
 data ServingDriver = ServingDriver
-    { withServing :: forall a. MetadataCompression -> [Rule] -> [ServingRelease] -> [ServingRelease] -> (ServingSession -> IO a) -> IO a
-    , withFaultedServing :: forall a. ServingFaults -> [Rule] -> [ServingRelease] -> [ServingRelease] -> (ServingSession -> IO a) -> IO a
-    -- ^ 'withServing' under gzip, with either origin replaced by its fault.
+    { withOrigins :: forall a. ServingFaults -> [ServingRelease] -> [ServingRelease] -> ((ServingSetup -> IO ServingSession) -> IO a) -> IO a
+    -- ^ Origins for the releases, each replaced by its fault, and a proxy over them per setup, each with its own runtime.
     , servingIdentity :: Text -> Text
     , servingDigest :: ByteString -> Text
     }
+
+-- | Gzip-capable metadata and the default integrity floors under these rules.
+servingSetup :: [Rule] -> ServingSetup
+servingSetup rules = ServingSetup GzipWhenAccepted rules defaultMinIntegrity defaultMinTrustedIntegrity
+
+-- | One proxy under the setup, over origins that serve the private and public releases.
+withServing :: ServingDriver -> ServingSetup -> [ServingRelease] -> [ServingRelease] -> (ServingSession -> IO a) -> IO a
+withServing driver setup privateReleases publicReleases action =
+    withOrigins driver (ServingFaults Nothing Nothing) privateReleases publicReleases (\proxy -> proxy setup >>= action)
 
 -- | Run the shared policy, authority, integrity and conditional response obligations.
 servingContract :: Text -> ServingDriver -> Spec
@@ -87,7 +112,8 @@ servingContract provider driver = describe "shared serving contract" $ do
     contractExample "default-denial" "denies public versions by default, and answers 404 for a listing with nothing admitted beside any private origin" $
         -- A private origin that holds nothing, one that answers 404, and none at all.
         for_ [Nothing, Just (FaultStatus 404), Just FaultUnconfigured] $ \private ->
-            withFaultedServing driver (ServingFaults private Nothing) [] [] [old] $ \session -> do
+            withOrigins driver (ServingFaults private Nothing) [] [old] $ \proxy -> do
+                session <- proxy (servingSetup [])
                 for_ [methodGet, methodHead] $ \method -> do
                     response <- requestMetadata session method []
                     (responseStatus response, responseVersions response) `shouldBe` (404, [])
@@ -105,10 +131,12 @@ servingContract provider driver = describe "shared serving contract" $ do
             artifact <- requestArtifact session methodGet [] "1.2.3"
             responseStatus artifact `shouldBe` 403
     contractExample "authorised-union" "serves the union of trusted-private and gated-public versions" $
-        run agePolicy [old] [old, other] $ \session -> do
+        -- The private origin alone holds 3.4.5 and its own copy of 1.2.3, so each origin's share is visible.
+        run agePolicy [old{releaseVersion = "3.4.5"}, old{releaseBytes = "private bytes"}] [old, other] $ \session -> do
             response <- requestMetadata session methodGet []
             responseStatus response `shouldBe` 200
-            responseVersions response `shouldBe` ["1.2.3", "2.3.4"]
+            responseVersions response `shouldBe` ["1.2.3", "2.3.4", "3.4.5"]
+            Map.lookup "1.2.3" (responseDigests response) `shouldBe` Just [servingDigest driver "private bytes"]
     contractExample "quarantine-private-authority" "gates public versions while trusting private release age" $
         run agePolicy [young{releaseVersion = "3.4.5"}] [old, young{releaseVersion = "2.3.4"}] $ \session -> do
             response <- requestMetadata session methodGet []
@@ -163,22 +191,39 @@ servingContract provider driver = describe "shared serving contract" $ do
             (responseStatus response, responseVersions response) `shouldBe` (200, ["2.3.4"])
             artifact <- requestArtifact session methodGet [] "2.3.4"
             responseStatus artifact `shouldBe` 200
-    contractExample "public-integrity" "filters a hashless public version from the listing" $
+    contractExample "public-integrity" "filters a hashless public version from the listing" $ do
         run agePolicy [] [old, other{releaseHasIntegrity = False}] $ \session -> do
             response <- requestMetadata session methodGet []
             responseStatus response `shouldBe` 200
             responseVersions response `shouldBe` ["1.2.3"]
-    contractExample "trusted-integrity" "applies the default integrity floor to trusted-private versions" $
+        -- Every fixture digest is SHA-256, so a SHA-512 public floor reaches each native format,
+        -- including those whose parser already refuses a hashless row. The trusted floor is unchanged.
+        sha512Floor <- either (fail . toString) pure (mkMinIntegrity SHA512)
+        withServing driver (servingSetup agePolicy){setupPublicFloor = sha512Floor} [old{releaseVersion = "3.4.5"}] [old] $ \session -> do
+            response <- requestMetadata session methodGet []
+            responseStatus response `shouldBe` 200
+            responseVersions response `shouldBe` ["3.4.5"]
+            artifact <- requestArtifact session methodGet [] "1.2.3"
+            responseStatus artifact `shouldBe` 403
+    contractExample "trusted-integrity" "applies the default integrity floor to trusted-private versions" $ do
         run agePolicy [old{releaseHasIntegrity = False}] [] $ \session -> do
             response <- requestMetadata session methodGet []
             -- npm and PyPI refuse the version at the trusted floor, so the listing admits nothing.
             -- Cargo and RubyGems drop a row with no checksum as malformed, so nothing is refused.
             (responseStatus response, responseVersions response) `shouldBe` (if provider `elem` ["cargo", "rubygems"] then 403 else 404, [])
+        -- Cargo and RubyGems parsers refuse a hashless row before any floor, so a SHA-512 trusted floor
+        -- over SHA-256 fixtures reaches the floor in every format. The public floor is unchanged.
+        sha512Floor <- either (fail . toString) pure (mkMinTrustedIntegrity SHA512)
+        for_ [(defaultMinTrustedIntegrity, ["1.2.3", "3.4.5"]), (sha512Floor, ["1.2.3"])] $ \(trustedFloor, listed) ->
+            withServing driver (servingSetup agePolicy){setupTrustedFloor = trustedFloor} [old{releaseVersion = "3.4.5"}] [old] $ \session -> do
+                response <- requestMetadata session methodGet []
+                (responseStatus response, responseVersions response) `shouldBe` (200, listed)
     contractExample "artifact-integrity" "serves the exact artifact bytes and advertised integrity" $
         artifactIntegrityCase driver
     contractExample "artifact-head" "serves artifact HEAD without transferring bytes" $
-        run agePolicy [] [old] $ \session ->
-            requestArtifact session methodHead [] "1.2.3" >>= artifactHeadCase
+        run agePolicy [] [old] $ \session -> do
+            requestArtifact session methodHead [] "1.2.3" >>= artifactHeadLengthCase (toInteger (BS.length (releaseBytes old)))
+            artifactUpstreamMethods session >>= artifactHeadUpstreamCase
     contractExample "conditional-coherence" "keeps GET, HEAD and conditional responses coherent" $
         run agePolicy [] [old] $ \session -> do
             initial <- requestMetadata session methodGet []
@@ -232,17 +277,30 @@ servingContract provider driver = describe "shared serving contract" $ do
             responseStatus refused `shouldBe` 406
             varies refused `shouldBe` True
     contractExample "metadata-gzip-opt-out" "keeps the identity listing unchanged when the operator opts out" $
-        withServing driver IdentityOnly agePolicy [] [old] $ \session -> do
+        withServing driver (servingSetup agePolicy){setupCompression = IdentityOnly} [] [old] $ \session -> do
             plain <- requestMetadata session methodGet []
             for_ [gzipOffer, [("Accept-Encoding", "*;q=0")]] $ \offered -> do
                 response <- requestMetadata session methodGet offered
                 response `shouldBe` plain
             varies plain `shouldBe` False
-    contractExample "metadata-gzip-policy" "applies policy before a gzip validator can answer 304" $ do
-        gzipTag <- run agePolicy [] [old] $ \session -> requestMetadata session methodGet gzipOffer >>= validator
-        run [] [] [old] $ \session -> do
-            refused <- requestMetadata session methodGet (("If-None-Match", gzipTag) : gzipOffer)
+    contractExample "metadata-gzip-policy" "applies policy before a gzip validator can answer 304" $
+        -- Every proxy reads the same origins, so the validator matches again wherever the policy is unchanged.
+        withOrigins driver (ServingFaults Nothing Nothing) [] [old, other] $ \proxy -> do
+            let under = proxy . servingSetup
+            gzipTag <- under agePolicy >>= \session -> requestMetadata session methodGet gzipOffer >>= validator
+            let replay session = requestMetadata session methodGet (("If-None-Match", gzipTag) : gzipOffer)
+                narrowed = agePolicy <> [DenyByIdentity (servingIdentity driver "2.3.4")]
+            unchanged <- under agePolicy >>= replay
+            responseStatus unchanged `shouldBe` 304
+            refused <- under [] >>= replay
             responseStatus refused `shouldBe` 404
+            narrowing <- under narrowed
+            changed <- replay narrowing
+            (responseStatus changed, lookup "Content-Encoding" (responseHeaders changed)) `shouldBe` (200, Just "gzip")
+            validator changed >>= (`shouldNotBe` gzipTag)
+            plain <- requestMetadata narrowing methodGet []
+            responseVersions plain `shouldBe` ["1.2.3"]
+            GZip.decompress (responseBody changed) `shouldBe` responseBody plain
     contractExample "artifact-uncoded" "relays artifact GET and HEAD unchanged to a client that accepts gzip" $
         run agePolicy [] [old] $ \session ->
             for_ [methodGet, methodHead] $ \method -> do
@@ -255,8 +313,8 @@ servingContract provider driver = describe "shared serving contract" $ do
                 lookup "Content-Encoding" (responseHeaders offered) `shouldBe` Nothing
   where
     contractExample identifier description = it (caseLabel ("integration.serving." <> provider <> "." <> identifier) description)
-    run = withServing driver GzipWhenAccepted
-    faulted faults = withFaultedServing driver faults agePolicy
+    run = withServing driver . servingSetup
+    faulted faults privateReleases publicReleases action = withOrigins driver faults privateReleases publicReleases (\proxy -> proxy (servingSetup agePolicy) >>= action)
     gzipOffer = [("Accept-Encoding", "gzip")]
     varies response = maybe False (BS.isInfixOf "Accept-Encoding") (lookup "Vary" (responseHeaders response))
     validator response = maybe (fail "no ETag on admitted metadata") pure (lookup "ETag" (responseHeaders response))
@@ -265,10 +323,10 @@ servingContract provider driver = describe "shared serving contract" $ do
     young = old{releaseAgeDays = 1}
     other = old{releaseVersion = "2.3.4"}
 
--- | Require both the fixture bytes and the digest advertised by the native listing.
+-- Require both the fixture bytes and the digest advertised by the native listing.
 artifactIntegrityCase :: ServingDriver -> IO ()
 artifactIntegrityCase driver =
-    withServing driver GzipWhenAccepted [AllowIfOlderThan (7 * nominalDay)] [] [release] $ \session -> do
+    withServing driver (servingSetup [AllowIfOlderThan (7 * nominalDay)]) [] [release] $ \session -> do
         response <- requestMetadata session methodGet []
         responseStatus response `shouldBe` 200
         Map.lookup "1.2.3" (responseDigests response) `shouldBe` Just [servingDigest driver (releaseBytes release)]
@@ -290,6 +348,17 @@ artifactHeadCase :: ServingResponse -> Expectation
 artifactHeadCase response = do
     responseStatus response `shouldBe` 200
     responseBody response `shouldBe` ""
-    let contentLength = lookup "Content-Length" (responseHeaders response) >>= parseLength
-        parseLength bytes = readMaybe (toString (decodeUtf8 bytes :: Text))
-    (contentLength :: Maybe Integer) `shouldSatisfy` maybe False (> 0)
+    advertisedLength response `shouldSatisfy` maybe False (> 0)
+
+-- | An admitted artifact HEAD advertises the exact length of the artifact's bytes.
+artifactHeadLengthCase :: Integer -> ServingResponse -> Expectation
+artifactHeadLengthCase expected response = do
+    artifactHeadCase response
+    advertisedLength response `shouldBe` Just expected
+
+-- | The upstream methods during an artifact HEAD: at least one, and every one a HEAD, so the artifact's bytes never travel.
+artifactHeadUpstreamCase :: [Method] -> Expectation
+artifactHeadUpstreamCase methods = methods `shouldSatisfy` (\seen -> not (null seen) && all (== methodHead) seen)
+
+advertisedLength :: ServingResponse -> Maybe Integer
+advertisedLength response = lookup "Content-Length" (responseHeaders response) >>= readMaybe . toString . decodeUtf8 @Text

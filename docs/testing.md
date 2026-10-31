@@ -782,6 +782,12 @@ The cases depend on uncontrolled external services, so an occasional failure is 
 and never blocks a merge. The CI `gate` does not depend on them. Treat a failure as a
 prompt to investigate (protocol drift or flakiness?), not a blocker. Run: `task test-smoke`.
 
+The suite's start-up check of its live measurement obligations does gate. The `build` job runs
+`task test-smoke-obligations` on every pull request, which runs the suite under `--dry-run`. Hspec
+still builds the spec tree, so `SpecHook` reads every case label and stops the suite on a missing,
+duplicate, unknown or malformed case, but no example runs and nothing reaches the network.
+`task check` includes it through `cabal-checks`.
+
 The hermetic span and metric assertions run in `ecluse-integration`. A request drives an in-process
 Écluse, and a real Collector container asserts the spans and metrics arrived. The unit tier covers
 config parsing, the denial span-attribute mapping, the JSONL scribe, and the metric-label guard.
@@ -849,8 +855,6 @@ The cases of one telemetry group share a collector, and each install emits the s
 span assertion therefore reads whole spans through `exportedSpans` and keys on an attribute of its
 own case, such as the coordinate of the package that the case installs. The private-leg case owns
 a separate coordinate, its public install, the mirror wait, and its second fresh install.
-`Ecluse.Test.CollectorSpec` in the core unit gate checks the shared parser and matching predicates
-against unrelated spans, signals, coordinates, events, links, and malformed attributes.
 
 Each declared group owns a complete data-plane lifecycle. Its cases cannot read another group's mutable store state.
 Profiles declare npm, PyPI, or mixed mounts and acquire the clients and services their cases need.
@@ -2142,8 +2146,7 @@ requires reads, writes, inventory, deletion, integrity, and recovery for every b
 An incomplete driver cannot reduce either required list. Discovery is pure, and missing families
 produce named failures without stopping unrelated contracts. A passing full composition defines
 completion only when its lower-tier obligations and execution reports also pass.
-npm, PyPI, Cargo, and RubyGems register the full ecosystem composition. The separately named read-only foundation
-remains an API for incomplete providers and does not establish full ecosystem completion.
+npm, PyPI, Cargo, and RubyGems register the full ecosystem composition.
 CI uploads actual plan and report pairs from the instrumented core unit, runtime unit and
 integration legs. The `e2e` job downloads all three pairs and audits each ecosystem against its subject's E2E report.
 All four tiers share the workflow run and attempt identity and use `arm64` as the architecture name.
@@ -2291,7 +2294,7 @@ Keep live unavailability distinct from refused product behaviour and planned cov
 | Metadata residency captures and limits, gating in `ecluse-residency` | Add a `Residency` record through `residencyFor` in [Probe.hs](../test/residency/Ecluse/Core/Server/MemoryModel/Probe.hs). Supply authenticated captures, an exact `Calibration` for the charges, measured `Figures` for each capture, the entry bound and probe hooks. Add the document cut and heavy-base text in `Ecluse.Test.Corpus.Subset` and `Ecluse.Test.Corpus.Merge` | The residency coverage check fails by ecosystem name when a registered adapter lacks its provider. It checks non-empty captures, and one `Figures` record for each capture and no other. Ecosystems without adapters remain excluded. The complete corpus needs a capture above 3,687,514 bytes. [Benchmark captures](#benchmark-captures) defines authentication. [Listing peaks](#listing-peaks) defines calibration and its checks. |
 | Read evaluation, gating in `ecluse-residency` | The same captures, and an arm for the ecosystem's served-document form in `documentKeys` in [MetadataResidencySpec.hs](../test/residency/Ecluse/Core/Registry/MetadataResidencySpec.hs) | Without that arm, the weak-pointer check of [Read evaluation](#read-evaluation) finds only the document itself and fails. |
 | Work-per-request instance and corpus | Register an `EcosystemBench` in [Ecluse.Test.EcosystemBench](../test/support/Ecluse/Test/EcosystemBench.hs), with frozen bytes under `bench/corpus/<ecosystem>/`, pins in `bench/corpus/pins.json`, and a synthetic byte generator | npm and PyPI run every metadata group through the shared record. [PyPI captures](../bench/corpus/pypi/) use the shipped PEP 691 Simple JSON format. Generator checks cover decoding, projection, selective reads, and artifact URL rewriting. New instances require no changes to the benchmark groups or report renderer. |
-| Allocation budgets | Per-package, per-leg figures in the ecosystem's section of `acceptance/criteria.json`, and osv.dev records for at least one capture under `bench/corpus/advisories/<ecosystem>/`, pinned at `advisories.records.<ecosystem>` in `bench/corpus/pins.json` | The [harness](../acceptance/app/Main.hs) measures every entry of the registered `EcosystemBench` corpus: the committed captures in the gating `captures` mode, and live npm packuments and PyPI PEP 691 Simple JSON documents in the `live` mode. Each ecosystem has its own report section. A new corpus entry needs calibrated figures before the gate passes, and the covered captures join the expected list in `Ecluse.Test.Corpus.AdvisoriesSpec`. |
+| Allocation budgets | Per-package, per-leg figures in the ecosystem's section of `acceptance/criteria.json`, and osv.dev records for at least one capture under `bench/corpus/advisories/<ecosystem>/`, pinned at `advisories.records.<ecosystem>` in `bench/corpus/pins.json` | The [harness](../acceptance/app/Main.hs) measures every entry of the registered `EcosystemBench` corpus: the committed captures in the gating `captures` mode, and live npm packuments and PyPI PEP 691 Simple JSON documents in the `live` mode. Each ecosystem has its own report section. A new corpus entry needs calibrated figures before the gate passes. Both modes run `checkCapturesServed` from `Ecluse.Test.Corpus.Advisories` before they measure, which stops the run unless the served advisories cover at least one capture and return rows for each capture they cover. |
 | Load fixture | `bench/load/Ecluse/BenchLoad/<Ecosystem>.hs` exporting an `UpstreamFixture`, registered in `bench/load/Ecluse/BenchLoad/Scenarios.hs`, with a [success floor](#success-floors) cell for each scenario pass in `bench/load/floors.json`, uncalibrated until a calibration | [npm](../bench/load/Ecluse/BenchLoad/Npm.hs) and [PyPI](../bench/load/Ecluse/BenchLoad/PyPI.hs) run metadata, artifact, and cache scenarios through shared proxy wiring. Each fixture gives `Ecluse.BenchLoad.PrivateCopy` its corpus, stub, listing URL and `Ecluse.Test.Corpus.Subset` cut for the private-copy scenarios. PyPI checks PEP 691 indices and wheel bodies before load. Its eviction cache stays below the actual corpus working set. PyPI worker mirroring measures four native archive files per job through verified extraction, upload, durable state and final completion proof. |
 
 The shared residency gate remains in
@@ -2310,16 +2313,13 @@ Advisory-shaped test data comes from committed OSV JSON, apart from the benchmar
 worst case. The suites read `test/fixtures/osv/`
 (`v1/`, plus the `v2/` delta). The benchmarks' [advisory rule rows](#advisory-rule-rows), the
 [allocation gate](#allocation-budgets-perf-allocation-gating) and the live performance-acceptance
-run, the load harness's advisory scenarios, and `ecluse-unit` (`Ecluse.Test.Corpus.AdvisoriesSpec`)
-read `bench/corpus/advisories/`. A suite derives everything it consumes from those files at test
-time.
+run, and the load harness's advisory scenarios read `bench/corpus/advisories/`. A suite derives
+everything it consumes from those files at test time.
 No `osv.db` is ever committed as a binary, so a fixture cannot drift from the artifact contract
 (`Ecluse.Core.Osv.Schema`). Helpers in `ecluse-test-support` assemble the osv.dev-shaped zip, plus
 *hostile* artifacts for rejection tests. They compile the corpus through the real OSV pipeline
 (`Ecluse.Core.Osv.Compile`, in `ecluse-core`, so `ecluse-core-unit` can link it). The corpus carries
 versions, so shadow-swap tests observe an ETag change and a rule-outcome flip.
-`Ecluse.Test.OsvSpec` pins each version's rows exactly, so editing the corpus updates the pin in the
-same PR.
 
 ## Tests and Docker
 
@@ -2398,15 +2398,15 @@ the floor in `.stan.toml`. The `analysis` job builds their `.hie` input once and
 own step, and stan also runs after a weeder failure. Any weeder finding, or a stan finding above
 its floor, blocks the merge. The non-gating smoke job runs outside ordinary PR validation.
 
-The Haskell jobs run in parallel where their prerequisites permit it. `build` compiles every
-target and then runs the residency suite, the doctests, and `cabal check`. `coverage` is a matrix
-of three legs. `ecluse-runtime-unit` and `ecluse-unit` share one leg, because `ecluse-unit` reuses
-the instrumented libraries that the runtime suite builds. `allocation`, `docs`, `analysis`, and
-`static-checks` each hold their own runner. E2E preparation feeds the ecosystem and
-shared-system subject jobs, which start without waiting for coverage. One `backend-conformance`
-job runs the Verdaccio package-store subject, then the CodeArtifact one. A job that runs two checks
-runs the second after a failed first, so one failure cannot hide the other. `codecov-notify`
-follows the coverage legs and releases the Codecov statuses.
+The Haskell jobs run in parallel where their prerequisites permit it. `build` compiles every target
+and then runs the residency suite, the smoke suite's start-up check, the doctests, and
+`cabal check`. `coverage` is a matrix of three legs. `ecluse-runtime-unit` and `ecluse-unit` share
+one leg, because `ecluse-unit` reuses the instrumented libraries that the runtime suite builds.
+`allocation`, `docs`, `analysis`, and `static-checks` each hold their own runner. E2E preparation
+feeds the ecosystem and shared-system subject jobs, which start without waiting for coverage. One
+`backend-conformance` job runs the Verdaccio package-store subject, then the CodeArtifact one. A job
+that runs two checks runs the second after a failed first, so one failure cannot hide the other.
+`codecov-notify` follows the coverage legs and releases the Codecov statuses.
 The core unit, runtime unit and integration suites upload their plan and execution reports.
 The `e2e` job waits for the subjects and the coverage legs. It audits every subject report
 against the plan, then runs the npm, PyPI, Cargo, and RubyGems completion audits over all four tiers' reports.

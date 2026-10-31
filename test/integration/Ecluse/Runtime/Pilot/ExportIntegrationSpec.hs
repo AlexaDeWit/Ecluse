@@ -13,13 +13,17 @@ import Control.Monad.Trans.Resource (runResourceT)
 import Data.HashMap.Strict qualified as HashMap
 import Data.Text qualified as T
 import Ecluse.Test.Contract.Catalogue (caseLabel)
+import Network.HTTP.Client qualified as HTTP
 import System.FilePath ((</>))
 import System.IO.Temp (withSystemTempDirectory)
 import Test.Hspec (Spec, SpecWith, aroundAll, aroundWith, describe, expectationFailure, it, shouldBe, shouldReturn, shouldSatisfy)
 import TestContainers (Container, containerAddress)
 import UnliftIO.Async (concurrently)
+import UnliftIO.STM (checkSTM, stateTVar)
+import UnliftIO.Timeout (timeout)
 
 import Amazonka qualified as AWS
+import Amazonka.Env.Hooks qualified as Hooks
 import Amazonka.S3 qualified as S3
 import Amazonka.S3.Lens qualified as S3L
 import Data.Time (UTCTime)
@@ -69,6 +73,16 @@ guardedPublicationSpec eco = do
             HashMap.lookup "ecosystem" metadata `shouldBe` Just (ecosystemName eco)
             consumer <- consumerFor store eco dir
             syncStep consumer Nothing >>= (`shouldSatisfy` swapped)
+            -- An operator writes the next key after Pilot reads it absent, so the store must refuse the create.
+            let contested = store{stKey = "contested-" <> stKey store}
+            mkMinimalValidDb (dir </> "operator.db") "pkg-a"
+            (hooked, planted) <- writeBeforeFirstPut contested (dir </> "operator.db")
+            served server "Wed, 01 Oct 2026 10:00:00 GMT" CorpusV1 (dir </> "contested") (publish contested{stAws = hooked}) >>= \case
+                Left (PublicationRefused (PredecessorUnreadable _)) -> pass
+                other -> expectationFailure ("expected the create refused once the key was taken, got " <> show other)
+            operatorEtag <- planted
+            operatorEtag `shouldSatisfy` isJust
+            storedEtag contested `shouldReturn` operatorEtag
 
     it (label "native-002" "refreshes unchanged input under a new revision, which the consumer swaps in with a later push time") $ \container ->
         withGuarded container eco "refresh" $ \store server dir -> do
@@ -108,9 +122,14 @@ guardedPublicationSpec eco = do
         withGuarded container eco "race" $ \store server dir ->
             served server "Wed, 01 Oct 2026 10:00:00 GMT" CorpusV1 (dir </> "older") $ \older ->
                 served server "Wed, 01 Oct 2026 11:00:00 GMT" CorpusV2 (dir </> "newer") $ \newer -> do
-                    (olderOutcome, newerOutcome) <- concurrently (publish store older) (publish store newer)
+                    -- Each writer's first PUT waits for the other's, so both read the key absent first.
+                    (raced, firstPuts) <- putsMeetFirst store
+                    (olderOutcome, newerOutcome) <- concurrently (publish raced older) (publish raced newer)
+                    firstPuts `shouldReturn` 2
                     newerOutcome `shouldSatisfy` isRight
                     olderOutcome `shouldSatisfy` either refusedAsOlder (const True)
+                    [plPrecondition (pubPlan published) | Right published <- [olderOutcome, newerOutcome]]
+                        `shouldSatisfy` ((== 1) . length . filter (== CreateOnly))
                     HashMap.lookup "osv-last-modified" <$> storedMetadata store `shouldReturn` Just "2026-10-01T11:00:00Z"
 
     it (label "native-005" "refuses to replace an object written without publication metadata") $ \container ->
@@ -161,12 +180,19 @@ shrinkSpec eco versioned =
             large <- aiOsvZip <$> syntheticAdvisories eco (fillerTargets 400)
             small <- aiOsvZip <$> syntheticAdvisories eco (fillerTargets 20)
             void (withServedCandidate server eco large (Just "Wed, 01 Oct 2026 10:00:00 GMT") (dir </> "large") (publish store) >>= expectPublished)
-            before <- storedEtag store
-            baseline <- HashMap.lookup "baseline-bytes" <$> storedMetadata store
-            withServedCandidate server eco small (Just "Wed, 01 Oct 2026 11:00:00 GMT") (dir </> "small") (publish store) >>= \case
-                Left (PublicationRefused (ShrinkPastBaseline reading)) -> show (srBaselineBytes reading) `shouldBe` fromMaybe "" baseline
-                other -> expectationFailure ("expected a shrink refusal, got " <> show other)
-            storedEtag store `shouldReturn` before
+            metadata <- storedMetadata store
+            withServedCandidate server eco small (Just "Wed, 01 Oct 2026 11:00:00 GMT") (dir </> "small") $ \candidate -> do
+                -- An operator write leaves an object of the candidate's own size under the large publication's
+                -- metadata, so only the metadata's baseline can refuse the candidate.
+                void (putDirect store (candidatePath candidate) metadata)
+                storedBytes <- maybe (fail "the stored object has no length") pure . (^. S3L.headObjectResponse_contentLength) =<< headObject store
+                before <- storedEtag store
+                publish store candidate >>= \case
+                    Left (PublicationRefused (ShrinkPastBaseline reading)) -> do
+                        Just (show (srBaselineBytes reading)) `shouldBe` HashMap.lookup "baseline-bytes" metadata
+                        toRational (srCandidateBytes reading) `shouldSatisfy` (>= toRational storedBytes * (100 - unPercent (spMaxShrink (stPolicy store))) / 100)
+                    other -> expectationFailure ("expected a shrink refusal, got " <> show other)
+                storedEtag store `shouldReturn` before
   where
     bucketKind = if versioned then "versioned" else "unversioned"
 
@@ -209,6 +235,38 @@ putDirect store path metadata = do
     body <- AWS.chunkedFile 1048576 path
     response <- runResourceT (AWS.send (stAws store) (S3.newPutObject (S3.BucketName (bucketOf store)) (S3.ObjectKey (stKey store)) body & S3L.putObject_metadata .~ metadata))
     maybe (fail "the direct write has no ETag") (\(S3.ETag tag) -> pure (DbEtag (decodeUtf8 tag))) (response ^. S3L.putObjectResponse_eTag)
+
+-- The store's env with a write of @path@ to its key just before its first PUT, and a read of the
+-- revision that write left, 'Nothing' until it has run.
+writeBeforeFirstPut :: Store -> FilePath -> IO (AWS.Env, IO (Maybe S3.ETag))
+writeBeforeFirstPut store path = do
+    fired <- newIORef False
+    planted <- newIORef Nothing
+    let plant request = do
+            isFirst <- if HTTP.method request == "PUT" then not <$> atomicModifyIORef' fired (True,) else pure False
+            when isFirst (putDirect store path HashMap.empty >> storedEtag store >>= writeIORef planted)
+    pure (beforeEachRequest plant (stAws store), readIORef planted)
+
+{- The store with each of its first two PUTs held until both have started, for at most five
+seconds, and a count of the PUTs that met the other. Any later PUT passes at once.
+-}
+putsMeetFirst :: Store -> IO (Store, IO Int)
+putsMeetFirst store = do
+    started <- newTVarIO (0 :: Int)
+    met <- newTVarIO (0 :: Int)
+    let hold request =
+            when (HTTP.method request == "PUT") $ do
+                arrived <- atomically (stateTVar started (\n -> (n + 1, n + 1)))
+                when (arrived <= 2) $
+                    timeout 5_000_000 (atomically (readTVar started >>= checkSTM . (>= 2))) >>= \case
+                        Just () -> atomically (modifyTVar' met (+ 1))
+                        Nothing -> pass
+    pure (store{stAws = beforeEachRequest hold (stAws store)}, readTVarIO met)
+
+-- Run @observe@ on each HTTP request the env sends, just before it goes out.
+beforeEachRequest :: (HTTP.Request -> IO ()) -> AWS.Env -> AWS.Env
+beforeEachRequest observe env =
+    env{AWS.hooks = Hooks.clientRequestHook (\previous current request -> observe request >> previous current request) (AWS.hooks env)}
 
 consumerFor :: Store -> Ecosystem -> FilePath -> IO SyncEnv
 consumerFor store eco dir = do

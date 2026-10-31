@@ -8,7 +8,6 @@ module Ecluse.Test.Contract.UnitCatalogue (
     expectedUnitCatalogue,
     unitRegistration,
     unitObligation,
-    unitCoverageSpec,
     metadataFetchLaws,
     metadataProjectionLaws,
     metadataFetchLawsFor,
@@ -19,9 +18,7 @@ import Data.Universe.Class (Universe (universe))
 import Ecluse.Core.Ecosystem (Ecosystem (Npm), ecosystemName)
 import Ecluse.Core.Registry.Adapter (RegistryAdapter (adapterMaintenance), adapterFor)
 import Ecluse.Core.Registry.Adapter.Capability (AdapterMaintenance (maintenanceListing, maintenanceVersionDelete))
-import Ecluse.Test.Contract.Catalogue (validateCatalogue)
 import Ecluse.Test.Contract.Types
-import Test.Hspec
 import Prelude hiding (universe)
 
 -- | Production registration determines supported ecosystems even when no fixture exists for one.
@@ -160,27 +157,6 @@ metadataFetchLaws =
     , "held-name-mismatch"
     , "held-version-bound"
     ]
-
--- | Audit actual registrations and prove that each required case and capability remains mandatory.
-unitCoverageSpec :: IO Catalogue -> Spec
-unitCoverageSpec inspect = do
-    it "covers every independently required case with an actual Hspec registration" $ do
-        catalogue <- inspect
-        validateCatalogue catalogue `shouldBe` Right catalogue
-    it "rejects removal of each group, case, or supported capability" $ do
-        catalogue <- inspect
-        for_ (catalogueGroups catalogue) $ \scenarioGroup -> do
-            validateCatalogue catalogue{catalogueGroups = filter ((/= groupId scenarioGroup) . groupId) (catalogueGroups catalogue)} `shouldSatisfy` isLeft
-            for_ (groupCases scenarioGroup) $ \item ->
-                validateCatalogue catalogue{catalogueGroups = map (removeCase (caseId item)) (catalogueGroups catalogue)} `shouldSatisfy` isLeft
-        for_ (catalogueProfiles catalogue) $ \profile ->
-            for_ (profileCapabilities profile) $ \capability ->
-                validateCatalogue catalogue{catalogueProfiles = map (removeCapability (profileId profile) capability) (catalogueProfiles catalogue)} `shouldSatisfy` isLeft
-  where
-    removeCase identifier scenarioGroup = scenarioGroup{groupCases = filter ((/= identifier) . caseId) (groupCases scenarioGroup)}
-    removeCapability identifier capability profile
-        | profileId profile == identifier = profile{profileCapabilities = filter (/= capability) (profileCapabilities profile)}
-        | otherwise = profile
 
 -- | Caller-bound formats owe native name and origin evidence instead of absent wire identity fields.
 metadataProjectionLawsFor :: Text -> [Text]

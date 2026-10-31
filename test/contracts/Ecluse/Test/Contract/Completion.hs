@@ -8,7 +8,6 @@ module Ecluse.Test.Contract.Completion (
     CompletionScope (..),
     LawEvidence (..),
     Completion (..),
-    requiredFamilyLaws,
     requiredFamilyLawsFor,
     validateCompletion,
     auditCompletion,
@@ -22,8 +21,8 @@ import Ecluse.Test.Contract.Result
 import Ecluse.Test.Contract.Types
 import Ecluse.Test.Contract.UnitCatalogue (metadataFetchLaws, metadataFetchLawsFor, metadataProjectionLaws, metadataProjectionLawsFor)
 
--- | The read-only scope never certifies full ecosystem completion.
-data CompletionScope = FullEcosystem | ReadOnlyEcosystemFoundation | FullPackageStore
+-- | The subject kind whose required families and laws a completion is checked against.
+data CompletionScope = FullEcosystem | FullPackageStore
     deriving stock (Eq, Show, Generic)
     deriving anyclass (ToJSON, FromJSON)
 
@@ -51,7 +50,7 @@ data Completion = Completion
 contentCodingLaws :: [Text]
 contentCodingLaws = ["metadata-gzip", "metadata-gzip-validators", "metadata-gzip-refusal", "metadata-gzip-opt-out", "artifact-uncoded"]
 
--- | This normative list is independent of concrete drivers, registration tables and scheduling.
+-- This normative list is independent of concrete drivers, registration tables and scheduling.
 requiredFamilyLaws :: CompletionScope -> [(Text, [Text])]
 requiredFamilyLaws FullPackageStore =
     [ ("reads", ["present", "absent"])
@@ -61,21 +60,16 @@ requiredFamilyLaws FullPackageStore =
     , ("integrity", ["bytes-and-digests"])
     , ("recovery", ["publish-retry", "reopen", "delete-retry"])
     ]
-requiredFamilyLaws scope =
+requiredFamilyLaws FullEcosystem =
     [ ("proxying", ["identity-precedence", "authorised-union", "private-divergence", "private-availability", "artifact-integrity", "artifact-head", "conditional-coherence"] <> contentCodingLaws <> map ("metadata-fetch/" <>) metadataFetchLaws <> map ("metadata-projection/" <>) metadataProjectionLaws)
     , ("installation", ["accepted-install", "default-denial", "artifact-integrity", "artifact-head", "artifact-identity-coding"])
     , ("policy", ["default-denial", "quarantine-private-authority", "public-integrity", "trusted-integrity", "metadata-gzip-policy"])
     , ("advisories", ["exact-fix", "partial-fix", "deny-cve", "deny-epss", "mal-denial", "last-good-generation"])
-    , ("telemetry", ["signals", "disabled", "export-failure", "datadog"] <> [law | scope == FullEcosystem, law <- ["domain-spans", "private-fetch"]])
+    , ("telemetry", ["signals", "disabled", "export-failure", "datadog", "domain-spans", "private-fetch"])
+    , ("mirroring", ["cross-target-install", "dependency-graph", "module-exports", "linked-executable", "origin-evidence", "installed-tree", "empty-store-control"])
+    , ("publication", ["publish-install", "authorisation-refusal", "non-upload-refusal"])
+    , ("dredger", ["inventory", "admission-only", "denied-versions", "dry-run", "consent-refusal", "first-party", "two-stores", "advisory-revocation", "mal-revocation", "denied-install", "delete-recovery", "refill", "missing-source", "late-copy", "old-worker", "old-dredger-refill", "old-dredger-loss"])
     ]
-        <> [ family
-           | scope == FullEcosystem
-           , family <-
-                [ ("mirroring", ["cross-target-install", "dependency-graph", "module-exports", "linked-executable", "origin-evidence", "installed-tree", "empty-store-control"])
-                , ("publication", ["publish-install", "authorisation-refusal", "non-upload-refusal"])
-                , ("dredger", ["inventory", "admission-only", "denied-versions", "dry-run", "consent-refusal", "first-party", "two-stores", "advisory-revocation", "mal-revocation", "denied-install", "delete-recovery", "refill", "missing-source", "late-copy", "old-worker", "old-dredger-refill", "old-dredger-loss"])
-                ]
-           ]
 
 -- | Add ecosystem-specific requirements without changing the shared laws.
 requiredFamilyLawsFor :: Text -> CompletionScope -> [(Text, [Text])]

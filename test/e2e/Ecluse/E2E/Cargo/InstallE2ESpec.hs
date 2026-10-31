@@ -28,7 +28,7 @@ import Ecluse.E2E.Harness
 import Ecluse.E2E.Harness.Cargo
 import Ecluse.E2E.Harness.CargoRegistry (cargoRegistryToken)
 import Ecluse.E2E.Harness.NativeEdge
-import Ecluse.E2E.InstallationE2ESpec (codedArtifact)
+import Ecluse.E2E.InstallationE2ESpec (codedArtifact, probedArtifact)
 import Ecluse.Test.Contract.Ecosystem (FamilyFixture)
 import Ecluse.Test.Contract.Install
 import Ecluse.Test.Contract.Phase (timedFixture)
@@ -59,7 +59,7 @@ installation observed =
                 (False, mempty)
         , installationArtifact = (,) <$> advertised <*> proxyGetCoded proxy archive
         , installationDigest = hexSha256Of
-        , installationHead = proxyHead proxy archive
+        , installationHead = probedArtifact proxy CargoPublic upstream archive
         , installationCodedArtifact = codedArtifact proxy CargoPublic upstream archive advertised
         }
   where

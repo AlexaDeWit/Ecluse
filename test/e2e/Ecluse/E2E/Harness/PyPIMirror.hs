@@ -45,6 +45,7 @@ import System.Exit (ExitCode (ExitSuccess))
 import System.Process.Typed (proc, readProcess)
 
 import UnliftIO (bracket_, timeout)
+import UnliftIO.Concurrent (threadDelay)
 import UnliftIO.STM (checkSTM)
 
 import Ecluse.Core.Security.Limits (BodyLimit (PublishRequestBodyLimit), boundedRead)
@@ -170,7 +171,9 @@ receiveUpload config expected target request fields file =
                     UploadHeld -> do
                         released <- timeout 120000000 (atomically (readTVar (ntReleased target) >>= checkSTM))
                         pure (responseLBS status503 [] (if isJust released then "interrupted upload released" else "fixture upload barrier timed out"))
-                    UploadReplyLost -> pure (responseRaw (\_ _ -> pass) (responseLBS status503 [] "lost reply"))
+                    UploadReplyLost -> do
+                        threadDelay lostReplyHold
+                        pure (responseRaw (\_ _ -> pass) (responseLBS status503 [] "lost reply"))
         _ -> pure (responseLBS status400 [] "upload metadata or exact bytes differ")
   where
     filename = decodeUtf8 (fileName file)
@@ -190,6 +193,12 @@ nativeRead config expected request files advertised = case filter (not . T.null)
             (if requestMethod request == "HEAD" then LBS.empty else bytes)
 
 data UploadReply = UploadStored | UploadDuplicate | UploadHeld | UploadReplyLost
+
+{- The product waits 30 seconds for an upload's response headers, and the stub's nginx forwarder 60
+for the fixture's. Holding a committed upload's reply between the two makes the product give up on
+an open connection, a reply it never receives. Closing at once would not: nginx answers that with 502. -}
+lostReplyHold :: Int
+lostReplyHold = 45_000_000
 
 acceptUpload :: NativeTarget -> Text -> ByteString -> STM UploadReply
 acceptUpload target filename bytes = do

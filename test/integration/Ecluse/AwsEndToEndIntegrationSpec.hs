@@ -22,7 +22,7 @@ import Ecluse.Config (Config (configApp), loadConfig)
 import Ecluse.Config.Ambient (ambientAwsFromEnv)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Package (HashAlg (SRI))
-import Ecluse.Core.Queue (MirrorQueue)
+import Ecluse.Core.Queue (MirrorQueue (receive))
 import Ecluse.Core.Rules (prepare)
 import Ecluse.Core.Rules.Types (PrecededRule, Rule (AllowIfOlderThan))
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
@@ -37,11 +37,13 @@ import Ecluse.Integration.Ministack (
     withMinistack,
  )
 import Ecluse.Integration.WorkerLoop (
+    TargetMemory (RetainsPublication),
     mirrorPoliciesAt,
     newQueueEnv,
+    npmAttachment,
     observeAcknowledgement,
     runLoopUntil,
-    withMirrorTarget,
+    withObservedMirrorTarget,
  )
 import Ecluse.Runtime.Aws.Env (AwsEndpoint (endpointHost, endpointPort))
 import Ecluse.Runtime.Env (Env)
@@ -50,11 +52,13 @@ import Ecluse.Runtime.Server (MountBinding, application, mkServerConfig)
 import Ecluse.Server.Pipeline.TestSupport (getPath)
 import Ecluse.Service (mountBindingFor)
 import Ecluse.Test.Deadline (withSweeper)
+import Ecluse.Test.Json (fieldAt)
 import Ecluse.Test.Package (hexSha1Of, sriSha512Of, unsafeHash)
 import Ecluse.Test.Registry.Npm (VersionSpec (..), packumentValue, versionSpec, versionValue)
 import Ecluse.Test.Rules (atDefaultPrecedence, inertRuleDeps)
 import Ecluse.Test.Server.Mount (npmServeDeps)
 import Ecluse.Test.Stub (stubLocalhostUrl, withStub)
+import Ecluse.Test.Support (expectRightIO)
 import Ecluse.Test.Wai (localhost, selfBaseUrl, servedVersions, status)
 import Ecluse.Test.Worker (workerSourceAt)
 
@@ -75,22 +79,37 @@ spec pool =
 
             it (caseLabel "integration/aws-composition/native-002" "gates a tarball, enqueues a real SQS job, and the worker mirrors it (fetch → verify → publish)") $ \container ->
                 withAwsProxy container "aws-e2e-tarball" $ \proxy -> do
+                    -- The quarantine refuses 2.0.0 at the tarball gate, and a refusal enqueues nothing.
+                    denied <- getPath "/npm/left-pad/-/left-pad-2.0.0.tgz" (tpApp proxy)
+                    status denied `shouldBe` 403
+                    expectRightIO (receive (tpQueue proxy)) `shouldReturn` []
+                    -- A source serving other bytes under the admitted digest fails verification, so nothing is published.
+                    tampered <- getPath "/npm/left-pad/-/left-pad-1.0.0.tgz" (tpApp proxy)
+                    status tampered `shouldBe` 200
+                    tpMirrorTampered proxy
+                    readIORef (tpMirrorLog proxy) `shouldReturn` []
                     resp <- getPath "/npm/left-pad/-/left-pad-1.0.0.tgz" (tpApp proxy)
                     status resp `shouldBe` 200
                     simpleBody resp `shouldBe` tarballBytes
                     runLoopUntil (tpPolicies proxy) (tpEnv proxy) (tpAcknowledged proxy)
                     tpAcknowledged proxy `shouldReturn` True
                     readIORef (tpMirrorLog proxy) `shouldReturn` ["/left-pad"]
+                    map (fieldAt "_attachments") <$> tpPublications proxy
+                        `shouldReturn` [Just (npmAttachment "left-pad-1.0.0.tgz" tarballBytes)]
 
 {- | The in-process Écluse under test: the serve 'Application', the composition-root 'Env' the
-worker runs over, and the mirror-target stub's publish log.
+worker runs over, the SQS handle it enqueues to, and what the mirror-target stub received.
 -}
 data TestProxy = TestProxy
     { tpApp :: Application
     , tpEnv :: Env
     , tpPolicies :: WorkerPolicies
     , tpMirrorLog :: IORef [ByteString]
+    , tpPublications :: IO [Value]
     , tpAcknowledged :: IO Bool
+    , tpQueue :: MirrorQueue
+    , tpMirrorTampered :: IO ()
+    -- ^ Run a worker whose source serves other bytes than the admitted digest, until it acknowledges a job.
     }
 
 -- The production composition root selects SQS from @AWS_ENDPOINT_URL_SQS@.
@@ -98,14 +117,27 @@ withAwsProxy :: Container -> Text -> (TestProxy -> IO a) -> IO a
 withAwsProxy container queueName body =
     withPrivateUpstream $ \privateUrl ->
         withPublicUpstream $ \publicUrl ->
-            withMirrorTarget status201 $ \mirrorUrl mirrorLog -> withSweeper $ \deadlines -> do
+            withObservedMirrorTarget RetainsPublication status201 $ \mirrorUrl mirrorLog publications -> withSweeper $ \deadlines -> do
                 queue <- configDrivenQueue container queueName
                 (observedQueue, acknowledged) <- observeAcknowledgement queue
                 env <- newQueueEnv deadlines observedQueue
-                policies <- workerSourceAt (publicUrl <> "/left-pad/-/left-pad-1.0.0.tgz") <$> mirrorPoliciesAt deadlines Nothing mirrorUrl (unsafeHash SRI sha512Integrity :| [])
+                (tamperQueue, tamperAcknowledged) <- observeAcknowledgement queue
+                tamperEnv <- newQueueEnv deadlines tamperQueue
+                mirror <- mirrorPoliciesAt deadlines Nothing mirrorUrl (unsafeHash SRI sha512Integrity :| [])
                 binding <- mountBinding privateUrl publicUrl mirrorUrl
                 let app = application (mkServerConfig (maybeToList binding)) env
-                body TestProxy{tpApp = app, tpEnv = env, tpPolicies = policies, tpMirrorLog = mirrorLog, tpAcknowledged = acknowledged}
+                    sourcedAt path = workerSourceAt (publicUrl <> path) mirror
+                body
+                    TestProxy
+                        { tpApp = app
+                        , tpEnv = env
+                        , tpPolicies = sourcedAt "/left-pad/-/left-pad-1.0.0.tgz"
+                        , tpMirrorLog = mirrorLog
+                        , tpPublications = publications
+                        , tpAcknowledged = acknowledged
+                        , tpQueue = queue
+                        , tpMirrorTampered = runLoopUntil (sourcedAt tamperedPath) tamperEnv tamperAcknowledged
+                        }
 
 -- The released image resolves the backend the same way, from @AWS_ENDPOINT_URL_SQS@ and the
 -- standard credential keys. A one-second long poll keeps the worker loop brisk.
@@ -162,11 +194,15 @@ withPublicUpstream :: (Text -> IO a) -> IO a
 withPublicUpstream k = testWithApplication (pure app) (k . localhost)
   where
     app :: Application
-    app req respond =
-        respond $
-            if ".tgz" `BS.isSuffixOf` rawPathInfo req
-                then responseLBS status200 [] tarballBytes
-                else responseLBS status200 [] (encode (packument (selfBaseUrl req)))
+    app req respond = respond (responseLBS status200 [] (bodyFor req))
+    bodyFor req
+        | rawPathInfo req == encodeUtf8 tamperedPath = "left-pad-1.0.0-other-bytes"
+        | ".tgz" `BS.isSuffixOf` rawPathInfo req = tarballBytes
+        | otherwise = encode (packument (selfBaseUrl req))
+
+-- A path where the public stub serves bytes other than 'tarballBytes'.
+tamperedPath :: Text
+tamperedPath = "/tampered/left-pad-1.0.0.tgz"
 
 -- The private upstream: a clean 404 miss for everything, so every request falls
 -- through to the public origin.

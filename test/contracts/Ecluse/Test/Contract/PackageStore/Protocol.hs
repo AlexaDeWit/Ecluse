@@ -61,28 +61,40 @@ npmStoreDriver subject maintenance =
         , psdWithSession = withNpmSession maintenance
         }
 
+-- The store keeps each tarball apart from the packument, as a registry does, so only a tarball
+-- DELETE or a whole-package DELETE removes its bytes. A control-plane removal deletes both.
 withNpmSession :: (OriginClient -> StoreBoundary -> IO StoreMaintenance) -> (PackageStoreSession -> IO ()) -> IO ()
 withNpmSession maintenance use = do
     held <- newIORef Map.empty
+    tarballs <- newIORef Map.empty
     writes <- newIORef []
     failWrite <- newIORef False
     failDelete <- newIORef False
     let boundary =
             StoreBoundary
                 { sbReleases = Map.elems <$> readIORef held
-                , sbRemove = \versions -> modifyIORef' held (\releases -> foldr Map.delete releases versions)
+                , sbRemove = \versions -> do
+                    releases <- readIORef held
+                    let removed = [artifactPath artifact | version <- versions, Just release' <- [Map.lookup version releases], artifact <- toList (psrArtifacts release')]
+                    writeIORef held (foldr Map.delete releases versions)
+                    modifyIORef' tarballs (\files -> foldr Map.delete files removed)
                 , sbTakeDeleteFailure = takeStoreFailure failDelete
                 }
-    withStoreSession (reply held writes failWrite failDelete) (build boundary) (reverse <$> readIORef writes) failWrite failDelete use
+        documentRead captured = capMethod captured == "GET" && capPath captured == packagePath
+    withStoreSession documentRead (reply held tarballs writes failWrite failDelete) (build boundary) (reverse <$> readIORef writes) failWrite failDelete use
   where
     build boundary base exchanges = do
         let origin = writeTokenNpmConfig (loopbackRegistryUrl base) exchanges defaultLimits
             publisher = newMirrorPublish (MirrorTransport exchanges (pure (Just (bareCredential mirrorWriteToken))) defaultLimits passthroughTracingPort) (ocBaseUrl origin) (ocBaseUrl origin) (npmPublishCodec nativePresentation)
         store <- maintenance origin boundary
-        pure (operations origin publisher store)
+        pure (operations base origin publisher store)
 
-operations :: OriginClient -> MirrorPublish -> StoreMaintenance -> PackageStoreOperations
-operations origin publisher = storeOperations packageName npmVersion (readRelease origin) (writeRelease publisher)
+operations :: Text -> OriginClient -> MirrorPublish -> StoreMaintenance -> PackageStoreOperations
+operations base origin publisher = storeOperations packageName npmVersion (readRelease origin) (\_ filename -> readTarball base origin filename) (writeRelease publisher)
+
+-- A tarball read by its native location alone, so the packument cannot vouch for its bytes.
+readTarball :: Text -> OriginClient -> Text -> IO (Either Text (Maybe ByteString))
+readTarball base origin filename = fetchStoredArtifact (MirrorArtifactBodyLimit 4096) origin (artifactRequestByUrl (ocToken origin) (base <> decodeUtf8 (tarballPath filename)))
 
 readRelease :: OriginClient -> Text -> IO (Either Text (Maybe PackageStoreRelease))
 readRelease origin version =
@@ -142,8 +154,8 @@ protocolMaintenance origin _ = do
 readStoreManifestOver :: OriginClient -> StoreManifestRead
 readStoreManifestOver origin name = first storeFaultOfMetadata <$> fetchManifest npmRead passthroughTracingPort origin name
 
-reply :: IORef (Map Text PackageStoreRelease) -> IORef [PackageStoreRelease] -> IORef Bool -> IORef Bool -> Captured -> IO (Status, [Header], LByteString)
-reply held writes failWrite failDelete captured
+reply :: IORef (Map Text PackageStoreRelease) -> IORef (Map ByteString ByteString) -> IORef [PackageStoreRelease] -> IORef Bool -> IORef Bool -> Captured -> IO (Status, [Header], LByteString)
+reply held tarballs writes failWrite failDelete captured
     | headerValue "Authorization" captured /= Just "Bearer write-token" = pure (status401, [], "{}")
     | otherwise = case (capMethod captured, capPath captured) of
         ("GET", "/-/all") -> do
@@ -152,25 +164,31 @@ reply held writes failWrite failDelete captured
         ("GET", path) | path == packagePath -> do
             releases <- readIORef held
             pure $ if Map.null releases then (status404, [], "{}") else (status200, [], encode (packument captured releases))
-        ("GET", _) -> do
-            releases <- Map.elems <$> readIORef held
-            pure $ case find ((== capPath captured) . artifactPath) (concatMap (toList . psrArtifacts) releases) of
+        ("GET", path) -> do
+            stored <- Map.lookup path <$> readIORef tarballs
+            pure $ case stored of
                 Nothing -> (status404, [], "{}")
-                Just artifact -> (status200, [], LBS.fromStrict (psaBytes artifact))
+                Just bytes -> (status200, [], LBS.fromStrict bytes)
         ("PUT", path) | path == packagePath -> do
             blocked <- takeStoreFailure failWrite
-            if blocked then pure (status503, [], "{}") else acceptPublish held writes (capBody captured)
+            if blocked then pure (status503, [], "{}") else acceptPublish held tarballs writes (capBody captured)
         ("PUT", path) | path == packagePath <> "/-rev/fixture" -> do
             blocked <- takeStoreFailure failDelete
             if blocked then pure (status503, [], "{}") else applyEdit held (capBody captured)
         ("DELETE", path) | path == packagePath <> "/-rev/fixture" -> do
             blocked <- takeStoreFailure failDelete
-            if blocked then pure (status503, [], "{}") else writeIORef held Map.empty >> pure (status200, [], "{}")
-        ("DELETE", _) -> pure (status200, [], "{}")
+            if blocked then pure (status503, [], "{}") else writeIORef held Map.empty >> writeIORef tarballs Map.empty >> pure (status200, [], "{}")
+        ("DELETE", path) | Just tarball <- BS.stripSuffix "/-rev/fixture" path -> do
+            blocked <- takeStoreFailure failDelete
+            present <- Map.member tarball <$> readIORef tarballs
+            case (blocked, present) of
+                (True, _) -> pure (status503, [], "{}")
+                (False, True) -> modifyIORef' tarballs (Map.delete tarball) >> pure (status200, [], "{}")
+                (False, False) -> pure (status404, [], "{}")
         _ -> pure (status404, [], "{}")
 
-acceptPublish :: IORef (Map Text PackageStoreRelease) -> IORef [PackageStoreRelease] -> ByteString -> IO (Status, [Header], LByteString)
-acceptPublish held writes bytes = case decodePublish bytes of
+acceptPublish :: IORef (Map Text PackageStoreRelease) -> IORef (Map ByteString ByteString) -> IORef [PackageStoreRelease] -> ByteString -> IO (Status, [Header], LByteString)
+acceptPublish held tarballs writes bytes = case decodePublish bytes of
     Left reason -> pure (status400, [], encode reason)
     Right release' -> do
         existing <- Map.member (psrVersion release') <$> readIORef held
@@ -178,6 +196,7 @@ acceptPublish held writes bytes = case decodePublish bytes of
             then pure (status409, [], "{}")
             else do
                 modifyIORef' held (Map.insert (psrVersion release') release')
+                modifyIORef' tarballs (Map.union (Map.fromList [(artifactPath artifact, psaBytes artifact) | artifact <- toList (psrArtifacts release')]))
                 modifyIORef' writes (release' :)
                 pure (status201, [], "{}")
 
@@ -261,7 +280,10 @@ release version bytes mainFile =
         (PackageStoreArtifact (packageText <> "-" <> version <> ".tgz") bytes (sriSha512Of bytes) :| [])
 
 artifactPath :: PackageStoreArtifact -> ByteString
-artifactPath artifact = packagePath <> "/-/" <> encodeUtf8 (psaFilename artifact)
+artifactPath = tarballPath . psaFilename
+
+tarballPath :: Text -> ByteString
+tarballPath filename = packagePath <> "/-/" <> encodeUtf8 filename
 
 packagePath :: ByteString
 packagePath = "/" <> encodeUtf8 packageText

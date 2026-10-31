@@ -23,7 +23,7 @@ import Ecluse.Core.Package.Entry (EntryKey (ArrayEntry))
 import Ecluse.Core.Registry.Adapter.Capability (AdapterMetadata (metadataRead))
 import Ecluse.Core.Registry.Adapter.Types (RegistryAdapter (adapterMetadata))
 import Ecluse.Core.Registry.Metadata (
-    Manifest (manifestRetainedEntries),
+    Manifest (manifestInfo, manifestRetainedEntries),
     MetadataError (MetadataBoundExceeded, MetadataUndecodable),
  )
 import Ecluse.Core.Registry.Metadata.EntryFloor (RetainedEntries (RetainedEntries), entryFloorBytes, entryFloorCharge)
@@ -44,14 +44,15 @@ import Ecluse.Core.Security (
 import Ecluse.Core.Server.Admission.Budget (scaleCharge)
 import Ecluse.Core.Server.Admission.Types (ChargeFactors (cfFullReadPermille, cfKeptPermille))
 import Ecluse.Test.Contract.Metadata.Projection (MetadataFraming (SingleDocument), ProjectionDriver (..), metadataProjectionContract)
-import Ecluse.Test.Corpus (CorpusPackage (cpPackage, cpPath), pypiCorpusPackages)
+import Ecluse.Test.Corpus (CaptureUpstream (upstreamOrigin), CorpusPackage (cpPackage, cpPath), pypiCaptureUpstream, pypiCorpusPackages)
 import Ecluse.Test.Json (encodeStrict)
 import Ecluse.Test.Package (defaultMinIntegrity, pypiVersion, requestsName, unsafeFilename, unscopedPyPI)
 import Ecluse.Test.Package.Admission (admitArtifactWithEvidence)
-import Ecluse.Test.Registry.Metadata.Fetch (captureChunks, heldWorkspacePayments, heldWorkspacePeak)
+import Ecluse.Test.Registry.Metadata.Fetch (captureChunks, heldManifest, heldVersion, heldWorkspacePayments, heldWorkspacePeak)
 import Ecluse.Test.Registry.PyPI (denseIndex, filesNamed, minimalIndex, simpleFile, simpleIndex, simpleIndexWith, withFileKeys)
-import Ecluse.Test.Registry.PyPI.Metadata (projectPyPIChunks, projectPyPIIndex, projectPyPIVersion, simpleValue)
+import Ecluse.Test.Registry.PyPI.Metadata (projectPyPIChunks, projectPyPIIndex, projectPyPIVersion, pypiRead, simpleValue)
 import Ecluse.Test.Rules (admittedBy, atDefaultPrecedence, evalRules, inertRuleDeps)
+import Ecluse.Test.Snapshot (readDetails)
 import Ecluse.Test.Support (expectRight)
 
 spec :: Spec
@@ -328,11 +329,12 @@ indexOf = indexNamed "requests"
 indexNamed :: Text -> [Text] -> ByteString
 indexNamed name = encodeStrict . simpleIndex name . filesNamed
 
+-- | The production full and selected reads, from the index whose file host the fixture names.
 projectionDriver :: ProjectionDriver
 projectionDriver =
     ProjectionDriver
-        { projectFull = \limits bytes -> pure (fst <$> projectPyPIIndex limits requestsName bytes)
-        , projectSelected = \limits version bytes -> pure (projectPyPIVersion limits requestsName (pypiVersion version) bytes)
+        { projectFull = \limits bytes -> fmap manifestInfo <$> heldManifest pypiRead limits (upstreamOrigin pypiCaptureUpstream) requestsName [bytes]
+        , projectSelected = \limits version bytes -> fmap readDetails <$> heldVersion pypiRead limits (upstreamOrigin pypiCaptureUpstream) requestsName (pypiVersion version) [bytes]
         , projectionFraming = SingleDocument
         , projectionDocument = \name versions -> indexNamed name [name <> "-" <> version <> ".tar.gz" | version <- versions]
         , projectionPackageName = "requests"

@@ -9,8 +9,6 @@ module Ecluse.Test.Contract.Artifact.Identity (
     finishPreparation,
     verifyPreparation,
     verifyPlan,
-    preparationProblems,
-    identityEnvironment,
 ) where
 
 import Data.Aeson (FromJSON (..), ToJSON (..), object, withObject, (.:), (.=))
@@ -97,7 +95,7 @@ verifyInputs includeArchive root loadedImage = do
   where
     nonempty value = if T.null value then Nothing else Just value
 
--- | Every declared identity field and distributed digest contributes to acceptance.
+-- Every declared identity field and distributed digest contributes to acceptance.
 preparationProblems :: Text -> Text -> Maybe Text -> Text -> Text -> Maybe Text -> PreparedIdentity -> [Text]
 preparationProblems source architecture runId planDigest archiveDigest loadedImage prepared =
     ["unsupported preparation schema" | preparedSchemaVersion prepared /= 1]
@@ -112,7 +110,7 @@ preparationProblems source architecture runId planDigest archiveDigest loadedIma
     execution = preparedExecution prepared
     validDigest value = T.length value == 64 && T.all (`elem` ("0123456789abcdef" :: String)) value
 
--- | Quote values as shell data, including apostrophes and command substitutions.
+-- Quote values as shell data, including apostrophes and command substitutions.
 identityEnvironment :: ExecutionIdentity -> Text
 identityEnvironment execution =
     T.unlines

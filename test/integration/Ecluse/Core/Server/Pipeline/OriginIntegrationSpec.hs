@@ -174,10 +174,15 @@ privateAuthoritySpec = describe "private origin is the per-client authority (not
 
     it (caseLabel "integration/origin/native-009" "serves byte-identical bodies across identical repeat requests (the assembled representation is reused)") $ do
         (privateUp, publicUp) <- twoServingUpstreams
-        withProxy privateUp publicUp Nothing $ \app -> do
-            firstResp <- getThing (Just "tokenA") app
-            secondResp <- getThing (Just "tokenA") app
+        logEnv <- newTestLogEnv
+        queue <- newTestMemoryQueue
+        -- The repeat goes through a mount over the same runtime whose render bottoms, so only
+        -- the representation the first request assembled can answer it.
+        withProxyMounts id logEnv queue privateUp publicUp Nothing $ \mount _env _port -> do
+            firstResp <- getThing (Just "tokenA") (mount id)
+            secondResp <- getThing (Just "tokenA") (mount withBottomingAssemble)
             status firstResp `shouldBe` 200
+            status secondResp `shouldBe` 200
             simpleBody secondResp `shouldBe` simpleBody firstResp
             header "ETag" secondResp `shouldBe` header "ETag" firstResp
             -- The reuse never skips the per-request private authorisation.

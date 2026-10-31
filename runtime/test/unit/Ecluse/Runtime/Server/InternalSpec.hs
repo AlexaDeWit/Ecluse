@@ -10,8 +10,6 @@ import Data.ByteString.Char8 qualified as B8
 import Data.ByteString.Lazy qualified as LBS
 import Data.Char (toLower)
 import Data.List (lookup)
-import Data.Text qualified as T
-import Katip (closeScribes)
 import Network.HPACK qualified as HPACK
 import Network.HTTP.Semantics (tokenFoldedKey)
 import Network.HTTP.Types (HeaderName, Method, ResponseHeaders, hContentLength, methodGet, methodHead, status200)
@@ -19,7 +17,6 @@ import Network.HTTP2.Client qualified as H2
 import Network.Socket qualified as Socket
 import Network.Socket.ByteString (recv, sendAll)
 import Network.Wai (Application, responseLBS, responseStream)
-import System.Posix.Signals qualified as Posix
 import Test.Hspec
 import UnliftIO (timeout)
 import UnliftIO.Async (link, withAsync)
@@ -30,10 +27,9 @@ import Ecluse.Core.Server.Admission (newServeAdmissionTuned, withOverflow, withS
 import Ecluse.Core.Server.Admission.Overflow (newOverflowTuned)
 import Ecluse.Core.Server.Context (ServeRuntime)
 import Ecluse.Core.Server.Pipeline.Shared (shedMessage, shedStatus, withMetadataAdmission)
-import Ecluse.Runtime.Server.Internal (ServerConfig (scPort), listeningPrefix, mkServerConfig, runWarp)
+import Ecluse.Runtime.Server.Internal (mkServerConfig)
+import Ecluse.Runtime.Test.Server (withProductionListener)
 import Ecluse.Test.Deadline (withSweeper)
-import Ecluse.Test.Log (memoryLogEnv)
-import Ecluse.Test.Poll (pollUntil)
 import Ecluse.Test.Port (noopMetricsPort)
 import Ecluse.Test.Server.Handler (testServeRuntimeWith)
 import Ecluse.Test.Support (TestContractEscape (TestContractEscape))
@@ -213,23 +209,7 @@ withLoopbackSocket port action =
         action client
 
 withRealWarp :: Application -> (Int -> IO a) -> IO a
-withRealWarp app action = withSavedSignalHandlers $
-    bracket memoryLogEnv (void . closeScribes . fst) $ \(logEnv, messages) -> do
-        let cfg = (mkServerConfig []){scPort = 0}
-        withAsync (runWarp logEnv "transport-test" cfg (const (pure app))) $ \server -> do
-            link server
-            port <- pollUntil 200 5_000 isJust (loggedPort <$> messages)
-            maybe (throwIO (TestContractEscape "listener did not report its port")) action port
-  where
-    loggedPort = listToMaybe . mapMaybe (readMaybe . toString <=< T.stripPrefix (listeningPrefix "transport-test"))
-
--- runWarp installs process-wide handlers. Restore the suite's handlers on every exit.
-withSavedSignalHandlers :: IO a -> IO a
-withSavedSignalHandlers action = bracket save restore (const action)
-  where
-    save = forM [Posix.sigTERM, Posix.sigINT] $ \signal ->
-        (signal,) <$> Posix.installHandler signal Posix.Ignore Nothing
-    restore = traverse_ (\(signal, handler) -> void (Posix.installHandler signal handler Nothing))
+withRealWarp app action = withProductionListener "transport-test" (mkServerConfig []) (const (pure app)) (const . action)
 
 receiveAll :: Socket.Socket -> IO ByteString
 receiveAll client = do

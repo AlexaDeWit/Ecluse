@@ -55,7 +55,7 @@ import Ecluse.Test.Osv (
 import Ecluse.Test.OsvDb (openCveDb, withFixtureOsvDb)
 import Ecluse.Test.Version (genGem, genNpm, genPyPI)
 
--- Keep these fake rows aligned with the committed corpus pins in Ecluse.Test.OsvSpec.
+-- Rows from the CorpusV1 fixture. Editing the fixture updates them in the same change.
 corpusRows :: [(Text, AdvisoryRange)]
 corpusRows =
     [ ("@corpus/scoped", AdvisoryRange "GHSA-corpus-0005" (Just 3.9) Nothing (FixedBefore "3.0.0") (Just 0.25))

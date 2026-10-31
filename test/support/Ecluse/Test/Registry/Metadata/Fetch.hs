@@ -12,6 +12,7 @@ module Ecluse.Test.Registry.Metadata.Fetch (
 
     -- * Reads
     heldManifest,
+    heldVersion,
     heldWorkspacePeak,
     heldWorkspacePayments,
     captureManifest,
@@ -84,10 +85,13 @@ heldWorkspacePayments factory base name chunks = do
 captureManifest :: EcosystemRead -> CaptureUpstream -> PackageName -> [ByteString] -> IO (Either MetadataError Manifest)
 captureManifest nativeRead upstream = heldManifest nativeRead defaultLimits (upstreamOrigin upstream)
 
+-- | The production selected read of held chunks, on the terms of 'heldManifest'.
+heldVersion :: EcosystemRead -> Limits -> Text -> PackageName -> Version -> [ByteString] -> IO (Either MetadataError VersionRead)
+heldVersion eco limits base name version chunks = readVersion eco passthroughTracingPort (heldTerms limits base chunks) name version (heldBody chunks)
+
 -- | The production selected read of a capture's chunks, on the terms of 'captureManifest'.
 captureVersion :: EcosystemRead -> CaptureUpstream -> PackageName -> Version -> [ByteString] -> IO (Either MetadataError VersionRead)
-captureVersion nativeRead upstream name version chunks =
-    readVersion nativeRead passthroughTracingPort (heldTerms defaultLimits (upstreamOrigin upstream) chunks) name version (heldBody chunks)
+captureVersion nativeRead upstream = heldVersion nativeRead defaultLimits (upstreamOrigin upstream)
 
 heldTerms :: Limits -> Text -> [ByteString] -> ReadTerms
 heldTerms limits base chunks =

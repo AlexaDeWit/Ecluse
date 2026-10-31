@@ -6,7 +6,6 @@
 module Ecluse.Test.Contract.Queue (
     QueueDriver (..),
     queueContract,
-    queuePayloadLaw,
     ephemeralQueueContract,
     leasedQueueContract,
 ) where
@@ -14,7 +13,8 @@ module Ecluse.Test.Contract.Queue (
 import Ecluse.Test.Contract.Catalogue (caseLabel)
 import Test.Hspec
 
-import Ecluse.Core.Queue (MirrorJob (..), MirrorQueue (..), QueueMessage (..))
+import Ecluse.Core.Queue (MirrorJob (..), MirrorQueue (..), QueueMessage (..), RemoteSpanContext (..))
+import Ecluse.Test.Package (scopedNpm)
 import Ecluse.Test.Queue (sampleJob)
 import Ecluse.Test.Support (expectRightIO)
 
@@ -30,10 +30,10 @@ queueContract contractGroup =
     describe "queue contract" $
         it (caseLabel (contractGroup <> "/payload") "preserves every payload field through delivery") queuePayloadLaw
 
--- | Check payload and acknowledgement evidence. Broken-driver tests exercise this same law.
+-- Check payload and acknowledgement evidence. Broken-driver tests exercise this same law.
 queuePayloadLaw :: QueueDriver -> Expectation
 queuePayloadLaw driver =
-    for_ [sampleJob, sampleJob{jobTriggerFilename = Nothing}] $ \payload -> do
+    for_ [sampleJob, sampleJob{jobTriggerFilename = Nothing}, sampleJob{jobTraceContext = Just carrier}, sampleJob{jobPackage = scopedNpm "scope" "thing"}] $ \payload -> do
         expectRightIO (enqueue (queueHandle driver) payload)
         messages <- awaitDelivery driver
         map msgJob messages `shouldBe` [payload]
@@ -43,6 +43,8 @@ queuePayloadLaw driver =
         map (jobTraceContext . msgJob) messages `shouldBe` [jobTraceContext payload]
         traverse_ (expectRightIO . ack (queueHandle driver) . msgReceipt) messages
         expectRightIO (receive (queueHandle driver)) `shouldReturn` []
+  where
+    carrier = RemoteSpanContext "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01" "vendor=value"
 
 -- | A destructive receive provides neither redelivery nor an increasing delivery count.
 ephemeralQueueContract :: Text -> SpecWith QueueDriver

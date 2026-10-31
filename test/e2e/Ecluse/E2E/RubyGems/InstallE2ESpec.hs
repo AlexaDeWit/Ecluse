@@ -24,12 +24,13 @@ import Ecluse.E2E.Fixtures.RubyGems
 import Ecluse.E2E.Harness
 import Ecluse.E2E.Harness.NativeEdge
 import Ecluse.E2E.Harness.RubyGems
-import Ecluse.E2E.InstallationE2ESpec (codedArtifact)
+import Ecluse.E2E.InstallationE2ESpec (codedArtifact, probedArtifact)
 import Ecluse.Test.Contract.Ecosystem (FamilyFixture)
 import Ecluse.Test.Contract.Install
 import Ecluse.Test.Contract.Phase (timedFixture)
 import Ecluse.Test.Package (hexSha256Of)
 import Ecluse.Test.Registry.RubyGems.Fixtures
+import Ecluse.Test.Registry.RubyGems.Reference (RubyInfoRow (..))
 
 -- | Refused and admitted installs use separate homes, caches and installed trees.
 rubyInstallationFamily :: FamilyFixture (InstallationDriver Bool)
@@ -44,14 +45,20 @@ installation observed release =
     InstallationDriver
         { installationAccepted = InstallDriver accepted True
         , installationDenied = InstallDriver denied (False, mempty)
-        , installationArtifact = (releaseChecksum release,) <$> proxyGetCoded proxy archive
+        , installationArtifact = (,) <$> advertised <*> proxyGetCoded proxy archive
         , installationDigest = hexSha256Of
-        , installationHead = proxyHead proxy archive
-        , installationCodedArtifact = codedArtifact proxy RubyGemsPublic (T.drop (T.length "/rubygems") archive) archive (pure (releaseChecksum release))
+        , installationHead = probedArtifact proxy RubyGemsPublic (T.drop (T.length "/rubygems") archive) archive
+        , installationCodedArtifact = codedArtifact proxy RubyGemsPublic (T.drop (T.length "/rubygems") archive) archive advertised
         }
   where
     proxy = observedProxy observed
     archive = rubyArchiveRoute release
+    -- The checksum the proxy's own info row advertises, never the fixture's.
+    advertised = do
+        rows <- rubyReadInfo proxy (releaseName release)
+        case [checksum | row <- rows, rowVersion row == releaseVersion release, rowPlatform row == releasePlatform release, ("checksum", checksum) <- rowFields row] of
+            [checksum] -> pure checksum
+            _ -> fail "RubyGems did not advertise one exact checksum"
     accepted = rubyConsumer proxy currentBundler $ \project -> do
         before <- nativeTraffic observed
         result <- rubyInstall project False
