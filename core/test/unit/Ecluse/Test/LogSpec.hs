@@ -10,7 +10,7 @@ import Katip (Severity (WarningS), logFM, ls)
 import Test.Hspec (Spec, describe, it, shouldBe, shouldReturn, shouldThrow)
 import UnliftIO.Exception (throwIO)
 
-import Ecluse.Test.Log (captureStderr, captureStdout, lineMessage, runJsonLog)
+import Ecluse.Test.Log (captureStderr, captureStdout, lineField, lineMessage, lineWhere, runJsonLog)
 import Ecluse.Test.Support (TestContractEscape (TestContractEscape))
 
 spec :: Spec
@@ -24,6 +24,22 @@ spec = do
         it "rejects malformed JSON and absent or non-text messages" $
             map lineMessage ["not JSON", "{}", "{\"message\":42}", "{\"msg\":42}"]
                 `shouldBe` replicate 4 Nothing
+
+    describe "lineField" $ do
+        it "reads the string at a nested key path" $
+            lineField ["data", "module"] "{\"data\":{\"module\":\"Ecluse.Server.Pipeline\"}}" `shouldBe` Just "Ecluse.Server.Pipeline"
+
+        it "reads nothing from malformed JSON, an absent key, or a value that is not a string" $
+            map (lineField ["data", "module"]) ["not JSON", "{}", "{\"data\":{}}", "{\"data\":{\"module\":42}}"]
+                `shouldBe` replicate 4 Nothing
+
+    describe "lineWhere" $ do
+        let captured = T.unlines ["not JSON", "{\"msg\":\"first\",\"n\":\"1\"}", "{\"msg\":\"second\"}", "{\"msg\":\"first\",\"n\":\"2\"}"]
+        it "finds the first line whose key path holds the value" $
+            (lineField ["n"] =<< lineWhere ["msg"] "first" captured) `shouldBe` Just "1"
+
+        it "finds nothing when no line holds the value" $
+            lineWhere ["msg"] "third" captured `shouldBe` Nothing
 
     describe "captureStdout" $ do
         it "returns what the action wrote to stdout" $
