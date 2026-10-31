@@ -38,6 +38,7 @@ import Ecluse.Composition.Support (
     fixedNow,
     overrideEnv,
     pubUrlEnv,
+    rubyGemsCodeArtifactMirrorEnv,
     rubyGemsMirrorEnv,
     rubyInstallRefusal,
     scopedName,
@@ -581,12 +582,6 @@ plannedMirrorTargets env = do
     plan <- expectConfig env Nothing >>= expectValidated
     providers <- initCredentialProviders slotCredentials (const (const noCredentialReporters)) (map vmMount (vpMounts plan)) >>= either (\errs -> fail ("provider init failed: " <> show errs)) pure
     either (\errs -> fail ("mirror target planning refused: " <> show errs)) pure (planPublishTargets MintMirrorWrite providers plan)
-
--- 'rubyGemsMirrorEnv' mirroring to a CodeArtifact repository, which mints its own write token.
-rubyGemsCodeArtifactMirrorEnv :: [(String, String)]
-rubyGemsCodeArtifactMirrorEnv =
-    ("ECLUSE_MOUNTS__RUBYGEMS__MIRROR_TARGET__CODE_ARTIFACT__URL", codeArtifactDomain <> "/ruby/mirror/")
-        : filter (not . ("ECLUSE_MOUNTS__RUBYGEMS__MIRROR_TARGET__REGISTRY__" `isPrefixOf`) . fst) rubyGemsMirrorEnv
 
 -- | The mount's serve deps carry the first-party predicate its declaration derives.
 firstPartySpec :: Spec
