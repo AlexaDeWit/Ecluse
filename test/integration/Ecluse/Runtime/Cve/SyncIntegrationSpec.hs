@@ -114,7 +114,7 @@ spec pool =
                                 status refused `shouldBe` 503
                                 (decodeUtf8 (simpleBody refused) :: Text) `shouldSatisfy` T.isInfixOf "AllowIfRemediatesCve: no advisory database loaded"
                                 quarantined <- getPath "/npm/corpus-vuln" skipping
-                                status quarantined `shouldBe` 403
+                                status quarantined `shouldBe` 404
 
                                 -- The running sync task's next poll verifies the new artifact and
                                 -- swaps it in, with no restart and no config change.
