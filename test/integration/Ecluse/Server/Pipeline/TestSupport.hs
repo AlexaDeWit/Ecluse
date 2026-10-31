@@ -29,6 +29,7 @@ module Ecluse.Server.Pipeline.TestSupport (
     conditionalArtifactUpstream,
     crossHostPublicUpstream,
     honouredPathUpstream,
+    declaredPathUpstream,
     offConventionPrivateUpstream,
     privateArtifactHit,
     privateArtifactHitWithHeader,
@@ -74,6 +75,8 @@ module Ecluse.Server.Pipeline.TestSupport (
     withProxyEnv,
     withProxy,
     withProxyEffectful,
+    withFreshProxies,
+    withUpstreams,
 
     -- * Request drivers
     getPath,
@@ -380,10 +383,19 @@ crossHostPublicUpstream crossHost version tarballBody =
 
 -- | Declare an off-convention artifact URL while serving any requested @.tgz@ path.
 honouredPathUpstream :: Text -> Text -> LByteString -> IO Upstream
-honouredPathUpstream version filename tarballBody = recordingUpstream answer
+honouredPathUpstream = offConventionPublicUpstream (".tgz" `BS.isSuffixOf`)
+
+-- | Declare an off-convention artifact URL and serve the bytes there alone, so any other @.tgz@ path is a 404.
+declaredPathUpstream :: Text -> Text -> LByteString -> IO Upstream
+declaredPathUpstream version filename = offConventionPublicUpstream (== encodeUtf8 ("/files/" <> filename)) version filename
+
+-- A packument declaring @/files/{filename}@, the bytes at each path @serves@ accepts, and 404 at any other @.tgz@ path.
+offConventionPublicUpstream :: (ByteString -> Bool) -> Text -> Text -> LByteString -> IO Upstream
+offConventionPublicUpstream serves version filename tarballBody = recordingUpstream answer
   where
     answer req
-        | ".tgz" `BS.isSuffixOf` rawPathInfo req = responseLBS status200 [] tarballBody
+        | serves (rawPathInfo req) = responseLBS status200 [] tarballBody
+        | ".tgz" `BS.isSuffixOf` rawPathInfo req = responseLBS status404 [] "not found"
         | otherwise = packumentAt altPackument req
 
     altPackument base =
@@ -572,12 +584,25 @@ withProxyMounts ::
     Maybe Text ->
     (forall a. (((PackumentDeps -> PackumentDeps) -> Application) -> Env -> Int -> IO a) -> IO a)
 withProxyMounts tweakEnv logEnv queue privateUp publicUp inbound k =
-    testWithApplication (pure (upApp privateUp)) $ \privatePort ->
-        testWithApplication (pure (upApp publicUp)) $ \publicPort -> withSweeper $ \deadlines -> do
-            manager <- newManager defaultManagerSettings
-            env <- tweakEnv <$> newTestEnvLogging deadlines logEnv queue (manager, manager) telemetryDisabled
-            baseDeps <- deps privatePort publicPort inbound
-            k (\tweakDeps -> proxyApplication Npm env (tweakDeps baseDeps)) env publicPort
+    withUpstreams (upApp privateUp) (upApp publicUp) $ \privatePort publicPort deadlines manager -> do
+        env <- tweakEnv <$> newTestEnvLogging deadlines logEnv queue (manager, manager) telemetryDisabled
+        baseDeps <- deps privatePort publicPort inbound
+        k (\tweakDeps -> proxyApplication Npm env (tweakDeps baseDeps)) env publicPort
+
+-- | Build proxies on demand over one pair of upstreams. Unlike 'withProxyMounts', each has its own runtime, so no cache carries between them.
+withFreshProxies :: Upstream -> Upstream -> (IO Application -> IO a) -> IO a
+withFreshProxies privateUp publicUp k =
+    withUpstreams (upApp privateUp) (upApp publicUp) $ \privatePort publicPort deadlines manager ->
+        k $ do
+            env <- newTestMemoryQueue >>= \queue -> newTestEnvWithQueue deadlines queue manager
+            proxyApplication Npm env <$> deps privatePort publicPort Nothing
+
+-- | Serve both origins for the continuation, with their ports, swept deadlines and one HTTP manager.
+withUpstreams :: Application -> Application -> (Int -> Int -> Deadlines -> Manager -> IO a) -> IO a
+withUpstreams privateApp publicApp k =
+    testWithApplication (pure privateApp) $ \privatePort ->
+        testWithApplication (pure publicApp) $ \publicPort -> withSweeper $ \deadlines ->
+            newManager defaultManagerSettings >>= k privatePort publicPort deadlines
 
 -- | A typed exception the bottoming assembly plants: a stand-in for an invariant break inside the pure render.
 newtype AssembleBottom = AssembleBottom Text
