@@ -25,6 +25,7 @@ import System.Process (readProcessWithExitCode)
 import UnliftIO.Temporary (withSystemTempFile)
 
 import Ecluse.Test.Package (hexSha256Of)
+import Ecluse.Test.Registry.Archive (readTarEntries)
 
 -- | Raw versions and platforms remain distinct from comparison keys.
 data RubyInfoRow = RubyInfoRow
@@ -68,7 +69,7 @@ referenceInfo bytes = do
 -- | The name, version and platform a gem's metadata declares, once its members match their SHA-256 entries.
 referenceGemIdentity :: ByteString -> Either Text (Text, Text, Text)
 referenceGemIdentity bytes = do
-    members <- Tar.foldEntries member (Right []) (Left . show) (Tar.read (LBS.fromStrict bytes))
+    members <- readTarEntries (LBS.fromStrict bytes) >>= traverse member
     unless (map fst members == ["metadata.gz", "data.tar.gz", "checksums.yaml.gz"]) (Left "gem archive members differ from the native layout")
     let content name = maybeToRight "gem archive lacks a native member" (LBS.toStrict <$> lookup name members)
     metadata <- content "metadata.gz"
@@ -83,8 +84,8 @@ referenceGemIdentity bytes = do
         _ -> Left "gem metadata lacks a version"
     (,version,) <$> scalar "name" <*> scalar "platform"
   where
-    member entry rest = case Tar.entryContent entry of
-        Tar.NormalFile body _ -> ((Tar.entryPath entry, body) :) <$> rest
+    member entry = case Tar.entryContent entry of
+        Tar.NormalFile body _ -> Right (Tar.entryPath entry, body)
         _ -> Left "gem archive has a member that is not a regular file"
 
 gunzipText :: ByteString -> Either Text Text

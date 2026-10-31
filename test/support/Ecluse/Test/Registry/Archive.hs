@@ -3,7 +3,7 @@
 -- SPDX-License-Identifier: MIT
 
 -- | Native tar fixtures shared across registry ecosystems.
-module Ecluse.Test.Registry.Archive (tarBytes, tarEntries, regular, pax, paxAt, paxRecord, checksumHeader, patchFirstHeader) where
+module Ecluse.Test.Registry.Archive (tarBytes, tarEntries, readTarEntries, regular, pax, paxAt, paxRecord, checksumHeader, patchFirstHeader) where
 
 import Codec.Archive.Tar qualified as Tar
 import Codec.Archive.Tar.Entry qualified as Tar
@@ -20,7 +20,11 @@ tarBytes entries = Tar.write <$> traverse (uncurry regular) entries
 
 -- | Read every entry of a tar stream in order, failing the test on a malformed stream.
 tarEntries :: BSL.ByteString -> IO [Tar.Entry]
-tarEntries = Tar.foldEntries (\entry rest -> (entry :) <$> rest) (pure []) (fail . show) . Tar.read
+tarEntries = either (fail . toString) pure . readTarEntries
+
+-- | 'tarEntries' as a value, reporting a malformed stream as 'Left'.
+readTarEntries :: BSL.ByteString -> Either Text [Tar.Entry]
+readTarEntries = Tar.foldEntries (\entry rest -> (entry :) <$> rest) (Right []) (Left . show) . Tar.read
 
 -- | One regular file. A path over 100 bytes splits into a ustar prefix and name.
 regular :: FilePath -> ByteString -> IO Tar.Entry

@@ -11,6 +11,7 @@ module Ecluse.Test.Contract.PackageStore.Provider (
     NativeStoreRead (..),
     readNativeRelease,
     publishNativeRelease,
+    uploadFiles,
     prepareStoreManifestOver,
     readStoreArtifact,
     fetchStoreArtifact,
@@ -152,6 +153,7 @@ matchesInventory expected stored =
     length expected == length (pkgArtifacts stored)
         && all (\file -> any (expectedTargetMatchesWith file Nothing) (pkgArtifacts stored)) expected
 
+-- | Upload each prepared file from the release's bytes, once each matches its expected digest.
 uploadFiles :: Version -> PreparedMirrorVersion -> PackageStoreRelease -> IO (Either Text ())
 uploadFiles version prepared release = fmap (void . sequence) $ forM (inventoryFiles (pmvInventory prepared)) $ \file ->
     case find ((== artFilename (expectedArtifact file)) . psaFilename) (psrArtifacts release) of
