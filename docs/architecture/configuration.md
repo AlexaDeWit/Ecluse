@@ -255,23 +255,24 @@ One such shape is a document of many tiny entries, whose map nodes, keys and typ
 the source bytes they come from. An npm or PyPI full read therefore pays a floor for each entry it
 retains, through its workspace, after each piece it parses:
 
-| Full read | Entries at 1,152 bytes | Entries at 704 bytes | Of those, entries no count bounds |
+| Full read | Entries at 1,152 bytes | Entries at 512 bytes | Of those, entries no count bounds |
 |---|---|---|---|
 | npm | Versions | Timestamps and dist-tags | Timestamps and dist-tags |
 | PyPI | Files | Dropped version entries, and `alternate-locations` and `meta.tracks` items | Dropped version entries, and `alternate-locations` and `meta.tracks` items |
 
-The read counts each entry as it reads it, so a PyPI array of items pays for them before it
-closes. The residency tier reads a dense document of each entry kind, and versions and files with
-minimal valid bodies of about 90 source bytes, and measures what the read holds per entry. The
-heaviest dense entry, an npm version with an empty body, peaks at 524 bytes per entry while read.
-A PyPI file with a minimal body peaks at 885, and an npm version with one at 845. Each floor is 1.25
-times the largest figure it covers, rounded up to 64 bytes: 704 bytes over the dense figures, and
-1,152 bytes for versions and files, which minimal bodies set. Every corpus listing's bytes pay more
+The read counts each entry as it reads it, so a PyPI array of items pays for them before it closes.
+The residency tier reads a dense document of each entry kind, and versions and files with minimal
+valid bodies of about 90 source bytes, and measures what the read holds per entry. Each floor is
+1.25 times the largest figure of the entry kinds it covers, rounded up to 64 bytes. The heaviest of
+the other entries, an npm timestamp whose value does not decode, peaks at 359 bytes per entry while
+read, which gives 512 bytes. A PyPI file with a minimal body peaks at 885, and an npm version with
+one at 845, which gives 1,152 bytes for versions and files. Every corpus listing's bytes pay more
 than the floors for the entries it keeps, so the floors add nothing to what a realistic listing
 keeps. While it reads, `@types/node` holds 69 entries in its first 32 KiB, 43 of them dist-tags, so
-its read pays 24,179 bytes of floor and holds them until it completes. The floors are the
-condition for later dropping the version count from listing reads, where it still caps the entries
-a dense document retains.
+its read pays 15,923 bytes of floor and holds them until it completes. A repeat of an
+`alternate-locations` array, a `meta` object or a `tracks` member counts toward no floor, so the
+PyPI read reads its items and holds none of them. The floors are the condition for later dropping
+the version count from listing reads, where it still caps the entries a dense document retains.
 
 A listing's response pays per byte of its output basis. The basis is the larger of two estimates,
 one anchored on the largest document the listing merges and one on the base document, whose
@@ -297,9 +298,11 @@ shared cache entry per source byte that the residency tier measures, rounded up 
 0.9 for npm (react at 0.699300) and 3.3 for PyPI (requests at 2.601638). An npm or PyPI listing
 keeps the floors for the entries its finished document keeps instead, when that is larger, so a
 dense document stays charged until its response renders. The cache entry carries the same count, so
-a cache hit keeps the same charge. An npm timestamp joins its version or is dropped when the read
-completes, so a document of timestamps that name no version keeps almost nothing, and pays almost
-no floor, once read. A PyPI read keeps every entry it counted. Once the body exists, the
+a cache hit keeps the same charge. When the read completes, an npm timestamp that decodes joins its
+version, and one under a key that names no version is dropped, so a document of timestamps that name
+no version keeps almost nothing, and pays almost no floor, once read. The `created` and `modified`
+times, and a timestamp under a version whose value does not decode, stay and keep the 512-byte
+floor. A PyPI read keeps every entry it counted. Once the body exists, the
 reads' charges go back, and the response holds only its own charge while it is sent. The residency
 tier checks each phase against what the meter holds then. Its heap census of the live listing path
 also covers the policy and merge plan between the reads and the render.

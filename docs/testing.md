@@ -631,7 +631,7 @@ output factors of 2.0 and 1.6.
 
 The per-byte charges come from realistic listings, so a document of many tiny entries pays almost
 nothing for them. An npm or PyPI full read pays a floor for each entry it retains instead, 1,152
-bytes for a version or file and 704 bytes for any other entry, and `EntryFloorResidencySpec`
+bytes for a version or file and 512 bytes for any other entry, and `EntryFloorResidencySpec`
 measures what such a read holds. For each entry kind it writes a document of 10,000 entries in the
 densest form the read retains: npm versions with empty bodies, and npm timestamps and dist-tags whose
 values do not decode, and PyPI files and versions entries that are bare numbers, and number items in
@@ -652,12 +652,17 @@ The checks are:
 - Each figure stays under its limit: the measured bytes per entry plus 4% for a read peak and 3%
   for a held entry, rounded up to a permille, plus the 16 KiB release tolerance. The tolerance
   keeps a near-zero figure, such as npm's held timestamps, from failing on one block.
+- A PyPI document that repeats a `tracks` member, an `alternate-locations` array and a `meta`
+  object, 30,000 items each, peaks within its per-byte full-read charge. A repeat counts toward no
+  floor, so the read holds none of its items. The PyPI walk residency case checks the same from the
+  other side: a repeat eight times longer leaves the bytes the walk holds level.
 
-The `Calibration` module stores the figures, and `entryFloor` applies the charge rule: 1.25 times
-the largest figure, rounded up to 64 bytes. Over the dense figures it gives the entry floor, and
-over the dense and minimal-body figures together it gives the release floor.
-`CalibrationResidencySpec` checks that both production floors match, and that every figure's limit
-stays below its floor. The figures were measured on amd64 with GHC 9.10.3 and Cabal `-O1`:
+The `Calibration` module stores the figures by the floor that covers each entry kind, and
+`floorRule` applies the charge rule: 1.25 times the largest figure, rounded up to 64 bytes. Over the
+version and file figures it gives the release floor, and over the figures of every other entry it
+gives the entry floor. `CalibrationResidencySpec` checks that both production floors match, and that
+every figure's limit stays below its floor. The figures were measured on amd64 with GHC 9.10.3 and
+Cabal `-O1`:
 
 | Listing | Source bytes per entry | Read peak per entry | Held per entry |
 |---|---:|---:|---:|
@@ -671,10 +676,9 @@ stays below its floor. The figures were measured on amd64 with GHC 9.10.3 and Ca
 | npm versions with minimal bodies | 87.8 | 844.5 | 657.9 |
 | PyPI files with minimal bodies | 97.8 | 885.3 | 856.1 |
 
-npm versions with empty bodies set the entry floor: 1.25 times 524.4 is 655.5, which rounds up to
-704. PyPI files with minimal bodies set the release floor: 1.25 times 885.3 is 1,106.7, which rounds
-up to 1,152. An npm read drops timestamps that name no version when it completes, so its held entry
-is nearly empty.
+npm timestamps set the entry floor: 1.25 times 359.3 is 449.1, which rounds up to 512. PyPI files
+with minimal bodies set the release floor: 1.25 times 885.3 is 1,106.7, which rounds up to 1,152. An
+npm read drops timestamps that name no version when it completes, so its held entry is nearly empty.
 
 The unit specs of each ecosystem's metadata read check the realistic side: the floors for the
 entries each corpus capture keeps stay within its kept charge.
