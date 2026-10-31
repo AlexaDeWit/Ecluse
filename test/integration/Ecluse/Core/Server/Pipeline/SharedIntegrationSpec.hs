@@ -5,7 +5,7 @@
 -- | Shared pipeline refusal behaviour under upstream faults and malformed responses.
 module Ecluse.Core.Server.Pipeline.SharedIntegrationSpec (spec) where
 
-import Data.Aeson (Key, Value (Object, String), object, (.=))
+import Data.Aeson (Value (Object, String), object, (.=))
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.Text qualified as T
 import Data.Time (getCurrentTime)
@@ -27,7 +27,7 @@ import Ecluse.Core.Rules.Types (FailureAlignment (..), Reason (FixesNoAdvisory),
 import Ecluse.Core.Security (Limits (..), defaultLimits)
 import Ecluse.Core.Server.Context (PackumentDeps (..))
 import Ecluse.Runtime.Log (DdContext (DdContext), LogFormat (JsonLog), LogLevel (DebugLevel, InfoLevel), newLogEnv)
-import Ecluse.Test.Log (captureStdout, lineField, lineWhere)
+import Ecluse.Test.Log (captureStdout, lineField, lineWhere, moduleOfLineWhere, untaggedLines)
 import Ecluse.Test.Queue (newTestMemoryQueue)
 import Ecluse.Test.Rules (packageRule, remediation, revocation)
 import Katip (Environment (Environment), closeScribes)
@@ -294,22 +294,14 @@ boundsLogSpec = describe "serve-path warnings are logged before degrading" $ do
         moduleOfLineWhere ["data", "bound"] "version-count" breach `shouldBe` Just "Ecluse.Server.Pipeline"
         moduleOfLineWhere ["message"] "the upstream refused the metadata read" breach `shouldBe` Just "Ecluse.Server.Pipeline"
         moduleOfLineWhere ["message"] "serving packument request for thing" breach `shouldBe` Just "Ecluse.Server.Pipeline"
-        untagged breach `shouldBe` []
+        untaggedLines breach `shouldBe` []
         -- A private upstream refusing access with 403, beside an admitting public upstream.
         refused <- captureServeLog DebugLevel (upstreamRespondingWith (responseLBS status403 [] "forbidden")) (servingUpstream (encodePackument (admittingPublic "1.0.0")))
         let refusal = lineWhere ["message"] "the upstream refused metadata access" refused
         (lineField ["data", "module"] =<< refusal) `shouldBe` Just "Ecluse.Server.Pipeline"
         (lineField ["data", "package"] =<< refusal) `shouldBe` Just "thing"
         (lineField ["data", "upstream"] =<< refusal) `shouldSatisfy` isJust
-        untagged refused `shouldBe` []
-
--- The @module@ of the first captured line whose key path holds the value.
-moduleOfLineWhere :: [Key] -> Text -> Text -> Maybe Text
-moduleOfLineWhere path value logged = lineField ["data", "module"] =<< lineWhere path value logged
-
--- The captured lines that name no module, a line that is not JSON included.
-untagged :: Text -> [Text]
-untagged = filter (isNothing . lineField ["data", "module"]) . lines
+        untaggedLines refused `shouldBe` []
 
 perimeterSpec :: Spec
 perimeterSpec = describe "the typed request perimeter (an escaped pre-commit fault)" $
