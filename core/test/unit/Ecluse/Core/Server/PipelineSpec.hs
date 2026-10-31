@@ -132,7 +132,7 @@ spec = describe "Ecluse.Core.Server.Pipeline (core handlers over a ServeRuntime)
     pypiPrivateArtifactSpec
     publicControlSpec
     absentNameSpec
-    unconfiguredPrivateAbsentNameSpec
+    unconfiguredPrivateSpec
     deniedListingSpec
 
     for_ [(status200, Admit), (status304, Admit), (status401, Deny), (status403, Deny)] $ \(upstreamStatus, expected) ->
@@ -1244,30 +1244,45 @@ withAbsentPublic ecosystem router credential privatePort publicStatus metrics ac
             deps = (serveDepsFor adapter (origin <$> privatePort) (origin publicPort) NoMirrorWrite [] (pure fixedNow)){pdMountBaseUrl = "http://proxy.test"}
         action rt (mountUnder credential deps){bindingRouter = router}
 
--- A public 404 settles the name on a mount with no private origin, on every ecosystem.
-unconfiguredPrivateAbsentNameSpec :: Spec
-unconfiguredPrivateAbsentNameSpec = describe "a name the public origin answers 404 for on a mount with no private origin, through ecosystem routes" $ do
-    for_ absentNameRoutes $ \(ecosystem, router, credential, listing, artifacts) -> do
-        let named = toString (ecosystemName ecosystem) <> " "
-            captured metrics path =
-                withAbsentPublic ecosystem router credential Nothing status404 metrics $ \rt binding ->
-                    traverse (\method -> captureRouted rt binding method path) [methodGet, methodHead]
-        for_ (listing : artifacts) $ \(route, path) ->
-            it (named <> route <> " answers 404 for GET and HEAD") $ do
-                responses <- captured noopMetricsPort path
-                map (statusCode . responseStatus) responses `shouldBe` [404, 404]
-        it (named <> fst listing <> " records an unavailable decision and its denial for GET and HEAD") $ do
-            (recording, decisions) <- recordingMetricsPort
-            (metrics, denials) <- recordingDenials recording
-            void (captured metrics (snd listing))
-            decisions `shouldReturn` [Unavailable, Unavailable]
-            denials `shouldReturn` replicate 2 (Nothing, Metric.ReasonUnavailable)
-    it "names only the configured origins in the npm refusal" $ do
-        let request rt binding = captureRouted rt binding methodGet ["leftpad"] >>= responseBytes
-        publicOnly <- withAbsentPublic Npm npmRouter npmCredential Nothing status404 noopMetricsPort request
-        eitherDecode publicOnly `shouldBe` Right (object ["error" .= ("the public upstream does not have the requested package" :: Text)])
-        both <- withAbsentPrivate Npm npmRouter npmCredential status404 noopMetricsPort request
-        eitherDecode both `shouldBe` Right (object ["error" .= ("neither the private nor the public upstream has the requested package" :: Text)])
+-- With no private origin the public one decides alone, on every ecosystem: its 404 settles the name, and
+-- its outage answers 503 with the cause, as a private outage does.
+unconfiguredPrivateSpec :: Spec
+unconfiguredPrivateSpec = do
+    describe "a name the public origin answers 404 for on a mount with no private origin, through ecosystem routes" $ do
+        publicOnlyRoutes status404 404
+        it "names only the configured origins in the npm refusal" $ do
+            let request rt binding = captureRouted rt binding methodGet ["leftpad"] >>= responseBytes
+            publicOnly <- withAbsentPublic Npm npmRouter npmCredential Nothing status404 noopMetricsPort request
+            eitherDecode publicOnly `shouldBe` Right (object ["error" .= ("the public upstream does not have the requested package" :: Text)])
+            both <- withAbsentPrivate Npm npmRouter npmCredential status404 noopMetricsPort request
+            eitherDecode both `shouldBe` Right (object ["error" .= ("neither the private nor the public upstream has the requested package" :: Text)])
+    describe "a name the public origin answers 503 for on a mount with no private origin, through ecosystem routes" $ do
+        publicOnlyRoutes status503 503
+        -- A PyPI refusal body carries only the configured help message.
+        for_ [entry | entry@(ecosystem, _, _, _, _) <- absentNameRoutes, ecosystem /= PyPI] $ \(ecosystem, router, credential, (route, path), _) ->
+            it (toString (ecosystemName ecosystem) <> " " <> route <> " names the outage in its body") $ do
+                body <- withAbsentPublic ecosystem router credential Nothing status503 noopMetricsPort $ \rt binding ->
+                    captureRouted rt binding methodGet path >>= responseBytes
+                LBS.toStrict body `shouldSatisfy` BS.isInfixOf "a needed upstream was unavailable"
+  where
+    -- Every route answers this status for GET and HEAD, and the listing records an unavailable decision and its denial.
+    publicOnlyRoutes :: Status -> Int -> Spec
+    publicOnlyRoutes publicStatus expectedStatus =
+        for_ absentNameRoutes $ \(ecosystem, router, credential, listing, artifacts) -> do
+            let named = toString (ecosystemName ecosystem) <> " "
+                captured metrics path =
+                    withAbsentPublic ecosystem router credential Nothing publicStatus metrics $ \rt binding ->
+                        traverse (\method -> captureRouted rt binding method path) [methodGet, methodHead]
+            for_ (listing : artifacts) $ \(route, path) ->
+                it (named <> route <> " answers " <> show expectedStatus <> " for GET and HEAD") $ do
+                    responses <- captured noopMetricsPort path
+                    map (statusCode . responseStatus) responses `shouldBe` [expectedStatus, expectedStatus]
+            it (named <> fst listing <> " records an unavailable decision and its denial for GET and HEAD") $ do
+                (recording, decisions) <- recordingMetricsPort
+                (metrics, denials) <- recordingDenials recording
+                void (captured metrics (snd listing))
+                decisions `shouldReturn` [Unavailable, Unavailable]
+                denials `shouldReturn` replicate 2 (Nothing, Metric.ReasonUnavailable)
 
 -- A public listing the gate denies in full answers 404 beside a private 404 or with no private origin. The artifact keeps its 403.
 deniedListingSpec :: Spec
