@@ -18,7 +18,7 @@ import Data.HashMap.Strict qualified as HashMap
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Ecluse.Test.Contract.Catalogue (caseLabel)
-import Katip (runKatipContextT)
+import Katip (Severity (ErrorS), runKatipContextT)
 import Network.HTTP.Types.Status (status200, status404)
 import System.Directory (doesFileExist)
 import System.FilePath ((</>))
@@ -45,7 +45,7 @@ import Ecluse.Runtime.Pilot.Export (PublicationStop (..), StoreFault (StoreNoRev
 import Ecluse.Runtime.Telemetry (telemetryDisabled)
 import Ecluse.Test.Corpus.Advisories (AdvisoryInputs (aiOsvZip), fillerTargets, syntheticAdvisories)
 import Ecluse.Test.Cve (namesFix)
-import Ecluse.Test.Log (memoryLogEnv, runQuietKatip)
+import Ecluse.Test.Log (memoryLogEnv, memorySeverityLogEnv)
 import Ecluse.Test.Osv (CorpusVersion (CorpusV1, CorpusV2), mkMinimalValidDb, osvCorpusZip, osvZipOf)
 import Ecluse.Test.OsvDb (denyIfEpssRules, epssFixtureFile, epssFreeRules, openCveDb, stubSourceEnv, withSourceStubs)
 import Ecluse.Test.Poll (pollUntil, retryingIO)
@@ -126,13 +126,14 @@ spec pool = aroundAll (withMinistack pool) $ do
                         bucket = if feedUp then "pilot-scheduled-up" else "pilot-scheduled-down"
                     aws <- createStore endpoint bucket
                     archive <- osvCorpusZip CorpusV1
+                    (logEnv, logged) <- memoryLogEnv
                     withStub status200 archive $ \osvStub -> do
                         seeded <- if feedUp then pure [] else seedNpm endpoint bucket dir osvStub >> snapshot aws bucket
                         withStub (if feedUp then status200 else status404) scheduledFeed $ \epssStub -> do
                             config <- either (fail . show) pure (loadConfig (scheduledEnv bucket (dir </> "data") osvStub epssStub) Nothing)
                             let targets = [ExportTarget eco (mountEpssRequirement mount) | (eco, mount) <- Map.toAscList (configMounts config)]
                             plan <- maybe (fail "a configured store planned no export") pure (exportLoopPlan (cfgAdvisories (configApp config)) targets)
-                            withAsync (runQuietKatip (runExportLoop telemetryDisabled (Just endpoint) config plan)) $ \_ -> do
+                            withAsync (runKatipContextT logEnv () mempty (runExportLoop telemetryDisabled (Just endpoint) config plan)) $ \_ -> do
                                 requests <- pollUntil 240 500_000 ((>= 2) . length) (allCaptured epssStub)
                                 map capPath requests `shouldBe` replicate 2 "/epss.csv.gz"
                                 published <- pollUntil 240 500_000 ((== 2) . length) (snapshot aws bucket)
@@ -142,7 +143,12 @@ spec pool = aroundAll (withMinistack pool) $ do
                                         withPublished endpoint bucket eco EpssRequired (dir </> "data" </> osvDbFileName (ecosystemName eco)) $ \lookup' ->
                                             map arEpss <$> cveAdvisoriesFor lookup' package `shouldReturn` [Just 0.75]
                                     else do
-                                        filter ((== artifactKey Npm) . objectKey) published `shouldBe` seeded
+                                        -- The loops run side by side, so read npm's object only once its cycle has refused.
+                                        let npmObjects = filter ((== artifactKey Npm) . objectKey)
+                                            settled (messages, objects) = any npmEpssRefusal messages || npmObjects objects /= seeded
+                                        (messages, current) <- pollUntil 240 500_000 settled ((,) <$> logged <*> snapshot aws bucket)
+                                        npmObjects current `shouldBe` seeded
+                                        messages `shouldSatisfy` any npmEpssRefusal
                                         withPublished endpoint bucket PyPI EpssOptional (dir </> "data" </> osvDbFileName "pypi") $ \lookup' ->
                                             map arEpss <$> cveAdvisoriesFor lookup' "redis" `shouldReturn` [Nothing]
 
@@ -191,16 +197,23 @@ spec pool = aroundAll (withMinistack pool) $ do
                     before <- snapshot aws bucket
                     archive <- osvCorpusZip CorpusV1
                     epss <- LBS.readFile epssFixtureFile
-                    (logEnv, logged) <- memoryLogEnv
+                    (logEnv, logged) <- memorySeverityLogEnv
                     withSourceStubs archive (status200, epss) $ \sources _ -> do
                         config <- either (fail . show) pure (loadConfig (loopEnvFor eco bucket (dir </> "data") sources) Nothing)
                         let targets = [ExportTarget mounted (mountEpssRequirement mount) | (mounted, mount) <- Map.toAscList (configMounts config)]
+                            stoppedLine = T.isInfixOf "Advisory publication stopped" . snd
                         plan <- maybe (fail "a configured store planned no export") pure (exportLoopPlan (cfgAdvisories (configApp config)) targets)
                         withAsync (runKatipContextT logEnv () mempty (runExportLoop telemetryDisabled (Just endpoint) config plan)) $ \_ -> do
-                            stopped <- pollUntil 240 500_000 (any (T.isInfixOf "Advisory publication stopped")) logged
-                            filter (T.isInfixOf "Advisory publication stopped") stopped `shouldSatisfy` all (T.isInfixOf "publication-version")
+                            stops <- filter stoppedLine <$> pollUntil 240 500_000 (any stoppedLine) logged
+                            stops `shouldSatisfy` (not . null)
+                            map snd stops `shouldSatisfy` all (T.isInfixOf "publication-version")
+                            map fst stops `shouldSatisfy` all (== ErrorS)
                     snapshot aws bucket `shouldReturn` before
                     doesFileExist (dir </> "data" </> osvDbFileName (ecosystemName eco)) `shouldReturn` False
+
+-- The supervisor's line for npm's cycle failing on its required EPSS feed.
+npmEpssRefusal :: Text -> Bool
+npmEpssRefusal message = "pilot-export-npm: " `T.isPrefixOf` message && "requires EPSS enrichment" `T.isInfixOf` message
 
 -- Scores the advisory CorpusV1 shares between npm's corpus-mixed and PyPI's redis.
 scheduledFeed :: LByteString
