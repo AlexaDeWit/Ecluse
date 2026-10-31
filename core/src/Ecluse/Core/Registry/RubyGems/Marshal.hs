@@ -171,12 +171,12 @@ spendNodes reason amount = do
 
 -- | The node and alias work one inert Marshal or YAML decode may do.
 inertNodeBudget :: Limits -> Int
-inertNodeBudget limits = min (maxArtifactCount limits) (maxMetadataBytes limits `div` 8)
+inertNodeBudget limits = min (inertNodeCeiling limits) (maxMetadataBytes limits `div` 8)
 
 counted :: Decoder a -> Decoder [a]
 counted parse = do
     count <- natural
-    cap <- gets (maxArtifactCount . bounds)
+    cap <- gets (inertNodeCeiling . bounds)
     available <- gets (BS.length . remaining)
     when (count > cap || count > available) (refuse "Marshal collection count exceeds its bound")
     replicateM count parse

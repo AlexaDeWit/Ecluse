@@ -26,6 +26,8 @@ module Ecluse.Core.Registry.Npm.StreamingProjection (
     emptyPackedRead,
     keepsPackedRelease,
     packedStep,
+    retainedEntries,
+    keptEntries,
     finishPacked,
 ) where
 
@@ -44,6 +46,7 @@ import Ecluse.Core.Package (InvalidEntry, InvalidEntryKind (..), PackageDetails 
 import Ecluse.Core.Registry.Json.Packed (DocTable, Packed)
 import Ecluse.Core.Registry.Json.Writer (Pick (..), decodePicked, decodeWhole, replacedMember)
 import Ecluse.Core.Registry.Metadata (MetadataError (..))
+import Ecluse.Core.Registry.Metadata.EntryFloor (RetainedEntries (RetainedEntries))
 import Ecluse.Core.Registry.Metadata.Projection (validateNameAgreement)
 import Ecluse.Core.Registry.Npm.DependencySource (installableFieldName)
 import Ecluse.Core.Registry.Npm.Document (PackedPackument (..), tarballHole, tarballUrl)
@@ -53,7 +56,7 @@ import Ecluse.Core.Registry.Npm.VersionWriter (VersionValue, VersionWriter, disc
 import Ecluse.Core.Registry.Npm.Wire (Dist (distTarball), VersionManifest (vmDist), distFields)
 import Ecluse.Core.Registry.ServedDocument (artifactUrlPacked)
 import Ecluse.Core.Registry.WireSupport (parsePublishTime)
-import Ecluse.Core.Security (LimitError, Limits, checkArtifactCount, checkVersionCountOf)
+import Ecluse.Core.Security (LimitError, Limits, checkVersionCountOf)
 import Ecluse.Core.Strict (strictElements)
 import Ecluse.Core.Version (Version, mkVersion)
 
@@ -154,14 +157,12 @@ invalidRelease key whole reason = Left $! mkInvalidEntry InvalidVersionManifest 
 -- The parts a finished read serves beside its releases: the reported name and the bookkeeping times.
 data NpmParts = NpmParts Value (Map Text Value)
 
-finishParts :: Limits -> PackageName -> NpmProjection -> Either MetadataError (PackageInfo, NpmParts)
-finishParts limits requested acc = do
+finishParts :: PackageName -> NpmProjection -> Either MetadataError (PackageInfo, NpmParts)
+finishParts requested acc = do
     when (projectedInvalidContainer acc) (Left MetadataUndecodable)
     _ <- validateNameAgreement projectName requested (projectedName acc)
-    first MetadataBoundExceeded (checkArtifactCount limits artifacts)
     pure (package, NpmParts (fromMaybe Null (projectedName acc)) (projectedBookkeeping acc))
   where
-    artifacts = Map.foldl' (\seen details -> seen + length (pkgArtifacts details)) 0 (infoVersions package)
     versions = Map.mapMaybe rightToMaybe (projectedVersions acc)
     times = Map.mapMaybe rightToMaybe (projectedTimes acc)
     tags = Map.mapMaybe rightToMaybe (projectedTags acc)
@@ -172,13 +173,13 @@ finishParts limits requested acc = do
             { infoName = requested
             , infoVersions = Map.mapWithKey stamp versions
             , infoDistTags = tags
-            , infoInvalidEntries =
-                strictElements
-                    ( drops (projectedVersions acc)
-                        <> drops (projectedTags acc)
-                        <> drops (Map.restrictKeys (projectedTimes acc) (Map.keysSet versions))
-                    )
+            , infoInvalidEntries = strictElements (drops (projectedVersions acc) <> drops (projectedTags acc) <> keptTimeDrops acc)
             }
+
+-- The timestamps a finished read reports as dropped: those under a valid release's key. A valid one folds
+-- into its release, and one under any other key goes.
+keptTimeDrops :: NpmProjection -> [InvalidEntry]
+keptTimeDrops acc = lefts (Map.elems (Map.restrictKeys (projectedTimes acc) (Map.keysSet (Map.filter isRight (projectedVersions acc)))))
 
 -- | A read that keeps each release as aeson's tree: the typed facts, and the served releases.
 data TreeRead = TreeRead NpmProjection (Map Text Value)
@@ -201,8 +202,8 @@ treeStep limits name (TreeRead acc served) field = case field of
     _ -> (`TreeRead` served) <$> collectField limits acc field
 
 -- | Bind the reported name, and serve each kept release with the source author pointer.
-finishTree :: Limits -> PackageName -> Text -> TreeRead -> Either MetadataError (PackageInfo, Value)
-finishTree limits requested authorPointer (TreeRead acc served) = second document <$> finishParts limits requested acc
+finishTree :: PackageName -> Text -> TreeRead -> Either MetadataError (PackageInfo, Value)
+finishTree requested authorPointer (TreeRead acc served) = second document <$> finishParts requested acc
   where
     document (NpmParts name time) =
         Object
@@ -257,13 +258,21 @@ packedStep writer limits name (PackedRead acc served) field next = case field of
         Object fields -> Object (maybe (KeyMap.delete "author") (KeyMap.insert "author") original fields)
         other -> other
 
+-- | The releases, timestamps and tags the packed read holds while it reads.
+retainedEntries :: PackedRead -> RetainedEntries
+retainedEntries (PackedRead acc _) = RetainedEntries (Map.size (projectedVersions acc)) (Map.size (projectedTimes acc) + Map.size (projectedTags acc))
+
+-- | The entries the finished read keeps: its releases, its tags, the bookkeeping times it serves, and its reported timestamp drops.
+keptEntries :: PackedRead -> RetainedEntries
+keptEntries (PackedRead acc _) = RetainedEntries (Map.size (projectedVersions acc)) (Map.size (projectedTags acc) + Map.size (projectedBookkeeping acc) + length (keptTimeDrops acc))
+
 -- Keep the diagnostic field selection to preserve decoder refusal priority. Dependency maps never refuse.
 typedMembers :: Pick
 typedMembers = Only [(field, if field == "dist" then Only [(member, Whole) | member <- distFields] else Whole) | field <- versionListFields <> map installableFieldName Universe.universe]
 
 -- | Bind the reported name, and serve each kept release packed over the read's sealed table.
-finishPacked :: Limits -> PackageName -> Text -> DocTable -> PackedRead -> Either MetadataError (PackageInfo, PackedPackument)
-finishPacked limits requested authorPointer table (PackedRead acc served) = second document <$> finishParts limits requested acc
+finishPacked :: PackageName -> Text -> DocTable -> PackedRead -> Either MetadataError (PackageInfo, PackedPackument)
+finishPacked requested authorPointer table (PackedRead acc served) = second document <$> finishParts requested acc
   where
     document (NpmParts name time) =
         PackedPackument

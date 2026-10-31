@@ -13,6 +13,8 @@ module Ecluse.Test.Registry.PyPI (
     yankedForms,
     simpleIndex,
     simpleIndexWith,
+    denseIndex,
+    minimalIndex,
     separatorHeavySdist,
     alicePair,
 ) where
@@ -20,6 +22,7 @@ module Ecluse.Test.Registry.PyPI (
 import Data.Aeson (Value (Bool, Null, Number, String), object, toJSON, (.=))
 import Data.Aeson.Key (Key)
 import Data.Aeson.Types (Pair)
+import Data.ByteString qualified as BS
 import Data.Text qualified as T
 
 import Ecluse.Core.Credential (ClientCredential (ClientCredential), mkSecret)
@@ -77,6 +80,18 @@ PEP 700 @tracks@ array, applied between the name and the files.
 -}
 simpleIndexWith :: Text -> [Pair] -> [Value] -> Value
 simpleIndexWith name extra files = object (["name" .= name] <> extra <> ["files" .= files])
+
+-- | A Simple index named @requests@ of files that name no release and non-string versions entries: many retained entries in few bytes.
+denseIndex :: Int -> Int -> ByteString
+denseIndex files drops = "{\"meta\":{\"api-version\":\"1.1\"},\"name\":\"requests\",\"files\":[" <> BS.intercalate "," [file (show at) | at <- [1 .. files]] <> "],\"versions\":[" <> BS.intercalate "," (replicate drops "7") <> "]}"
+  where
+    file at = "{\"filename\":\"x" <> at <> "\",\"url\":\"https://files.pythonhosted.org/x" <> at <> "\"}"
+
+-- | A Simple index named @thing@ with as many files as asked, each with only a filename and URL: the smallest valid file body.
+minimalIndex :: Int -> ByteString
+minimalIndex count = "{\"meta\":{\"api-version\":\"1.1\"},\"name\":\"thing\",\"files\":[" <> BS.intercalate "," [file (show at) | at <- [1 .. count]] <> "]}"
+  where
+    file at = "{\"filename\":\"thing-0.0." <> at <> ".tar.gz\",\"url\":\"https://files.pythonhosted.org/thing-0.0." <> at <> ".tar.gz\"}"
 
 -- | A malformed sdist with distinct suffixes for allocation and scaling measurements.
 separatorHeavySdist :: Text -> Int -> Text -> Text

@@ -13,6 +13,7 @@ import Data.JsonStream.LexerResidencySpec qualified as LexerResidencySpec
 import Ecluse.Core.Mirror.State.WeightResidencySpec qualified as StateWeightResidencySpec
 import Ecluse.Core.Registry.Cargo.ReaderResidencySpec qualified as CargoReaderResidencySpec
 import Ecluse.Core.Registry.JsonStreamResidencySpec qualified as JsonStreamResidencySpec
+import Ecluse.Core.Registry.Metadata.EntryFloorResidencySpec qualified as EntryFloorResidencySpec
 import Ecluse.Core.Registry.MetadataResidencySpec qualified as MetadataResidencySpec
 import Ecluse.Core.Registry.Npm.ReaderResidencySpec qualified as NpmReaderResidencySpec
 import Ecluse.Core.Registry.PyPI.ArchiveResidencySpec qualified as ArchiveResidencySpec
@@ -51,6 +52,7 @@ main =
             JsonStreamResidencySpec.spec
             SummaryResidencySpec.spec
             MetadataResidencySpec.spec
+            EntryFloorResidencySpec.spec
             NpmReaderResidencySpec.spec
             PyPIReaderResidencySpec.spec
             CargoReaderResidencySpec.spec

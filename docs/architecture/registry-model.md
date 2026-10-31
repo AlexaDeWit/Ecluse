@@ -588,7 +588,7 @@ retained-live measurements remain distinct from the cached accounting estimate.
 
 RubyGems merges caller-authorised private gems with admitted public gems. It discovers gems through the global Compact Index and acquires metadata per gem.
 The public directory shares bounded retention. Caller-authorised private discovery remains fresh and separate from public retention.
-Discovery bounds gem names with a fixed ceiling rather than the per-package count limits, so lowering those limits for npm or PyPI cannot break RubyGems discovery.
+Discovery bounds gem names with a fixed ceiling rather than the per-package version count, so lowering that limit for npm or PyPI cannot break RubyGems discovery.
 The public directory follows public availability, except that a bound breach refuses the request as an exceeded input bound does.
 Per-gem `/info/<gem>` rows follow the shared merge, admission and mirror restoration paths.
 Unknown transformed info-file MD5 values use explicit blank hints in the supported clients.
@@ -598,8 +598,7 @@ The [operator protocol reference](https://ecluse-proxy.com/docs/protocol-support
 
 Raw version identity differs from native version ordering. Platforms identify separate physical artifacts of the same raw version.
 A conflicting coordinate quarantines its version. Selected reads still scan through EOF and enforce counts before selection.
-Full reads count distinct raw versions, while selected reads count all nonblank artifact positions, including malformed or skipped rows.
-Artifact counts include every nonblank row before projection.
+Full and selected reads count every nonblank row before projection against the version count, including malformed or skipped rows.
 
 RubyGems supplies no supported deprecation flag or scope. Native builds are normal installation behaviour.
 Compact Index `/info` omits a yanked version instead of flagging it, so public reads and the mirror worker never see a yanked gem.

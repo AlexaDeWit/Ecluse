@@ -43,6 +43,8 @@ import Ecluse.Core.Package (
  )
 import Ecluse.Core.Package.Entry (EntryKey (ObjectEntry))
 import Ecluse.Core.Package.Merge (MergePlan (mpSurvivors), Provenance (GatedSource, TrustedSource), mergePackuments)
+import Ecluse.Core.Registry.Adapter.Capability (AdapterMetadata (metadataRead))
+import Ecluse.Core.Registry.Adapter.Types (RegistryAdapter (adapterMetadata))
 import Ecluse.Core.Registry.CachedDocument (CachedDoc, npmCached, npmPacked)
 import Ecluse.Core.Registry.Json.Intern (InternTable, Interned (..), decodedName, internName, tableTexts)
 import Ecluse.Core.Registry.Json.Packed (DocTable, Packed, docTable, packedEncodedLength, withoutHole)
@@ -50,41 +52,50 @@ import Ecluse.Core.Registry.Json.Walk (Steps, Walked (..))
 import Ecluse.Core.Registry.Json.Writer (Pick (..), Writer, decodePicked, decodeWhole, discard, newWriter, replacedMember, sealValue)
 import Ecluse.Core.Registry.JsonStream (StreamResult (streamValue))
 import Ecluse.Core.Registry.Metadata (
+    Manifest (manifestRetainedEntries),
     MetadataError (MetadataBoundExceeded, MetadataNameMismatch, MetadataUndecodable),
     VersionDoc (vdRaw),
     VersionRead (vrBodyBytes, vrUpstreamLatest, vrVersion),
  )
+import Ecluse.Core.Registry.Metadata.EntryFloor (RetainedEntries (RetainedEntries), entryFloorBytes, entryFloorCharge)
 import Ecluse.Core.Registry.Metadata.Projection (projectionResult, streamError, validateReportedName)
+import Ecluse.Core.Registry.Npm.Adapter (npmAdapter)
 import Ecluse.Core.Registry.Npm.DependencySource (installableFieldName)
 import Ecluse.Core.Registry.Npm.Document (PackedPackument (..), tarballHole, tarballUrl)
 import Ecluse.Core.Registry.Npm.Filter (assembleMergedDocument, serialiseMergedDocument)
-import Ecluse.Core.Registry.Npm.Metadata (npmPackumentWalk, projectNpmPacked, projectNpmStream, selectNpmVersionDoc)
+import Ecluse.Core.Registry.Npm.Metadata (npmChargeFactors, npmPackumentWalk, projectNpmPacked, projectNpmStream, selectNpmVersionDoc)
 import Ecluse.Core.Registry.Npm.Project (projectName, projectVersionEntryResult)
+import Ecluse.Core.Registry.Npm.Publish (npmPublishCodec)
 import Ecluse.Core.Registry.Npm.Reader (PackumentRead (WholePackument), npmWalk, releaseUniqueFields)
 import Ecluse.Core.Registry.Npm.Request (packageUrl)
 import Ecluse.Core.Registry.Npm.Streaming (NpmContainer (..), NpmFieldOf (..), versionListFields)
 import Ecluse.Core.Registry.Npm.Wire (distFields)
+import Ecluse.Core.Registry.Publish (PublishCodec (pcTargetRead))
+import Ecluse.Core.Registry.Request (nativePresentation)
 import Ecluse.Core.Registry.ServedDocument (RenderRefused, rebaseArtifactUrl)
 import Ecluse.Core.Registry.WireSupport (checkNameAgreement, parsePublishTime)
 import Ecluse.Core.Security (
     BodyLimit (MetadataBodyLimit),
-    LimitError (BodyTooLarge, TooDeeplyNested, TooManyArtifacts, TooManyVersions),
-    Limits (maxArtifactCount, maxMetadataBytes, maxNestingDepth, maxVersionCount),
-    checkArtifactCount,
+    LimitError (BodyTooLarge, TooDeeplyNested, TooManyVersions),
+    Limits (maxMetadataBytes, maxNestingDepth, maxVersionCount),
     checkVersionCountOf,
     defaultLimits,
  )
+import Ecluse.Core.Server.Admission.Budget (scaleCharge)
+import Ecluse.Core.Server.Admission.Types (ChargeFactors (cfFullReadPermille, cfKeptPermille))
 import Ecluse.Core.Server.Conditional (Conditional (..), ETag, evaluateETag, renderETag)
 import Ecluse.Core.Server.Pipeline.Packument.Representation (packumentETag)
 import Ecluse.Core.Snapshot (Snapshot (Snapshot))
 import Ecluse.Core.Strict (strictElements)
 import Ecluse.Core.Version (Version, mkVersion)
 import Ecluse.Test.Contract.Metadata.Projection (MetadataFraming (SingleDocument), ProjectionDriver (..), metadataProjectionContract)
-import Ecluse.Test.Corpus (CorpusPackage (cpPath), corpusPackages, cpName)
+import Ecluse.Test.Corpus (CorpusPackage (cpPackage, cpPath), corpusPackages, cpName)
 import Ecluse.Test.Json (fieldAt, isObject, withKeys)
 import Ecluse.Test.Package (unscopedNpm, validSha1, validSha512Sri)
 import Ecluse.Test.Registry.JsonBytes (damaged, genChunks, genPackumentBytes, genServablePackumentBytes)
 import Ecluse.Test.Registry.JsonStream (byteChunks, testTable, walkJsonChunks, walkWritingChunks)
+import Ecluse.Test.Registry.Metadata.Fetch (captureChunks, heldWorkspacePeak)
+import Ecluse.Test.Registry.Npm (densePackument, minimalPackument, timedPackument)
 import Ecluse.Test.Registry.Npm.Metadata (npmFullTestWalk, projectNpmManifest, projectNpmVersion)
 import Ecluse.Test.Registry.Packed (walkedLength)
 import Ecluse.Test.Snapshot (digestOf, readDetails)
@@ -98,6 +109,65 @@ spec = do
     projectNpmVersionSpec
     packedReadSpec
     integratedFactsSpec
+    entryFloorSpec
+
+-- A full read's versions pay the release floor, and its timestamps and tags the entry floor, that their
+-- per-byte charge leaves uncovered. Each read goes through the wiring that serve and publication use.
+entryFloorSpec :: Spec
+entryFloorSpec = describe "the full-read entry floor" $ do
+    it "charges the workspace for dense timestamps and tags beyond their per-byte charge" $ do
+        (result, peak) <- heldWorkspacePeak adapterRead captureRegistry (unscopedNpm "thing") [denseBody]
+        void result `shouldSatisfy` isRight
+        peak `shouldBe` denseShortfall
+
+    it "charges the workspace for minimal-body versions at the release floor" $ do
+        let body = minimalPackument entries
+        (result, peak) <- heldWorkspacePeak adapterRead captureRegistry (unscopedNpm "thing") [body]
+        void result `shouldSatisfy` isRight
+        peak `shouldBe` releaseFloor * entries - scaleCharge (cfFullReadPermille npmChargeFactors) (BS.length body)
+
+    it "counts only the entries the finished document keeps, not the timestamps it drops" $ do
+        (result, _) <- heldWorkspacePeak adapterRead captureRegistry (unscopedNpm "thing") [denseBody]
+        manifestRetainedEntries <$> expectRight result `shouldReturn` RetainedEntries 0 entries
+
+    it "counts the created and modified times a finished document serves, and no timestamp that joins its release" $ do
+        let body = timedPackument 3 [("\"created\"", stamp), ("\"modified\"", stamp), ("\"0.0.1\"", stamp)]
+        (result, _) <- heldWorkspacePeak adapterRead captureRegistry (unscopedNpm "thing") [body]
+        manifestRetainedEntries <$> expectRight result `shouldReturn` RetainedEntries 3 2
+
+    it "counts the dropped timestamps a finished document reports under its releases' keys, and no other" $ do
+        let body = timedPackument 3 [("\"0.0.1\"", undated), ("\"0.0.2\"", undated), ("\"0.0.3\"", undated), ("\"x\"", undated)]
+        (result, _) <- heldWorkspacePeak adapterRead captureRegistry (unscopedNpm "thing") [body]
+        manifestRetainedEntries <$> expectRight result `shouldReturn` RetainedEntries 3 3
+
+    it "charges no workspace when releases carry more source bytes than their entries' floor" $ do
+        let release at = "\"1.0." <> at <> "\":" <> policyRelease [("readme", String (T.replicate 1024 "x"))]
+            body = "{\"name\":\"thing\",\"versions\":{" <> BS.intercalate "," [release (show at) | at <- [1 .. 20 :: Int]] <> "}}"
+        (result, peak) <- heldWorkspacePeak adapterRead captureRegistry (unscopedNpm "thing") [body]
+        void result `shouldSatisfy` isRight
+        peak `shouldBe` 0
+
+    it "charges a publication target's full read the same floor" $ do
+        (result, peak) <- heldWorkspacePeak (pcTargetRead (npmPublishCodec nativePresentation)) captureRegistry (unscopedNpm "thing") [denseBody]
+        void result `shouldSatisfy` isRight
+        peak `shouldBe` denseShortfall
+
+    forM_ corpusPackages $ \package ->
+        it ("keeps only the per-byte kept charge once it reads the capture " <> cpPath package) $ do
+            bytes <- readFileBS (cpPath package)
+            (result, _) <- heldWorkspacePeak adapterRead captureRegistry (cpPackage package) (captureChunks bytes)
+            manifest <- expectRight result
+            entryFloorCharge (manifestRetainedEntries manifest) `shouldSatisfy` (<= scaleCharge (cfKeptPermille npmChargeFactors) (BS.length bytes))
+  where
+    adapterRead = metadataRead (adapterMetadata npmAdapter)
+    entries = 300
+    denseBody = densePackument entries
+    stamp = "\"2020-01-01T00:00:00.000Z\""
+    -- A publish time no decoder reads as an instant.
+    undated = "\"not-a-date\""
+    -- The floor each version pays, which the release floor's measurement sets.
+    releaseFloor = 1152
+    denseShortfall = entryFloorBytes * 2 * entries - scaleCharge (cfFullReadPermille npmChargeFactors) (BS.length denseBody)
 
 packedReadSpec :: Spec
 packedReadSpec = describe "packed full read" $ do
@@ -248,18 +318,14 @@ integratedFactsSpec = describe "production direct facts against the frozen base"
         (withoutAuthor, _) <- expectRight (directFullRead defaultLimits (unscopedNpm "thing") (bodyLimit [absent]) [absent])
         map (fieldAt "author" . invalidValue) (infoInvalidEntries withoutAuthor) `shouldBe` [Nothing]
 
-    it "counts duplicate keys before name validation and counts only retained artifacts" $ do
+    it "counts duplicate keys before name validation" $ do
         let body = "{\"name\":\"different\",\"versions\":{\"alias\":" <> policyRelease [] <> ",\"alias\":null}}"
             name = unscopedNpm "thing"
             readWith limits bytes = directFullRead limits name (bodyLimit [bytes]) [bytes]
         assertIntegrated defaultLimits{maxVersionCount = 1} body
         readWith defaultLimits{maxVersionCount = 1} body `shouldBe` Left (MetadataBoundExceeded (TooManyVersions 2 1))
-        assertIntegrated defaultLimits{maxArtifactCount = 0} body
-        readWith defaultLimits{maxArtifactCount = 0} body `shouldBe` Left (MetadataNameMismatch "different")
-        let mixed = "{\"name\":\"thing\",\"versions\":{\"bad\":null,\"alias\":" <> policyRelease [] <> "}}"
-        assertIntegrated defaultLimits{maxArtifactCount = 1} mixed
-        readWith defaultLimits{maxArtifactCount = 0} mixed `shouldBe` Left (MetadataBoundExceeded (TooManyArtifacts 1 0))
-        readWith defaultLimits{maxArtifactCount = 1} mixed `shouldSatisfy` isRight
+        assertIntegrated defaultLimits{maxVersionCount = 2} body
+        readWith defaultLimits{maxVersionCount = 2} body `shouldBe` Left (MetadataNameMismatch "different")
 
     it "preserves first versions, containers, timestamps, tags and malformed first fields" $
         for_ duplicateBodies (assertIntegrated defaultLimits)
@@ -312,7 +378,7 @@ baseFullRead :: Limits -> PackageName -> BodyLimit -> [ByteString] -> Either Met
 baseFullRead limits name bound chunks = do
     streamed <- first MetadataBoundExceeded (walkWritingChunks bound setup chunks)
     Walked table acc <- first (streamError limits) (streamValue streamed)
-    baseFinishPacked limits name pointer (docTable (tableTexts table)) acc
+    baseFinishPacked name pointer (docTable (tableTexts table)) acc
   where
     pointer = "See " <> fromRight (captureRegistry <> "/" <> renderPackageName name) (packageUrl captureRegistry name)
     setup :: ST st (Cursor -> ST st (Steps (ST st) (Walked BasePackedRead)))
@@ -361,11 +427,6 @@ projectNpmManifestSpec = describe "projectNpmManifest" $ do
                 Map.keys (infoVersions info) `shouldBe` ["3.0.1"]
                 raw `shouldSatisfy` isObject
             other -> expectationFailure ("expected a projection, got: " <> show other)
-
-    it "counts only the releases that project toward the artifact ceiling" $ do
-        let unprojected = object ["name" .= ("is-odd" :: Text), "version" .= ("2.0.0" :: Text)]
-            body = BL.toStrict (encode (object ["name" .= ("is-odd" :: Text), "versions" .= object ["1.0.0" .= versionObject "is-odd" "1.0.0", "2.0.0" .= unprojected]]))
-        projectNpmManifest (defaultLimits{maxArtifactCount = 1}) (unscopedNpm "is-odd") body `shouldSatisfy` isRight
 
     it "refuses an empty signature object beyond the retained nesting budget" $ do
         let version = withKeys [("dist", object ["tarball" .= ("https://example.test/is-odd-1.0.0.tgz" :: Text), "signatures" .= [object []]])] (versionObject "is-odd" "1.0.0")
@@ -725,15 +786,13 @@ baseProjectRelease name key projected = case projectVersionEntryResult name (mkV
 baseInvalidRelease :: Text -> Value -> Text -> BaseTypedRelease
 baseInvalidRelease key whole reason = Left $! mkInvalidEntry InvalidVersionManifest key whole reason
 data BaseNpmParts = BaseNpmParts Value (Map Text Value)
-baseFinishParts :: Limits -> PackageName -> BaseNpmProjection -> Either MetadataError (PackageInfo, BaseNpmParts)
-baseFinishParts limits requested acc = do
+baseFinishParts :: PackageName -> BaseNpmProjection -> Either MetadataError (PackageInfo, BaseNpmParts)
+baseFinishParts requested acc = do
     when (baseProjectedInvalidContainer acc) (Left MetadataUndecodable)
     reported <- validateReportedName projectName (baseProjectedName acc)
     _ <- projectionResult (checkNameAgreement requested reported ())
-    first MetadataBoundExceeded (checkArtifactCount limits artifacts)
     pure (package, BaseNpmParts (fromMaybe Null (baseProjectedName acc)) (baseProjectedBookkeeping acc))
   where
-    artifacts = Map.foldl' (\seen details -> seen + length (pkgArtifacts details)) 0 (infoVersions package)
     versions = Map.mapMaybe rightToMaybe (baseProjectedVersions acc)
     times = Map.mapMaybe rightToMaybe (baseProjectedTimes acc)
     tags = Map.mapMaybe rightToMaybe (baseProjectedTags acc)
@@ -781,8 +840,8 @@ baseRebases :: Value -> Bool
 baseRebases release = isJust (tarballUrl release >>= rebaseArtifactUrl Just)
 baseTypedMembers :: Pick
 baseTypedMembers = Only [(field, if field == "dist" then Only [(member, Whole) | member <- distFields] else Whole) | field <- versionListFields <> map installableFieldName Universe.universe]
-baseFinishPacked :: Limits -> PackageName -> Text -> DocTable -> BasePackedRead -> Either MetadataError (PackageInfo, PackedPackument)
-baseFinishPacked limits requested authorPointer table (BasePackedRead acc heldReleases) = second document <$> baseFinishParts limits requested acc
+baseFinishPacked :: PackageName -> Text -> DocTable -> BasePackedRead -> Either MetadataError (PackageInfo, PackedPackument)
+baseFinishPacked requested authorPointer table (BasePackedRead acc heldReleases) = second document <$> baseFinishParts requested acc
   where
     document (BaseNpmParts name time) =
         PackedPackument

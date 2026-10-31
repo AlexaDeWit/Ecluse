@@ -53,7 +53,6 @@ import Ecluse.Core.Registry.Maintenance.Upstream (UndecidabilityReason (NoMechan
 import Ecluse.Core.Registry.Metadata (Manifest (manifestInfo))
 import Ecluse.Core.Registry.Metadata.Fetch (fetchManifest)
 import Ecluse.Core.Registry.Npm.Maintenance (npmMaintenance)
-import Ecluse.Core.Registry.Npm.Metadata (npmRead)
 import Ecluse.Core.Registry.Npm.Publish (npmPublishCodec)
 import Ecluse.Core.Registry.Origin (OriginClient)
 import Ecluse.Core.Registry.Request (nativePresentation)
@@ -66,6 +65,7 @@ import Ecluse.Test.Maintenance (testDeleteGuard, withBucket)
 import Ecluse.Test.Package (leftpadName, npmVersion, unscopedNpm)
 import Ecluse.Test.Port (passthroughTracingPort)
 import Ecluse.Test.Registry.Npm (listingValue, writeTokenNpmConfig)
+import Ecluse.Test.Registry.Npm.Metadata (npmRead)
 import Ecluse.Test.Stub (
     Captured (capBody, capHeaders, capMethod, capPath),
     Stub,

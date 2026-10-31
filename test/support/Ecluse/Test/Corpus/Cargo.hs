@@ -28,7 +28,7 @@ import Ecluse.Core.Registry.CachedDocument (CachedDoc, cargoCached)
 import Ecluse.Core.Registry.Cargo.Discovery (CargoDiscovery, renderCargoDiscovery)
 import Ecluse.Core.Registry.Cargo.Document (cargoDocument)
 import Ecluse.Core.Registry.Metadata (MetadataError (MetadataBoundExceeded, MetadataUndecodable))
-import Ecluse.Core.Security (Limits, checkArtifactCount, checkVersionCountOf)
+import Ecluse.Core.Security (Limits, checkVersionCountOf)
 import Ecluse.Core.Version (mkVersion)
 import Ecluse.Test.Corpus (CaptureUpstream (..), cargoCaptureUpstream, syntheticProxyBase)
 import Ecluse.Test.Registry.Cargo.Metadata (parseCargoDiscovery)
@@ -84,7 +84,6 @@ projectCargoValues limits name value = case value of
 projectRows :: (Text -> Text -> Text) -> Limits -> PackageName -> [(EntryKey, Value)] -> Either MetadataError (PackageInfo, CachedDoc)
 projectRows location limits name rows = do
     first MetadataBoundExceeded (checkVersionCountOf limits (length rows))
-    first MetadataBoundExceeded (checkArtifactCount limits (length rows))
     details <- traverse project rows
     let releases = Map.fromList [(raw, facts) | (raw, facts) <- details]
     unless (Map.size releases == length details) (Left MetadataUndecodable)

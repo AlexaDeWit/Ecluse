@@ -3,8 +3,9 @@
 -- SPDX-License-Identifier: MIT
 
 {- | A Simple-index walk holds nothing for what its projection drops: repeated files arrays, the
-members a file repeats, the files of other releases, and files past a tripped limit leave the live
-bytes where a few leave them.
+members a file repeats, the files of other releases, files past a tripped limit, and repeated
+@alternate-locations@ arrays, @meta@ objects and @tracks@ members leave the live bytes where a few
+leave them.
 -}
 module Ecluse.Core.Registry.PyPI.ReaderResidencySpec (spec) where
 
@@ -17,16 +18,17 @@ import Ecluse.Core.Registry.PyPI.Document (simpleFiles)
 import Ecluse.Core.Registry.PyPI.Metadata (projectPyPIStream)
 import Ecluse.Core.Registry.PyPI.Reader (fileUniqueFields, pypiWalk)
 import Ecluse.Core.Registry.PyPI.Streaming (PyPIRead (..))
-import Ecluse.Core.Registry.PyPI.StreamingProjection (collectField, emptyProjection, keepsFile)
-import Ecluse.Core.Security (Limits (maxArtifactCount), defaultLimits)
+import Ecluse.Core.Registry.PyPI.StreamingProjection (claimsEnvelope, collectField, emptyProjection, keepsFile)
+import Ecluse.Core.Security (Limits (maxVersionCount), defaultLimits)
 import Ecluse.Test.Contract.Catalogue (caseLabel)
 import Ecluse.Test.Contract.Retention (boundedRetention)
 import Ecluse.Test.Package (unscopedPyPI)
+import Ecluse.Test.Registry.JsonBytes (commas, render)
 import Ecluse.Test.Registry.JsonStream (testTable)
 import Ecluse.Test.Registry.PyPI.Metadata (projectPyPIChunks)
 import Ecluse.Test.Support (expectRight)
 
--- | Eight times more dropped files or members may not raise the bytes a read holds.
+-- | Eight times more dropped files, members or repeated envelope items may not raise the bytes a read holds.
 spec :: Spec
 spec = describe "pypiWalk live bytes" $ do
     it (caseLabel "retention/pypi/selected/containers" "a selected read holds the same bytes however many files arrays repeat the release") $
@@ -37,8 +39,10 @@ spec = describe "pypiWalk live bytes" $ do
         selectedLevel otherReleases
     it (caseLabel "retention/pypi/full/members" "a full read holds the same bytes however often a kept file repeats a member") $
         boundedRetention allowance (heldFor FullRead defaultLimits repeatedMembers)
-    it (caseLabel "retention/pypi/full/past-limit" "a full read holds the same bytes however many files follow a tripped artifact limit") $
-        boundedRetention allowance (heldFor FullRead defaultLimits{maxArtifactCount = 2} filesPastLimit)
+    it (caseLabel "retention/pypi/full/past-limit" "a full read holds the same bytes however many files follow a tripped file limit") $
+        boundedRetention allowance (heldFor FullRead defaultLimits{maxVersionCount = 2} filesPastLimit)
+    it (caseLabel "retention/pypi/full/repeated-envelope" "a full read holds the same bytes however long a repeated tracks member, alternate-locations array or meta object") $
+        boundedRetention allowance (heldFor FullRead defaultLimits repeatedEnvelope)
 
 -- A selected read keeps its one file of the release at both sizes, and holds the same bytes.
 selectedLevel :: (Int -> ByteString) -> IO ()
@@ -58,7 +62,7 @@ thing = unscopedPyPI "thing"
 
 heldFor :: PyPIRead -> Limits -> (Int -> ByteString) -> Int -> IO Integer
 heldFor mode limits body count =
-    heldDuring (pypiWalk 64 mode (collectField limits mode) keepsFile (testTable fileUniqueFields) (emptyProjection thing)) (body count)
+    heldDuring (pypiWalk 64 mode (collectField limits) keepsFile claimsEnvelope (testTable fileUniqueFields) (emptyProjection thing)) (body count)
 
 -- Files arrays that each hold one file of the release. Only the first claims the key.
 repeatedArrays :: Int -> ByteString
@@ -77,6 +81,23 @@ repeatedMembers count =
 otherReleases :: Int -> ByteString
 otherReleases count = index ("\"files\":[" <> commas (file "1.0.0.tar.gz" 0 : [file ("2." <> Builder.intDec position <> ".tar.gz") position | position <- [1 .. count]]) <> "]")
 
+-- A meta object with a repeated tracks member, a repeated alternate-locations array, and a second
+-- meta object, each repeat as long as asked. The first occurrence of each claims its key empty. Each
+-- item is a distinct URL, so a repeat spans many chunks and a held one shows between them.
+repeatedEnvelope :: Int -> ByteString
+repeatedEnvelope count =
+    render
+        ( "{\"name\":\"thing\",\"meta\":{\"api-version\":\"1.1\",\"tracks\":[],\"tracks\":["
+            <> items
+            <> "]},\"alternate-locations\":[],\"alternate-locations\":["
+            <> items
+            <> "],\"meta\":{\"tracks\":["
+            <> items
+            <> "]},\"files\":[]}"
+        )
+  where
+    items = commas ["\"https://mirror.example/simple/thing/" <> Builder.intDec position <> "/\"" | position <- [1 .. count]]
+
 -- Wheels of one release under distinct build tags, each with its own requires-python value.
 filesPastLimit :: Int -> ByteString
 filesPastLimit count = index ("\"files\":[" <> commas [file ("1.0.0-" <> Builder.intDec position <> "-py3-none-any.whl") position | position <- [1 .. count]] <> "]")
@@ -92,7 +113,4 @@ file suffix position =
         <> "\"}"
 
 index :: Builder.Builder -> ByteString
-index members = toStrict (Builder.toLazyByteString ("{\"name\":\"thing\",\"meta\":{\"api-version\":\"1.1\"}," <> members <> "}"))
-
-commas :: [Builder.Builder] -> Builder.Builder
-commas = mconcat . intersperse ","
+index members = render ("{\"name\":\"thing\",\"meta\":{\"api-version\":\"1.1\"}," <> members <> "}")

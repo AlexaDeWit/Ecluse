@@ -251,6 +251,29 @@ them can hold more than it pays for. Écluse treats such documents as rare. Two 
 excess. The sampler measures it as live data outside the charges after the next major collection,
 and the ceiling the budget may reach, set out below, falls as that remainder grows.
 
+One such shape is a document of many tiny entries, whose map nodes, keys and typed values outweigh
+the source bytes they come from. An npm or PyPI full read therefore pays a floor for each entry it
+retains, through its workspace, after each piece it parses:
+
+| Full read | Entries at 1,152 bytes | Entries at 512 bytes | Of those, entries no count bounds |
+|---|---|---|---|
+| npm | Versions | Timestamps and dist-tags | Timestamps and dist-tags |
+| PyPI | Files | Dropped version entries, and `alternate-locations` and `meta.tracks` items | Dropped version entries, and `alternate-locations` and `meta.tracks` items |
+
+The read counts each entry as it reads it, so a PyPI array of items pays for them before it closes.
+The residency tier reads a dense document of each entry kind, and versions and files with minimal
+valid bodies of about 100 to 125 source bytes, and measures what the read holds per entry. Each
+floor is 1.25 times the largest figure of the entry kinds it covers, rounded up to 64 bytes. The
+heaviest of the other entries, an npm timestamp whose value does not decode, peaks at 359 bytes per
+entry while read, which gives 512 bytes. An npm version with a minimal body peaks at 891, and a PyPI
+file with one at 885, which gives 1,152 bytes for versions and files. Every corpus listing's bytes
+pay more than the floors for the entries it keeps, so the floors add nothing to what a realistic
+listing keeps. While it reads, `@types/node` holds 69 entries in its first 32 KiB, 43 of them
+dist-tags, so its read pays 15,923 bytes of floor and holds them until it completes. A repeat of an
+`alternate-locations` array, a `meta` object or a `tracks` member counts toward no floor, so the
+PyPI read reads its items and holds none of them. The floors are the condition for later dropping
+the version count from listing reads, where it still caps the entries a dense document retains.
+
 A listing's response pays per byte of its output basis. The basis is the larger of two estimates,
 one anchored on the largest document the listing merges and one on the base document, whose
 top-level fields the response keeps. Each adds the other document's bytes in proportion to the
@@ -272,7 +295,14 @@ listing's output working set, heavy bases included, and the tier checks that too
 A completed read keeps less than its peak, and nothing reaches its document once the body exists.
 So when a full read completes, its charge steps down to the kept charge: 1.25 times the largest
 shared cache entry per source byte that the residency tier measures, rounded up to a tenth. That is
-0.9 for npm (react at 0.699300) and 3.3 for PyPI (requests at 2.601638). Once the body exists, the
+0.9 for npm (react at 0.699300) and 3.3 for PyPI (requests at 2.601638). An npm or PyPI listing
+keeps the floors for the entries its finished document keeps instead, when that is larger, so a
+dense document stays charged until its response renders. The cache entry carries the same count, so
+a cache hit keeps the same charge. When the read completes, an npm timestamp that decodes joins its
+version, and one under a key that names no version is dropped, so a document of timestamps that name
+no version keeps almost nothing, and pays almost no floor, once read. The `created` and `modified`
+times, and a timestamp under a version whose value does not decode, stay and keep the 512-byte
+floor. A PyPI read keeps every entry it counted. Once the body exists, the
 reads' charges go back, and the response holds only its own charge while it is sent. The residency
 tier checks each phase against what the meter holds then. Its heap census of the live listing path
 also covers the policy and merge plan between the reads and the render.
@@ -293,9 +323,20 @@ halves the budget, at most once a second, while the collector takes more than ha
 charges act the moment work starts and the measurement arrives later, so neither alone holds the
 line.
 
-The structural hostile-input counts (`maxVersionCount`, `maxArtifactCount`, `maxNestingDepth`) stay
-pinned policy. They bound document shape, not bytes, and do not scale with RAM. Resolution remains
-role-agnostic across proxy, Pilot, and Dredger. The body bounds name their operations separately:
+Écluse keeps a structural count only where no byte, memory or deadline bound already covers the
+work. Both count keys stay pinned policy: they bound document shape, not bytes, and do not scale
+with RAM.
+
+| Bound | Work it covers | Why no other bound covers it |
+|---|---|---|
+| `maxNestingDepth` | Recursion while decoding, and tar path depth and link chains | Source bytes do not bound depth or link chains |
+| `maxVersionCount` | The versions the Dredger gathers for one package across store listing pages | That work has no deadline, and no byte bound across pages |
+| `maxVersionCount` | The versions one mirror-state record holds | A pre-scan counts them before the record decodes |
+| `maxVersionCount` | Source entry positions on every listing read, which refuses at the first entry past it | Per-byte charges are calibrated on realistic listings, so a dense npm or PyPI listing can retain more than its bytes pay for |
+| Fixed ceilings in code | Tar and ZIP entries, gzip and bzip2 members, Marshal and YAML nodes, multipart parts, mirror-state files, and RubyGems directory gem names | Bytes and per-entry charges already bound this work, so it has no key |
+
+Resolution remains role-agnostic across proxy, Pilot, and Dredger. The body bounds name their
+operations separately:
 
 | Bound | Consumers | Source |
 |---|---|---|

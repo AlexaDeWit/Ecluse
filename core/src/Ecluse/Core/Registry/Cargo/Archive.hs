@@ -110,7 +110,7 @@ archivePass :: Limits -> (Int -> IO ()) -> Text -> Set Text -> ByteString -> IO 
 archivePass limits charge root selected bytes = do
     (decoderCharge, retainedCharge) <- newChargePair charge
     scanTar limits retainedCharge select $ \consume ->
-        withInflatedChunks (GzipMembers (maxArtifactCount limits)) decoderCharge bytes (consume . sourceReader)
+        withInflatedChunks (GzipMembers (compressedMemberCeiling limits)) decoderCharge bytes (consume . sourceReader)
   where
     select parts = case parts of
         actualRoot : relative | actualRoot == root -> Right (Set.member (T.intercalate "/" relative) selected)

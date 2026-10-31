@@ -15,7 +15,6 @@ import Ecluse.Core.Registry (UrlFormationError (UnparseableUrl))
 import Ecluse.Core.Registry.Metadata.Fetch.Preparation (PrepareRead (PrepareRead), bindToOrigin, canChargeFullReadWorkspace, prepareRead, presentedRead, staticRead)
 import Ecluse.Core.Registry.Metadata.Fetch.Types (EcosystemRead (erRequest))
 import Ecluse.Core.Registry.Npm.Credential (npmCredential)
-import Ecluse.Core.Registry.Npm.Metadata (npmRead)
 import Ecluse.Core.Registry.Origin (originClient)
 import Ecluse.Core.Registry.Request (AuthMechanism (AuthRawKey), CredentialMapping, StoreOperation (StoreRead), declaredPresentation, mkBaseRequest, presentedMapping)
 import Ecluse.Core.Security (defaultLimits)
@@ -23,6 +22,7 @@ import Ecluse.Core.Security.Egress (RegistryUrl, registryUrlText)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Test.Deadline (withExchangeClient)
 import Ecluse.Test.Registry.Npm (isOdd)
+import Ecluse.Test.Registry.Npm.Metadata (npmRead)
 
 spec :: Spec
 spec = describe "presentedRead" $ do

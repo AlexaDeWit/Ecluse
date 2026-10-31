@@ -891,7 +891,7 @@ metadataByteCap cap binding =
 countLimits :: Int -> MountBinding -> MountBinding
 countLimits count binding =
     let deps = bindingPackumentDeps binding
-     in binding{bindingPackumentDeps = deps{pdLimits = (pdLimits deps){maxVersionCount = count, maxArtifactCount = count}}}
+     in binding{bindingPackumentDeps = deps{pdLimits = (pdLimits deps){maxVersionCount = count}}}
 
 warmCoordinateCache :: ServeRuntime -> MountBinding -> IORef [[Text]] -> IO ServeRuntime
 warmCoordinateCache uncached binding hits = warmPublicDocuments uncached binding hits [("acme", status404), ("acme-1", status200)]

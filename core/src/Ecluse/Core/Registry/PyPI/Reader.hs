@@ -10,9 +10,11 @@ module Ecluse.Core.Registry.PyPI.Reader (
 ) where
 
 import Control.Monad.ST (ST)
-import Data.Aeson (Value (Null, String))
+import Data.Aeson (Value (Array, Null, Object, String))
 import Data.Aeson.Key qualified as Key
+import Data.Aeson.KeyMap qualified as KeyMap
 import Data.JsonStream.Lexer (Cursor, Element (..))
+import Data.Vector qualified as V
 
 import Ecluse.Core.Registry.Json.Intern (InternTable, nameBytes, nameText)
 import Ecluse.Core.Registry.Json.Shape (Members, Mode (..), Shape (..), Trees (..), knownMembers, listedMember, namedMembers, prepareMembers, readShape)
@@ -29,9 +31,9 @@ fileUniqueFields :: [Text]
 fileUniqueFields = ["filename", "url", "hashes", "upload-time", "provenance", "core-metadata"]
 
 -- | Walk an index into trees, retaining the first occurrence and the selected-file skip policy.
-pypiWalk :: Int -> PyPIRead -> (s -> PyPIField -> Either LimitError s) -> (s -> Bool) -> InternTable -> s -> Cursor -> Step s
+pypiWalk :: Int -> PyPIRead -> (s -> PyPIField -> Either LimitError s) -> (s -> Bool) -> (s -> Text -> Bool) -> InternTable -> s -> Cursor -> Step s
 {-# INLINE pypiWalk #-}
-pypiWalk depth mode step keeps table0 = walkIndex depth mode (pureStep step) (\_ acc -> Finished acc) treeFile table0
+pypiWalk depth mode step keeps claims table0 = walkIndex depth mode (pureStep step) claims (\_ acc -> Finished acc) treeFile table0
   where
     fileShape = ObjectOr Null (fileMembers depth (prepareMembers table0))
     treeFile table acc position element rest next =
@@ -39,18 +41,19 @@ pypiWalk depth mode step keeps table0 = walkIndex depth mode (pureStep step) (\_
             Walk.emit (pureStep step) acc (FileField position (Just payload)) (\kept -> next kept held after)
 
 -- | Walk a full index with typed reduction beside packing, returning the read's final table.
-pypiFullWalk :: FileWriter st -> Int -> FieldStep s PyPIField (ST st (Steps (ST st) (Walked s))) -> (s -> Bool) -> (s -> Int -> FileValue -> (Either LimitError s -> ST st (Steps (ST st) (Walked s))) -> ST st (Steps (ST st) (Walked s))) -> InternTable -> s -> Cursor -> ST st (Steps (ST st) (Walked s))
+pypiFullWalk :: FileWriter st -> Int -> FieldStep s PyPIField (ST st (Steps (ST st) (Walked s))) -> (s -> Bool) -> (s -> Text -> Bool) -> (s -> Int -> FileValue -> (Either LimitError s -> ST st (Steps (ST st) (Walked s))) -> ST st (Steps (ST st) (Walked s))) -> InternTable -> s -> Cursor -> ST st (Steps (ST st) (Walked s))
 {-# INLINE pypiFullWalk #-}
-pypiFullWalk writer depth step keeps fileStep table0 = walkIndex depth FullRead step (\table acc -> pure (Finished (Walked table acc))) packedFile table0
+pypiFullWalk writer depth step keeps claims fileStep table0 = walkIndex depth FullRead step claims (\table acc -> pure (Finished (Walked table acc))) packedFile table0
   where
     fileShape = ObjectOr Null (fileMembers depth (prepareMembers table0))
     packedFile table acc position element rest next =
         readShape writer fileShape (if keeps acc then Share else Keep) table element rest $ \payload held after ->
             fileStep acc position payload (either Walk.refuse (\kept -> next kept held after))
 
-walkIndex :: (Walk r) => Int -> PyPIRead -> FieldStep s PyPIField r -> (InternTable -> s -> r) -> (InternTable -> s -> Int -> Element -> Cursor -> (s -> InternTable -> Cursor -> r) -> r) -> InternTable -> s -> Cursor -> r
+-- An envelope key the consumer @claims@ holds an earlier occurrence, so a repeat is read and dropped.
+walkIndex :: (Walk r) => Int -> PyPIRead -> FieldStep s PyPIField r -> (s -> Text -> Bool) -> (InternTable -> s -> r) -> (InternTable -> s -> Int -> Element -> Cursor -> (s -> InternTable -> Cursor -> r) -> r) -> InternTable -> s -> Cursor -> r
 {-# INLINE walkIndex #-}
-walkIndex depth mode step finishRead readIndexFile table0 initial = start
+walkIndex depth mode step claims finishRead readIndexFile table0 initial = start
   where
     start tokens
         | depth <= 0 = withElement tokens tooDeep
@@ -64,16 +67,53 @@ walkIndex depth mode step finishRead readIndexFile table0 initial = start
     emit = Walk.emit step
     topField walked@(Walked table acc) name after continue = case nameBytes name of
         "name" -> envelope "name" (Scalar (depth - 1))
-        "meta" -> envelope "meta" (ObjectWith (depth - 1) metaFields (Scalar (depth - 1)))
+        "meta" -> withElement after $ \element afterKey -> case element of
+            ObjectBegin
+                | depth > 1, claims acc "meta" -> eachMember (metaMember False table) (\(Fields held _) -> continue (Walked table held)) (Fields acc mempty) afterKey
+                | depth > 1 -> eachMember (metaMember True table) (\(Fields held members) -> keep "meta" held (Object members)) (Fields acc mempty) afterKey
+            _ -> envelopeValue "meta" (ObjectWith (depth - 1) metaFields (Scalar (depth - 1))) element afterKey
         "project-status" | full -> envelope "project-status" (ObjectWith (depth - 1) statusFields (Scalar (depth - 1)))
-        "alternate-locations" | full -> envelope "alternate-locations" (ArrayWith (depth - 1) (Scalar (depth - 2)) (Scalar (depth - 1)))
+        "alternate-locations" | full -> withElement after $ \element afterKey -> case element of
+            ArrayBegin
+                | depth > 1, claims acc "alternate-locations" -> dropItems (depth - 2) table afterKey (continue walked)
+                | depth > 1 -> envelopeItems "alternate-locations" (depth - 2) table acc afterKey (keep "alternate-locations")
+            _ -> envelopeValue "alternate-locations" (ArrayWith (depth - 1) (Scalar (depth - 2)) (Scalar (depth - 1))) element afterKey
         "files" -> shaped FilesShape files walked after continue
         "versions" | full -> shaped VersionsShape (eachItem version) walked after continue
         _ -> withElement after $ \element afterKey -> skipFrom element afterKey (continue walked)
       where
-        envelope key shape = withElement after $ \element afterKey ->
-            readShape Trees shape Keep table element afterKey $ \value _ afterValue ->
-                emit acc (EnvelopeField key value) (\acc' -> continue (Walked table acc') afterValue)
+        envelope key shape = withElement after (envelopeValue key shape)
+        envelopeValue key shape element afterKey =
+            readShape Trees shape Keep table element afterKey $ \value _ -> keep key acc value
+        keep key held value afterValue = emit held (EnvelopeField key value) (\acc' -> continue (Walked table acc') afterValue)
+
+    -- Meta keeps its listed members, the first of each name, as an object read keeps them. A member
+    -- it does not keep, every member of a meta object after the first included, is read and dropped.
+    metaMember keeping table (Fields acc members) name after next = withElement after $ \element afterKey -> case listedMember metaFields name of
+        Just (key, shape)
+            | key == "tracks"
+            , ArrayBegin <- element
+            , depth > 2 ->
+                if kept key
+                    then envelopeItems "meta" (depth - 3) table acc afterKey $ \counted value -> next (Fields counted (KeyMap.insert key value members))
+                    else dropItems (depth - 3) table afterKey (next (Fields acc members))
+            | kept key -> readShape Trees shape Keep table element afterKey (\value _ -> next (Fields acc (KeyMap.insert key value members)))
+            | otherwise -> readShape Trees shape Keep table element afterKey (\_ _ -> next (Fields acc members))
+        Nothing -> skipFrom element afterKey (next (Fields acc members))
+      where
+        kept key = keeping && not (KeyMap.member key members)
+
+    -- Each item reaches the step as it is read, so the entry floor counts it before its array closes.
+    envelopeItems key budget table acc0 tokens done = eachItem item (\(Items acc values) -> done acc (Array (V.fromList (reverse values)))) (Items acc0 []) tokens
+      where
+        item (Items acc values) _ element rest next =
+            readShape Trees (Scalar budget) Keep table element rest $ \value _ afterValue ->
+                emit acc (EnvelopeItem key) (\counted -> next (Items counted (value : values)) afterValue)
+
+    -- A repeated array's items are read as its first occurrence's are, so the nesting limit holds, and none is kept.
+    dropItems budget table tokens done = eachItem item (const done) () tokens
+      where
+        item _ _ element rest next = readShape Trees (Scalar budget) Keep table element rest (\_ _ -> next ())
 
     -- The first array claims the key and its end yields an ignored field. Null claims it empty.
     shaped claim items (Walked table acc) after continue = withElement after $ \element rest -> case element of
@@ -128,6 +168,12 @@ data Selection = Selection
 
 -- Keep the filename memo scoped to the current files array.
 data Selecting a = Selecting !InternTable !FilenameMemo a
+
+-- The consumer's state beside an envelope object's members so far.
+data Fields s = Fields s (KeyMap.KeyMap Value)
+
+-- The consumer's state beside an envelope array's items so far, newest first.
+data Items s = Items s [Value]
 
 -- After a rejecting filename, only the lexer checks the remaining members.
 selectedFile :: (Walk r) => Selection -> FilenameMemo -> InternTable -> Element -> Cursor -> (Maybe Value -> FilenameMemo -> InternTable -> Cursor -> r) -> r

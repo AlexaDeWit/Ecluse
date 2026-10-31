@@ -624,11 +624,15 @@ The controls serve different purposes:
 | Control | What it decides |
 |---|---|
 | Metadata ingest ceiling | The maximum decompressed source body accepted from one metadata response |
-| Structural limits | Protocol-specific version and file counts, and retained structure depth |
+| Structural limits | Source entries per package, retained structure depth, and fixed decoder ceilings |
 | CPU admission | How much metadata work runs concurrently |
 | Memory admission | How much live data the metadata requests in flight hold at once |
 | Cache budget | How much eligible metadata the selected provider retains locally |
 | Runtime heap ceiling | The heap limit applied to the process |
+
+The structural limit keys are `limits.maxVersionCount` and `limits.maxNestingDepth`. Archive,
+compression, Marshal, YAML, multipart and mirror-state decoders use fixed internal ceilings, which
+no key sets.
 
 A larger count bound lets more requests share public reads and wait for upstreams.
 Private listings still parse per-request, so more concurrency can increase their memory use and latency.
@@ -656,6 +660,17 @@ it uses it, against one budget:
 | A request that joins another request's public fetch or render | Nothing for that fetch or render |
 | A first-party publication, once its upload is read | Its archive inspection for Cargo and RubyGems, and for Cargo a full metadata read of the target registry's `config.json` |
 
+An npm or PyPI full read also pays a floor for each entry it retains: at least 1,152 bytes for each
+npm version and PyPI file, and at least 512 bytes for each npm timestamp and dist-tag, and each PyPI
+dropped version entry and `alternate-locations` and `meta.tracks` item. The read counts each entry as
+it reads it. After each 32 KiB it parses, it raises its charge to those floors, less what its source
+bytes already paid, so a document of many tiny entries pays for them as it reads. A repeated
+`alternate-locations` array, `meta` object or `tracks` member holds nothing, so it pays no floor. A
+realistic listing carries enough bytes per entry that the floors add nothing to what it keeps once
+read. While it reads, a listing whose first 32 KiB hold many entries can pay some floor before its
+bytes catch up, and keeps paying it until the read completes: about 16 KiB for `@types/node`, which
+opens with 43 dist-tags.
+
 A listing's output basis is the larger of two estimates. One starts from the largest document the
 listing merges. The other starts from the base document, whose top-level fields the response
 keeps: the private document when there is one. Each adds the other document's size in proportion
@@ -665,7 +680,11 @@ share no version, pays for every byte it merges.
 
 A listing gives charges back as it finishes each phase. When a full read completes, its charge
 steps down to what the read keeps: 0.9 bytes per source byte for npm, 3.3 bytes for PyPI, 1.5 bytes
-for Cargo, 17.3 bytes for RubyGems. A failed read keeps nothing. Once the response body exists, the reads' charges go back, so only the response
+for Cargo, 17.3 bytes for RubyGems. An npm or PyPI read keeps the floors for the entries its
+finished document keeps instead, when that is larger. An npm timestamp that decodes joins its
+version, and one under a key that names no version is dropped, so neither keeps a floor of its own.
+The `created` and `modified` times, and a timestamp under a version whose value does not decode,
+keep the 512-byte floor. A failed read keeps nothing. Once the response body exists, the reads' charges go back, so only the response
 charge and any gzip charge stay while the body is sent.
 
 RubyGems per-gem `/info` documents are small, but their per-byte charges are the highest of the four
@@ -795,7 +814,8 @@ the document, so removing a document pin alone does not restore the automatic va
 |---|---|---|
 | `limits.maxResponseBytes: 12582912` | The old 12 MiB pin still refuses larger metadata after the upgrade | Remove the pin to adopt the shipped ingest ceiling, or retain it as an intentional policy |
 | A larger response pin used as a workaround | The declared ceiling still wins, including above the shipped default | Compare the effective ceiling and warning with your source sizes and process headroom |
-| Explicit `limits.maxVersionCount` or `limits.maxArtifactCount` pins | The existing count policy still applies | Remove old pins to adopt the larger defaults, or keep the intended restriction |
+| An explicit `limits.maxVersionCount` pin | The pinned count still applies | Remove an old pin to adopt the larger default, or keep the intended restriction |
+| An explicit `limits.maxArtifactCount` pin | The key is removed, and a config that sets it refuses at load. Archive, compression, Marshal, YAML, multipart and mirror-state decoders use fixed internal ceilings | Remove it from the document and the environment. No key replaces it |
 | An explicit `runtime.serveMaxInFlight` pin | The declared positive concurrency still wins, and it also sizes the memory gate's waiting room | Review it against the pod's cores and concurrent workload |
 | No explicit response or CPU pin | The new automatic controls apply | Compare boot output with `check-config` under the deployment's actual resources |
 

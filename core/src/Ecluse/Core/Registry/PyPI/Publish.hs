@@ -20,13 +20,13 @@ import Ecluse.Core.Package (Artifact (artFilename), hashValue)
 import Ecluse.Core.Registry (FetchFault (FetchUrlUnformable), ParseError (parseErrorMessage), PublishError (..), PublishFault (..), isSuccessStatus)
 import Ecluse.Core.Registry.CachedDocument (pypiSimpleCached)
 import Ecluse.Core.Registry.Metadata (VersionDoc (vdRaw))
-import Ecluse.Core.Registry.Metadata.Fetch.Preparation (presentedRead, staticRead)
+import Ecluse.Core.Registry.Metadata.Fetch.Preparation (presentedRead)
 import Ecluse.Core.Registry.MirrorUpload
 import Ecluse.Core.Registry.MirrorUpload.Internal (checkedMirrorUploadData)
 import Ecluse.Core.Registry.Publish (PublishCodec (..))
 import Ecluse.Core.Registry.PyPI.Archive (archiveMetadata)
 import Ecluse.Core.Registry.PyPI.Credential (pypiCredential)
-import Ecluse.Core.Registry.PyPI.Metadata (pypiChargeFactors, pypiRead)
+import Ecluse.Core.Registry.PyPI.Metadata (preparePyPIRead, pypiChargeFactors)
 import Ecluse.Core.Registry.PyPI.Request (simpleIndexRequest)
 import Ecluse.Core.Registry.PyPI.UploadMetadata (PyPIUploadMetadata, parseUploadMetadata, uploadFields, uploadMetadataMemoryBytes)
 import Ecluse.Core.Registry.Request (ServicePresentation, StoreOperation (StoreRead, StoreWrite), attachCredential, parseRequestEither, presentedMapping, presentedRequest, sendsCredentialUsername)
@@ -54,7 +54,7 @@ pypiPublishCodec presentation =
                             checkedMirrorUploadData inventory file bytes metadata
         , pcMirrorCompanion = Nothing
         , pcNativeComplete = \_ _ _ -> False
-        , pcTargetRead = presentedRead readAs (staticRead pypiRead)
+        , pcTargetRead = presentedRead readAs preparePyPIRead
         , pcTargetReadPermille = cfFullReadPermille pypiChargeFactors
         , pcProbeRequest = \target credential name -> presentedRequest readAs credential (\anonymous -> simpleIndexRequest target anonymous name)
         , pcVersionListWalk = Nothing
