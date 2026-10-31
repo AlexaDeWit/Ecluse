@@ -25,7 +25,7 @@ module Ecluse.BenchLoad.Fixture (
     rewriteLines,
     swapChecksumPreservingWidth,
     preflightDistinct,
-    probeBaseline,
+    probeLiveFetch,
 ) where
 
 import Control.Concurrent (threadDelay)
@@ -54,7 +54,7 @@ import UnliftIO.Concurrent (myThreadId, throwTo)
 import Ecluse.BenchLoad.CapturedArtifact (SelectedArtifact)
 import Ecluse.BenchLoad.Error (benchFail)
 import Ecluse.BenchLoad.Harness (Driver (DriveHttp), LoadKnobs (..), Target, proxied, urlLoad)
-import Ecluse.BenchLoad.Normalise (BaselineSource (InjectedFallback, MeasuredRtt))
+import Ecluse.BenchLoad.Normalise (LiveFetch (LiveFetch, NoLiveFetch))
 import Ecluse.BenchLoad.ProxyProcess (ProxyProcess, ProxySettings (..), proxyPort, proxySettings, withProxyProcess)
 import Ecluse.Core.Ecosystem (Ecosystem, ecosystemName)
 import Ecluse.Core.Package (PackageName, pkgEcosystem)
@@ -229,18 +229,16 @@ swapChecksumPreservingWidth label before after line = do
 preflightDistinct :: (Text -> IO ()) -> [Text] -> IO a -> IO a
 preflightDistinct check urls body = traverse_ check (ordNub urls) >> body
 
--- | Warm one native connection, then measure successful fetches or declare the configured fallback.
-probeBaseline :: Double -> Bool -> [Text] -> (Text -> IO (Maybe Double)) -> IO BaselineSource
-probeBaseline configured enabled names fetch =
+-- | Warm one native connection, then time each successful fetch. 'NoLiveFetch' when the probe is off or none succeeded.
+probeLiveFetch :: Bool -> [Text] -> (Text -> IO (Maybe Double)) -> IO LiveFetch
+probeLiveFetch enabled names fetch =
     case (enabled, names) of
         (True, warm : _) ->
             fetch warm >>= \case
-                Nothing -> pure fallback
+                Nothing -> pure NoLiveFetch
                 Just _ -> do
                     samples <- catMaybes <$> traverse fetch names
                     pure $ case nonEmpty samples of
-                        Nothing -> fallback
-                        Just values -> MeasuredRtt (fromIntegral (round (sum values / fromIntegral (length values)) :: Int)) (length values)
-        _ -> pure fallback
-  where
-    fallback = InjectedFallback configured
+                        Nothing -> NoLiveFetch
+                        Just values -> LiveFetch (fromIntegral (round (sum values / fromIntegral (length values)) :: Int)) (length values)
+        _ -> pure NoLiveFetch

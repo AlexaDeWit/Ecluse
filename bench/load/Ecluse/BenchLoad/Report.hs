@@ -13,6 +13,7 @@ module Ecluse.BenchLoad.Report (
     renderLoadSaturation,
     renderThrash,
     renderFloors,
+    renderConfirmations,
     renderVerdict,
 ) where
 
@@ -34,11 +35,11 @@ import Ecluse.BenchLoad.CpuUse (
     proxyCpuShare,
  )
 import Ecluse.BenchLoad.Exposition (CacheOutcomes (..), GaugeSummary (..))
-import Ecluse.BenchLoad.Floors (Calibration (calConditions), Enforcement, FloorCheck (..), Pass (ConcurrencyOne, Loaded), PassSelection (LoadedPassOnly), describeEnforcement, describeRetainedConditions, floorCheck, floorsPath)
+import Ecluse.BenchLoad.Floors (Calibration (calFloorFraction), Enforcement (Enforced), FloorCheck (..), FloorKey, Pass (ConcurrencyOne, Loaded), PassSelection (LoadedPassOnly), checkedFloor, describeEnforcement, floorCheck, floorsPath, passKey)
 import Ecluse.BenchLoad.Harness (LoadKnobs (..), LoadSummary (..), ProxyFigures (..), ScenarioReport (..), hasDiagnosticBurst, windowAttempts, windowRefusals, windowSuccesses)
 import Ecluse.BenchLoad.Latency (Percentiles (..))
 import Ecluse.BenchLoad.Normalise (
-    BaselineSource,
+    LiveFetch,
     NormalisedRow (NormalisedRow),
     SaturationInput (SaturationInput),
     deriveSaturation,
@@ -48,10 +49,10 @@ import Ecluse.BenchLoad.Normalise (
  )
 import Ecluse.BenchLoad.PatternReport (renderReplayTotals)
 import Ecluse.BenchLoad.Pod (BurstMemory (..), CgroupReading (..), PodShape (Unlimited), ProxyTuning (..), counter, noTuning, proxyCgroupFiles, renderCpuList, renderPodShape)
-import Ecluse.BenchLoad.ReportLabels (admissionRow, generatorHeadroomRow, headroomHeld, headroomSaturated, loadCell, loadRow, memoryEventsRow, memoryPeakColumn, postureRow)
+import Ecluse.BenchLoad.ReportLabels (admissionRow, generatorHeadroomRow, headroomHeld, headroomSaturated, latencyCell, latencyRow, loadCell, loadRow, memoryEventsRow, memoryPeakColumn, postureRow)
 import Ecluse.BenchLoad.RtsWindow (RtsSnapshot (..), RtsWindow (..), compactionThresholdCrossed, gcCpuShare, meanLiveAtMajors, perSuccess)
 import Ecluse.BenchLoad.Selection (measurementConditionVersion)
-import Ecluse.BenchLoad.Verdict (ProxyEnding (..), describeEnding)
+import Ecluse.BenchLoad.Verdict (Attempts, ProxyEnding (..), attemptCount, describeEnding, passViolations)
 import Ecluse.Core.Ecosystem (Ecosystem, ecosystemName)
 
 -- | What one ecosystem's section of the report is rendered from.
@@ -112,7 +113,7 @@ operatingPointTable knobs capabilities processors shape boot =
     , row "harness GHC capabilities (-N)" (show capabilities)
     , row loadRow (loadCell (lkConcurrency knobs) (lkDurationSeconds knobs))
     , row "measurement conditions" measurementConditionVersion
-    , row "injected upstream latency" (fmt1 (fromIntegral (lkUpstreamLatencyMicros knobs) / 1_000) <> " ms")
+    , row latencyRow (latencyCell (lkUpstreamLatencyMicros knobs))
     , row "serve admission (requests)" (maybe "n/a" show (blCpuAdmission limits) <> origin (lkServeMaxInFlight knobs))
     , row "memory admission budget at boot" (maybe "n/a" bytesCell (blMemoryBudgetBytes limits))
     , row "native metadata gzip" (renderMetadataCompression (metadataCompression boot))
@@ -205,15 +206,19 @@ glanceRow floorOf r =
   where
     load = srLoad r
 
+-- The floor in force, with the loads it holds and the window it came from, or why the cell holds none.
 floorCell :: ScenarioReport -> FloorCheck -> Text
 floorCell r = \case
     Unchecked -> "not held"
     NoFloor _ -> "**none**"
-    AtLeast least
-        | not (null (srSteps r)) -> show least <> " (every step)"
-        | hasDiagnosticBurst r -> show least <> " (background only)"
-        | isJust (srCompanion r) -> show least <> " (both loads)"
-        | otherwise -> show least
+    AtLeast least median -> show least <> " (" <> T.intercalate ", " (scope <> ["median " <> show median]) <> ")"
+    ReportOnly why -> maybe "uncalibrated" ("report-only: " <>) why
+  where
+    scope
+        | not (null (srSteps r)) = ["every step"]
+        | hasDiagnosticBurst r = ["background only"]
+        | isJust (srCompanion r) = ["both loads"]
+        | otherwise = []
 
 -- Each scenario's loaded cost beside its concurrency-one cost and floor, its refusals' cost, and cache sharing.
 costTable :: (Text -> FloorCheck) -> [ScenarioReport] -> [ScenarioReport] -> [Text]
@@ -421,9 +426,9 @@ readingNotes =
     [ "### Reading the numbers"
     , ""
     , "- **Successes are the primary figure.** A 2xx or 3xx response is a success. A `503` shed or a `429` is a refusal: a client retries it at once, so refusal counts measure retry speed, not demand."
-    , "- **The run fails** when a required load or ramp step has no successful response or misses its floor. A scheduled run also fails when its configuration keeps it off the floors. Proxy OOM kills, heap overflows, abnormal shutdowns, and early exits fail the run. Latency and memory figures have no threshold."
-    , "- **A success floor** is the minimum count of successes for a scenario and pass under this pod shape, from `" <> toText floorsPath <> "`. The at-a-glance table shows the loaded floor. The cost table shows the concurrency-one floor. A ramp holds every step to its floor. A paired scenario holds both loads to its floor. The combined `herd-under-heavy-private` probes hold only the concurrent background load to a floor. Their burst successes and refusals remain diagnostic, including zero successes. A held run also fails on a missing floor or a floor that names no scenario."
-    , "- **A run is held to the floors** only on the runner they were calibrated on, at the calibrated settings, under a pod shape the floors hold, and while each ecosystem fixture stays below its own latency ceiling and measurement conditions match. The Success floors section says whether this run is held, and names every reason when it is not. A run that is not held shows `not held` for each floor."
+    , "- **The run fails** when a required load or ramp step has no successful response, and when a scenario pass breaches its floor on its first attempt and on every re-run. A scheduled run also fails when it is not held to the floors. Proxy OOM kills, heap overflows, abnormal shutdowns, and early exits fail the run. Latency and memory figures have no threshold."
+    , "- **A success floor** is a cell of `" <> toText floorsPath <> "`: the floor for a scenario and pass under this pod shape, with the median count it was set from, `uncalibrated`, or `report-only` and the reason. A cell without a floor keeps only the zero-success and process checks. The at-a-glance table shows the loaded cell. The cost table shows the concurrency-one cell. A ramp holds every step to its floor. A paired scenario holds both loads to its floor. The combined `herd-under-heavy-private` probes hold only the concurrent background load to a floor. Their burst successes and refusals remain diagnostic, including zero successes. A held run also fails on a missing cell or a cell that names no scenario. The method is in `docs/testing.md`, Success floors."
+    , "- **A run is held to the floors** only on the runner they were calibrated on, at the calibrated settings, under a pod shape the floors hold, and under the measurement conditions they were measured under. The Success floors section says whether this run is held, and names every reason when it is not. A run that is not held shows `not held` for each floor."
     , "- **Allocation and collector figures describe the proxy process alone** over the measured window, and divide by every successful request in it: both generators of a paired scenario, every step of a ramp. The stub upstreams and the load generator run outside it."
     , "- **The proxy's cgroup is not charged for its logs.** They go through pipes the harness drains, and only unread pipe buffers, at most 64 KiB per pipe, count against the limit. On CI the build step has just built or restored the executable, so its text pages are already in the page cache when the proxy starts and are not charged to it either. The harness does not enforce that."
     , "- **Each scenario boots its own proxy** from its own cgroup, so the runtime posture and the admission budgets are the ones that pod shape resolves. A boot retried after the runtime could not start a thread gets a fresh cgroup, so its readings exclude the failed attempt."
@@ -437,10 +442,10 @@ readingNotes =
     , "- **Missed and collapsed lookups** are the metadata cache's request outcomes in the window, summed over the full, version, and assembled stores. One request can look up more than one store, so the sums count lookups, not requests. Each scenario lists them per store. A collapsed lookup waited for another request's fetch instead of making its own, so few collapsed lookups beside many missed ones show concurrent requests that did not share work."
     ]
 
--- | Attribute concurrency-one service time against the named upstream baseline.
-renderServiceTime :: BaselineSource -> [ScenarioReport] -> Text
-renderServiceTime source reports =
-    renderNormalised source [NormalisedRow (srName r) (pP50Ms (lat r)) (pP99Ms (lat r)) (srPublicLegUnavailableReason r) | r <- reports]
+-- | Attribute concurrency-one service time against the injected latency in microseconds, beside the live fetch time.
+renderServiceTime :: Int -> LiveFetch -> [ScenarioReport] -> Text
+renderServiceTime injectedMicros live reports =
+    renderNormalised (fromIntegral injectedMicros / 1_000) live [NormalisedRow (srName r) (pP50Ms (lat r)) (pP99Ms (lat r)) (srPublicLegUnavailableReason r) | r <- reports]
   where
     lat = lsLatency . srLoad
 
@@ -499,9 +504,42 @@ renderFloors calibration enforcement =
         , ""
         , describeEnforcement calibration enforcement
         , ""
-        , "Floor measurement conditions: `" <> calConditions calibration <> "`."
-        , describeRetainedConditions calibration
+        , "Each floor is "
+            <> show (round (calFloorFraction calibration * 100) :: Int)
+            <> "% of its cell's median count over three calibration runs, rounded down. A cell without a floor checks zero successes and process failures only."
         ]
+
+{- | Every scenario pass that breached its floor on its first attempt, with the count of each attempt
+and whether a re-run cleared the breach.
+-}
+renderConfirmations :: Enforcement -> [(FloorKey, Attempts)] -> Text
+renderConfirmations enforcement passes =
+    T.unlines $
+        ["## Breach confirmation", ""] <> case enforcement of
+            Enforced _ reruns _ ->
+                ( "A scenario pass below its floor on its first attempt re-runs on a fresh proxy at the end of the job, "
+                    <> (if reruns == 1 then "once" else show reruns <> " times")
+                    <> ". Its breach fails the run only when every attempt is below the floor."
+                )
+                    : ""
+                    : case breachedPasses of
+                        [] -> ["No scenario pass breached its floor on its first attempt."]
+                        breaches -> ["| scenario | pass | floor | attempts | result |", "| --- | --- | --: | --- | --- |"] <> map breachRow breaches
+            _ -> ["This run is not held to the floors, so no breach is re-run."]
+  where
+    breachedPasses = [(key, attempts, least) | (key, attempts@(initial :| _)) <- passes, let check = floorCheck enforcement key, Just least <- [checkedFloor check], below least initial]
+    below least attempt = maybe False (\count -> count >= 1 && count < least) (attemptCount attempt)
+    breachRow ((scenario, whichPass), attempts, least) =
+        "| "
+            <> T.intercalate
+                " | "
+                [ scenario
+                , passKey whichPass
+                , show least
+                , T.intercalate ", then " (map (maybe "no report" show . attemptCount) (toList attempts))
+                , if null (passViolations (scenario, whichPass) (floorCheck enforcement (scenario, whichPass)) attempts) then "cleared" else "**failed**"
+                ]
+            <> " |"
 
 -- | The run's verdict: every broken invariant, or a line saying none broke.
 renderVerdict :: [Text] -> Text

@@ -36,9 +36,9 @@ import Data.Text qualified as T
 import GHC.Float (log)
 import System.FilePath ((</>))
 
-import Ecluse.BenchLoad.Floors (Calibration (calOperatingPoint), FloorKey, Floors (floorsByShape, floorsCalibration), OperatingPoint (opConcurrency, opDurationSeconds), Pass (Loaded))
+import Ecluse.BenchLoad.Floors (Calibration (calOperatingPoint), Cell (Floored), FloorKey, Floors (floorsByShape, floorsCalibration), OperatingPoint (opConcurrency, opDurationSeconds, opUpstreamLatencyMs), Pass (Loaded))
 import Ecluse.BenchLoad.Pod (PodShape, mib, renderPodShape)
-import Ecluse.BenchLoad.ReportLabels (admissionRow, generatorHeadroomRow, headroomHeld, headroomSaturated, loadRow, memoryEventsRow, parseLoadCell, postureRow)
+import Ecluse.BenchLoad.ReportLabels (admissionRow, generatorHeadroomRow, headroomHeld, headroomSaturated, latencyRow, loadRow, memoryEventsRow, parseLatencyCell, parseLoadCell, postureRow)
 import Ecluse.BenchLoad.Sweep (Arm (..), BootValues (..), Sweep (..), SweepJob (..))
 import Ecluse.BenchReport.AgainstMain (percentChange, signedPercent)
 import Ecluse.BenchReport.AgainstMain.Load (Reading (..), Scenario (..), readReport)
@@ -130,23 +130,32 @@ data Drift = Drift
 data ReferenceFloor
     = NoReferenceFloor
     | HeldTo Int
-    | -- | The floor, which a window of other connections or seconds than the floors' calibration cannot be held to.
+    | -- | The floor, which a window of other connections, seconds, or injected latency than the floors' calibration cannot be held to.
       NotApplicable Int
     deriving stock (Eq, Show)
 
--- | The loaded floors by pod shape, and the connections and window length in seconds they were calibrated at.
+-- | The floors in force by pod shape, and the connections, window length in seconds, and injected latency in ms they were calibrated at.
 data ReferenceFloors = ReferenceFloors
     { rfConcurrency :: Int
     , rfDurationSeconds :: Int
+    , rfUpstreamLatencyMs :: Int
     , rfByShape :: Map PodShape (Map FloorKey Int)
     }
     deriving stock (Eq, Show)
 
--- | The committed floors as a sweep comparison reads them.
+-- | The committed floors as a sweep comparison reads them: each cell that holds a floor.
 referenceFloors :: Floors -> ReferenceFloors
-referenceFloors floors = ReferenceFloors (opConcurrency calibrated) (opDurationSeconds calibrated) (floorsByShape floors)
+referenceFloors floors =
+    ReferenceFloors
+        (opConcurrency calibrated)
+        (opDurationSeconds calibrated)
+        (opUpstreamLatencyMs calibrated)
+        (Map.map (Map.mapMaybe floorOf) (floorsByShape floors))
   where
     calibrated = calOperatingPoint (floorsCalibration floors)
+    floorOf = \case
+        Floored least _ _ -> Just least
+        _ -> Nothing
 
 -- | Compare one job's reports, in slot order, with the job's anchors and the reference floors, for the named commit.
 compareJob :: Maybe Text -> ReferenceFloors -> Sweep -> SweepJob -> [Either Text Text] -> JobComparison
@@ -172,11 +181,15 @@ slotVoid slot = either (const True) (\arm -> not (null (arBoot arm) && all (null
 windowOf :: Reading -> Maybe (Int, Int)
 windowOf reading = listToMaybe [window | knobs <- Map.elems (readingKnobs reading), Just cell <- [lookup loadRow knobs], Just window <- [parseLoadCell cell]]
 
+-- The injected latency in ms a report's latency row states.
+latencyOf :: Reading -> Maybe Int
+latencyOf reading = listToMaybe [latency | knobs <- Map.elems (readingKnobs reading), Just cell <- [lookup latencyRow knobs], Just latency <- [parseLatencyCell cell]]
+
 slotResult :: ReferenceFloors -> Sweep -> Map Text Double -> (Int, Text, Either Text Reading) -> SlotResult
 slotResult floors sweep means (number, name, reading) = SlotResult number name $ do
     arm <- maybeToRight ("the sweep has no arm " <> name) (Map.lookup name (swArms sweep))
     found <- first ("the report could not be read. " <>) reading
-    let calibrated = windowOf found == Just (rfConcurrency floors, rfDurationSeconds floors)
+    let calibrated = windowOf found == Just (rfConcurrency floors, rfDurationSeconds floors) && latencyOf found == Just (rfUpstreamLatencyMs floors)
         scenarios = map (scenarioResult floors calibrated means arm) (readingScenarios found)
     pure
         ArmResult
@@ -269,7 +282,7 @@ renderComparison comparison =
         , ""
         , "Commit " <> maybe "unnamed" (\commit -> "`" <> T.take 9 commit <> "`") (cmCommit comparison) <> ", " <> maybe "with no load row" (\(connections, seconds) -> show connections <> " connections x " <> show seconds <> " s windows") (cmWindow comparison) <> "."
         , ""
-        , "Each arm's successes divide by the mean of the anchor's successes in slots " <> inWords (map (show . slNumber) anchorSlots) <> ", scenario by scenario. The score is the geometric mean of those ratios over the scored scenarios the job ran, and a scored scenario without a ratio leaves the arm unscored. A boot value the arm did not show, or a safety check it failed, voids its repeat. A floor applies only to a window of the connections and length the floors were calibrated at."
+        , "Each arm's successes divide by the mean of the anchor's successes in slots " <> inWords (map (show . slNumber) anchorSlots) <> ", scenario by scenario. The score is the geometric mean of those ratios over the scored scenarios the job ran, and a scored scenario without a ratio leaves the arm unscored. A boot value the arm did not show, or a safety check it failed, voids its repeat. A floor applies only to a window of the connections, length, and injected latency the floors were calibrated at."
         , ""
         , "| slot | arm | boot values | safety | load generator headroom | score |"
         , "| --: | --- | --- | --- | --- | --: |"
@@ -362,7 +375,7 @@ floorCell :: ReferenceFloor -> Text
 floorCell = \case
     NoReferenceFloor -> "n/a"
     HeldTo least -> show least
-    NotApplicable least -> show least <> ", not applicable to this window"
+    NotApplicable least -> show least <> ", not applicable to this window or latency"
 
 countCell :: Maybe Int -> Text
 countCell = maybe "n/a" show
