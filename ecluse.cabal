@@ -590,6 +590,7 @@ library
     Ecluse.Proxy.Internal
     Ecluse.Mirror
     Ecluse.Service
+    Ecluse.Service.Internal
     Ecluse.Pilot
     Ecluse.Pilot.Plan
     Ecluse.Dredger
