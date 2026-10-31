@@ -27,7 +27,7 @@ import Ecluse.Core.Registry.Metadata (VersionDoc (..))
 import Ecluse.Core.Registry.MirrorUpload (inventoryFiles, inventoryPackage, inventoryVersion, verifyMirrorBytes)
 import Ecluse.Core.Registry.Publish (MirrorPublish (..), MirrorTransport (..), PublishCodec (..), PublishPlan (..), newMirrorPublish, pmvInventory, pmvPrepareUpload, publishPrepared)
 import Ecluse.Core.Registry.PyPI.Publish (classifyPublish, pypiPublishCodec)
-import Ecluse.Core.Registry.Request (AuthMechanism (AuthBearer), declaredPresentation, nativePresentation)
+import Ecluse.Core.Registry.Request (AuthMechanism (AuthBasic, AuthBearer), ServicePresentation, declaredPresentation, nativePresentation)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Core.Security.Limits (defaultLimits)
 import Ecluse.Test.Deadline (withExchangeClient, withSweeper)
@@ -74,7 +74,7 @@ spec = do
                     lookup "sha256_digest" fields `shouldBe` Just (encodeUtf8 (sha256 bytes))
                     lookup "requires_dist" fields `shouldBe` Just "dependency>=2; extra == 'test'"
                     map (BSL.toStrict . Wai.fileContent . snd) files `shouldBe` [bytes]
-    describe "PyPI store-declared presentation" $
+    describe "PyPI store-declared presentation" $ do
         it "renders a store-declared mechanism on the target read and the upload" $
             withStub status200 "ok" $ \stub -> do
                 bytes <- exampleWheel
@@ -87,6 +87,12 @@ spec = do
                     captured <- allCaptured stub
                     map capMethod captured `shouldBe` ["GET", "POST"]
                     map (headerValue "Authorization") captured `shouldBe` [Just "Bearer password", Just "Bearer password"]
+        it "uploads a credential with no username under the store's declared Basic username" $
+            publishWithoutUsername (declaredPresentation (const (AuthBasic "aws")))
+                `shouldReturn` (Right (), [("POST", Just "Basic YXdzOnBhc3N3b3Jk")])
+        it "refuses a natively presented credential with no username before any request" $
+            publishWithoutUsername nativePresentation
+                `shouldReturn` (Left (PublishSourceUnavailable "PyPI upload requires an explicit credential username"), [])
     describe "PyPI upload preparation" $
         for_ ["example-1-py3-none-any.whl", "example-1.zip"] $ \filename ->
             it ("refuses verified malformed archive bytes for " <> toString filename) $ do
@@ -107,6 +113,19 @@ spec = do
             classifyPublish 400 "Invalid metadata" `shouldSatisfy` isLeft
             classifyPublish 403 "File already exists." `shouldSatisfy` isLeft
             classifyPublish 500 "File already exists." `shouldSatisfy` isLeft
+
+-- Publish the example wheel from a worker credential with no username, as a minted CodeArtifact token has.
+publishWithoutUsername :: ServicePresentation -> IO (Either PublishFault (), [(ByteString, Maybe ByteString)])
+publishWithoutUsername presentation =
+    withStub status200 "ok" $ \stub -> do
+        bytes <- exampleWheel
+        snapshot <- sourceSnapshot bytes
+        withExchangeClient (newManager defaultManagerSettings) $ \exchanges -> do
+            let transport = MirrorTransport exchanges (pure (Just (ClientCredential Nothing (mkSecret "password")))) defaultLimits passthroughTracingPort
+                writer = newMirrorPublish transport (loopbackRegistryUrl (stubBaseUrl stub)) (loopbackRegistryUrl (stubBaseUrl stub <> "/custom-upload")) (pypiPublishCodec presentation)
+            result <- publishOnlyFile writer snapshot (PublishPlan (pypiVersion "1")) bytes
+            captured <- allCaptured stub
+            pure (result, [(capMethod request, headerValue "Authorization" request) | request <- captured])
 
 -- One wheel whose metadata carries a conditional dependency and its extra.
 exampleWheel :: IO ByteString
