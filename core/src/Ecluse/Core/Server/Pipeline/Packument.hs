@@ -681,10 +681,13 @@ collectDecisions privResult pubResult exclusions =
     privateLeg = case (privResult, pubResult) of
         (OriginNotFound, OriginResolved _) | packumentStatus exclusions == PackumentDenied -> []
         _ -> privateDecision privResult
-    -- With no private origin the public one is the only source, so its failed read refuses as a private one does.
+    -- An unread public origin never reached the gate. With no private origin, or beside a private
+    -- document that admitted nothing, its failed read refuses as a private one does.
     publicLeg = case (privResult, pubResult) of
-        (OriginAbsent, OriginUnresolved failure) -> [readFailureRefusal "the public upstream" neededUpstreamUnavailableMessage failure]
+        (OriginAbsent, OriginUnresolved failure) -> [publicReadRefusal failure]
+        (OriginResolved _, OriginUnresolved failure) -> [publicReadRefusal failure]
         _ -> publicDecision pubResult
+    publicReadRefusal = readFailureRefusal "the public upstream" neededUpstreamUnavailableMessage
 
 privateDecision :: OriginResult -> [ServeDecision]
 privateDecision = \case

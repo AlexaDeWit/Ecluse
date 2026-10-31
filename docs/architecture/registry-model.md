@@ -270,9 +270,12 @@ track which input a survivor came from, so assembly can select its retained sour
 - **Public availability.** If the public upstream fails while the private one succeeds, the merge
   serves the private-only union with a degraded signal (readiness stays
   [lenient about public reachability](web-layer.md#meta-routes-ping-health-and-search)). Only when
-  nothing resolves does the request error. A mount with no private upstream has no other source,
-  so a failed public read refuses its listings as a failed private read does: `503` when the public
-  upstream is unavailable, and `502` when its reply is invalid or unusable.
+  nothing survives does the request error. The public versions never reached the gate, so a failed
+  public read then refuses the listing as a failed private read does: `503` when the public upstream
+  is unavailable, and `502` when its reply is invalid or unusable. That holds on a mount with no
+  private upstream, and beside a private document that admits nothing, such as one whose every
+  version fails the trusted floor. Beside a private `404` the request answers `503`, as settled
+  absence above describes.
 
 A packument request filters but never mirrors. See
 [Applying verdicts to a packument](rules-engine.md#applying-verdicts-to-a-packument).

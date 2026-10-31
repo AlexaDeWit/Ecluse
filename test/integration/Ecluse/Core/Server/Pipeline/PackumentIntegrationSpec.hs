@@ -130,7 +130,8 @@ mergeSpec = describe "multi-upstream merge (not fallback)" $ do
         publicUp <- failingUpstream
         withProxy privateUp publicUp Nothing $ \app -> do
             resp <- getThing Nothing app
-            status resp `shouldBe` 404
+            -- Nothing private is admitted and the public read failed, so the listing is an outage.
+            status resp `shouldBe` 503
 
     it (caseLabel "integration/npm-metadata/native-007" "lists a SHA-1-only trusted-private version when the trusted floor is loosened to SHA-1") $ do
         sha1Floor <- either (fail . toString) pure (mkMinTrustedIntegrity SHA1)

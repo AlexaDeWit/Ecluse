@@ -134,6 +134,7 @@ spec = describe "Ecluse.Core.Server.Pipeline (core handlers over a ServeRuntime)
     publicControlSpec
     absentNameSpec
     unconfiguredPrivateSpec
+    privateAdmitsNothingSpec
     deniedListingSpec
 
     for_ [(status200, Admit), (status304, Admit), (status401, Deny), (status403, Deny)] $ \(upstreamStatus, expected) ->
@@ -1322,6 +1323,21 @@ invalidPublicReplies =
     , ("a document past its bound", responseLBS status200 [] (LBS.replicate 64 0x7b), \deps -> deps{pdLimits = defaultLimits{maxMetadataBytes = 8}}, [RubyGems])
     ]
 
+-- A private document that admits nothing leaves the listing to the public origin. Its failed read never
+-- reached the gate, so it refuses the listing as an outage, and a public document the gate refuses in full answers 404.
+privateAdmitsNothingSpec :: Spec
+privateAdmitsNothingSpec = describe "an npm packument whose private document admits nothing" $
+    for_ [("every version below the trusted floor", belowFloorPrivateApp), ("no version", emptyPrivateApp)] $ \(label, privateApp) -> do
+        for_ [("is unavailable", status503, 503), ("answers HTTP 400", status400, 502)] $ \(failure, publicStatus, expected) ->
+            it ("answers " <> show expected <> " for GET and HEAD when the private document has " <> label <> " and the public origin " <> failure) $
+                listingOver privateApp (\_ respond -> respond (responseLBS publicStatus [] "")) id expected Nothing Unavailable
+        it ("answers 404 for GET and HEAD when the private document has " <> label <> " and the gate refuses every public version") $ do
+            denyAll <- prepare inertRuleDeps []
+            listingOver privateApp upstreamApp (\deps -> deps{pdRules = denyAll}) 404 Nothing Deny
+  where
+    belowFloorPrivateApp = publicAppOver ["1.0.0"] "1.0.0" (\v -> v{vsIntegrity = Nothing, vsShasum = Just (hexSha1Of artifactBytes)})
+    emptyPrivateApp _ respond = respond (responseLBS status200 [(hContentType, "application/json")] (encode (object ["name" .= ("leftpad" :: Text), "dist-tags" .= object [], "versions" .= object []])))
+
 -- A public listing the gate denies in full answers 404 beside a private 404 or with no private origin. The artifact keeps its 403.
 deniedListingSpec :: Spec
 deniedListingSpec = describe "a public listing the gate denies in full" $
@@ -1358,13 +1374,17 @@ captureRouted rt binding method path =
 
 -- A merged listing whose public origin admits leftpad and whose private origin gives one fixed answer.
 mergedListingAfter :: Response -> Int -> Maybe ByteString -> Decision -> Expectation
-mergedListingAfter privateResponse expectedStatus expectedRetry expectedDecision = withSweeper $ \deadlines -> do
+mergedListingAfter privateResponse = listingOver (\_ respond -> respond privateResponse) upstreamApp id
+
+-- The leftpad listing over these origins and this mount change for GET and HEAD, with each answer's status, Retry-After and serve decision.
+listingOver :: Application -> Application -> (PackumentDeps -> PackumentDeps) -> Int -> Maybe ByteString -> Decision -> Expectation
+listingOver private public change expectedStatus expectedRetry expectedDecision = withSweeper $ \deadlines -> do
     (metricsPort, decisions) <- recordingMetricsPort
     rt <- testServeRuntime deadlines metricsPort
-    testWithApplication (pure upstreamApp) $ \publicPort ->
-        testWithApplication (pure (\_ respond -> respond privateResponse)) $ \privatePort -> do
+    testWithApplication (pure public) $ \publicPort ->
+        testWithApplication (pure private) $ \privatePort -> do
             base <- depsFor publicPort
-            let deps = withPrivateBaseUrl (Just (loopbackRegistryUrl ("http://localhost:" <> show privatePort))) base
+            let deps = change (withPrivateBaseUrl (Just (loopbackRegistryUrl ("http://localhost:" <> show privatePort))) base)
             for_ [servePackument, headPackument] $ \serve -> do
                 response <- captureServe npmPackumentContract rt (mountWith deps) (serve npmPackumentReplies leftpadName defaultRequest)
                 statusCode (responseStatus response) `shouldBe` expectedStatus
