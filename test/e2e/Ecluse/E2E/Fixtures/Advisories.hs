@@ -21,6 +21,7 @@ module Ecluse.E2E.Fixtures.Advisories (
     partialFixRemainingAdvisoryId,
     epssProofExportBase,
     epssControlExportBase,
+    cvssControlExportBase,
     buildAdvisoryFixtures,
     ecosystemAdvisory,
 ) where
@@ -101,6 +102,10 @@ epssProofExportBase = "advisories/epss-proof"
 epssControlExportBase :: Text
 epssControlExportBase = "advisories/epss-control"
 
+-- | Each ecosystem's CVSS control export: its advisory with CVSS 4.2, below a 7.0 deny.
+cvssControlExportBase :: Text
+cvssControlExportBase = "advisories/cvss-control"
+
 -- | Write the local OSV archives and shared EPSS slice without reaching public feeds.
 buildAdvisoryFixtures :: FilePath -> IO ()
 buildAdvisoryFixtures root = do
@@ -128,6 +133,8 @@ buildAdvisoryFixtures root = do
             >>= writeUnder (epssProofExportBase <> "/" <> directory <> "/all.zip")
         osvZipOf [("epss.json", scoredAdvisory ecosystem advisory "CVE-2026-10004" (Just severeVector) name (fixedAt fixed))]
             >>= writeUnder (epssControlExportBase <> "/" <> directory <> "/all.zip")
+        osvZipOf [("cvss.json", scoredAdvisory ecosystem advisory "CVE-2026-10001" (Just minorVector) name (fixedAt fixed))]
+            >>= writeUnder (cvssControlExportBase <> "/" <> directory <> "/all.zip")
     epssFixtureWith [(minorAlias, "0.005")] >>= writeUnder advisoryEpssPath
   where
     writeUnder relative bytes = do
@@ -148,10 +155,14 @@ fixedAt fixed = [object ["introduced" .= ("0" :: Text)], object ["fixed" .= fixe
 severeVector :: Text
 severeVector = "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H"
 
+-- The CVSS 3.1 vector scoring 4.2.
+minorVector :: Text
+minorVector = "CVSS:3.1/AV:N/AC:H/PR:N/UI:R/S:U/C:L/I:L/A:N"
+
 -- The partial fix's remaining advisory: CVSS 4.2 and the EPSS 'minorAlias' carries, from the fix on.
 minorAdvisory :: Ecosystem -> Text -> Text -> LByteString
 minorAdvisory ecosystem name fixed =
-    scoredAdvisory ecosystem partialFixRemainingAdvisoryId minorAlias (Just "CVSS:3.1/AV:N/AC:H/PR:N/UI:R/S:U/C:L/I:L/A:N") name [object ["introduced" .= fixed]]
+    scoredAdvisory ecosystem partialFixRemainingAdvisoryId minorAlias (Just minorVector) name [object ["introduced" .= fixed]]
 
 minorAlias :: Text
 minorAlias = "CVE-2026-10007"
