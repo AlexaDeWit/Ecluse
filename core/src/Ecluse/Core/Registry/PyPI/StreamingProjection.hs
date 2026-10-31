@@ -8,6 +8,7 @@ module Ecluse.Core.Registry.PyPI.StreamingProjection (
     emptyProjection,
     collectField,
     keepsFile,
+    claimsEnvelope,
     retainedEntries,
     finishProjection,
     packedFileStep,
@@ -61,6 +62,10 @@ emptyProjection name = PyPIProjection mempty [] (filenameMemo name) [] [] 0 0 Tr
 keepsFile :: PyPIProjection -> Bool
 keepsFile = projectedFilesActive
 
+-- | Whether the envelope holds an earlier occurrence of the key, so the walk drops a repeat as it reads it.
+claimsEnvelope :: PyPIProjection -> Text -> Bool
+claimsEnvelope acc key = KeyMap.member (Key.fromText key) (projectedEnvelope acc)
+
 -- | The files and file drops, and the version drops and envelope array items, the projection holds.
 retainedEntries :: PyPIProjection -> RetainedEntries
 retainedEntries acc = RetainedEntries (projectedReleases acc) (projectedOthers acc)
@@ -72,9 +77,8 @@ collectField limits acc = \case
     EnvelopeField key value
         | KeyMap.member (Key.fromText key) (projectedEnvelope acc) -> Right acc
         | otherwise -> Right acc{projectedEnvelope = KeyMap.insert (Key.fromText key) value (projectedEnvelope acc)}
-    EnvelopeItem key
-        | KeyMap.member (Key.fromText key) (projectedEnvelope acc) -> Right acc
-        | otherwise -> Right acc{projectedOthers = projectedOthers acc + 1}
+    -- The walk reports items only for an envelope key no earlier occurrence has claimed.
+    EnvelopeItem _ -> Right acc{projectedOthers = projectedOthers acc + 1}
     FilesShape valid -> Right acc{projectedFilesSeen = True, projectedFilesActive = not (projectedFilesSeen acc), projectedShape = projectedShape acc && (projectedFilesSeen acc || valid)}
     VersionsShape valid -> Right acc{projectedVersionsSeen = True, projectedVersionsActive = not (projectedVersionsSeen acc), projectedShape = projectedShape acc && (projectedVersionsSeen acc || valid)}
     InvalidVersionField position value
