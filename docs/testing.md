@@ -2254,16 +2254,13 @@ Advisory-shaped test data comes from committed OSV JSON, apart from the benchmar
 worst case. The suites read `test/fixtures/osv/`
 (`v1/`, plus the `v2/` delta). The benchmarks' [advisory rule rows](#advisory-rule-rows), the
 [allocation gate](#allocation-budgets-perf-allocation-gating) and the live performance-acceptance
-run, the load harness's advisory scenarios, and `ecluse-unit` (`Ecluse.Test.Corpus.AdvisoriesSpec`)
-read `bench/corpus/advisories/`. A suite derives everything it consumes from those files at test
-time.
+run, and the load harness's advisory scenarios read `bench/corpus/advisories/`. A suite derives
+everything it consumes from those files at test time.
 No `osv.db` is ever committed as a binary, so a fixture cannot drift from the artifact contract
 (`Ecluse.Core.Osv.Schema`). Helpers in `ecluse-test-support` assemble the osv.dev-shaped zip, plus
 *hostile* artifacts for rejection tests. They compile the corpus through the real OSV pipeline
 (`Ecluse.Core.Osv.Compile`, in `ecluse-core`, so `ecluse-core-unit` can link it). The corpus carries
 versions, so shadow-swap tests observe an ETag change and a rule-outcome flip.
-`Ecluse.Test.OsvSpec` pins each version's rows exactly, so editing the corpus updates the pin in the
-same PR.
 
 ## Tests and Docker
 

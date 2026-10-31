@@ -1180,13 +1180,6 @@ test-suite ecluse-core-unit
   other-modules:
     SpecHook
     Ecluse.Core.StreamBench.Sink
-    Ecluse.Test.Registry.Npm.StoredVersionsSpec
-    Ecluse.Test.Registry.Cargo.FixturesSpec
-    Ecluse.Test.Registry.Cargo.MetadataSpec
-    Ecluse.Test.CorpusSpec
-    Ecluse.Test.Corpus.OutputsSpec
-    Ecluse.Test.Corpus.CargoSpec
-    Ecluse.Test.EcosystemBenchSpec
     Ecluse.Test.EnvSpec
     Ecluse.Test.PollSpec
     Ecluse.Core.Mirror.StateSpec
@@ -1320,7 +1313,6 @@ test-suite ecluse-core-unit
     Ecluse.Core.Registry.RubyGems.ProjectSpec
     Ecluse.Core.Registry.RubyGems.CredentialSpec
     Ecluse.Core.Registry.RubyGems.StreamingSpec
-    Ecluse.Test.Server.CacheSpec
     Ecluse.Core.Registry.RubyGems.Handlers.BudgetSpec
     Ecluse.Core.Registry.RubyGems.HandlersSpec
     Ecluse.Core.Registry.RubyGems.MetadataSpec
@@ -1331,7 +1323,6 @@ test-suite ecluse-core-unit
     Ecluse.Core.Registry.RubyGems.ServingSpec
     Ecluse.Core.Registry.RubyGems.SourceStateSpec
     Ecluse.Core.Server.Pipeline.PublishSpec
-    Ecluse.Test.Corpus.RubyGemsSpec
     Ecluse.Core.Registry.RubyGems.AdapterSpec
     Ecluse.Core.Registry.RubyGems.Archive.MetadataSpec
     Ecluse.Core.Registry.RubyGems.Archive.YamlSpec
@@ -1464,12 +1455,8 @@ test-suite ecluse-core-unit
     Ecluse.Server.Admission.Support
     Ecluse.Test.CollectorSpec
     Ecluse.Test.Container.ImageSpec
-    Ecluse.Test.Corpus.SubsetSpec
+    Ecluse.Test.LogSpec
     Ecluse.Test.MaintenanceSpec
-    Ecluse.Test.Registry.PyPI.WireSpec
-    Ecluse.Test.Registry.Metadata.ProjectionSpec
-    Ecluse.Test.Registry.RubyGems.WireSpec
-    Ecluse.Test.RegistryCaptureSpec
     Ecluse.Worker.Support
     Ecluse.Worker.Support.Fixtures
     Ecluse.Worker.Support.Runtime
@@ -1609,9 +1596,7 @@ test-suite ecluse-unit
     Ecluse.Site.MarkdownSpec
     Ecluse.Site.OpenApiSpec
     Ecluse.Site.SearchSpec
-    Ecluse.Test.Corpus.AdvisoriesSpec
     Ecluse.Test.InstalledTreeSpec
-    Ecluse.Test.OsvSpec
     Paths_ecluse
 
   autogen-modules:    Paths_ecluse
