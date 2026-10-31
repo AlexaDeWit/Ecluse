@@ -80,7 +80,7 @@ spec = do
             Map.member Cargo (configMounts defaultConfig) `shouldBe` False
             enabled <- configFor "{\"mounts\":{\"cargo\":{\"enabled\":true}}}"
             fmap (map (ruleName . prRule) . mountPolicy) (Map.lookup Cargo (configMounts enabled))
-                `shouldBe` Just ["AllowIfOlderThan"]
+                `shouldBe` Just ["DenyExternalDependencies", "AllowIfOlderThan"]
 
         it "ships exactly the expected shared baseline rules under their default names" $ do
             (_, catalogue) <- expectRight (decodeDefaultConfig defaultConfigBytes)
@@ -192,15 +192,38 @@ spec = do
             fmap (map (ruleName . prRule) . mountPolicy) (Map.lookup Npm (configMounts cfg))
                 `shouldBe` Just ["DenyInstallTimeExecution", "AllowIfOlderThan"]
 
-        it "refuses disabling the shipped dependency deny in the shared list, naming the npm remedy" $ do
+        it "refuses disabling the shipped dependency deny in the shared list, naming the npm and Cargo remedies" $ do
             loadConfig [] (Just "{\"rules\":{\"deny-external-dependencies\":{\"enabled\":false}}}")
                 `shouldBe` Left [SharedPolicyErrors [SuppressUnknownRule "deny-external-dependencies"]]
             first (map renderConfigError) (loadConfig [("ECLUSE_RULES", "{\"deny-external-dependencies\":{\"enabled\":false}}")] Nothing)
-                `shouldBe` Left ["rule \"deny-external-dependencies\" disables a rule that no default defines. Disable the shipped npm default with enabled: false under mounts.npm.rules (ECLUSE_MOUNTS__NPM__RULES) instead.\n"]
+                `shouldBe` Left ["rule \"deny-external-dependencies\" disables a rule that no default defines. Disable the shipped npm or cargo default with enabled: false under mounts.npm.rules (ECLUSE_MOUNTS__NPM__RULES) or mounts.cargo.rules (ECLUSE_MOUNTS__CARGO__RULES) instead.\n"]
 
         it "refuses a different type under the shipped dependency deny's name" $
             loadConfig pubUrlEnv (Just "{\"mounts\":{\"npm\":{\"rules\":{\"deny-external-dependencies\":{\"type\":\"DenyInstallTimeExecution\"}}}}}")
                 `shouldBe` Left [PolicyErrors [MalformedRule "deny-external-dependencies" "\"type\" \"DenyInstallTimeExecution\" does not match the default rule it patches"]]
+
+    describe "the shipped Cargo mount policy" $ do
+        it "denies a public crate whose dependency comes from outside the registry, at admission only" $ do
+            cfg <- configFor "{\"mounts\":{\"cargo\":{\"enabled\":true}}}"
+            Map.map limitedRules (configMounts cfg) `shouldBe` Map.singleton Cargo ["DenyExternalDependencies"]
+            decideOn cfg Cargo (externalEvidence Cargo) >>= (\decision -> blockedBy decision `shouldBe` Just "DenyExternalDependencies")
+            fmap (map (ruleName . prRule) . revocationRules . mountPolicy) (Map.lookup Cargo (configMounts cfg))
+                `shouldBe` Just ["AllowIfOlderThan"]
+
+        it "disables the shipped dependency deny under the Cargo mount" $
+            for_ [configFor "{\"mounts\":{\"cargo\":{\"enabled\":true,\"rules\":{\"deny-external-dependencies\":{\"enabled\":false}}}}}", expectConfig (pubUrlEnv <> [("ECLUSE_MOUNTS__CARGO__ENABLED", "true"), ("ECLUSE_MOUNTS__CARGO__RULES", "{\"deny-external-dependencies\":{\"enabled\":false}}")]) Nothing] $ \load -> do
+                cfg <- load
+                fmap (map (ruleName . prRule) . mountPolicy) (Map.lookup Cargo (configMounts cfg)) `shouldBe` Just ["AllowIfOlderThan"]
+                decideOn cfg Cargo (externalEvidence Cargo) >>= (\decision -> admittedBy decision `shouldBe` Just "AllowIfOlderThan")
+
+        it "admits a named crate with a pin above the deny's precedence" $ do
+            cfg <- configFor "{\"mounts\":{\"cargo\":{\"enabled\":true,\"rules\":{\"pin\":{\"type\":\"AllowByIdentity\",\"identity\":\"thing@1.0.0\",\"precedence\":301}}}}}"
+            decideOn cfg Cargo (externalEvidence Cargo) >>= (\decision -> admittedBy decision `shouldBe` Just "AllowByIdentity")
+
+        it "keeps the shipped Cargo deny out of the npm and PyPI policies" $ do
+            cfg <- configFor "{\"mounts\":{\"npm\":{\"enabled\":true},\"pypi\":{\"enabled\":true},\"cargo\":{\"enabled\":true}}}"
+            fmap (map (ruleName . prRule) . mountPolicy) (Map.lookup PyPI (configMounts cfg)) `shouldBe` Just ["AllowIfOlderThan"]
+            Map.map limitedRules (configMounts cfg) `shouldBe` Map.fromList [(Npm, ["DenyExternalDependencies", "DenyInstallTimeExecution"]), (Cargo, ["DenyExternalDependencies"])]
 
     describe "configuration type error paths" $ do
         forM_

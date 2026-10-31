@@ -260,14 +260,14 @@ cargoRuleBlocksSpec = describe "resolved Cargo rule blocks" $
         it "clears the shipped policy for the Cargo mount alone" $ do
             plan <- expectVetted role cargoGateEnv
             map vmEcosystem (vpMounts plan) `shouldBe` [Cargo]
-            map (ruleName . prRule) (concatMap (mountPolicy . vmMount) (vpMounts plan)) `shouldBe` ["AllowIfOlderThan"]
+            map (ruleName . prRule) (concatMap (mountPolicy . vmMount) (vpMounts plan)) `shouldBe` ["DenyExternalDependencies", "AllowIfOlderThan"]
         for_ [(scopeRule, cargoScopeRefusal), (deprecatedRule, cargoDeprecationRefusal), (installRule, cargoInstallRefusal)] $ \(rules, refusal) ->
             it ("refuses the shared " <> show refusal) $
                 refusalsFor role (overrideEnv "ECLUSE_RULES" rules cargoGateEnv) `shouldReturn` [refusal]
         it "clears a shared external-dependency deny on the Cargo mount" $ do
             refusalsFor role (overrideEnv "ECLUSE_RULES" dependencyRule cargoGateEnv) `shouldReturn` []
             plan <- expectVetted role (overrideEnv "ECLUSE_RULES" dependencyRule cargoGateEnv)
-            map (ruleName . prRule) (concatMap (mountPolicy . vmMount) (vpMounts plan)) `shouldMatchList` ["AllowIfOlderThan", "DenyExternalDependencies"]
+            map (ruleName . prRule) (concatMap (mountPolicy . vmMount) (vpMounts plan)) `shouldMatchList` ["AllowIfOlderThan", "DenyExternalDependencies", "DenyExternalDependencies"]
         it "refuses aliased Cargo blocks below a higher allow with an admission-only deny" $ do
             errors <- refusalsFor role (overrideEnv "ECLUSE_MOUNTS__CARGO__RULES" "{\"alias-scope\":{\"type\":\"AllowScope\",\"scope\":\"acme\",\"precedence\":1},\"alias-deprecated\":{\"type\":\"DenyIfDeprecated\",\"precedence\":1,\"appliesTo\":[\"admission\"]},\"alias-install\":{\"type\":\"DenyInstallTimeExecution\",\"precedence\":1,\"appliesTo\":[\"admission\"]},\"pin\":{\"type\":\"AllowByIdentity\",\"identity\":\"fixture@1.0.0\",\"precedence\":999}}" cargoGateEnv)
             errors `shouldMatchList` [cargoScopeRefusal, cargoDeprecationRefusal, cargoInstallRefusal]
@@ -285,12 +285,12 @@ cargoRuleBlocksSpec = describe "resolved Cargo rule blocks" $
         it "removes both blocked types through matching Cargo rule keys" $ do
             let env = overrideEnv "ECLUSE_MOUNTS__CARGO__RULES" "{\"scope\":{\"enabled\":false},\"deprecated\":{\"enabled\":false}}" (overrideEnv "ECLUSE_RULES" bothRules cargoGateEnv)
             plan <- expectVetted role env
-            map (ruleName . prRule) (concatMap (mountPolicy . vmMount) (vpMounts plan)) `shouldBe` ["AllowIfOlderThan"]
+            map (ruleName . prRule) (concatMap (mountPolicy . vmMount) (vpMounts plan)) `shouldBe` ["DenyExternalDependencies", "AllowIfOlderThan"]
         it "keeps npm mount policy out of the Cargo policy" $ do
             plan <- expectVetted role (overrideEnv "ECLUSE_MOUNTS__NPM__RULES" bothRules (overrideEnv "ECLUSE_MOUNTS__NPM__ENABLED" "true" cargoGateEnv))
             map vmEcosystem (vpMounts plan) `shouldBe` [Npm, Cargo]
             let cargoPolicies = [mountPolicy (vmMount mount) | mount <- vpMounts plan, vmEcosystem mount == Cargo]
-            map (map (ruleName . prRule)) cargoPolicies `shouldBe` [["AllowIfOlderThan"]]
+            map (map (ruleName . prRule)) cargoPolicies `shouldBe` [["DenyExternalDependencies", "AllowIfOlderThan"]]
         it "ignores blocked declarations on a disabled Cargo mount" $ do
             let env = overrideEnv "ECLUSE_MOUNTS__NPM__ENABLED" "true" (overrideEnv "ECLUSE_MOUNTS__CARGO__ENABLED" "false" (overrideEnv "ECLUSE_RULES" bothRules cargoGateEnv))
             plan <- expectVetted role env
