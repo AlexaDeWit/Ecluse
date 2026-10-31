@@ -63,7 +63,7 @@ import Ecluse.Config (
     QuotaOverride (qoQuotas, qoScope, qoWeights),
     ServerSettings (srvAuthToken),
     StoreBackend,
-    StoreTag (TagCodeArtifact),
+    StoreTag,
     Target (tgtTag, tgtUrl),
     advisorySourced,
     meTarget,
@@ -84,7 +84,7 @@ import Ecluse.Core.Registry.Adapter.Capability (
     companionsAgree,
     durableMirrorDocuments,
  )
-import Ecluse.Core.Registry.Request (ServicePresentation, nativePresentation)
+import Ecluse.Core.Registry.Request (ServicePresentation, StoreOperation (StoreWrite), declaredUsername, nativePresentation)
 import Ecluse.Core.Registry.Sweep.Types (minimumChunkPause)
 import Ecluse.Core.Rules.Types (
     AllowIfRemediatesCveParams (aircOnUnavailable),
@@ -152,10 +152,12 @@ vetMirrorCapabilities role app = decided $ case missing of
                 <> maybe [] (publicationNeeds eco publish) (mntPublicationTarget mount)
     mirrorNeeds eco publish endpoint =
         [MirrorStateRequired eco | isJust (durableMirrorDocuments (mirrorStateRequirement (publishMirrorRequirements publish))), isJust pipeline, isNothing (cfgMirrorState app)]
-            <> [usernameRequired eco "mirrorTarget" (meTarget endpoint) | publishIdentity publish == NamedIdentity, mirrorWrites, tgtTag (meTarget endpoint) /= TagCodeArtifact, isNothing (meUsername endpoint)]
+            <> [usernameRequired eco "mirrorTarget" (meTarget endpoint) | publishIdentity publish == NamedIdentity, mirrorWrites, storeLacksUsername eco (meTarget endpoint), isNothing (meUsername endpoint)]
     publicationNeeds eco publish endpoint =
-        [usernameRequired eco "publicationTarget" (peTarget endpoint) | publishIdentity publish == NamedIdentity, clientWrites, isJust (peToken endpoint), tgtTag (peTarget endpoint) /= TagCodeArtifact, isNothing (peUsername endpoint)]
+        [usernameRequired eco "publicationTarget" (peTarget endpoint) | publishIdentity publish == NamedIdentity, clientWrites, isJust (peToken endpoint), storeLacksUsername eco (peTarget endpoint), isNothing (peUsername endpoint)]
     usernameRequired eco endpoint target = UploadConfigurationRequired eco (taggedKeyPath endpoint (tgtTag target) "username")
+    -- A store whose upload presentation names its Basic username supplies the one configuration would.
+    storeLacksUsername eco target = isNothing (declaredUsername (storePresentation (tgtTag target) eco) StoreWrite)
 
 -- | Accumulate every pure refusal and advisory for one role before constructing its plan.
 vetBoot :: Config -> Vet ValidatedPlan
