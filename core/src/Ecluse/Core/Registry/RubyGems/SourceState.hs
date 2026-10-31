@@ -9,6 +9,7 @@ module Ecluse.Core.Registry.RubyGems.SourceState (
     validateGemSource,
     gemSourcePublishedAt,
     gemSourceDecodeCharge,
+    gemSourceCompanions,
 ) where
 
 import Data.Aeson (Value (..), object, (.:), (.=))
@@ -21,7 +22,7 @@ import Data.Time (UTCTime)
 
 import Ecluse.Core.Package
 import Ecluse.Core.Package.Entry (EntryKey (RecordEntry), distinctKeys, validRecordKey)
-import Ecluse.Core.Registry (ParseError (..))
+import Ecluse.Core.Registry (CompanionRequirement (NativeCompanions), ParseError (..))
 import Ecluse.Core.Registry.RubyGems.Document
 import Ecluse.Core.Registry.RubyGems.Project
 import Ecluse.Core.Registry.RubyGems.Wire (decodeInfoRow)
@@ -29,6 +30,10 @@ import Ecluse.Core.Registry.WireSupport (newestUpload)
 import Ecluse.Core.Server.MemoryModel (decodedDocumentCharge)
 import Ecluse.Core.Server.Path (unFilename)
 import Ecluse.Core.Version (renderVersion)
+
+-- | Every retained gem needs its original compact specification.
+gemSourceCompanions :: CompanionRequirement
+gemSourceCompanions = NativeCompanions
 
 -- | Store exact source bytes and physical positions in a versioned native payload.
 gemSourceValue :: GemDocument -> Value

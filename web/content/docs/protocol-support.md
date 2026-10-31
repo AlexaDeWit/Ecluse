@@ -128,31 +128,30 @@ shrinkwrap marker while removing other source-registry bookkeeping.
 
 ## Cargo sparse registries {#cargo}
 
-Cargo uses two views under one mount. [Connect Cargo](@/docs/connect.md#cargo) gives the client configuration.
+Cargo uses one registry under `/cargo/`, which replaces crates.io. [Connect Cargo](@/docs/connect.md#cargo) gives the client configuration.
 
-| View | Source and operations |
-|---|---|
-| `/cargo/` | crates.io source replacement. Reads crates.io and valid completed managed mirrors. Excludes private-only additions and declared first-party names. No publication API. |
-| `/cargo/private/` | Alternate registry. Reads arbitrary caller-authorised private packages and accepts configured first-party publication. No public fallback. |
-
-Both views serve `config.json`, native sparse index paths, and local crate archive routes.
+The registry merges caller-authorised `privateUpstream` crates with admitted crates.io crates, as the npm, PyPI and RubyGems mounts merge their sources.
+A declared first-party name reads `privateUpstream` only. A private `404` for an undeclared name falls back to admitted crates.io crates.
+It serves `config.json`, native sparse index paths, local crate archive routes, and configured publication. Every path under `/cargo/private/` answers `404`.
 Every emitted download location points through Écluse.
-Git index serving is unsupported. Cargo can retain its canonical crates.io registry identity in lockfiles, including the historical GitHub URL.
+Git index serving is unsupported. Cargo records every crate in lockfiles under crates.io's registry identity, the historical GitHub URL, private crates included.
 That identity does not select Git transport when source replacement uses a sparse HTTPS index.
 
-The private discovery response advertises `api` only when publication is configured.
-Its API base is `https://packages.example.com/cargo/private`.
-Cargo appends `/api/v1/crates/new`, producing `PUT /cargo/private/api/v1/crates/new`.
+Écluse answers `config.json` itself after edge authentication. It reads no upstream registry for that response.
+
+| Field | Value |
+|---|---|
+| `dl` | `https://packages.example.com/cargo/crates/{crate}/{version}/{crate}-{version}.crate` |
+| `api` | `https://packages.example.com/cargo`, present only when publication is configured |
+| `auth-required` | `true` when the mount has a `privateUpstream` or `server.authToken`, otherwise `false` |
+
+Cargo appends `/api/v1/crates/new` to `api`, producing `PUT /cargo/api/v1/crates/new`.
 Do not append another `/api` to the configured client registry.
 The proxy supports publication, not registry management operations such as yank or unyank.
 
-Discovery runs against the selected origin after the operation obtains its caller or service credential.
-Boot performs no registry discovery. Private discovery stays local to the request.
-Local `auth-required` combines the edge requirement and the selected trusted origin's declaration.
-Without a trusted origin, public discovery answers locally.
-It never contacts crates.io merely to construct that local response.
+Écluse discovers an upstream registry only after the operation obtains its caller or service credential.
+Boot performs no registry discovery, and private discovery stays local to the request.
 The [private access policy](@/docs/configuration.md#first-party-namespaces) gives Cargo's `401` challenge and `403` refusal.
-Discovery failure stays explicit. A new client can fail to bootstrap while its configured trusted registry is unavailable.
 
 The index reader retains admitted native records, their order, raw versions, checksums, and additive fields.
 It preserves dependencies, renames, features, targets, source identities, schema, Rust-version constraints, yank, and publication time.
@@ -164,27 +163,37 @@ Transport and resource failures fail the whole read.
 Published spelling, lowercase lookup identity, and case-insensitive hyphen/underscore ownership matching have separate uses.
 Hyphen and underscore aliases do not merge distinct index lookup paths.
 Cargo versions use native SemVer identity and ordering. Build metadata does not create a second publishable version identity.
+In the merged index, a private version and a public version that differ only in build metadata are one version, and the private row wins.
 
 The age rule uses native `pubtime`. Missing or invalid time stays unknown.
 OSV `crates.io` advisories use the existing freshness, malicious-package, and exact-fix rules.
-The default age and advisory path makes no archive evidence request.
-An explicit `DenyInstallTimeExecution` rule inspects bounded, checksum-verified archive and TOML evidence only when ordered evaluation reaches it.
-Higher-ranked decisions and first-party treatment retain their precedence.
-Required unavailable evidence produces structured inability. Écluse never runs the inspected code.
+Build scripts and procedural macros remain allowed. Cargo blocks active `DenyInstallTimeExecution`, `DenyIfDeprecated`, and `AllowScope` rules at boot.
+The shipped `deny-external-dependencies` rule denies, at admission, a public crate whose index row names a registry other than crates.io for a normal or build dependency.
+A null registry, either crates.io spelling and development dependencies pass. Disable it or pin a crate under `mounts.cargo.rules`.
 
 Cargo mirrors retain the original admitted index row, source identity, and checksum-verified archive using durable version state.
 Native-library `links` declarations must agree. Cargo defines omitted index `links` as null.
 Target publication can reset time or yank and omit fields, so an archive alone cannot prove faithful source reads.
+Completed copies are read through `privateUpstream`, as in the other ecosystems.
+A target row without a durable record is trusted private content, served with the target's publication time and yank state.
 Missing, corrupt, or unrecorded state cannot supply a managed original-source copy during a public outage.
-Ordinary compatible private reads remain available through the alternate view.
 Retained fields reflect first admission. Écluse does not continuously synchronise later yanks or mutate the target's yank state.
 
 Native publication checks length framing, archive root, manifest identity, and version before discovery or writes.
 Dependency inventories, aliases, kinds, targets, registry sources, version requirements, and dependency features must agree with the effective archived manifest.
 Package feature graphs, native-library `links` declarations, and the optional minimum Rust version must also agree, allowing native normalisation.
+Upload dependencies must not carry the `artifact`, `bindep_target`, `lib`, or `public` fields of unstable Cargo features such as nightly `-Z bindeps`.
+Écluse refuses such an upload with `400`, as mirroring refuses index rows that carry them.
+The archived `Cargo.toml` dependency tables must not carry the same features' `artifact`, `target`, `lib`, or `public` keys either, because the upload cannot state them.
+Écluse refuses such an archive with `400` and names the dependency. Mirroring does not apply this manifest check.
 Target comparison parses native cfg expressions under the configured nesting limit, including final commas in `all` and `any` lists.
 Registry comparison uses native logical identities, preserving source kinds and sparse registry paths.
-A null upload dependency registry identifies the selected private view. An absent manifest registry identifies crates.io.
+A null upload dependency registry identifies this `/cargo/` registry. An absent manifest registry identifies crates.io.
+Every normal and build dependency must come from crates.io or from Écluse's `/cargo/` index under `server.publicUrl`.
+Écluse refuses such a dependency from any other registry with `400` and names it.
+A development dependency may come from any registry, as npm publishes `devDependencies`, because no consumer resolves it.
+Publish that dependency through Écluse first, then depend on Écluse's copy.
+Écluse does not check crates that reach the private upstream by other means.
 Descriptive and additive metadata need not match the manifest. Accepted uploads retain their original bytes.
 The sparse read root and approved upload API root remain distinct.
 Discovery must advertise the exact approved API authority and base path before Écluse attaches the publication credential.
@@ -213,8 +222,18 @@ Private access refusal does not authorise public substitution.
 HEAD authorises and checks availability without reading or hashing an archive body, and never enqueues mirroring.
 
 The public `/versions` directory adds a global transfer and refresh cost before per-gem acquisition.
+The public and private directories each accept at most 2,000,000 distinct gem names, and a directory past that ceiling fails its read.
+The ceiling is fixed in Écluse and independent of `limits.maxVersionCount` and `limits.maxArtifactCount`, which bound per-gem `/info` reads.
+A ceiling breach logs under the `version-count` bound with a cap of `2000000`.
 Private discovery uses current caller credentials and remains outside public shared retention.
 Private directory failure remains a failure rather than a public-only or stale conditional response.
+It answers as [a failing private registry](@/docs/private-reads.md#private-outage) does, except that a private `404` on the directory answers `502`.
+A malformed private directory row fails the private read.
+When the public directory times out, fails, cools down or cannot be decoded, the reply serves the caller-authorised private rows alone.
+With no private rows, the request fails: `403` when the public source refuses access, otherwise `502` or `503`.
+A public directory past its byte bound or gem-name ceiling refuses the request with `502`, even beside private rows.
+A malformed public directory row is dropped and logged, and the rest of the directory serves.
+A public directory with no well-formed row cannot be decoded.
 Detailed metadata acquisition stays on demand. There is no full specification index, unfiltered fallback, or client yank relay.
 Compact specification and archive locations point through Écluse.
 A failed read stays a failure rather than an empty successful result.
@@ -239,14 +258,25 @@ A directory failure does not remove unrelated backend capabilities, such as publ
 Names, raw versions, and platform labels retain their native identity.
 Dependencies, version constraints, required Ruby and RubyGems versions, checksums, and supported source fields remain available.
 Malformed records and conflicting coordinates cannot supply an admitted version.
-Native builds remain allowed. RubyGems blocks active `DenyInstallTimeExecution`, `DenyIfDeprecated`, and `AllowScope` rules at boot.
+Native builds remain allowed. RubyGems blocks active `DenyInstallTimeExecution`, `DenyIfYanked`, `DenyExternalDependencies`, `DenyIfDeprecated`, and `AllowScope` rules at boot.
 Unknown installation metadata does not prove that an archive executes no code.
 
 Private reads preserve the caller's complete Basic credential pair.
-Publication uses the complete native API-key header value and an optional validated `OTP` header.
-A declared CodeArtifact service role uses Basic with username `aws` for reads and Bearer for publication.
+A caller's publication keeps its complete native API-key header value and an optional validated `OTP` header.
+On a `codeArtifact` store, Écluse's own tokens read with Basic and username `aws` and publish with Bearer.
+That covers the mirror worker's minted token and a static `publicationTarget` token. Store the static token as the bare secret.
 The backend declaration selects this presentation, not a hostname guess.
 Static publication credentials retain the required edge-token guard.
+
+`POST /api/v1/gems` answers `400` when the outer gem tar carries any of the following, because Écluse and the store could read different gem names:
+
+- a PAX (`x`, `g`) or GNU (`L`, `K`) extended header, which RubyGems' own archive reader treats as an ordinary member
+- a member name split by a ustar prefix
+- a name or prefix field with bytes after its first NUL, which RubyGems' reader keeps and Écluse ignores
+
+Écluse does not upload a public gem whose outer tar carries one to the mirror target either.
+Clients still download that version through Écluse, but the mirror holds no copy of it.
+Archives that `gem build` writes carry none of them.
 
 Mirroring copies every supported platform artifact of an admitted raw version, with original compact specifications and durable source facts.
 The worker verifies exact archives and native identities without executing Ruby, constructing YAML objects, or extracting files to disk.

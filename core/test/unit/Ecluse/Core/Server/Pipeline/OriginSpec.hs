@@ -33,7 +33,6 @@ import UnliftIO.Exception (bracket, evaluate, throwIO)
 import Ecluse.Core.Ecosystem (Ecosystem (Cargo))
 import Ecluse.Core.Package (PackageInfo (infoVersions))
 import Ecluse.Core.Package.Entry (EntryKey (RecordEntry))
-import Ecluse.Core.Registry.Adapter (RegistryAdapter, adapterFor)
 import Ecluse.Core.Registry.Adapter.Capability (AdapterMetadata (metadataChargeFactors, metadataRead))
 import Ecluse.Core.Registry.CachedDocument (cargoCached, cargoPacked, cargoRendered)
 import Ecluse.Core.Registry.Cargo.Credential (cargoCredential)
@@ -71,6 +70,7 @@ import Ecluse.Core.Server.Pipeline.Origin (
         OriginResolved,
         OriginUnresolved
     ),
+    ReadFailure (ReadInvalid, ReadUnavailable),
     fetchPrivateOriginObserved,
     fetchPublicOriginObserved,
     originManifest,
@@ -89,7 +89,7 @@ import Ecluse.Test.Registry.Cargo.Metadata (cargoFeatureRecord, cargoRead, cargo
 import Ecluse.Test.Registry.Metadata.Fetch (heldBody)
 import Ecluse.Test.Server.Cache (cachedVersion, defaultCacheConfig, newLocalRetention, newMetadataCache)
 import Ecluse.Test.Server.Handler (testServeRuntime)
-import Ecluse.Test.Server.Mount (inertDepsFor, inertPackumentDeps, serveDepsFor, withPrivateBaseUrl)
+import Ecluse.Test.Server.Mount (inertDepsFor, inertPackumentDeps, requiredAdapter, serveDepsFor, withPrivateBaseUrl)
 import Ecluse.Test.Stub (Captured (capPath), stubBaseUrl, withRoutedStubIO)
 import Ecluse.Test.Support (expectRight)
 
@@ -100,25 +100,27 @@ spec = describe "originMiss -- the outcomes that leave nothing to serve" $ do
     retainedConsumerSpec
     selectedChargeSpec
     fullReadSpec
-    it "reports no miss for a document, an access refusal, or an identity refusal" $
+    it "reports no miss for a document or an access refusal" $
         map
             originMiss
             [ OriginResolved (sampleManifest thingName [])
             , OriginAuthorisationFailure 401
             , OriginAuthorisationFailure 403
-            , OriginNameMismatch
             ]
-            `shouldBe` [Nothing, Nothing, Nothing, Nothing]
+            `shouldBe` [Nothing, Nothing, Nothing]
 
-    it "separates an origin that answered 404 from one that was never read" $
-        map originMiss [OriginNotFound, OriginUnresolved]
-            `shouldBe` [Just MissAbsent, Just MissUnresolved]
+    it "reports an identity refusal as an unread origin whose reply was invalid" $
+        originMiss OriginNameMismatch `shouldBe` Just (MissUnresolved ReadInvalid)
+
+    it "separates an origin that answered 404 from one that was never read, keeping the cause" $
+        map originMiss [OriginNotFound, OriginUnresolved (ReadUnavailable Nothing), OriginUnresolved ReadInvalid]
+            `shouldBe` [Just MissAbsent, Just (MissUnresolved (ReadUnavailable Nothing)), Just (MissUnresolved ReadInvalid)]
 
     it "groups an unconfigured origin with an absence, because no retry reaches it" $
         originMiss OriginAbsent `shouldBe` Just MissAbsent
 
     it "contributes no manifest from any miss" $
-        map (isNothing . originManifest) [OriginNotFound, OriginUnresolved, OriginAbsent]
+        map (isNothing . originManifest) [OriginNotFound, OriginUnresolved (ReadUnavailable Nothing), OriginAbsent]
             `shouldBe` [True, True, True]
 
 fullReadSpec :: Spec
@@ -126,7 +128,7 @@ fullReadSpec = describe "full Cargo read payments" $ do
     for_ [False, True] $ \public ->
         for_ [False, True] $ \refused ->
             it ((if public then "public" else "private") <> (if refused then " releases source and workspace after a refused read" else " retains only packed source after a full read")) $ withSweeper $ \deadlines -> do
-                adapter <- requiredCargoAdapter
+                adapter <- requiredAdapter Cargo
                 let body = toStrict (encode (cargoFeatureRecord "1.0.0" 16384)) <> "\n" <> toStrict (encode (cargoTestRecord "2.0.0"))
                     reply captured
                         | capPath captured == "/config.json" = pure (status200, [], "{\"dl\":\"https://static.crates.io/crates/{crate}/{crate}-{version}.crate\"}")
@@ -147,7 +149,7 @@ fullReadSpec = describe "full Cargo read payments" $ do
                         result <- runCargoFull runtime deps ticket public
                         if refused
                             then do
-                                originMiss result `shouldBe` Just MissUnresolved
+                                originMiss result `shouldBe` Just (MissUnresolved ReadInvalid)
                                 snChargedBytes <$> meterSnapshot meter `shouldReturn` 0
                             else do
                                 manifest <- maybe (fail "full Cargo read returned no manifest") pure (originManifest result)
@@ -161,7 +163,7 @@ fullReadSpec = describe "full Cargo read payments" $ do
                     completed `shouldBe` Right ()
                     snChargedBytes <$> meterSnapshot meter `shouldReturn` 0
     it "charges a collapsed full flight with the overdraw owner's priority" $ withSweeper $ \deadlines -> do
-        adapter <- requiredCargoAdapter
+        adapter <- requiredAdapter Cargo
         started <- newEmptyMVar
         releaseSource <- newEmptyMVar
         followerEntered <- newEmptyMVar
@@ -236,7 +238,7 @@ runCargoFull :: ServeRuntime -> PackumentDeps -> MemoryTicket -> Bool -> IO Orig
 runCargoFull runtime deps ticket public = do
     part <- newChargePart ticket
     logEnv <- newTestLogEnv
-    let binding = MountBinding ("cargo" :| []) (cargoRouter Nothing) cargoCredential deps Nothing
+    let binding = MountBinding ("cargo" :| []) cargoRouter cargoCredential deps Nothing
     runHandler logEnv mempty (RequestCtx runtime binding) $
         if public
             then fetchPublicOriginObserved (const pass) deps runtime ticket part cargoTestName
@@ -245,7 +247,7 @@ runCargoFull runtime deps ticket public = do
 retainedConsumerSpec :: Spec
 retainedConsumerSpec = describe "successful selected consumers" $ do
     it "keeps a local Cargo hit charged after cache eviction and upstream absence" $ withSweeper $ \deadlines -> do
-        adapter <- requiredCargoAdapter
+        adapter <- requiredAdapter Cargo
         let name = cargoTestName
             version = cargoTestVersion "1.0.0"
             replacement = cargoTestVersion "2.0.0"
@@ -281,7 +283,7 @@ retainedConsumerSpec = describe "successful selected consumers" $ do
         readIORef misses `shouldReturn` 1
         snChargedBytes <$> meterSnapshot meter `shouldReturn` 0
     it "does not pin a raw cache row in the deferred serving continuation" $ withSweeper $ \deadlines -> do
-        adapter <- requiredCargoAdapter
+        adapter <- requiredAdapter Cargo
         cache <- newMetadataCache defaultCacheConfig{cacheMaxEntries = 1}
         original <- testServeRuntime deadlines noopMetricsPort
         let base = inertDepsFor adapter
@@ -299,7 +301,7 @@ retainedConsumerSpec = describe "successful selected consumers" $ do
         completed `shouldBe` Right ()
     for_ [False, True] $ \holdsToken ->
         it (if holdsToken then "completes a successful oversized Cargo flight when the follower holds the overdraw token" else "keeps an oversized successful Cargo follower charged after its leader exits") $ withSweeper $ \deadlines -> do
-            adapter <- requiredCargoAdapter
+            adapter <- requiredAdapter Cargo
             (body, _, expected) <- retainedCargoFixture
             started <- newEmptyMVar
             releaseSource <- newEmptyMVar
@@ -413,9 +415,6 @@ retainedCargoFixture = do
     void (evaluate (weighVersion served))
     pure (body, selected, served)
 
-requiredCargoAdapter :: IO RegistryAdapter
-requiredCargoAdapter = maybe (fail "Cargo has no registered adapter") pure (adapterFor Cargo)
-
 runCargoConsumer :: ServeRuntime -> PackumentDeps -> MemoryTicket -> (VersionRead -> IO a) -> IO (Either MetadataError a)
 runCargoConsumer runtime deps ticket consume =
     runCargoRead runtime deps ticket (>>= traverse consume)
@@ -423,7 +422,7 @@ runCargoConsumer runtime deps ticket consume =
 runCargoRead :: ServeRuntime -> PackumentDeps -> MemoryTicket -> (IO (Either MetadataError VersionRead) -> IO a) -> IO a
 runCargoRead runtime deps ticket consume = do
     logEnv <- newTestLogEnv
-    let binding = MountBinding ("cargo" :| []) (cargoRouter Nothing) cargoCredential deps Nothing
+    let binding = MountBinding ("cargo" :| []) cargoRouter cargoCredential deps Nothing
     runHandler logEnv mempty (RequestCtx runtime binding) $
         withPublicMetadata runtime deps ticket cargoTestName (cargoTestVersion "1.0.0") (liftIO . consume)
 
@@ -528,7 +527,7 @@ observedReadSpec = describe "observed full origin reads" $ do
     it "reports actual input bytes even when native parsing rejects the response" $ do
         seen <- newIORef 0
         result <- readObserved (\bytes -> modifyIORef' seen (+ bytes))
-        (case result of OriginUnresolved -> True; _ -> False) `shouldBe` True
+        (case result of OriginUnresolved _ -> True; _ -> False) `shouldBe` True
         readIORef seen `shouldReturn` BS.length malformed
     it "retains a typed request-wide bound refusal instead of a transport outcome" $ do
         let fault = BodyTooLarge (MetadataBodyLimit 12)

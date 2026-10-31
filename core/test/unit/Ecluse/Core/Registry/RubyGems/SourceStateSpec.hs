@@ -15,6 +15,7 @@ import Test.Hspec
 import Ecluse.Core.Ecosystem (Ecosystem (RubyGems))
 import Ecluse.Core.Mirror.State
 import Ecluse.Core.Mirror.State.Codec (chargedDecodeProjectRecord)
+import Ecluse.Core.Mirror.State.Format (MirrorStateFormat (msfCompanions))
 import Ecluse.Core.Mirror.State.Internal (VerifiedCompanionBytes (..))
 import Ecluse.Core.Package
 import Ecluse.Core.Package.Entry (EntryKey (RecordEntry))
@@ -23,7 +24,7 @@ import Ecluse.Core.Registry.Metadata (VersionDoc (..))
 import Ecluse.Core.Registry.MirrorUpload
 import Ecluse.Core.Registry.Publish (MirrorCompanion (mcValidate))
 import Ecluse.Core.Registry.RubyGems.Document
-import Ecluse.Core.Registry.RubyGems.Mirror (mirrorRow, rubyMirrorCompanion)
+import Ecluse.Core.Registry.RubyGems.Mirror (mirrorRow, rubyGemsMirrorDocuments, rubyGemsStateFormat, rubyMirrorCompanion)
 import Ecluse.Core.Registry.RubyGems.Project
 import Ecluse.Core.Registry.RubyGems.Projection (projectGemRows)
 import Ecluse.Core.Registry.RubyGems.SourceState
@@ -42,12 +43,12 @@ spec = describe "RubyGems durable source" $ do
     it "retains all original platform rows and requires each compact companion after reopen" $ do
         (document, details, inventory) <- fixture
         let target = stateTarget "native target"
-        record <- expectRight (extendProjectRecord defaultLimits target inventory Nothing)
+        record <- expectRight (extendProjectRecord rubyGemsStateFormat defaultLimits target inventory Nothing)
         version <- maybe (fail "missing native version") pure (recordVersion nativeVersion record)
         Map.size (versionCompanions version) `shouldBe` 4
         checkMirrorCompletion version (toList (pkgArtifacts details)) `shouldSatisfy` incomplete
-        bytes <- expectRight (encodeProjectRecord defaultLimits record)
-        reopened <- chargedDecodeProjectRecord (const pass) defaultLimits target (pkgName details) bytes >>= expectRight
+        bytes <- expectRight (encodeProjectRecord rubyGemsStateFormat defaultLimits record)
+        reopened <- chargedDecodeProjectRecord rubyGemsStateFormat (const pass) defaultLimits target (pkgName details) bytes >>= expectRight
         reopened `shouldBe` record
         let fragment :| _ = versionFragments version
         inventoryReadData inventory `shouldBe` fragmentReadData fragment
@@ -55,17 +56,17 @@ spec = describe "RubyGems durable source" $ do
 
     it "requires retained compact bytes for every platform before it restores source metadata" $ do
         (document, details, inventory) <- fixture
-        initial <- expectRight (extendProjectRecord defaultLimits (stateTarget "native target") inventory Nothing)
+        initial <- expectRight (extendProjectRecord rubyGemsStateFormat defaultLimits (stateTarget "native target") inventory Nothing)
         retained <- foldM (retain inventory) initial (toList (inventoryFiles inventory))
         let targetDetails = details{pkgPublishedAt = Nothing, pkgArtifacts = fmap (\artifact -> artifact{artUrl = "https://private.test/gems/" <> artFilename artifact}) (pkgArtifacts details)}
         targetVersion <- maybe (fail "missing expected version") pure (recordVersion nativeVersion retained)
         checkMirrorCompletion targetVersion (toList (pkgArtifacts targetDetails)) `shouldBe` MirrorComplete
-        restored <- expectRight (mirrorVersionView nativeVersion retained (Just (VersionDoc targetDetails Nothing)))
+        restored <- expectRight (mirrorVersionView rubyGemsMirrorDocuments nativeVersion retained (Just (VersionDoc targetDetails Nothing)))
         fmap (pkgPublishedAt . vdDetails) restored `shouldBe` Just (pkgPublishedAt details)
         fmap (fmap gemRows . (snd rubyGemsCached <=< vdRaw)) restored `shouldBe` Just (Just [row{grEntryKey = RecordEntry position} | (position, row) <- zip [0 ..] (gemRows document)])
-        mirrorVersionView nativeVersion retained Nothing `shouldSatisfy` isLeft
+        mirrorVersionView rubyGemsMirrorDocuments nativeVersion retained Nothing `shouldSatisfy` isLeft
         let missing = targetDetails{pkgArtifacts = takeOne (pkgArtifacts targetDetails)}
-        mirrorVersionView nativeVersion retained (Just (VersionDoc missing Nothing)) `shouldSatisfy` isLeft
+        mirrorVersionView rubyGemsMirrorDocuments nativeVersion retained (Just (VersionDoc missing Nothing)) `shouldSatisfy` isLeft
 
     it "rekeys overlapping physical positions after a later platform upload" $ do
         (document, _, inventory) <- fixture
@@ -73,14 +74,14 @@ spec = describe "RubyGems durable source" $ do
         let firstSource = document{gemRows = [firstRow]}
             target = stateTarget "native target"
         original <- inventoryFor firstSource
-        initial <- expectRight (extendProjectRecord defaultLimits target original Nothing)
+        initial <- expectRight (extendProjectRecord rubyGemsStateFormat defaultLimits target original Nothing)
         firstRetained <- foldM (retain original) initial (toList (inventoryFiles original))
         let changed = document{gemRows = [row{grEntryKey = RecordEntry position} | (position, row) <- zip [1 ..] (reverse (gemRows document))]}
         incoming <- inventoryFor changed
-        extended <- expectRight (extendProjectRecord defaultLimits target incoming (Just firstRetained))
+        extended <- expectRight (extendProjectRecord rubyGemsStateFormat defaultLimits target incoming (Just firstRetained))
         complete <- foldM (retain incoming) extended (filter ((/= grCoordinate firstRow) . grCoordinate) (gemRows changed) >>= \row -> filter ((== grEntryKey row) . artEntryKey . expectedArtifact) (toList (inventoryFiles incoming)))
         let details = inventoryDetails inventory
-        restored <- expectRight (mirrorVersionView nativeVersion complete (Just (VersionDoc details Nothing)))
+        restored <- expectRight (mirrorVersionView rubyGemsMirrorDocuments nativeVersion complete (Just (VersionDoc details Nothing)))
         let source = restored >>= vdRaw >>= snd rubyGemsCached
         fmap (map grEntryKey . gemRows) source `shouldBe` Just (map RecordEntry [0 .. 3])
         fmap (pkgPublishedAt . vdDetails) restored `shouldBe` Just (pkgPublishedAt details)
@@ -112,7 +113,7 @@ spec = describe "RubyGems durable source" $ do
         bytes <- readFileBS ("test/fixtures/rubygems/quick/Marshal.4.8/" <> toString (coordinateStem (grCoordinate row)) <> ".gemspec.rz")
         original <- withSweeper (\deadlines -> mcValidate rubyMirrorCompanion deadlines defaultLimits (const pass) inventory file bytes) >>= expectRight
         original `shouldBe` bytes
-        checked@(VerifiedCompanionBytes _ reference _) <- expectRight (verifySourceCompanionBytes defaultLimits (inventoryReadData inventory) file original)
+        checked@(VerifiedCompanionBytes _ reference _) <- expectRight (verifySourceCompanionBytes defaultLimits (msfCompanions rubyGemsStateFormat) file original)
         expectRight (retainCompanionReference nativeVersion checked reference record)
     takeOne (value :| _) = value :| []
 
@@ -127,7 +128,7 @@ fixture = do
         firstRow :| otherRows = members
         published = foldl' (\instant row -> newestUpload instant (grPublishedAt row)) (grPublishedAt firstRow) otherRows
         document = GemDocument name "---\n" rows
-        details = PackageDetails name nativeVersion published CodeExecUnknown Available artifacts
+        details = PackageDetails name nativeVersion published CodeExecUnknown DependencySourcesUnknown Available artifacts
         doc = VersionDoc details (Just (fst rubyGemsCached document))
     inventory <- expectRight (checkedMirrorInventory name nativeVersion doc (RubyGemsMirrorRead document))
     pure (document, details, inventory)

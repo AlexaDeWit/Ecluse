@@ -4,22 +4,32 @@
 
 module Ecluse.CompositionSpec (spec) where
 
+import Data.List (lookup)
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
+import Data.Traversable (for)
+import Network.HTTP.Client qualified as Client
+import Network.HTTP.Types (hAuthorization, hContentType, methodPost, status200)
+import Network.Wai (Request (requestHeaders, requestMethod), defaultRequest)
+import Network.Wai.Test (SRequest (SRequest), runSession, setPath, simpleStatus, srequest)
 import Test.Hspec
 
 import Ecluse.Composition (
     BootWiring (bwBindings),
     PublishBudget (..),
-    WiringPorts (WiringPorts, wpBuildCredentials, wpClock, wpDeadlines, wpReporters, wpResolveAdapter, wpRuleDeps),
-    firstPartyName,
+    PublishTarget (ptEcosystem, ptPresentation, ptUsername),
+    WiringPorts (WiringPorts, wpBuildCredentials, wpClock, wpReporters, wpResolveAdapter, wpRuleDeps),
     planMounts,
+    planPublishTargets,
     resolveBootWiring,
  )
 import Ecluse.Composition.BootError (BootError (..), renderBootError)
-import Ecluse.Composition.Credential (initTargetCredentialProviders)
+import Ecluse.Composition.Credential (initCredentialProviders, initTargetCredentialProviders)
 import Ecluse.Composition.MirrorRole (MirrorMintPlan (MintMirrorWrite, SkipMirrorWrite))
 import Ecluse.Composition.Support (
+    cargoCodeArtifactEnv,
+    cargoMirrorEnv,
+    codeArtifactDomain,
     completeMountDoc,
     expectConfig,
     expectEnv,
@@ -27,40 +37,46 @@ import Ecluse.Composition.Support (
     expectValidated,
     fixedNow,
     overrideEnv,
+    pubUrlEnv,
+    rubyGemsCodeArtifactMirrorEnv,
+    rubyGemsMirrorEnv,
     rubyInstallRefusal,
     scopedName,
+    slotCredentials,
     staticEnvVars,
     testLimits,
+    twoStoreEnv,
     withRubyInstallBlock,
     withoutMirrorTargetUrl,
  )
 import Ecluse.Composition.Types (RegistryRole (MirrorWriter))
-import Ecluse.Composition.Validate (vetBoot)
+import Ecluse.Composition.Validate (ValidatedPlan (vpMounts), VettedMount (vmMount), vetBoot)
 import Ecluse.Composition.Vet (runVet)
 import Ecluse.Config (
     Config (configMounts),
     ConfigError (..),
-    FirstParty (FirstPartyNpmScopes, FirstPartyPyPI, FirstPartyRubyGems),
     Mount (mountPolicy),
     PolicyError (UnknownRuleType),
     StoreTag (TagRegistry),
     loadConfig,
     renderConfigError,
  )
-import Ecluse.Core.Credential (unSecret)
-import Ecluse.Core.Deadline (Deadlines, newDeadlines)
+import Ecluse.Core.Credential (ClientCredential (ClientCredential), mkSecret, unSecret)
+import Ecluse.Core.Deadline (newDeadlines)
 import Ecluse.Core.Ecosystem (Ecosystem (..))
-import Ecluse.Core.Package (HashAlg (SHA1, SHA512), mkPackageName, mkScope)
+import Ecluse.Core.Package (HashAlg (SHA1, SHA512))
 import Ecluse.Core.Package.Integrity (
     mkMinIntegrity,
     mkMinTrustedIntegrity,
  )
-import Ecluse.Core.Registry.FirstParty (FirstPartyEntry (OwnedName))
-import Ecluse.Core.Registry.PyPI.FirstParty (PyPIFirstParty (PyPIOwnedName))
+import Ecluse.Core.Registry.Adapter (AdapterServe (serveCredential), adapterFor, adapterServe)
+import Ecluse.Core.Registry.Request (StoreOperation (StoreRead, StoreWrite), attachCredential, nativePresentation, presentedMapping)
+import Ecluse.Core.Registry.RubyGems.Credential (rubyPublishCredential, rubyReadCredential)
 import Ecluse.Core.Rules (PreparedRule (prepName), bootOrder, renderBootOrder)
 import Ecluse.Core.Rules.Types (EvalContext (EvalContext), identityEvidence)
 import Ecluse.Core.Security (Limits (maxMetadataBytes, maxNestingDepth, maxVersionCount), defaultLimits)
 import Ecluse.Core.Security.Egress (registryUrlText)
+import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Core.Server.Admission.Bytes (newByteAdmission)
 import Ecluse.Core.Server.Context (
     MountBinding (bindingPackumentDeps, bindingPrefix, bindingPublishDeps),
@@ -77,10 +93,15 @@ import Ecluse.Core.Server.Upstream (
     mountUpstreams,
     upstreamTarballHostGate,
  )
+import Ecluse.Runtime.Server (application, mkServerConfig)
+import Ecluse.Runtime.Test.Support (newTestEnv)
 import Ecluse.Service (mountBindingFor)
 import Ecluse.Test.Credential (noCredentialReporters)
+import Ecluse.Test.Deadline (withSweeper)
 import Ecluse.Test.Package (defaultMinIntegrity, defaultMinTrustedIntegrity, pypiVersion, thingName, unscopedPyPI, v1_0_0)
 import Ecluse.Test.Rules (blockedBy, evalRules, inertRuleDeps)
+import Ecluse.Test.Stub (allCaptured, headerValue, stubBaseUrl, withRoutedStub)
+import Ecluse.Test.Support (parseRequestOrFail)
 
 -- | The composition root's boot wiring: every problem is an aggregated boot error, with no IO beyond the injected clock and resolver.
 spec :: Spec
@@ -88,22 +109,22 @@ spec = do
     planMountsSpec
     bootErrorSpec
     publishWiringSpec
+    mirrorTargetSpec
     firstPartySpec
 
 expectDoc :: ByteString -> IO ByteString
 expectDoc = pure
 
 {- The ports a unit test injects into the environment-dependent tier: the real adapter resolver,
-a fixed clock, inert rule deps, reporters that record nothing, and the caller's deadlines. -}
-testWiringPorts :: Deadlines -> WiringPorts
-testWiringPorts deadlines =
+a fixed clock, inert rule deps, and reporters that record nothing. -}
+testWiringPorts :: WiringPorts
+testWiringPorts =
     WiringPorts
         { wpReporters = const (const noCredentialReporters)
         , wpBuildCredentials = initTargetCredentialProviders
         , wpResolveAdapter = mountBindingFor
         , wpClock = pure fixedNow
         , wpRuleDeps = const inertRuleDeps
-        , wpDeadlines = deadlines
         }
 
 -- Build the served bindings from an env + optional document through the boot's own pure pass
@@ -126,6 +147,7 @@ planFromWith mintPlan limits envVars mDocBytes = do
             toBoot missing@(CodeArtifactHostMismatch _ _) = [PolicyBootError (UnknownRuleType "mount" (renderConfigError missing))]
             toBoot missing@(CodeArtifactFormatUnsupported _ _) = [PolicyBootError (UnknownRuleType "mount" (renderConfigError missing))]
             toBoot missing@CodeArtifactRepositoryMissing{} = [PolicyBootError (UnknownRuleType "mount" (renderConfigError missing))]
+            toBoot refused@UploadUrlRefused{} = [PolicyBootError (UnknownRuleType "mount" (renderConfigError refused))]
             toBoot missing@PublicUrlRequired = [PolicyBootError (UnknownRuleType "server" (renderConfigError missing))]
         Right cfg -> case snd (runVet MirrorWriter (vetBoot cfg)) of
             -- The pass refuses before anything is built, which is what the composition root sees.
@@ -133,10 +155,9 @@ planFromWith mintPlan limits envVars mDocBytes = do
             Right plan -> do
                 -- The root always pairs a publishing mount with a body budget. A
                 -- generous test budget keeps these specs about the wiring.
-                deadlines <- newDeadlines
-                bodyBudget <- newByteAdmission deadlines (128 * 1024 * 1024)
+                bodyBudget <- newDeadlines >>= \deadlines -> newByteAdmission deadlines (128 * 1024 * 1024)
                 let publishBudget = PublishBudget{pbBodyBudget = bodyBudget, pbMaxRequestBytes = 26214400}
-                fmap bwBindings <$> resolveBootWiring (testWiringPorts deadlines) mintPlan limits (Just publishBudget) plan
+                fmap bwBindings <$> resolveBootWiring testWiringPorts mintPlan limits (Just publishBudget) plan
 
 planMountsSpec :: Spec
 planMountsSpec = describe "resolveBootWiring (config-driven serving)" $ do
@@ -184,10 +205,10 @@ planMountsSpec = describe "resolveBootWiring (config-driven serving)" $ do
         planFrom staticEnvVars Nothing >>= \case
             Right [binding] -> do
                 let deps = bindingPackumentDeps binding
-                map prepName (bootOrder (pdRules deps)) `shouldBe` ["DenyInstallTimeExecution", "AllowIfOlderThan"]
+                map prepName (bootOrder (pdRules deps)) `shouldBe` ["DenyExternalDependencies", "DenyInstallTimeExecution", "AllowIfOlderThan"]
                 cfg <- expectConfig staticEnvVars Nothing
                 fmap (renderBootOrder . mountPolicy) (Map.lookup Npm (configMounts cfg))
-                    `shouldBe` Just ["rule 1: DenyInstallTimeExecution (precedence 300, applies at admission only)", "rule 2: AllowIfOlderThan (precedence 100, applies at admission and revocation)"]
+                    `shouldBe` Just ["rule 1: DenyExternalDependencies (precedence 300, applies at admission only)", "rule 2: DenyInstallTimeExecution (precedence 300, applies at admission only)", "rule 3: AllowIfOlderThan (precedence 100, applies at admission and revocation)"]
             other -> expectationFailure ("expected one binding, got " <> show (fmap length other))
 
     it "wires a deny limited to admission into each mount's gate, for npm and for PyPI" $ do
@@ -206,8 +227,7 @@ planMountsSpec = describe "resolveBootWiring (config-driven serving)" $ do
         config <- expectConfig (("ECLUSE_SERVER__AUTH_TOKEN", "edge-secret") : ("ECLUSE_SERVER__HELP_MESSAGE", "ask #platform") : staticEnvVars) Nothing
         providers <- expectProviders config
         plan <- expectValidated config
-        deadlines <- newDeadlines
-        planMounts mountBindingFor (pure fixedNow) (const inertRuleDeps) MintMirrorWrite providers deadlines testLimits Nothing plan >>= \case
+        planMounts mountBindingFor (pure fixedNow) (const inertRuleDeps) MintMirrorWrite providers testLimits Nothing plan >>= \case
             Right [binding] -> do
                 let deps = bindingPackumentDeps binding
                 fmap unSecret (pdInboundToken deps) `shouldBe` Just "edge-secret"
@@ -303,6 +323,16 @@ planMountsSpec = describe "resolveBootWiring (config-driven serving)" $ do
             Right [binding] -> do
                 let deps = bindingPackumentDeps binding
                 mirrorTargetText (pdMirror deps) `shouldBe` Just "https://mirror.example.test"
+            other -> expectationFailure ("expected one binding, got " <> show (fmap length other))
+
+    it "plans a Cargo mount that reads the private upstream and only writes to its distinct mirror target" $ do
+        planFrom cargoMirrorEnv Nothing >>= \case
+            Right [binding] -> do
+                bindingPrefix binding `shouldBe` ("cargo" :| [])
+                let deps = bindingPackumentDeps binding
+                fmap registryUrlText (pdPrivateBaseUrl deps) `shouldBe` Just "https://private.example.test/"
+                mirrorTargetText (pdMirror deps) `shouldBe` Just "https://target.example.test/"
+                pdMountBaseUrl deps `shouldBe` "https://registry.example.test/cargo"
             other -> expectationFailure ("expected one binding, got " <> show (fmap length other))
 
     it "refines the trusted floor per mount over the global default" $ do
@@ -462,6 +492,46 @@ publishWiringSpec = describe "resolveBootWiring (first-party publish deps)" $ do
                 Just _ -> expectationFailure "expected no publish deps when no publication target is configured"
             _ -> expectationFailure "expected a single wired binding"
 
+    it "presents a static CodeArtifact RubyGems publication token as Bearer" $
+        relayedRubyGemsAuthorization
+            [ ("ECLUSE_MOUNTS__RUBYGEMS__PUBLICATION_TARGET__CODE_ARTIFACT__TOKEN", "publish-key")
+            , ("ECLUSE_SERVER__AUTH_TOKEN", "edge-key")
+            ]
+            "edge-key"
+            `shouldReturn` [Just "Bearer publish-key"]
+
+    it "passes a caller's RubyGems publication key through unchanged to a CodeArtifact target" $
+        relayedRubyGemsAuthorization [] "caller-key" `shouldReturn` [Just "caller-key"]
+
+{- Compose a RubyGems mount that publishes to CodeArtifact, point its cleared target at a stub,
+push the fixture gem under @key@, and return the Authorization of each request the target saw. -}
+relayedRubyGemsAuthorization :: [(String, String)] -> ByteString -> IO [Maybe ByteString]
+relayedRubyGemsAuthorization extraEnv key = do
+    archive <- readFileBS "test/fixtures/rubygems/gems/ecluse-fixture-root-1.0.0.gem"
+    planFrom (extraEnv <> rubyGemsCodeArtifactPublicationEnv) Nothing >>= \case
+        Right [binding] | Just deps <- bindingPublishDeps binding ->
+            withRoutedStub (const (status200, [], "Successfully registered gem")) $ \stub -> withSweeper $ \deadlines -> do
+                let target = loopbackRegistryUrl (stubBaseUrl stub)
+                    retargeted = binding{bindingPublishDeps = Just deps{pubReadUrl = target, pubTargetUrl = target}}
+                    push = setPath defaultRequest{requestMethod = methodPost, requestHeaders = [(hAuthorization, key), (hContentType, "application/octet-stream")]} "/rubygems/api/v1/gems"
+                app <- application (mkServerConfig [retargeted]) <$> newTestEnv deadlines
+                response <- runSession (srequest (SRequest push (toLazy archive))) app
+                simpleStatus response `shouldBe` status200
+                map (headerValue "Authorization") <$> allCaptured stub
+        Right _ -> [] <$ expectationFailure "expected one RubyGems binding with publish deps"
+        Left errs -> [] <$ expectationFailure ("expected the RubyGems publication to boot: " <> show errs)
+
+-- A RubyGems mount whose first-party namespace owns the fixture gem and publishes to a CodeArtifact repository.
+rubyGemsCodeArtifactPublicationEnv :: [(String, String)]
+rubyGemsCodeArtifactPublicationEnv =
+    pubUrlEnv
+        <> [ ("ECLUSE_MOUNTS__NPM__ENABLED", "false")
+           , ("ECLUSE_MOUNTS__RUBYGEMS__ENABLED", "true")
+           , ("ECLUSE_MOUNTS__RUBYGEMS__PRIVATE_UPSTREAM__REGISTRY__URL", "https://private.example.test/")
+           , ("ECLUSE_MOUNTS__RUBYGEMS__FIRST_PARTY", "ecluse-fixture-root")
+           , ("ECLUSE_MOUNTS__RUBYGEMS__PUBLICATION_TARGET__CODE_ARTIFACT__URL", codeArtifactDomain <> "/ruby/internal/")
+           ]
+
 {- The mirror serve plan's declared target as characters. The wired value carries the
 https-only egress witness, and these assertions read the configured URL back out of it. -}
 mirrorTargetText :: MirrorServePlan -> Maybe Text
@@ -469,28 +539,53 @@ mirrorTargetText = \case
     MirrorOnAdmit url -> Just (registryUrlText url)
     NoMirrorWrite -> Nothing
 
--- | The first-party predicate every consumer reads, pinned per ecosystem: a disagreement would be dependency confusion.
+-- | The mirror worker's write targets carry the presentation their declared store asks for.
+mirrorTargetSpec :: Spec
+mirrorTargetSpec = describe "planPublishTargets (the mirror worker's write targets)" $ do
+    it "plans a CodeArtifact mirror target with its store's declared presentation" $ do
+        target <- plannedMirrorTarget rubyGemsCodeArtifactMirrorEnv
+        request <- parseRequestOrFail (codeArtifactDomain <> "/ruby/mirror/api/v1/gems")
+        let token = Just (ClientCredential (Just "aws") (mkSecret "key"))
+            authorization mapping = lookup "Authorization" (Client.requestHeaders (attachCredential mapping token request))
+        authorization (presentedMapping (ptPresentation target) StoreWrite rubyPublishCredential) `shouldBe` Just "Bearer key"
+        authorization (presentedMapping (ptPresentation target) StoreRead rubyReadCredential) `shouldBe` Just "Basic YXdzOmtleQ=="
+
+    it "renders each minted CodeArtifact token through its plan's username and its store's presentation" $ do
+        targets <- concat <$> traverse plannedMirrorTargets [twoStoreEnv, cargoCodeArtifactEnv, rubyGemsCodeArtifactMirrorEnv]
+        request <- parseRequestOrFail (codeArtifactDomain <> "/any/mirror/")
+        rendered <- for targets $ \target -> do
+            native <- maybe (fail "missing adapter") (pure . serveCredential . adapterServe) (adapterFor (ptEcosystem target))
+            let token = Just (ClientCredential (ptUsername target) (mkSecret "key"))
+                authorization operation = lookup "Authorization" (Client.requestHeaders (attachCredential (presentedMapping (ptPresentation target) operation native) token request))
+            pure (ptEcosystem target, authorization StoreRead, authorization StoreWrite)
+        sortOn (\(eco, _, _) -> eco) rendered
+            `shouldBe` [ (Npm, Just "Bearer key", Just "Bearer key")
+                       , (PyPI, Just "Basic YXdzOmtleQ==", Just "Basic YXdzOmtleQ==")
+                       , (RubyGems, Just "Basic YXdzOmtleQ==", Just "Bearer key")
+                       , (Cargo, Just "key", Just "key")
+                       ]
+
+    it "plans a registry mirror target with the protocol's own presentation" $ do
+        target <- plannedMirrorTarget rubyGemsMirrorEnv
+        ptPresentation target `shouldBe` nativePresentation
+
+-- The one mirror target a writing role plans for a single-mount fixture, its providers minted per slot.
+plannedMirrorTarget :: [(String, String)] -> IO PublishTarget
+plannedMirrorTarget env =
+    plannedMirrorTargets env >>= \case
+        [target] -> pure target
+        targets -> fail ("expected one mirror target, got " <> show (length targets))
+
+-- Every mirror target a writing role plans for a fixture, its providers minted per slot.
+plannedMirrorTargets :: [(String, String)] -> IO [PublishTarget]
+plannedMirrorTargets env = do
+    plan <- expectConfig env Nothing >>= expectValidated
+    providers <- initCredentialProviders slotCredentials (const (const noCredentialReporters)) (map vmMount (vpMounts plan)) >>= either (\errs -> fail ("provider init failed: " <> show errs)) pure
+    either (\errs -> fail ("mirror target planning refused: " <> show errs)) pure (planPublishTargets MintMirrorWrite providers plan)
+
+-- | The mount's serve deps carry the first-party predicate its declaration derives.
 firstPartySpec :: Spec
-firstPartySpec = describe "firstPartyName (the derived first-party predicate)" $ do
-    it "matches an npm scope exactly, refusing a lookalike and an unscoped name" $
-        map
-            (firstPartyName (FirstPartyNpmScopes (mkScope "acme" :| [mkScope "beta"])))
-            [scopedName "acme", scopedName "beta", scopedName "acme-evil", thingName]
-            `shouldBe` [True, True, False, False]
-
-    it "dispatches the PyPI arm to PyPI's own predicate" $
-        -- The arm's matching rules are pinned in "Ecluse.Core.Registry.PyPI.FirstPartySpec". This row
-        -- proves the root hands the declaration to it rather than deciding anything itself.
-        map (firstPartyName (pypiFirstParty ("Acme_Tools" :| [])) . unscopedPyPI) ["acme-tools", "beta"]
-            `shouldBe` [True, False]
-
-    it "dispatches RubyGems ownership without changing native identity" $
-        let owned = mkPackageName RubyGems Nothing "Acme_Tools"
-         in map
-                (firstPartyName (FirstPartyRubyGems (OwnedName owned :| [])))
-                [owned, mkPackageName RubyGems Nothing "acme-tools", mkPackageName Npm Nothing "Acme_Tools"]
-                `shouldBe` [True, False, False]
-
+firstPartySpec = describe "the first-party predicate a mount wires" $ do
     it "wires the same predicate onto the mount's serve deps, deny by default" $ do
         let testEnv = [("ECLUSE_MOUNTS__NPM__FIRST_PARTY", "@acme")] <> staticEnvVars
         _ <- expectEnv testEnv
@@ -508,7 +603,3 @@ firstPartySpec = describe "firstPartyName (the derived first-party predicate)" $
                 map (pdFirstParty (bindingPackumentDeps binding)) [scopedName "acme", thingName]
                     `shouldBe` [False, False]
             _ -> expectationFailure "expected a single wired binding"
-
--- A PyPI declaration of exact names.
-pypiFirstParty :: NonEmpty Text -> FirstParty
-pypiFirstParty = FirstPartyPyPI . fmap (PyPIOwnedName . unscopedPyPI)

@@ -17,7 +17,7 @@ import Network.HTTP.Client (Request (method, requestBody, requestHeaders), Reque
 import Network.HTTP.Types (hContentType)
 
 import Ecluse.Core.Registry.Metadata.Fetch.Preparation (staticRead)
-import Ecluse.Core.Registry.Request (attachCredential, parseRequestEither)
+import Ecluse.Core.Registry.Request (StoreOperation (StoreWrite), attachCredential, parseRequestEither, presentedMapping)
 
 import Ecluse.Core.Ecosystem (Ecosystem (PyPI))
 import Ecluse.Core.Registry.Adapter.Capability (
@@ -35,19 +35,22 @@ import Ecluse.Core.Registry.Adapter.Capability (
     WorkerMetadataRead (..),
  )
 import Ecluse.Core.Registry.Adapter.Types (AdapterServe (..), RegistryAdapter (..))
+import Ecluse.Core.Registry.FirstParty (FirstPartyDeclaration (FirstPartyDeclaration))
 import Ecluse.Core.Registry.Maintenance.NameSpace (mkNameAlphabet)
 import Ecluse.Core.Registry.Origin (OriginClient (ocToken), originBaseUrl)
 import Ecluse.Core.Registry.Publish (relayPublishRequest)
 import Ecluse.Core.Registry.PyPI.Credential (pypiCredential)
 import Ecluse.Core.Registry.PyPI.Filter (assembleSimpleDocument, serialiseSimpleDocument)
+import Ecluse.Core.Registry.PyPI.FirstParty (pypiFirstPartyNames)
 import Ecluse.Core.Registry.PyPI.Metadata (pypiChargeFactors, pypiMirrorRead, pypiRead)
+import Ecluse.Core.Registry.PyPI.Mirror (pypiMirrorDocuments, pypiStateFormat)
 import Ecluse.Core.Registry.PyPI.Project (projectName, pypiNameLeadChars)
 import Ecluse.Core.Registry.PyPI.Publish (pypiPublishCodec)
 import Ecluse.Core.Registry.PyPI.Publish.Multipart qualified as Multipart
 import Ecluse.Core.Registry.PyPI.Request qualified as PyPIRequest
 import Ecluse.Core.Registry.PyPI.Route qualified as PyPIRoute
 
-import Ecluse.Core.Rules.Types (RuleType (AllowScopeType, DenyIfDeprecatedType, DenyInstallTimeExecutionType))
+import Ecluse.Core.Rules.Types (RuleType (AllowScopeType, DenyExternalDependenciesType, DenyIfDeprecatedType, DenyInstallTimeExecutionType))
 
 -- | PyPI's capability record.
 pypiAdapter :: RegistryAdapter
@@ -57,12 +60,13 @@ pypiAdapter =
         , adapterRuleBlocks =
             Map.fromList
                 [ (DenyInstallTimeExecutionType, "Most PyPI releases offer a source distribution, which runs its own build on install, so this rule would deny nearly every release.")
+                , (DenyExternalDependenciesType, "The PyPI adapter does not read where a release's dependencies install from.")
                 , (DenyIfDeprecatedType, "The PyPI adapter supplies no deprecation flag.")
                 , (AllowScopeType, "A PyPI project name has no scope, so this rule can never match one.")
                 ]
         , adapterServe =
             AdapterServe
-                { serveRouter = const PyPIRoute.pypiRouter
+                { serveRouter = PyPIRoute.pypiRouter
                 , serveRoutes = PyPIRoute.pypiRouteSpecs
                 , serveCredential = pypiCredential
                 }
@@ -81,6 +85,7 @@ pypiAdapter =
                 , artifactPrivateAddressing = IndexedArtifactLocation
                 }
         , adapterProjectName = rightToMaybe . projectName
+        , adapterFirstParty = FirstPartyDeclaration pypiFirstPartyNames
         , adapterPublish = Just pypiPublish
         , adapterMaintenance =
             AdapterMaintenance
@@ -88,7 +93,6 @@ pypiAdapter =
                 , maintenanceVersionDelete = Nothing
                 , maintenanceAlphabet = mkNameAlphabet pypiNameLeadChars
                 }
-        , adapterInstallEvidence = Nothing
         }
 
 -- | Preserve client upload bytes and response statuses without mirror duplicate classification.
@@ -97,12 +101,12 @@ pypiPublish =
     AdapterPublish
         { publishCredential = pypiCredential
         , publishRequestExtras = const (Right NoPublishExtras)
-        , publishRelay = \origin _ body ->
+        , publishRelay = \presentation origin _ body ->
             relayPublishRequest
                 origin
                 ( do
                     base <- parseRequestEither (originBaseUrl origin)
-                    pure . attachCredential pypiCredential (ocToken origin) $
+                    pure . attachCredential (presentedMapping presentation StoreWrite pypiCredential) (ocToken origin) $
                         base
                             { method = "POST"
                             , requestHeaders = maybeToList (fmap (hContentType,) (publishBodyContentType body)) <> requestHeaders base
@@ -111,6 +115,7 @@ pypiPublish =
                 )
         , publishUploadClaims = \limits _ _ body -> Multipart.uploadClaims limits (publishBodyContentType body) (publishBodyBytes body)
         , publishCodec = pypiPublishCodec
-        , publishMirrorRequirements = MirrorRequirements (ChargedWorkerRead (staticRead pypiMirrorRead)) DurableVersionState ExplicitUploadEndpoint
+        , publishMirrorRequirements = MirrorRequirements (ChargedWorkerRead (staticRead pypiMirrorRead)) pypiStateFormat (DurableVersionState pypiMirrorDocuments)
+        , publishUploadEndpoint = ExplicitUploadEndpoint
         , publishIdentity = NamedIdentity
         }

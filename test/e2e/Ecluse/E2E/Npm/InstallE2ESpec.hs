@@ -24,6 +24,7 @@ import Ecluse.E2E.Fixtures.Npm (
     denyPkg,
     deprecatedPkg,
     deprecationNotice,
+    externalDependencyPkg,
     headPkg,
     latestPkg,
     mirrorAuthorFields,
@@ -51,12 +52,24 @@ scenarios recorder = do
         describe "public surface -- install and policy" $ do
             it (caseLabel "npm/install/default-denial" "uses the shipped default to block install scripts and never mirrors the package") $ \e2e -> do
                 logs <- proxyContainerLogs e2e
-                logs `shouldSatisfy` T.isInfixOf "rule 1: DenyInstallTimeExecution (precedence 300, applies at admission only)"
+                logs `shouldSatisfy` T.isInfixOf "rule 2: DenyInstallTimeExecution (precedence 300, applies at admission only)"
                 refusesWithoutEffects
                     False
                     RefusalDriver
                         { refusalInstall = npmRefused e2e (psName denyPkg)
                         , refusalObserve = verdaccioHasVersionNow e2e (psName denyPkg) (psVersion denyPkg)
+                        , refusalSettle = awaitMirrorWindow
+                        }
+
+            it (caseLabel "npm/install/external-dependency-denial" "uses the shipped default to deny a version whose dependency names a git source, and never mirrors it") $ \e2e -> do
+                logs <- proxyContainerLogs e2e
+                logs `shouldSatisfy` T.isInfixOf "rule 1: DenyExternalDependencies (precedence 300, applies at admission only)"
+                proxyStatus e2e (npmTarballPath (psName externalDependencyPkg) (psVersion externalDependencyPkg)) `shouldReturn` 403
+                refusesWithoutEffects
+                    False
+                    RefusalDriver
+                        { refusalInstall = npmRefused e2e (psName externalDependencyPkg)
+                        , refusalObserve = verdaccioHasVersionNow e2e (psName externalDependencyPkg) (psVersion externalDependencyPkg)
                         , refusalSettle = awaitMirrorWindow
                         }
 

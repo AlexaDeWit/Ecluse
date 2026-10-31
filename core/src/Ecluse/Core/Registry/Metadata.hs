@@ -84,8 +84,8 @@ data MetadataError
       MetadataAuthorisationFailure Int
     | -- | The upstream answered 404. Its body cannot establish a package's identity.
       MetadataAbsent
-    | -- | Another non-success HTTP status, retained for the consumer's retry policy.
-      MetadataHttpFailure Int
+    | -- | Another non-success HTTP status and any delay it asked for, retained for the consumer's retry policy.
+      MetadataHttpFailure Int (Maybe RetryAfter)
     | -- | A failed exchange, with request-formation, bound, and transport causes kept distinct.
       MetadataFetch FetchFault
     | -- | The decoded structure crossed a limit, distinct from an exchange body-size failure.
@@ -136,10 +136,10 @@ metadataResponse :: Either FetchFault (BodyOutcome a) -> Either MetadataError a
 metadataResponse = \case
     Left fault -> Left (metadataFetchError fault)
     Right (SuccessBody _ parsed) -> Right parsed
-    Right (UnreadStatus 404) -> Left MetadataAbsent
-    Right (UnreadStatus code)
+    Right (UnreadStatus 404 _) -> Left MetadataAbsent
+    Right (UnreadStatus code retry)
         | isAuthorisationFailure code -> Left (MetadataAuthorisationFailure code)
-        | otherwise -> Left (MetadataHttpFailure code)
+        | otherwise -> Left (MetadataHttpFailure code retry)
 
 -- Keep body and transport faults distinct from structural bounds enforced during incremental extraction.
 metadataFetchError :: FetchFault -> MetadataError

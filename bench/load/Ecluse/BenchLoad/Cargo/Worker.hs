@@ -18,14 +18,14 @@ import Ecluse.Core.Queue (MirrorJob (..))
 import Ecluse.Core.Registry.Adapter (adapterFor)
 import Ecluse.Core.Registry.Adapter.Capability (AdapterMetadata (metadataChargeFactors))
 import Ecluse.Core.Registry.Adapter.Types (RegistryAdapter (adapterArtifact, adapterMetadata))
-import Ecluse.Core.Registry.Cargo.Execution (newCargoInstallEvidence)
 import Ecluse.Core.Registry.Cargo.Metadata (prepareCargoRead)
+import Ecluse.Core.Registry.Cargo.Mirror (cargoStateFormat)
 import Ecluse.Core.Registry.Cargo.Publish (cargoPublishCodec)
-import Ecluse.Core.Registry.Exchange.Types (ExchangeClient (ecDeadlines))
 import Ecluse.Core.Registry.Metadata (versionEvaluation)
 import Ecluse.Core.Registry.Metadata.Fetch.Preparation (prepareVersion)
 import Ecluse.Core.Registry.Origin (chargingNativeReads, originClientOf)
 import Ecluse.Core.Registry.Publish (MirrorTransport (..), newMirrorPublish)
+import Ecluse.Core.Registry.Request (nativePresentation)
 import Ecluse.Core.Security (defaultLimits)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Core.Worker (WorkerPolicy (..))
@@ -49,6 +49,7 @@ boot knobs use = do
                 { nwSourceApp = sourceApp latency fixture
                 , nwTargetApp = targetApp latency fixture
                 , nwStateApp = stateApp latency fixture
+                , nwStateFormat = cargoStateFormat
                 , nwPolicy = cargoPolicy adapter
                 , nwJob = MirrorJob fixturePackage fixtureVersion (Just (unsafeFilename fixtureTrigger)) Nothing
                 , nwExpectedFiles = 1
@@ -63,21 +64,20 @@ boot knobs use = do
 
 cargoPolicy :: RegistryAdapter -> WorkerEnvironment -> IO WorkerPolicy
 cargoPolicy adapter environment = do
-    evidence <- newCargoInstallEvidence (ecDeadlines (weClient environment)) defaultLimits
     let factors = metadataChargeFactors (adapterMetadata adapter)
         targetReadRoot = weTargetReadRoot environment
-        publish = newMirrorPublish (MirrorTransport (weClient environment) (pure Nothing) defaultLimits passthroughTracingPort) targetReadRoot targetReadRoot (cargoPublishCodec factors)
+        publish = newMirrorPublish (MirrorTransport (weClient environment) (pure Nothing) defaultLimits passthroughTracingPort) targetReadRoot targetReadRoot (cargoPublishCodec factors nativePresentation)
     pure
         WorkerPolicy
             { wpFirstParty = const False
             , wpResolveVersion = \pay name version -> chargingNativeReads factors pay (weSourceOrigin environment) >>= \origin -> versionEvaluation <$> prepareVersion prepareCargoRead passthroughTracingPort (originClientOf origin) name version
-            , wpInstallEvidence = Just evidence
             , wpRules = weRules environment
             , wpMinIntegrity = defaultMinIntegrity
             , wpArtifactHostHonoured = const True
             , wpEgressUrl = Right . loopbackRegistryUrl
             , wpArtifact = adapterArtifact adapter
             , wpPublish = publish
+            , wpMirrorFormat = cargoStateFormat
             , wpArtifactLimits = defaultLimits
             , wpMirrorState = Just (weMirrorState environment)
             , wpNow = pure benchNow

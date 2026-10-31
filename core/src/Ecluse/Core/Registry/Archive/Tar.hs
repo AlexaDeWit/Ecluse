@@ -3,7 +3,9 @@
 -- SPDX-License-Identifier: MIT
 {-# LANGUAGE RankNTypes #-}
 
--- | Complete PAX-aware tar traversal with bounded inventory and selected payload retention.
+{- | Complete PAX-aware tar traversal with bounded inventory and selected payload retention.
+The scan also records whether every member took its name from its raw ustar name field alone.
+-}
 module Ecluse.Core.Registry.Archive.Tar (
     TarDecode,
     TarMember (..),
@@ -11,6 +13,7 @@ module Ecluse.Core.Registry.Archive.Tar (
     scanTar,
     tarMembers,
     tarContents,
+    tarRawNames,
     resolveTarMember,
     sourceReader,
 ) where
@@ -45,10 +48,21 @@ data TarScan = TarState
     , tsLocal :: Map ByteString ByteString
     , tsPending :: !Bool
     , tsCaptured :: Map Text ByteString
+    , tsRawNames :: !Bool
     }
 
 emptyState :: TarScan
-emptyState = TarState 0 0 Map.empty Map.empty Map.empty False Map.empty
+emptyState =
+    TarState
+        { tsCount = 0
+        , tsCharge = 0
+        , tsMembers = Map.empty
+        , tsGlobal = Map.empty
+        , tsLocal = Map.empty
+        , tsPending = False
+        , tsCaptured = Map.empty
+        , tsRawNames = True
+        }
 
 -- | Consume the whole archive and retain only explicitly selected regular files.
 scanTar :: Limits -> (Int -> IO ()) -> ([Text] -> Either ParseError Bool) -> (forall a. (ConduitT () ByteString TarDecode () -> IO a) -> IO a) -> IO (Either ParseError TarScan)
@@ -63,6 +77,12 @@ tarMembers = tsMembers
 -- | Missing payloads were not selected or were not regular files.
 tarContents :: TarScan -> Map Text ByteString
 tarContents = tsCaptured
+
+{- | Whether every member was named by its raw ustar name field alone. False after any PAX or GNU
+extended header, a ustar prefix, or bytes after the first NUL of a name or prefix field.
+-}
+tarRawNames :: TarScan -> Bool
+tarRawNames = tsRawNames
 
 -- | Resolve an inventory link with the same depth bound used during traversal.
 resolveTarMember :: Limits -> TarScan -> Text -> Either ParseError Text
@@ -96,7 +116,7 @@ walkTar limits charge select tarState = do
             when (tsCount tarState >= maxArtifactCount limits) (refuse "archive entry count exceeds its bound")
             entry <- checked (readHeader header)
             next <- case Tar.entryContent entry of
-                Tar.OtherEntryType code _ size | code `elem` ['x', 'g', 'L', 'K'] -> extendedEntry limits charge code size tarState
+                Tar.OtherEntryType code _ size | code `elem` ['x', 'g', 'L', 'K'] -> extendedEntry limits charge code size tarState{tsRawNames = False}
                 content -> ordinaryEntry limits charge select header content tarState
             walkTar limits charge select next{tsCount = tsCount tarState + 1}
 
@@ -192,6 +212,7 @@ ordinaryEntry limits charge select header content tarState = do
             , tsLocal = Map.empty
             , tsPending = False
             , tsCaptured = retained
+            , tsRawNames = tsRawNames tarState && rawHeaderName header
             }
 
 memberOf :: Text -> Map ByteString ByteString -> ByteString -> Tar.EntryContent -> Either ParseError TarMember
@@ -223,10 +244,26 @@ zeroSize :: ByteString -> Bool
 zeroSize bytes = BS.all (`elem` [0, 32, 48]) bytes || bytes == BS.cons 128 (BS.replicate 11 0)
 
 headerPath :: ByteString -> ByteString
-headerPath header = if BS.null prefix then suffix else prefix <> "/" <> suffix
-  where
-    prefix = BS.takeWhile (/= 0) (BS.take 155 (BS.drop 345 header))
-    suffix = BS.takeWhile (/= 0) (BS.take 100 header)
+headerPath header
+    | BS.null (headerPrefix header) = headerName header
+    | otherwise = headerPrefix header <> "/" <> headerName header
+
+headerName :: ByteString -> ByteString
+headerName = BS.takeWhile (/= 0) . nameField
+
+headerPrefix :: ByteString -> ByteString
+headerPrefix = BS.takeWhile (/= 0) . prefixField
+
+{- Whether the name field alone names the member: nothing follows the name's first NUL, and the
+prefix field holds only NULs. A reader that strips only trailing NULs would see any other byte. -}
+rawHeaderName :: ByteString -> Bool
+rawHeaderName header = BS.all (== 0) (BS.dropWhile (/= 0) (nameField header)) && BS.all (== 0) (prefixField header)
+
+nameField :: ByteString -> ByteString
+nameField = BS.take 100
+
+prefixField :: ByteString -> ByteString
+prefixField = BS.take 155 . BS.drop 345
 
 parsePax :: ByteString -> Either ParseError (Map ByteString ByteString)
 parsePax = go Map.empty

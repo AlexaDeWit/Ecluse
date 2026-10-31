@@ -60,7 +60,7 @@ spec = describe "native mirror declarations" $ do
             it ("accepts the native upload path " <> path) $ do
                 config <- expectConfig (codeArtifactEnv (codeArtifactHost <> path)) Nothing
                 let target = regMirrorTarget . mountRegistries =<< Map.lookup PyPI (configMounts config)
-                fmap mtUsername target `shouldBe` Just (Just "aws")
+                fmap mtUsername target `shouldBe` Just Nothing
                 fmap (registryUrlText . mtUploadUrl) target `shouldBe` Just (toText (codeArtifactHost <> path))
         for_
             [ ("repository root", codeArtifactHost <> "/pypi/other/")
@@ -85,15 +85,25 @@ spec = describe "native mirror declarations" $ do
                 (overrideEnv (codeArtifactPrefix <> "URL") (codeArtifactHost <> "/pypi/cache/legacy/") (codeArtifactEnv (codeArtifactHost <> "/pypi/cache/legacy/")))
                 Nothing
                 `shouldBe` Left [CodeArtifactRepositoryMissing PyPI "mirrorTarget.codeArtifact.url" "pypi"]
-        it "refuses the PyPI upload suffix on an npm mount" $
+        it "refuses the PyPI upload suffix on a Cargo mount" $
             loadConfig
                 ( pubUrlEnv
-                    <> [ ("ECLUSE_MOUNTS__NPM__MIRROR_TARGET__CODE_ARTIFACT__URL", codeArtifactHost <> "/npm/cache/")
-                       , ("ECLUSE_MOUNTS__NPM__MIRROR_TARGET__CODE_ARTIFACT__UPLOAD_URL", codeArtifactHost <> "/npm/cache/legacy/")
+                    <> [ ("ECLUSE_MOUNTS__CARGO__MIRROR_TARGET__CODE_ARTIFACT__URL", codeArtifactHost <> "/cargo/cache/")
+                       , ("ECLUSE_MOUNTS__CARGO__MIRROR_TARGET__CODE_ARTIFACT__UPLOAD_URL", codeArtifactHost <> "/cargo/cache/legacy/")
                        ]
                 )
                 Nothing
-                `shouldBe` Left [ParseError "mirrorTarget.codeArtifact.uploadUrl must address /npm/{repository}/"]
+                `shouldBe` Left [ParseError "mirrorTarget.codeArtifact.uploadUrl must address /cargo/{repository}/"]
+    describe "CodeArtifact publication upload endpoints" $ do
+        for_ ["/pypi/cache/", "/pypi/cache/legacy/"] $ \path ->
+            it ("accepts the publication upload path " <> path) $ do
+                config <- expectConfig (codeArtifactPublicationUploadEnv (codeArtifactHost <> path)) Nothing
+                let target = mntPublicationTarget =<< Map.lookup PyPI (cfgMounts (configApp config))
+                fmap (fmap registryUrlText . peUploadUrl) target `shouldBe` Just (Just (toText (codeArtifactHost <> path)))
+        for_ [("repository root", "/pypi/other/"), ("repository upload path", "/pypi/other/legacy/")] $ \(identityPart, path) ->
+            it ("refuses a publication upload to another " <> identityPart) $
+                loadConfig (codeArtifactPublicationUploadEnv (codeArtifactHost <> path)) Nothing
+                    `shouldBe` Left [ParseError "CodeArtifact publication uploadUrl must address the same read repository"]
     it "refuses malformed state URLs through the existing object-store parser" $
         loadConfig (overrideEnv stateKey "https://target.example.test/state" pypiMirrorEnv) Nothing `shouldSatisfy` isLeft
     it "does not require state or upload settings for a serve-only mount" $
@@ -128,12 +138,20 @@ codeArtifactEnv upload =
 publicationPrefix :: String -> String
 publicationPrefix tag = "ECLUSE_MOUNTS__PYPI__PUBLICATION_TARGET__" <> tag <> "__"
 
+-- A PyPI publication target that reads and uploads at the one address.
 publicationEnv :: String -> String -> [(String, String)]
 publicationEnv tag url =
     pubUrlEnv
         <> [ ("ECLUSE_MOUNTS__PYPI__ENABLED", "true")
            , (publicationPrefix tag <> "URL", url)
+           , (publicationPrefix tag <> "UPLOAD_URL", url)
            ]
+
+-- url is the repository's read root, and uploadUrl is where publication posts.
+codeArtifactPublicationUploadEnv :: String -> [(String, String)]
+codeArtifactPublicationUploadEnv upload =
+    overrideEnv (publicationPrefix "CODE_ARTIFACT" <> "UPLOAD_URL") upload $
+        publicationEnv "CODE_ARTIFACT" (codeArtifactHost <> "/pypi/cache/")
 
 codeArtifactPublicationEnv :: [(String, String)]
 codeArtifactPublicationEnv =

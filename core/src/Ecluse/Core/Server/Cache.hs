@@ -31,7 +31,7 @@ module Ecluse.Core.Server.Cache (
     resolveAssembled,
 ) where
 
-import Data.ByteString qualified as BS
+import Data.ByteString.Short qualified as SBS
 
 import Ecluse.Core.Package (PackageName)
 import Ecluse.Core.Registry.Metadata (MetadataError, VersionRead)
@@ -53,7 +53,7 @@ import Ecluse.Core.Version (Version)
 
 -- | One provider supplies every retention capability beside process-local request coalescing.
 data MetadataCache = MetadataCache
-    { mcDirectory :: SingleFlight MetadataError Text (GemDirectory, Int)
+    { mcDirectory :: SingleFlight MetadataError CacheKey (GemDirectory, Int)
     , mcFull :: SingleFlight MetadataError CacheKey CacheEntry
     -- ^ Full fetches partition by source, ecosystem, and package without local retention.
     , mcVersion :: SingleFlight MetadataError CacheKey VersionRead
@@ -112,13 +112,13 @@ recordFullOccupancy metrics occ = do
     mpCacheResidentBytes metrics (occBytes occ)
 
 -- | Refresh one public directory per origin and share active acquisitions.
-resolveDirectory :: MetadataCache -> Text -> IO (Either MetadataError GemDirectory) -> IO (Either MetadataError GemDirectory)
-resolveDirectory cache source fetch =
+resolveDirectory :: MetricsPort -> MetadataCache -> CacheKey -> IO (Either MetadataError GemDirectory) -> IO (Either MetadataError GemDirectory)
+resolveDirectory metrics cache key fetch =
     fmap fst
         <$> resolveSingleFlight
-            (const pass)
-            (const pass)
-            pass
+            (mpDirectoryCacheRequest metrics)
+            (mpDirectoryCacheResidentBytes metrics . occBytes)
+            (mpCacheRefused metrics Metric.DirectoryStore)
             (mcDirectory cache)
-            source
-            (fmap (fmap (,BS.length (encodeUtf8 source) + 256)) fetch)
+            key
+            (fmap (fmap (,SBS.length (cacheKeyIdentity key) + 256)) fetch)

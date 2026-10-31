@@ -9,7 +9,7 @@ module Ecluse.E2E.Cargo.InstallE2ESpec (
     cargoConsumer,
     assertCargoRouting,
     assertCargoAssets,
-    assertCargoViewRouting,
+    assertCargoOriginRouting,
     cargoDeniedConfig,
 ) where
 
@@ -26,6 +26,7 @@ import Ecluse.E2E.Fixtures.Cargo
 import Ecluse.E2E.Fixtures.Contracts (concreteFamily)
 import Ecluse.E2E.Harness
 import Ecluse.E2E.Harness.Cargo
+import Ecluse.E2E.Harness.CargoRegistry (cargoRegistryToken)
 import Ecluse.E2E.Harness.NativeEdge
 import Ecluse.E2E.InstallationE2ESpec (codedArtifact)
 import Ecluse.Test.Contract.Ecosystem (FamilyFixture)
@@ -79,29 +80,32 @@ installation observed =
         result <- cargoRun project []
         pure (cargoInvocationClient invocation, crExit result == ExitSuccess && T.strip (crStdout result) == cargoExpectedOutput False False)
 
--- | Every client command uses the sparse public replacement and a fresh owned project.
+{- | Every client command uses the crates.io replacement and a fresh owned project. The token answers
+discovery's authentication requirement whenever the mount has a private upstream.
+-}
 cargoConsumer :: E2E -> CargoToolchain -> (CargoProject -> IO a) -> IO a
-cargoConsumer proxy toolchain = withCargoProject toolchain CargoReplacement proxy ("sparse+" <> e2eBaseUrl proxy <> "/cargo/") Nothing
+cargoConsumer proxy toolchain = withCargoProject toolchain CargoConsumer proxy ("sparse+" <> e2eBaseUrl proxy <> "/cargo/") (Just cargoRegistryToken)
 
 -- | Compile the selected registry coordinate using a fresh consumer project.
 cargoInstallInto :: E2E -> CargoToolchain -> Text -> Text -> IO ClientResult
 cargoInstallInto proxy toolchain name version = cargoConsumer proxy toolchain $ \project -> do
-    cargoSelectDependency CargoReplacement name version project
+    cargoSelectDependency name version project
     runCargo project ["build"]
 
 -- | Require archive requests at both proxy listeners and at the public fixture.
 assertCargoRouting :: NativeTraffic -> IO ()
-assertCargoRouting = assertCargoViewRouting "/cargo" "cargo-upstream"
+assertCargoRouting = assertCargoOriginRouting "cargo-upstream"
 
--- | Require matching native archive exchanges through one local view and its actual origin.
-assertCargoViewRouting :: Text -> Text -> NativeTraffic -> IO ()
-assertCargoViewRouting view origin traffic = do
+-- | Require matching native archive exchanges through the registry and its actual origin.
+assertCargoOriginRouting :: Text -> NativeTraffic -> IO ()
+assertCargoOriginRouting origin traffic = do
     let archives = filter (T.isSuffixOf ".crate" . nativeRequestPath)
-        throughView = filter (T.isPrefixOf (view <> "/crates/") . nativeRequestPath) . archives
-        clients = throughView (nativeClientRequests traffic)
-        forwards = throughView (nativeProxyRequests traffic)
+        root = "/cargo"
+        throughRoot = filter (T.isPrefixOf (root <> "/crates/") . nativeRequestPath) . archives
+        clients = throughRoot (nativeClientRequests traffic)
+        forwards = throughRoot (nativeProxyRequests traffic)
         upstream = filter ((== origin) . nativeRequestHost) (archives (nativeUpstreamRequests traffic))
-    let discovery = filter ((== view <> "/config.json") . nativeRequestPath) (nativeClientRequests traffic)
+    let discovery = filter ((== root <> "/config.json") . nativeRequestPath) (nativeClientRequests traffic)
     discovery `shouldSatisfy` (not . null)
     map nativeRequestScheme discovery `shouldSatisfy` all (== "https")
     clients `shouldSatisfy` (not . null)
@@ -110,7 +114,7 @@ assertCargoViewRouting view origin traffic = do
     forwards `shouldSatisfy` (not . null)
     upstream `shouldSatisfy` (not . null)
     map nativeRequestPath clients `shouldMatchList` map nativeRequestPath forwards
-    map (T.drop (T.length view) . nativeRequestPath) clients `shouldMatchList` map nativeRequestPath upstream
+    map (T.drop (T.length root) . nativeRequestPath) clients `shouldMatchList` map nativeRequestPath upstream
 
 -- | Every cached native archive needs a successful HTTPS request and a matching product exchange.
 assertCargoAssets :: CargoProject -> NativeTraffic -> IO ()
@@ -121,7 +125,7 @@ assertCargoAssets project traffic = do
         forwards = archives (nativeProxyRequests traffic)
         cached = [toText (takeFileName path) | (path, TreeFile _ _) <- Map.toList tree, take 3 (splitDirectories path) == ["home", "registry", "cache"], ".crate" `T.isSuffixOf` toText path]
         discovery = filter (T.isSuffixOf "/config.json" . nativeRequestPath) (nativeClientRequests traffic)
-        throughCargoView path = any (`T.isPrefixOf` path) ["/cargo/crates/", "/cargo/private/crates/"]
+        throughCargoView = T.isPrefixOf "/cargo/crates/"
         exchange request = (nativeRequestMethod request, nativeRequestPath request, nativeRequestStatus request)
     clients `shouldSatisfy` (not . null)
     discovery `shouldSatisfy` (not . null)

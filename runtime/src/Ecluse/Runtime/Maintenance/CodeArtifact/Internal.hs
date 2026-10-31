@@ -2,7 +2,7 @@
 --
 -- SPDX-License-Identifier: MIT
 
--- | CodeArtifact control-plane handles with authenticated data-plane readers bound by composition.
+-- | CodeArtifact control-plane handles with the manifest reader bound by composition.
 module Ecluse.Runtime.Maintenance.CodeArtifact.Internal (
     newCodeArtifactMaintenance,
     newCodeArtifactObservation,
@@ -59,7 +59,6 @@ import Ecluse.Core.Registry.Maintenance.Upstream (
     UpstreamSafety (Undecidable, Unsafe),
     walkUpstreamChain,
  )
-import Ecluse.Core.Rules.Install (InstallArtifactRead)
 import Ecluse.Core.Version (Version)
 import Ecluse.Runtime.Aws.Env (newAwsEnv, singleAttemptEnv)
 import Ecluse.Runtime.Aws.Fault (sendClassified)
@@ -105,15 +104,15 @@ data ControlPlane = ControlPlane
     }
 
 -- | Build repository maintenance with ambient AWS credentials and single-attempt destructive transport.
-newCodeArtifactMaintenance :: Int -> NameAlphabet -> StoreManifestRead -> InstallArtifactRead -> CodeArtifactStore -> IO StoreMaintenance
-newCodeArtifactMaintenance limit alphabet readManifest readArtifact store = do
+newCodeArtifactMaintenance :: Int -> NameAlphabet -> StoreManifestRead -> CodeArtifactStore -> IO StoreMaintenance
+newCodeArtifactMaintenance limit alphabet readManifest store = do
     env <- newMaintenanceEnv store
-    boundedMaintenance limit alphabet readManifest readArtifact store <$> controlPlaneFor env
+    boundedMaintenance limit alphabet readManifest store <$> controlPlaneFor env
 
 -- | Build repository observation with ambient credentials and no write calls.
-newCodeArtifactObservation :: Int -> NameAlphabet -> StoreManifestRead -> InstallArtifactRead -> CodeArtifactStore -> IO StoreObservation
-newCodeArtifactObservation limit alphabet readManifest readArtifact store =
-    boundedObservationFor limit alphabet readManifest readArtifact store . readPlaneFor <$> newMaintenanceEnv store
+newCodeArtifactObservation :: Int -> NameAlphabet -> StoreManifestRead -> CodeArtifactStore -> IO StoreObservation
+newCodeArtifactObservation limit alphabet readManifest store =
+    boundedObservationFor limit alphabet readManifest store . readPlaneFor <$> newMaintenanceEnv store
 
 -- | Probe upstream refill without constructing maintenance writes.
 newCodeArtifactUpstreamProbe :: CodeArtifactStore -> IO UpstreamSafety
@@ -122,28 +121,28 @@ newCodeArtifactUpstreamProbe store = withReadableIdentity $ do
     probeUpstreamSafety (readPlaneFor env) store
 
 -- | Build cache deletion with target-local reads and consent, allowing its declared refill role.
-newCodeArtifactCacheMaintenance :: Int -> NameAlphabet -> StoreManifestRead -> InstallArtifactRead -> CodeArtifactStore -> IO StoreMaintenance
-newCodeArtifactCacheMaintenance limit alphabet readManifest readArtifact store = do
+newCodeArtifactCacheMaintenance :: Int -> NameAlphabet -> StoreManifestRead -> CodeArtifactStore -> IO StoreMaintenance
+newCodeArtifactCacheMaintenance limit alphabet readManifest store = do
     env <- newMaintenanceEnv store
     plane <- controlPlaneFor env
-    pure (cacheMaintenanceFor limit alphabet readManifest readArtifact store plane)
+    pure (cacheMaintenanceFor limit alphabet readManifest store plane)
 
 -- | Observe the configured cache under its distinct refill classification without constructing writes.
-newCodeArtifactCacheObservation :: Int -> NameAlphabet -> StoreManifestRead -> InstallArtifactRead -> CodeArtifactStore -> IO StoreObservation
-newCodeArtifactCacheObservation limit alphabet readManifest readArtifact store = do
+newCodeArtifactCacheObservation :: Int -> NameAlphabet -> StoreManifestRead -> CodeArtifactStore -> IO StoreObservation
+newCodeArtifactCacheObservation limit alphabet readManifest store = do
     env <- newMaintenanceEnv store
     let readCalls = readPlaneFor env
-    pure (boundedObservationFor limit alphabet readManifest readArtifact store readCalls){obClassifyStore = cacheClassification readCalls store}
+    pure (boundedObservationFor limit alphabet readManifest store readCalls){obClassifyStore = cacheClassification readCalls store}
 
 -- | Build the configured cache capability over injected calls without relaxing the mirror constructor.
-cacheMaintenanceFor :: Int -> NameAlphabet -> StoreManifestRead -> InstallArtifactRead -> CodeArtifactStore -> ControlPlane -> StoreMaintenance
-cacheMaintenanceFor limit alphabet readManifest readArtifact store plane =
-    (boundedMaintenance limit alphabet readManifest readArtifact store plane){classifyStore = cacheClassification (cpRead plane) store, storeCursor = Nothing}
+cacheMaintenanceFor :: Int -> NameAlphabet -> StoreManifestRead -> CodeArtifactStore -> ControlPlane -> StoreMaintenance
+cacheMaintenanceFor limit alphabet readManifest store plane =
+    (boundedMaintenance limit alphabet readManifest store plane){classifyStore = cacheClassification (cpRead plane) store, storeCursor = Nothing}
 
-boundedMaintenance :: Int -> NameAlphabet -> StoreManifestRead -> InstallArtifactRead -> CodeArtifactStore -> ControlPlane -> StoreMaintenance
-boundedMaintenance limit alphabet readManifest readArtifact store plane =
-    (maintenanceFor alphabet readManifest readArtifact store plane)
-        { enumerateVersions = obEnumerateVersions (boundedObservationFor limit alphabet readManifest readArtifact store (cpRead plane))
+boundedMaintenance :: Int -> NameAlphabet -> StoreManifestRead -> CodeArtifactStore -> ControlPlane -> StoreMaintenance
+boundedMaintenance limit alphabet readManifest store plane =
+    (maintenanceFor alphabet readManifest store plane)
+        { enumerateVersions = obEnumerateVersions (boundedObservationFor limit alphabet readManifest store (cpRead plane))
         }
 
 cacheClassification :: ReadPlane -> CodeArtifactStore -> IO (Either StoreFault StoreClass)
@@ -181,23 +180,22 @@ readPlaneFor env =
         }
 
 -- | Supplied control-plane calls and the role-specific manifest reader provide every effect.
-maintenanceFor :: NameAlphabet -> StoreManifestRead -> InstallArtifactRead -> CodeArtifactStore -> ControlPlane -> StoreMaintenance
-maintenanceFor alphabet readManifest readArtifact store plane =
+maintenanceFor :: NameAlphabet -> StoreManifestRead -> CodeArtifactStore -> ControlPlane -> StoreMaintenance
+maintenanceFor alphabet readManifest store plane =
     maintenanceOf
-        (observationFor alphabet readManifest readArtifact store (cpRead plane))
+        (observationFor alphabet readManifest store (cpRead plane))
         StoreDeletion
             { dlDeleteVersions = deleteChunks plane store
             , dlCursor = Just (walkCursor alphabet plane store)
             }
 
--- | Bind observations to the supplied metadata and artifact readers.
-observationFor :: NameAlphabet -> StoreManifestRead -> InstallArtifactRead -> CodeArtifactStore -> ReadPlane -> StoreObservation
-observationFor alphabet readManifest readArtifact store observer =
+-- | Bind observations to the supplied metadata reader.
+observationFor :: NameAlphabet -> StoreManifestRead -> CodeArtifactStore -> ReadPlane -> StoreObservation
+observationFor alphabet readManifest store observer =
     StoreObservation
         { obFacts = codeArtifactFacts alphabet store
         , obListPackagesIn = pageSource . packagePage observer store
         , obEnumerateVersions = pageAll . versionPage observer store
-        , obReadArtifact = readArtifact
         , obReadManifest = readManifest
         , obVerifyConsent = readConsent observer store
         , obClassifyStore = fmap (fmap classifyRepository) (describeStore observer store)
@@ -225,9 +223,9 @@ withReadableIdentity =
     fmap (fromRight (Unsafe (InsufficientPermissions describeRepositoryGrant))) . tryAny
 
 -- | Build observation with version pagination bounded before another page is requested.
-boundedObservationFor :: Int -> NameAlphabet -> StoreManifestRead -> InstallArtifactRead -> CodeArtifactStore -> ReadPlane -> StoreObservation
-boundedObservationFor limit alphabet readManifest readArtifact store observer =
-    (observationFor alphabet readManifest readArtifact store observer)
+boundedObservationFor :: Int -> NameAlphabet -> StoreManifestRead -> CodeArtifactStore -> ReadPlane -> StoreObservation
+boundedObservationFor limit alphabet readManifest store observer =
+    (observationFor alphabet readManifest store observer)
         { obEnumerateVersions = collectPagesBounded limit . pageSource . versionPage observer store
         }
 

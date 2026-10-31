@@ -16,7 +16,7 @@ obligations =
         "npm/install"
         Supported
         ["read", "mirror", "client-install"]
-        ["npm/install/default-denial", "npm/install/lifecycle-script-control", "npm/install/deprecation-relay", "npm/install/deprecation-negative-control", "npm/install/integrity-refusal", "npm/install/head-no-effect", "npm/install/metadata-preservation", "npm/install/latest-preservation", "npm/install/publication-unconfigured", "npm/install/mal-forced-source-required", "npm/install/mal-manual-source-required"]
+        ["npm/install/default-denial", "npm/install/external-dependency-denial", "npm/install/lifecycle-script-control", "npm/install/deprecation-relay", "npm/install/deprecation-negative-control", "npm/install/integrity-refusal", "npm/install/head-no-effect", "npm/install/metadata-preservation", "npm/install/latest-preservation", "npm/install/publication-unconfigured", "npm/install/mal-forced-source-required", "npm/install/mal-manual-source-required"]
     , Obligation
         "npm/mirror"
         "npm/registry"
@@ -205,14 +205,7 @@ obligations =
         "cargo/native"
         Supported
         ["read", "mirror", "publication", "client-install"]
-        (map ("cargo/native/" <>) ["current-client", "floor-client", "asset-routing", "metadata-no-archives", "denial-control", "features", "targets", "lock-checksums", "msrv", "discovery-views", "private-no-public", "raw-auth", "private-auth-required", "public-token-control", "private-anonymous", "publication-framing", "foreign-registry"])
-    , Obligation
-        "cargo/execution"
-        "cargo/execution"
-        "cargo/execution"
-        Supported
-        ["read", "mirror", "maintenance", "client-install"]
-        (map ("cargo/execution/" <>) ["build-script", "proc-macro", "plain-source", "exact-override", "unavailable-evidence", "corrupt-evidence", "unsupported-evidence", "default-metadata", "worker-readmission", "dredger-revocation"])
+        (map ("cargo/native/" <>) ["current-client", "floor-client", "asset-routing", "metadata-no-archives", "denial-control", "features", "targets", "lock-checksums", "msrv", "local-discovery", "merged-private", "raw-auth", "private-auth-required", "public-token-control", "placeholder-token", "publication-framing", "dependency-sources", "publisher-configuration"])
     , Obligation
         "cargo/mirror-proof"
         "cargo/write"

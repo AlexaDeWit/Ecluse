@@ -10,8 +10,8 @@ module Ecluse.BenchLoad.ProxyProcess (
     AdvisoryFeed (..),
     advisoryBucket,
     mirrorStateBucket,
-    copyStatePublicHost,
-    copyStatePrivateHost,
+    publicStubHost,
+    privateStubHost,
     podShapeFromEnv,
     serveProxyFlag,
     proxyEnvironment,
@@ -102,7 +102,7 @@ import UnliftIO (bracket, bracketOnError, finally, mask, onException, try, tryAn
 import UnliftIO.Async (Async, async, cancel, link, poll)
 import UnliftIO.Temporary (withSystemTempDirectory)
 
-import Ecluse.BenchLoad.AdvisoryStore (AdvisoryObject, advisoryBucket)
+import Ecluse.BenchLoad.AdvisoryStore (advisoryBucket)
 import Ecluse.BenchLoad.BootLines (bootMessages, logMessages, metadataCompression, renderMetadataCompression, ruleMessages)
 import Ecluse.BenchLoad.Error (benchFail)
 import Ecluse.BenchLoad.Exposition (Sample, advisoryDatabaseInstalled, parseExposition)
@@ -123,7 +123,9 @@ import Ecluse.BenchLoad.Pod (
 import Ecluse.BenchLoad.RtsProbe (rtsStatsFlag)
 import Ecluse.BenchLoad.RtsWindow (Collection (MajorCollection), RtsSnapshot, collectionName)
 import Ecluse.BenchLoad.Verdict (ProxyEnding, classifyEnding)
-import Ecluse.Core.Ecosystem (Ecosystem (Cargo, Npm, PyPI, RubyGems), ecosystemName)
+import Ecluse.Core.Ecosystem (Ecosystem, ecosystemName)
+import Ecluse.Core.Registry.Adapter (uploadEndpointFor)
+import Ecluse.Core.Registry.Adapter.Capability (UploadEndpointRequirement (ExplicitUploadEndpoint))
 import Ecluse.Core.Server.Encoding (MetadataCompression (IdentityOnly))
 import Ecluse.Rts.Cgroup (parseMemoryMax, readIfExists)
 import Ecluse.Runtime.Server (listeningPrefix, proxyListener)
@@ -144,10 +146,6 @@ data ProxySettings = ProxySettings
     , psMaxResponseBytes :: Maybe Int
     , psServeMaxInFlight :: Maybe Int
     , psPublicConnections :: Maybe Int
-    , psPublicHost :: Maybe Text
-    -- ^ An override for the public leg only. 'Nothing' preserves the fixture's hostname.
-    , psPrivateHost :: Maybe Text
-    -- ^ An override for the private and mirror target legs. 'Nothing' preserves the fixture's hostname.
     , psPrivateConnections :: Maybe Int
     , psClock :: Maybe UTCTime
     -- ^ A fixed evaluation clock for the rules, 'Nothing' for the wall clock.
@@ -168,27 +166,17 @@ proxySettings ecosystem ttl =
         , psMaxResponseBytes = Nothing
         , psServeMaxInFlight = Nothing
         , psPublicConnections = Nothing
-        , psPublicHost = publicHost
-        , psPrivateHost = privateHost
         , psPrivateConnections = Nothing
         , psClock = Nothing
         , psMirrorStatePort = Nothing
         , psAdvisories = Nothing
         , psTuning = noTuning
         }
-  where
-    -- Cargo's private-copy state fixture reads its public sources and keys its private records by these hosts.
-    (publicHost, privateHost) = case ecosystem of
-        Npm -> (Nothing, Nothing)
-        PyPI -> (Nothing, Nothing)
-        Cargo -> (Just copyStatePublicHost, Just copyStatePrivateHost)
-        RubyGems -> (Nothing, Nothing)
 
 -- | The loopback object store serving the advisory database, and the named rules the policy adds to read it.
 data AdvisoryFeed = AdvisoryFeed
     { afStorePort :: Int
     , afRules :: [Pair]
-    , afObject :: AdvisoryObject
     }
     deriving stock (Eq, Show)
 
@@ -196,13 +184,15 @@ data AdvisoryFeed = AdvisoryFeed
 mirrorStateBucket :: Text
 mirrorStateBucket = "ecluse-bench-mirror-state"
 
--- | The public upstream host a native private-copy state fixture reads its sources from.
-copyStatePublicHost :: Text
-copyStatePublicHost = "localhost"
+{- | The name the proxy dials the public stub by. The internal-range block refuses a public artifact URL at a
+loopback literal, and boot refuses a mirror target on the public upstream's host, so it differs from 'privateStubHost'.
+-}
+publicStubHost :: Text
+publicStubHost = "localhost"
 
--- | The private upstream host a native private-copy state fixture keys its records by.
-copyStatePrivateHost :: Text
-copyStatePrivateHost = "127.0.0.1"
+-- | The address the proxy dials the private and mirror target stubs by, and the host their prepared mirror records name.
+privateStubHost :: Text
+privateStubHost = "127.0.0.1"
 
 -- | The pod shape in @BENCH_LOAD_POD@, unlimited when unset.
 podShapeFromEnv :: IO PodShape
@@ -414,10 +404,8 @@ proxyEnvironment settings shape capabilities dir (port, controlPort, scrapePort)
     upstreamUrl leg p = "https://" <> upstreamHost leg <> ":" <> show p
     upstreamHost :: Text -> Text
     upstreamHost leg
-        | leg == "PUBLIC_UPSTREAM", Just host <- psPublicHost settings = host
-        | leg /= "PUBLIC_UPSTREAM", Just host <- psPrivateHost settings = host
-        | leg == "PUBLIC_UPSTREAM", isJust (psMirrorStatePort settings) = "127.0.0.1"
-        | otherwise = "localhost"
+        | leg == "PUBLIC_UPSTREAM" = publicStubHost
+        | otherwise = privateStubHost
     fixed =
         [ ("ECLUSE_SERVER__PORT", show port)
         , ("ECLUSE_SERVER__PUBLIC_URL", "https://bench.proxy")
@@ -446,7 +434,9 @@ proxyEnvironment settings shape capabilities dir (port, controlPort, scrapePort)
         , ("ECLUSE_MOUNTS__" <> mount <> "__MIRROR_TARGET__REGISTRY__TOKEN", "fixture-token")
         , ("ECLUSE_MOUNTS__" <> mount <> "__MIRROR_TARGET__REGISTRY__USERNAME", "fixture-user")
         ]
-            <> foldMap (\p -> [upstream "MIRROR_TARGET" p, ("ECLUSE_MOUNTS__" <> mount <> "__MIRROR_TARGET__REGISTRY__UPLOAD_URL", upstreamUrl "MIRROR_TARGET" p <> "/upload")]) privatePort
+            <> foldMap (\p -> upstream "MIRROR_TARGET" p : [("ECLUSE_MOUNTS__" <> mount <> "__MIRROR_TARGET__REGISTRY__UPLOAD_URL", upstreamUrl "MIRROR_TARGET" p <> "/upload") | separateUpload]) privatePort
+    -- A protocol that derives its upload address from url refuses an uploadUrl at load.
+    separateUpload = uploadEndpointFor (psEcosystem settings) == Just ExplicitUploadEndpoint
     pinned =
         catMaybes
             [ upstream "PRIVATE_UPSTREAM" <$> privatePort

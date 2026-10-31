@@ -40,6 +40,7 @@ import Ecluse.Config.DefaultConfig (defaultConfigBytes)
 import Ecluse.Config.Resolve (deepMerge)
 import Ecluse.Core.Ecosystem (Ecosystem (Cargo, Npm, PyPI))
 import Ecluse.Core.Osv.Schema (EpssRequirement (..))
+import Ecluse.Core.Package (CodeExecSignal (NoCodeOnInstall), DependencySources (FetchesOutsideRegistry, RegistryDependencies))
 import Ecluse.Core.Queue (DeliveryBudget (DeliveryBudget), defaultDeliveryBudget)
 import Ecluse.Core.Rules (prepare)
 import Ecluse.Core.Rules.Types (
@@ -52,7 +53,7 @@ import Ecluse.Core.Rules.Types (
     PrecededRule (..),
     RemainingAdvisories (..),
     Rule (AllowIfRemediatesCve, DenyIfKnownMalicious),
-    RuleEvidence (evPublishedAt),
+    RuleEvidence (evDependencySources, evInstallCode, evPublishedAt),
     RuleReach (AdmissionAndRevocation, AdmissionOnly),
     defaultDifferentialLimits,
     identityEvidence,
@@ -79,7 +80,7 @@ spec = do
             Map.member Cargo (configMounts defaultConfig) `shouldBe` False
             enabled <- configFor "{\"mounts\":{\"cargo\":{\"enabled\":true}}}"
             fmap (map (ruleName . prRule) . mountPolicy) (Map.lookup Cargo (configMounts enabled))
-                `shouldBe` Just ["AllowIfOlderThan"]
+                `shouldBe` Just ["DenyExternalDependencies", "AllowIfOlderThan"]
 
         it "ships exactly the expected shared baseline rules under their default names" $ do
             (_, catalogue) <- expectRight (decodeDefaultConfig defaultConfigBytes)
@@ -122,7 +123,7 @@ spec = do
             it ("denies install scripts on the active npm mount with " <> label) $ do
                 cfg <- configFor doc
                 fmap (map (ruleName . prRule) . mountPolicy) (Map.lookup Npm (configMounts cfg))
-                    `shouldBe` Just ["DenyInstallTimeExecution", "AllowIfOlderThan"]
+                    `shouldBe` Just ["DenyExternalDependencies", "DenyInstallTimeExecution", "AllowIfOlderThan"]
                 decideOn cfg Npm (scriptEvidence Npm) >>= (\decision -> blockedBy decision `shouldBe` Just "DenyInstallTimeExecution")
                 fmap (map (ruleName . prRule) . revocationRules . mountPolicy) (Map.lookup Npm (configMounts cfg))
                     `shouldBe` Just ["AllowIfOlderThan"]
@@ -137,7 +138,7 @@ spec = do
         it "disables the npm default in the document or environment" $
             for_ [configFor "{\"mounts\":{\"npm\":{\"rules\":{\"deny-scripts\":{\"enabled\":false}}}}}", expectConfig (pubUrlEnv <> [("ECLUSE_MOUNTS__NPM__RULES", "{\"deny-scripts\":{\"enabled\":false}}")]) Nothing] $ \load -> do
                 cfg <- load
-                Map.map limitedRules (configMounts cfg) `shouldBe` Map.singleton Npm []
+                Map.map limitedRules (configMounts cfg) `shouldBe` Map.singleton Npm ["DenyExternalDependencies"]
                 decideOn cfg Npm (scriptEvidence Npm) >>= (\decision -> admittedBy decision `shouldBe` Just "AllowIfOlderThan")
 
         it "admits a named npm package with a pin above the deny's precedence" $ do
@@ -146,13 +147,13 @@ spec = do
 
         it "widens the shipped npm deny from the operator layer" $ do
             cfg <- configFor "{\"mounts\":{\"npm\":{\"rules\":{\"deny-scripts\":{\"appliesTo\":[\"admission\",\"revocation\"]}}}}}"
-            Map.map limitedRules (configMounts cfg) `shouldBe` Map.singleton Npm []
+            Map.map limitedRules (configMounts cfg) `shouldBe` Map.singleton Npm ["DenyExternalDependencies"]
             fmap (map (ruleName . prRule) . revocationRules . mountPolicy) (Map.lookup Npm (configMounts cfg))
                 `shouldBe` Just ["DenyInstallTimeExecution", "AllowIfOlderThan"]
 
         it "keeps the shipped mount layer above a shared entry of the same name" $ do
             cfg <- configFor "{\"rules\":{\"deny-scripts\":{\"type\":\"DenyInstallTimeExecution\",\"appliesTo\":[\"admission\",\"revocation\"]}},\"mounts\":{\"npm\":{\"enabled\":true}}}"
-            Map.map limitedRules (configMounts cfg) `shouldBe` Map.singleton Npm ["DenyInstallTimeExecution"]
+            Map.map limitedRules (configMounts cfg) `shouldBe` Map.singleton Npm ["DenyExternalDependencies", "DenyInstallTimeExecution"]
 
         it "refuses disabling the npm-only name in the shared list or the PyPI mount" $ do
             loadConfig [] (Just "{\"rules\":{\"deny-scripts\":{\"enabled\":false}}}")
@@ -176,6 +177,53 @@ spec = do
         it "refuses a different type under the shipped npm name" $
             loadConfig pubUrlEnv (Just "{\"mounts\":{\"npm\":{\"rules\":{\"deny-scripts\":{\"type\":\"DenyByIdentity\",\"identity\":\"thing\"}}}}}")
                 `shouldBe` Left [PolicyErrors [MalformedRule "deny-scripts" "\"type\" \"DenyByIdentity\" does not match the default rule it patches"]]
+
+        it "denies a version whose dependency names a git source on the active npm mount" $ do
+            cfg <- configFor "{\"mounts\":{\"npm\":{\"enabled\":true}}}"
+            decideOn cfg Npm (externalEvidence Npm) >>= (\decision -> blockedBy decision `shouldBe` Just "DenyExternalDependencies")
+
+        it "admits a version whose dependency names a git source with a pin above the deny's precedence" $ do
+            cfg <- configFor "{\"mounts\":{\"npm\":{\"rules\":{\"pin\":{\"type\":\"AllowByIdentity\",\"identity\":\"thing@1.0.0\",\"precedence\":301}}}}}"
+            decideOn cfg Npm (externalEvidence Npm) >>= (\decision -> admittedBy decision `shouldBe` Just "AllowByIdentity")
+
+        it "disables the shipped dependency deny under the npm mount, keeping the script deny" $ do
+            cfg <- configFor "{\"mounts\":{\"npm\":{\"rules\":{\"deny-external-dependencies\":{\"enabled\":false}}}}}"
+            Map.map limitedRules (configMounts cfg) `shouldBe` Map.singleton Npm ["DenyInstallTimeExecution"]
+            fmap (map (ruleName . prRule) . mountPolicy) (Map.lookup Npm (configMounts cfg))
+                `shouldBe` Just ["DenyInstallTimeExecution", "AllowIfOlderThan"]
+
+        it "refuses disabling the shipped dependency deny in the shared list, naming the npm and Cargo remedies" $ do
+            loadConfig [] (Just "{\"rules\":{\"deny-external-dependencies\":{\"enabled\":false}}}")
+                `shouldBe` Left [SharedPolicyErrors [SuppressUnknownRule "deny-external-dependencies"]]
+            first (map renderConfigError) (loadConfig [("ECLUSE_RULES", "{\"deny-external-dependencies\":{\"enabled\":false}}")] Nothing)
+                `shouldBe` Left ["rule \"deny-external-dependencies\" disables a rule that no default defines. Disable the shipped npm or cargo default with enabled: false under mounts.npm.rules (ECLUSE_MOUNTS__NPM__RULES) or mounts.cargo.rules (ECLUSE_MOUNTS__CARGO__RULES) instead.\n"]
+
+        it "refuses a different type under the shipped dependency deny's name" $
+            loadConfig pubUrlEnv (Just "{\"mounts\":{\"npm\":{\"rules\":{\"deny-external-dependencies\":{\"type\":\"DenyInstallTimeExecution\"}}}}}")
+                `shouldBe` Left [PolicyErrors [MalformedRule "deny-external-dependencies" "\"type\" \"DenyInstallTimeExecution\" does not match the default rule it patches"]]
+
+    describe "the shipped Cargo mount policy" $ do
+        it "denies a public crate whose dependency comes from outside the registry, at admission only" $ do
+            cfg <- configFor "{\"mounts\":{\"cargo\":{\"enabled\":true}}}"
+            Map.map limitedRules (configMounts cfg) `shouldBe` Map.singleton Cargo ["DenyExternalDependencies"]
+            decideOn cfg Cargo (externalEvidence Cargo) >>= (\decision -> blockedBy decision `shouldBe` Just "DenyExternalDependencies")
+            fmap (map (ruleName . prRule) . revocationRules . mountPolicy) (Map.lookup Cargo (configMounts cfg))
+                `shouldBe` Just ["AllowIfOlderThan"]
+
+        it "disables the shipped dependency deny under the Cargo mount" $
+            for_ [configFor "{\"mounts\":{\"cargo\":{\"enabled\":true,\"rules\":{\"deny-external-dependencies\":{\"enabled\":false}}}}}", expectConfig (pubUrlEnv <> [("ECLUSE_MOUNTS__CARGO__ENABLED", "true"), ("ECLUSE_MOUNTS__CARGO__RULES", "{\"deny-external-dependencies\":{\"enabled\":false}}")]) Nothing] $ \load -> do
+                cfg <- load
+                fmap (map (ruleName . prRule) . mountPolicy) (Map.lookup Cargo (configMounts cfg)) `shouldBe` Just ["AllowIfOlderThan"]
+                decideOn cfg Cargo (externalEvidence Cargo) >>= (\decision -> admittedBy decision `shouldBe` Just "AllowIfOlderThan")
+
+        it "admits a named crate with a pin above the deny's precedence" $ do
+            cfg <- configFor "{\"mounts\":{\"cargo\":{\"enabled\":true,\"rules\":{\"pin\":{\"type\":\"AllowByIdentity\",\"identity\":\"thing@1.0.0\",\"precedence\":301}}}}}"
+            decideOn cfg Cargo (externalEvidence Cargo) >>= (\decision -> admittedBy decision `shouldBe` Just "AllowByIdentity")
+
+        it "keeps the shipped Cargo deny out of the npm and PyPI policies" $ do
+            cfg <- configFor "{\"mounts\":{\"npm\":{\"enabled\":true},\"pypi\":{\"enabled\":true},\"cargo\":{\"enabled\":true}}}"
+            fmap (map (ruleName . prRule) . mountPolicy) (Map.lookup PyPI (configMounts cfg)) `shouldBe` Just ["AllowIfOlderThan"]
+            Map.map limitedRules (configMounts cfg) `shouldBe` Map.fromList [(Npm, ["DenyExternalDependencies", "DenyInstallTimeExecution"]), (PyPI, []), (Cargo, ["DenyExternalDependencies"])]
 
     describe "configuration type error paths" $ do
         forM_
@@ -273,22 +321,22 @@ spec = do
         it "keeps shared rules at both phases while the npm default applies only at admission" $ do
             cfg <- configFor "{\"rules\":{\"deny-scripts\":{\"type\":\"DenyInstallTimeExecution\"}},\"mounts\":{\"npm\":{\"enabled\":true},\"pypi\":{\"enabled\":true}}}"
             Map.map (map ruleReach . mountPolicy) (configMounts cfg)
-                `shouldBe` Map.fromList [(Npm, [AdmissionOnly, AdmissionAndRevocation]), (PyPI, replicate 2 AdmissionAndRevocation)]
+                `shouldBe` Map.fromList [(Npm, [AdmissionOnly, AdmissionOnly, AdmissionAndRevocation]), (PyPI, replicate 2 AdmissionAndRevocation)]
 
         it "limits a shared deny to admission only on the mount that says so" $ do
             cfg <- configFor "{\"rules\":{\"withdrawn\":{\"type\":\"DenyByIdentity\",\"identity\":\"thing\"}},\"mounts\":{\"npm\":{\"enabled\":true},\"pypi\":{\"enabled\":true,\"rules\":{\"withdrawn\":{\"appliesTo\":[\"admission\"]}}}}}"
-            Map.map limitedRules (configMounts cfg) `shouldBe` Map.fromList [(Npm, ["DenyInstallTimeExecution"]), (PyPI, ["DenyByIdentity"])]
+            Map.map limitedRules (configMounts cfg) `shouldBe` Map.fromList [(Npm, ["DenyExternalDependencies", "DenyInstallTimeExecution"]), (PyPI, ["DenyByIdentity"])]
 
         it "widens on one mount a rule the layer below limits to admission" $ do
             cfg <- configFor "{\"rules\":{\"deny-scripts\":{\"type\":\"DenyInstallTimeExecution\",\"appliesTo\":[\"admission\"]}},\"mounts\":{\"npm\":{\"enabled\":true,\"rules\":{\"deny-scripts\":{\"appliesTo\":[\"admission\",\"revocation\"]}}},\"pypi\":{\"enabled\":true}}}"
-            Map.map limitedRules (configMounts cfg) `shouldBe` Map.fromList [(Npm, []), (PyPI, ["DenyInstallTimeExecution"])]
+            Map.map limitedRules (configMounts cfg) `shouldBe` Map.fromList [(Npm, ["DenyExternalDependencies"]), (PyPI, ["DenyInstallTimeExecution"])]
 
         it "replaces the document's list whole from the environment" $ do
             let doc = "{\"mounts\":{\"npm\":{\"enabled\":true,\"rules\":{\"deny-scripts\":{\"type\":\"DenyInstallTimeExecution\",\"appliesTo\":[\"admission\"]}}}}}"
             limited <- configFor doc
             widened <- expectConfig (pubUrlEnv <> [("ECLUSE_MOUNTS__NPM__RULES", "{\"deny-scripts\":{\"appliesTo\":[\"admission\",\"revocation\"]}}")]) (Just doc)
-            Map.map limitedRules (configMounts limited) `shouldBe` Map.singleton Npm ["DenyInstallTimeExecution"]
-            Map.map limitedRules (configMounts widened) `shouldBe` Map.singleton Npm []
+            Map.map limitedRules (configMounts limited) `shouldBe` Map.singleton Npm ["DenyExternalDependencies", "DenyInstallTimeExecution"]
+            Map.map limitedRules (configMounts widened) `shouldBe` Map.singleton Npm ["DenyExternalDependencies"]
 
         it "switches off, from the environment, a shipped rule whose phases the document states" $ do
             -- The two layers merge into one entry, where enabled: false decides and appliesTo is not read.
@@ -297,7 +345,7 @@ spec = do
                     (pubUrlEnv <> [("ECLUSE_RULES", "{\"min-age\":{\"enabled\":false}}")])
                     (Just "{\"rules\":{\"min-age\":{\"appliesTo\":[\"admission\",\"revocation\"]}},\"mounts\":{\"npm\":{\"enabled\":true}}}")
             Map.map (map (ruleName . prRule) . mountPolicy) (configMounts cfg)
-                `shouldBe` Map.singleton Npm ["DenyInstallTimeExecution"]
+                `shouldBe` Map.singleton Npm ["DenyExternalDependencies", "DenyInstallTimeExecution"]
 
         it "refuses an ambiguous setting on a mount's own rules, for npm and for PyPI" $
             for_ ["npm", "pypi"] $ \mount ->
@@ -557,9 +605,13 @@ modeOf cfg = regMode . mountRegistries <$> Map.lookup Npm (configMounts cfg)
 
 scriptEvidence :: Ecosystem -> RuleEvidence
 scriptEvidence eco =
-    withInstallScripts (identityEvidence name version){evPublishedAt = Known (Just (addUTCTime (negate (30 * nominalDay)) fixedNow))}
+    withInstallScripts (identityEvidence name version){evPublishedAt = Known (Just (addUTCTime (negate (30 * nominalDay)) fixedNow)), evDependencySources = Known RegistryDependencies}
   where
     (name, version) = if eco == PyPI then (unscopedPyPI "thing", pypiVersion "1.0.0") else (thingName, v1_0_0)
+
+-- | An old version without install scripts whose dependency names a git source.
+externalEvidence :: Ecosystem -> RuleEvidence
+externalEvidence eco = (scriptEvidence eco){evInstallCode = Known NoCodeOnInstall, evDependencySources = Known (FetchesOutsideRegistry "dependency 'left-pad' in dependencies names a git source")}
 
 decideOn :: Config -> Ecosystem -> RuleEvidence -> IO Decision
 decideOn cfg eco evidence = case Map.lookup eco (configMounts cfg) of

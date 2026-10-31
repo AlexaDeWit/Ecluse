@@ -62,19 +62,21 @@ and explains what you lose when two share one.
 For npm, a client requests a version listing and then a tarball. PyPI clients request project indexes
 and distribution files. Cargo clients read sparse discovery, native index records, and crate archives.
 RubyGems clients read a Compact Index directory, per-gem metadata, and gem archives.
-Cargo separates crates.io source replacement from private alternate-registry access.
-The [Cargo protocol contract](@/docs/protocol-support.md#cargo) defines those views and their source rules.
+Cargo's `/cargo/` registry replaces crates.io and merges private and public crates like the other ecosystems.
+The [Cargo protocol contract](@/docs/protocol-support.md#cargo) defines its discovery and source rules.
 
 {{ diagram(name="metadata-admission", alt="The proxy combines caller-authorised private metadata with admitted anonymous public metadata. First-party names stay private, and response reuse follows fresh private authorisation.", caption="Version discovery and admission. Advisory polling runs independently of each request.") }}
 
-1. **The listing.** For npm, PyPI, and RubyGems non-first-party names, Écluse fetches private and public metadata in parallel.
+1. **The listing.** For npm, PyPI, Cargo, and RubyGems non-first-party names, Écluse fetches private and public metadata in parallel.
+   If the private read fails, the listing refuses with `503` or `502` rather than serving public versions alone.
    Private versions must meet the trusted integrity floor, and managed mirror versions must also prove completion.
    The policy filters public versions before the listing is merged. For npm, `dist-tags.latest` follows an admitted
    public tag, otherwise the highest admitted version, with stable versions before prereleases.
    It never exposes a private or mirror store's `latest` tag.
 2. **The artifact.** Private files use the trusted path. A managed mirror hit also requires current
-   authorisation, matching target identities, and a complete expected version. A private miss uses current
-   public metadata and policy. An admitted public request delivers the file and queues a whole-version job
+   authorisation, matching target identities, and a complete expected version. A private `404` uses current
+   public metadata and policy, and a failed private read refuses the download.
+   An admitted public request delivers the file and queues a whole-version job
    when mirroring is configured. Clients verify streamed archives against checksums from admitted metadata.
    For PyPI, that job copies every supported wheel and sdist in the admitted version.
    For RubyGems, it copies every platform archive in the admitted version.
@@ -155,8 +157,8 @@ stronger-algorithm mismatch. This alternative rule applies only to SRI component
 ### The policy
 
 The policy is deny by default: a public version reaches a build only when a rule admits it. Rules
-run in precedence order and the first decisive one wins. The revoke and the install-time deny sit
-above every allow by default.
+run in precedence order and the first decisive one wins. The revoke, the install-time deny and the
+external-dependency deny sit above every allow by default.
 
 | Rule | Band | On by default | What it decides |
 |------|------|----------------|-----------------|
@@ -166,6 +168,7 @@ above every allow by default.
 | `AllowByIdentity` | Allow | No | Pins a package or a `package@version` by exact name |
 | `DenyByIdentity` | Deny | No | Revokes a package or version |
 | `DenyInstallTimeExecution` | Deny | npm only | `deny-scripts` denies npm install scripts at admission, leaving stored copies in place |
+| `DenyExternalDependencies` | Deny | npm and Cargo | `deny-external-dependencies` denies, at admission, a public npm version whose installable dependency names a git source, a remote tarball URL or an unsupported scheme such as `jsr:`, which a client would fetch past Écluse. On Cargo it denies a public crate whose dependency names a registry other than crates.io. Stored copies stay |
 | `DenyIfCve` | Deny | No | Denies versions with a known vulnerability above a severity you choose |
 | `DenyIfEpss` | Deny | No | Denies versions with a known vulnerability whose exploitation probability (EPSS) is at or above a threshold you choose |
 
@@ -173,8 +176,10 @@ An advisory source (`advisories.url`) activates `remediation-fast-track`, togeth
 `deny-known-malicious` MAL deny. Without a source, only the quarantine supplies the shared allow.
 With one, the fast lane refuses a version it reaches while the advisory database is missing,
 unreadable, or too old, so an outage also holds back old versions until the database recovers. The
-npm mount also denies install scripts by default.
-Disable `deny-scripts` under `mounts.npm.rules`, or add an `AllowByIdentity` pin with precedence above 300.
+npm mount also denies, by default, install scripts and dependencies fetched from outside the registry,
+and the Cargo mount denies dependencies from a registry other than crates.io.
+Disable `deny-scripts` or `deny-external-dependencies` under `mounts.npm.rules` or
+`mounts.cargo.rules`, or add an `AllowByIdentity` pin with precedence above 300.
 The off rules opt in by name, and
 [Rule policy](@/docs/configuration.md#rule-policy) has their knobs.
 

@@ -17,12 +17,17 @@ module Ecluse.Composition.Support (
     publicGateEnv,
     cargoGateEnv,
     cargoMirrorEnv,
+    rubyGemsMirrorEnv,
+    rubyGemsCodeArtifactMirrorEnv,
     cargoCodeArtifactEnv,
     cargoScopeRefusal,
+    cargoInstallRefusal,
     withRubyInstallBlock,
     rubyInstallRefusal,
     rubyScopeRefusal,
     rubyDeprecationRefusal,
+    rubyYankRefusal,
+    rubyDependencyRefusal,
     cargoDeprecationRefusal,
     privateUpstreamUrl,
     collapsingMirrorTarget,
@@ -51,6 +56,7 @@ module Ecluse.Composition.Support (
     expectEnv,
     expectAppConfig,
     expectProviders,
+    slotCredentials,
     expectConfig,
     expectValidated,
     bootInputsFor,
@@ -66,7 +72,7 @@ import System.Exit (ExitCode)
 import UnliftIO (timeout, try)
 
 import Ecluse.Composition.BootError (BootError (MirrorTargetOnMountEndpoint, RuleBlockedOnMount, StoreMaintenanceUnavailable), StoreMaintenanceReason (NoControlPlane, PrivateCacheUnavailable))
-import Ecluse.Composition.Credential (CredentialProviders, initCredentialProviders, initTargetCredentialProviders)
+import Ecluse.Composition.Credential (BuildCredentials, CredentialProviders, initCredentialProviders, initTargetCredentialProviders)
 import Ecluse.Composition.Maintenance.Plan (ClearedBackend (cbUrl))
 import Ecluse.Composition.Plan (
     BootInputs (BootInputs, biConfig, biDocument, biEnvVars, biFdLimit, biRuntimePlan),
@@ -77,10 +83,11 @@ import Ecluse.Composition.Plan (
 import Ecluse.Composition.Types (BootRole (BootWithoutPipeline), RegistryRole (MirrorWriter))
 import Ecluse.Composition.Validate (ValidatedPlan (vpMounts), VettedMount (vmMount), vetBoot)
 import Ecluse.Composition.Vet (runVet)
-import Ecluse.Config (AppConfig, Config (configApp), StoreTag (TagRegistry), loadConfig, renderConfigError)
+import Ecluse.Config (AppConfig, Config (configApp), StoreBackend (BackendRegistry), StoreTag (TagRegistry), loadConfig, renderConfigError)
+import Ecluse.Core.Credential (mkSecret)
 import Ecluse.Core.Ecosystem (Ecosystem (Cargo, Npm, RubyGems))
 import Ecluse.Core.Package (PackageName, mkPackageName, mkScope)
-import Ecluse.Core.Rules.Types (RuleType (AllowScopeType, DenyIfDeprecatedType, DenyInstallTimeExecutionType))
+import Ecluse.Core.Rules.Types (RuleType (AllowScopeType, DenyExternalDependenciesType, DenyIfDeprecatedType, DenyIfYankedType, DenyInstallTimeExecutionType))
 import Ecluse.Core.Security (Limits, defaultLimits)
 import Ecluse.Core.Security.Egress (registryUrlText)
 import Ecluse.Rts (EffectiveAxis (..), EffectiveRuntimePlan (..), Provenance (FromRts))
@@ -154,6 +161,10 @@ cargoScopeRefusal = RuleBlockedOnMount Cargo AllowScopeType "Cargo package names
 cargoDeprecationRefusal :: BootError
 cargoDeprecationRefusal = RuleBlockedOnMount Cargo DenyIfDeprecatedType "Cargo's sparse index supplies no deprecation flag."
 
+-- | The native installation-execution refusal shared by boot and pure validation observations.
+cargoInstallRefusal :: BootError
+cargoInstallRefusal = RuleBlockedOnMount Cargo DenyInstallTimeExecutionType "Cargo's sparse index does not declare build scripts or procedural macros. This rule is unsupported for the ecosystem."
+
 -- | Activate a Ruby mount whose explicit installation rule the adapter cannot support.
 withRubyInstallBlock :: [(String, String)] -> [(String, String)]
 withRubyInstallBlock =
@@ -171,6 +182,14 @@ rubyScopeRefusal = RuleBlockedOnMount RubyGems AllowScopeType "RubyGems package 
 -- | A deprecation deny refuses the Ruby mount, whose metadata carries no deprecation flag.
 rubyDeprecationRefusal :: BootError
 rubyDeprecationRefusal = RuleBlockedOnMount RubyGems DenyIfDeprecatedType "RubyGems metadata supplies no supported deprecation flag."
+
+-- | A yank deny refuses the Ruby mount, whose metadata drops a yanked version instead of flagging it.
+rubyYankRefusal :: BootError
+rubyYankRefusal = RuleBlockedOnMount RubyGems DenyIfYankedType "RubyGems reports no yank flag in a gem's metadata. Yanked versions disappear from it."
+
+-- | A dependency-source deny refuses the Ruby mount, whose dependencies name no source.
+rubyDependencyRefusal :: BootError
+rubyDependencyRefusal = RuleBlockedOnMount RubyGems DenyExternalDependenciesType "A RubyGems dependency names only a gem and its requirements, never a source, so this rule can never match one."
 
 -- | The private upstream the composition fixtures declare.
 privateUpstreamUrl :: (IsString s) => s
@@ -230,7 +249,8 @@ twoStoreEnv :: [(String, String)]
 twoStoreEnv =
     overrideEnv "ECLUSE_MOUNTS__PYPI__ENABLED" "true" $
         overrideEnv "ECLUSE_MOUNTS__PYPI__PRIVATE_UPSTREAM__CODE_ARTIFACT__URL" codeArtifactPypiCacheUrl $
-            overrideEnv "ECLUSE_MOUNTS__PYPI__MIRROR_TARGET__CODE_ARTIFACT__URL" codeArtifactPypiMirrorUrl codeArtifactEnvVars
+            overrideEnv "ECLUSE_MOUNTS__PYPI__MIRROR_TARGET__CODE_ARTIFACT__URL" codeArtifactPypiMirrorUrl $
+                overrideEnv "ECLUSE_MOUNTS__PYPI__MIRROR_TARGET__CODE_ARTIFACT__UPLOAD_URL" codeArtifactPypiMirrorUrl codeArtifactEnvVars
 
 -- | The repository 'twoStoreEnv' mirrors PyPI to.
 codeArtifactPypiMirrorUrl :: (IsString s, Semigroup s) => s
@@ -308,6 +328,11 @@ expectProviders config = do
     initCredentialProviders initTargetCredentialProviders (const (const noCredentialReporters)) (map vmMount (vpMounts plan))
         >>= either (\errs -> fail ("provider init failed: " <> show errs)) pure
 
+-- | Mints each slot a static token that spells the slot, so a store's ports show which credential reached it.
+slotCredentials :: BuildCredentials
+slotCredentials reportersFor targets =
+    initTargetCredentialProviders reportersFor [(slot, BackendRegistry (mkSecret (show slot))) | (slot, _) <- targets]
+
 -- | Build a 'Config' from an env and an optional document, failing the test on a policy error.
 expectConfig :: [(String, String)] -> Maybe ByteString -> IO Config
 expectConfig env mDoc =
@@ -369,10 +394,27 @@ cargoMirrorEnv =
            , ("ECLUSE_MOUNTS__CARGO__MIRROR_TARGET__REGISTRY__TOKEN", "fixture-token")
            ]
 
+-- | A native mirror with durable source state, native companions and token-only uploads at its read root.
+rubyGemsMirrorEnv :: [(String, String)]
+rubyGemsMirrorEnv =
+    overrideEnv "ECLUSE_MOUNTS__NPM__ENABLED" "false" (("ECLUSE_MOUNTS__RUBYGEMS__ENABLED", "true") : publicGateEnv)
+        <> [ ("ECLUSE_MIRROR_STATE__URL", "s3://mirror-state/records")
+           , ("ECLUSE_MOUNTS__RUBYGEMS__PRIVATE_UPSTREAM__REGISTRY__URL", "https://private.example.test/")
+           , ("ECLUSE_MOUNTS__RUBYGEMS__MIRROR_TARGET__REGISTRY__URL", "https://target.example.test/")
+           , ("ECLUSE_MOUNTS__RUBYGEMS__MIRROR_TARGET__REGISTRY__TOKEN", "fixture-token")
+           ]
+
+-- | 'rubyGemsMirrorEnv' mirroring to a CodeArtifact repository, which mints its own write token.
+rubyGemsCodeArtifactMirrorEnv :: [(String, String)]
+rubyGemsCodeArtifactMirrorEnv =
+    ("ECLUSE_MOUNTS__RUBYGEMS__MIRROR_TARGET__CODE_ARTIFACT__URL", codeArtifactDomain <> "/ruby/mirror/")
+        : filter (not . ("ECLUSE_MOUNTS__RUBYGEMS__MIRROR_TARGET__REGISTRY__" `isPrefixOf`) . fst) rubyGemsMirrorEnv
+
 -- | Separate native CodeArtifact stores with inventory and physical deletion capabilities.
 cargoCodeArtifactEnv :: [(String, String)]
 cargoCodeArtifactEnv =
     cargoGateEnv
         <> [ ("ECLUSE_MOUNTS__CARGO__PRIVATE_UPSTREAM__CODE_ARTIFACT__URL", codeArtifactDomain <> "/cargo/internal/")
            , ("ECLUSE_MOUNTS__CARGO__MIRROR_TARGET__CODE_ARTIFACT__URL", codeArtifactDomain <> "/cargo/mirror/")
+           , ("ECLUSE_MOUNTS__CARGO__MIRROR_TARGET__CODE_ARTIFACT__UPLOAD_URL", codeArtifactDomain <> "/cargo/mirror/")
            ]

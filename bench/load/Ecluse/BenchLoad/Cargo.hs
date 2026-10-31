@@ -6,6 +6,7 @@
 module Ecluse.BenchLoad.Cargo (
     cargoFixture,
     cargoLoadNotes,
+    cargoPrivateCopy,
     selectWarmArtifacts,
     indexStubWithArtifacts,
     crateStubWith,
@@ -103,7 +104,7 @@ cargoListing =
 -- | State the effective eviction size and the limits of the service-time attribution.
 cargoLoadNotes :: LoadKnobs -> Text
 cargoLoadNotes knobs =
-    "Captured index rows retain their source fields. HTTP relay fixtures replace only checksums with hashes of owned payloads and preserve wire sizes. Complete-copy state verifies those actual target bytes. These payloads model relays, not native client installation.\n\nService attribution subtracts one public baseline. Extra private or public hops remain in reported overhead, which is not intrinsic proxy CPU time.\n\n"
+    "Captured index rows retain their source fields. HTTP relay fixtures replace only checksums with hashes of owned payloads and preserve wire sizes. These payloads model relays, not native client installation.\n\nService attribution subtracts one public baseline. Extra private or public hops remain in reported overhead, which is not intrinsic proxy CPU time.\n\n"
         <> "Cache working set: "
         <> show count
         <> " projects. Eviction entry bound: "
@@ -170,7 +171,7 @@ crateScenario source =
             (privateApp, publicApp, ttl) = case source of
                 PrivateCrate -> (crateStub latency bytes, missingStub latency, longCacheTtl)
                 PublicOnboarding -> (missingStub latency, crateStub latency bytes, 0)
-        withProxyOverStubs Cargo knobs ttl Nothing privateApp publicApp (crateMix source) $ \proxy urls -> do
+        withProxyOverStubs Cargo knobs ttl Nothing privateApp publicApp crateMix $ \proxy urls -> do
             for_ (zip cargoCorpusPackages urls) $ \(package, url) -> checkCrate bytes (cpName package) url
             httpTarget k proxy urls
   where
@@ -215,7 +216,7 @@ warmUnderColdScenario :: Scenario
 warmUnderColdScenario =
     (scenario "warm-under-cold" description bootWarm){scenarioServiceTime = False}
   where
-    description = "Measure warm listings and selected reads outside the heavy tier while cold clients read the heavy native index. Each heavy public response carries a changed additive field, which prevents assembled-response reuse. Cargo ignores unmanaged private source fields."
+    description = "Measure warm listings and selected reads outside the heavy tier while cold clients read the heavy native index. Each heavy public response carries a changed additive field, which prevents assembled-response reuse."
     bootWarm knobs use = do
         changes <- newIORef (0 :: Int)
         pairedLoad
@@ -284,12 +285,9 @@ withUnprimedIndexProxy = withListingStubs cargoListing
 indexUrl :: Int -> Text -> Text
 indexUrl port name = localhost port <> "/cargo/" <> if T.null name then "" else cargoShard name
 
-crateMix :: CrateSource -> Int -> [Text]
-crateMix source port = [localhost port <> root <> "crates/" <> cpName package <> "/9999.0.2/" <> crateFilename (cpName package) | package <- cargoCorpusPackages]
-  where
-    root = case source of
-        PrivateCrate -> "/cargo/private/"
-        PublicOnboarding -> "/cargo/"
+-- Private and public crates share the one merged registry, so the source selects only the stubs.
+crateMix :: Int -> [Text]
+crateMix port = [localhost port <> "/cargo/crates/" <> cpName package <> "/9999.0.2/" <> crateFilename (cpName package) | package <- cargoCorpusPackages]
 
 crateFilename :: Text -> Text
 crateFilename name = name <> "-9999.0.2.crate"
@@ -389,17 +387,19 @@ checkedIndex url = do
     let rows = referenceIndex (LBS.toStrict (HTTP.responseBody response))
     fields <- traverse (either benchFail pure . indexValue) rows
     unless (not (null fields) && all (KeyMap.member "cksum") fields) (benchFail ("Cargo index preflight returned empty or malformed records: " <> url))
-    let root = fst (T.breakOnEnd "/cargo/" url) <> if "/cargo/private/" `T.isInfixOf` url then "private/" else ""
-    discovery <- fetchChecked status200 [] (root <> "config.json")
+    discovery <- fetchChecked status200 [] (registryRoot url <> "config.json")
     (template, _, _, _) <- either benchFail pure (referenceDiscovery (LBS.toStrict (HTTP.responseBody discovery)))
-    unless ((if "/cargo/private/" `T.isInfixOf` url then "https://bench.proxy/cargo/private/crates/" else "https://bench.proxy/cargo/crates/") `T.isPrefixOf` template) (benchFail "Cargo discovery bypassed the proxy archive route")
+    unless ("https://bench.proxy/cargo/crates/" `T.isPrefixOf` template) (benchFail "Cargo discovery bypassed the proxy archive route")
     pure fields
+
+-- The proxy's registry root, up to and including /cargo/.
+registryRoot :: Text -> Text
+registryRoot = fst . T.breakOnEnd "/cargo/"
 
 checkCrate :: LByteString -> Text -> Text -> IO ()
 checkCrate bytes name url = do
     response <- fetchChecked status200 [] url
     unless (HTTP.responseBody response == bytes) (benchFail ("Cargo archive bytes differ: " <> url))
-    let root = fst (T.breakOnEnd "/cargo/" url) <> if "/cargo/private/" `T.isInfixOf` url then "private/" else ""
-    fields <- checkedIndex (root <> cargoShard name)
+    fields <- checkedIndex (registryRoot url <> cargoShard name)
     records <- traverse (either (benchFail . toText) pure . parseEither (\row -> (,,) <$> row .: "name" <*> (row .: "vers" :: Parser Text) <*> row .: "cksum")) fields
     unless (records == [(name, "9999.0.2", hexSha256Of (LBS.toStrict bytes))]) (benchFail "Cargo archive preflight index identity or checksum differs")

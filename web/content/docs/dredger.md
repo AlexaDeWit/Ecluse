@@ -201,8 +201,9 @@ execution signal, cannot decide without that metadata: the evaluation stops ther
 is kept. Precedence still governs, so an undecided rule above a deny keeps the version rather than
 letting the deny remove it. Missing metadata on its own never deletes anything.
 
-The shipped npm `deny-scripts` applies only at admission and never deletes a stored copy.
-An operator can widen it to `[admission, revocation]` under `mounts.npm.rules`.
+The shipped npm `deny-scripts` and the shipped npm and Cargo `deny-external-dependencies` apply only
+at admission and never delete a stored copy. An operator can widen one to `[admission, revocation]`
+under its mount's rules.
 
 The Dredger evaluates the rules that apply at revocation and passes over a rule you limited to
 admission with `appliesTo: [admission]`

@@ -1,571 +1,1516 @@
 {
-  "_note": "Reviewed success floors by pod shape, scenario and pass. Calibration records conditions, retained row identities, source runs and native latency ceilings. Full coverage omits the 5% private-copy and default restart cases, which remain available by explicit selection. Cargo adds 154 floor cells and its independently measured latency policy. Existing npm and PyPI floors, operating settings, native latency records and historical source groups remain unchanged. The calibration rule identifies each source group. The Success floors section in docs/testing.md owns eligibility and recalibration. RubyGems adds 162 floor cells. The [RubyGems calibration ledger](rubygems-calibration.json) records their counts, source groups, original outcomes and limits.",
+  "_note": "Reviewed success floors by pod shape, scenario and pass. docs/testing.md, Success floors, owns the rule and how a calibration writes them.",
   "calibration": {
-    "measurementConditions": "unified-v2",
-    "retainedFloorConditions": {
-      "npm/herd": "legacy-v1",
-      "npm/pattern-ci-fleet": "legacy-v1",
-      "npm/pattern-cold-install": "legacy-v1",
-      "npm/pattern-cold-install-default-body-cap": "legacy-v1",
-      "npm/pattern-heterogeneous": "legacy-v1",
-      "npm/pattern-hot-set-control": "legacy-v1",
-      "npm/pattern-scan": "legacy-v1",
-      "npm/pattern-zipf": "legacy-v1",
-      "npm/ramp": "legacy-v1",
-      "npm/tarball-ceiling": "legacy-v1",
-      "npm/tarball-hot-path": "legacy-v1",
-      "npm/tarball-onboarding": "legacy-v1",
-      "npm/warm-under-cold": "legacy-v1",
-      "npm/worker-mirroring": "legacy-v1",
-      "pypi/wheel-ceiling": "legacy-v1"
-    },
-    "rule": "The first 35 run records preserve historical calibration provenance. The retained 78 floor cells keep their values and original source groups. Their scenario names carry legacy-v1 in retainedFloorConditions. Historical calibration: Each floor is half the lowest count of successes over the calibration runs for its scenario, pass, and pod shape, rounded down, and at least 1. A scenario with several loads takes the lowest count of any of them. The first ten listed runs retain the previous calibration for every unchanged floor. The next ten dispatched runs recalibrate only npm/tarball-ceiling at concurrency one, after its service pass changed from four connections to one. No loaded-pass or other scenario floor is recalibrated by those ten dispatched runs. The next nine dispatched runs add only the PyPI wheel-ceiling loaded and concurrency-one floors, and the PyPI herd, warm-under-cold and ramp loaded floors. Each pod shape has three observations on 4528093eb2834801f1a099713834ed4743426ff7. Every earlier floor retains its prior calibration. The final six dispatched runs add loaded and concurrency-one floors only for PyPI mirror-native-baseline, mirror-managed-warm, mirror-managed-revision and worker-mirroring. The mirror scenarios run under all four pod shapes, and worker-mirroring runs under unlimited only. Each applicable scenario has three observations per pod shape across 48166311b42f035e2a8ea96ead28f35886b4d713 and 30ca5206bbb5402c144a29f8857b029a0f54353a. These six runs change no earlier floor. The final three run records, 38497708999, 38508047442 and 38518124038, measured unified-v2 at ba4276f8e31077c72d41415b90f3847c3f51ae3a. Each supplies one qualifying observation under each of the four scheduled pod shapes. They recalibrate only the 11 npm listing scenarios and every PyPI scenario except wheel-ceiling. For those 262 cells, the floor is half the lowest selected success count, rounded down, and at least 1. A scenario with several loads uses its lowest count across those loads. Bootstrap selection uses existing applicable constraints: default unified-v2 inputs, the npm 230 ms ceiling, retained floors, successful outcomes and clean final memory. No PyPI ceiling existed during sample selection. The new PyPI ceiling is derived after selection and governs future observations. Recorded maxima can exceed that ceiling because the formula uses the lowest per-shape maximum. The original npm maxima and 230 ms ceiling keep their historical source group and are not recomputed from these new observations. The new PyPI maxima use only the final three qualifying runs. Each ecosystem uses the same ceiling formula independently because its floors depend on its own injected RTT. Runs 38502988119 and 38513015540 are wholly excluded because a profile exceeded the existing npm ceiling. They contribute no counts or latency maxima. Failures and adverse observations remain in the corresponding workflow reports. Future runs above either applicable native ceiling are unheld as a whole. The final 3 run records, 40016327682, 40018954941, 40019366641, measured unified-v2 at e72c13663bbccc4cd2f49b2d2e418f0a5bd284b0. Each supplies one qualifying observation under each of the four scheduled pod shapes. They add only the npm/slow-readers and pypi/slow-readers loaded floors: half the lowest count of either load, rounded down, and at least 1. Four runs dispatched at the same commit are wholly excluded, because a profile exceeded the PyPI ceiling of 20 ms. Run 39958149768 injected 22 ms under 4cpu-2gib and 23 ms under unlimited. Run 39985720638 injected 32 ms under 4cpu-2gib. Run 39991179217 injected 70 ms under 2cpu-1gib. Run 40020024081 injected 29 to 32 ms under every shape. They contribute no counts or latency maxima. Runs 40022928943, 40023792987, 40025832132 and 40027186864, dispatched at the same commit, were cancelled once three runs qualified, and contribute nothing. These runs change no earlier floor and no latency record. The next 12 run records add only the npm/herd-under-heavy-private and pypi/herd-under-heavy-private loaded floors under unified-v2. Three qualifying observations cover each scheduled pod shape at the default settings. 2cpu-1gib uses runs 40134641614, 40148240836, 40152892339. 4cpu-1gib uses runs 40134643827, 40138804551, 40142650212. 4cpu-2gib uses runs 40134645719, 40143174575, 40148248838. unlimited uses runs 40134647640, 40138820330, 40143181139. Each new floor is half the lowest qualifying background success count for its ecosystem and shape, rounded down, and at least 1. Primary burst successes and refusals remain diagnostic and do not supply floor counts. The sources span production commits under unchanged probe conditions, with exact measured commits recorded for every run. All 41 earlier source records retain their floor groups and native latency provenance. No earlier floor, measurement identity, operating setting, native latency maximum, or ceiling changes. Runs 40138798221 and 40138811076 are wholly excluded because their PyPI injected latency was 23 ms, above the existing 20 ms ceiling. Runs 40143168227 and 40149097553 are wholly excluded because their PyPI injected latency was 22 ms, above that ceiling. These four excluded runs contribute no floor counts or latency maxima. Their reports retain their outcomes. The final three added run records, 40308556913, 40344077603 and 40415498969, supply only the new Cargo floors and native latency record under unified-v2. Each supplies one qualifying full-profile observation for every scheduled shape, at its exact recorded source and default operating point. All 154 Cargo cells use half the lowest required success count across those three runs, rounded down and at least 1. Paired loads use their lower count, ramps use the lowest of all six steps, combined herd probes use only the background count, and worker mirroring uses unlimited only. Every earlier npm and PyPI floor, native maximum, ceiling and assigned source group remains unchanged. Bootstrap selection uses the existing npm 230 ms and PyPI 20 ms ceilings, complete native outcomes, retained floors, routine conditions and reported clean final memory. No Cargo ceiling existed during selection. The new Cargo ceiling is derived afterward from only this source group. Recorded Cargo maxima can exceed the derived future ceiling because the formula uses the lowest per-shape maximum. No selected sample is retrospectively excluded by that new ceiling. Later source changes do not relabel these measurements or establish performance parity. Runs 40308889538 and 40319891234 are wholly excluded for PyPI 22 ms. Run 40329872873 is wholly excluded for PyPI 23 ms and retains its wheel-hot-path concurrency-one 614 count against the existing 664 floor. Run 40355225948 is wholly excluded for PyPI 23 ms. Run 40380676927 is wholly excluded for PyPI 23 ms on two shapes and retains its wheel-hot-path concurrency-one 615 count against 664. Run 40394505205 is wholly excluded for PyPI 23 ms on 4cpu-1gib and 43 ms on unlimited. None of those workflows contributes any count or Cargo maximum from any shape. Run 40392907045 has two Hackage setup failures with zero observations for those shapes, so its incomplete grid contributes no count or maximum. All raw and adverse rows remain in the corresponding workflow artifacts. The selected sources retain six recovered premeasurement proxy boots under the documented fresh-cgroup retry policy. Two scenario/pass mappings remain unknown. Failed boots supply no measurements. Source 40308556913 retains one Cargo index-cold recovery, 40344077603 retains one unknown recovery, and 40415498969 retains four recoveries with one unknown mapping. RubyGems adds 162 cells using max(1, minimum actual required-load count // 2). The 152 changed cells use one focused observation per shape and pass at a64a08e8ebb4b987302054a27e7c03753d6bba32. The 10 unchanged cells use 70 actual values from seven historical runs at 86ea1d7029b4d24bca1d56c4c7470cfefee0a448. The eight-workflow broad-calibration limit requires best-effort calibration, with uncertainty and original failures retained in bench/load/rubygems-calibration.json.",
+    "measurementConditions": "unified-v3",
     "runner": "ubuntu-26.04-arm",
     "runnerOs": "Linux",
     "runnerArch": "ARM64",
+    "operatingPoint": { "durationSeconds": 30, "concurrency": 100, "payloadBytes": 363520, "upstreamLatencyMs": 20, "cacheMaxEntries": 3, "workingSet": 64, "serveMaxInFlight": null, "publicConnectionsPerHost": null, "privateConnectionsPerHost": null, "scenarios": null, "patternOverrides": [] },
+    "floorFraction": 0.60,
+    "confirmationReruns": 1,
+    "confirmationCap": 20,
     "runs": [
-      { "url": "https://github.com/AlexaDeWit/Ecluse/actions/runs/37923173226", "commit": "f434ed026836d20e58ac4c6dac1d37abb4953bd8" },
-      { "url": "https://github.com/AlexaDeWit/Ecluse/actions/runs/37769773705", "commit": "f434ed026836d20e58ac4c6dac1d37abb4953bd8" },
-      { "url": "https://github.com/AlexaDeWit/Ecluse/actions/runs/37611831876", "commit": "f434ed026836d20e58ac4c6dac1d37abb4953bd8" },
-      { "url": "https://github.com/AlexaDeWit/Ecluse/actions/runs/37455507981", "commit": "f434ed026836d20e58ac4c6dac1d37abb4953bd8" },
-      { "url": "https://github.com/AlexaDeWit/Ecluse/actions/runs/37303584780", "commit": "f434ed026836d20e58ac4c6dac1d37abb4953bd8" },
-      { "url": "https://github.com/AlexaDeWit/Ecluse/actions/runs/37195885786", "commit": "f434ed026836d20e58ac4c6dac1d37abb4953bd8" },
-      { "url": "https://github.com/AlexaDeWit/Ecluse/actions/runs/37114558339", "commit": "f434ed026836d20e58ac4c6dac1d37abb4953bd8" },
-      { "url": "https://github.com/AlexaDeWit/Ecluse/actions/runs/36995975221", "commit": "f434ed026836d20e58ac4c6dac1d37abb4953bd8" },
-      { "url": "https://github.com/AlexaDeWit/Ecluse/actions/runs/36852452238", "commit": "f434ed026836d20e58ac4c6dac1d37abb4953bd8" },
-      { "url": "https://github.com/AlexaDeWit/Ecluse/actions/runs/36702902323", "commit": "f434ed026836d20e58ac4c6dac1d37abb4953bd8" },
-      { "url": "https://github.com/AlexaDeWit/Ecluse/actions/runs/38151835669", "commit": "730f8a3a6c5d2c3bad5304c8df5a0cb31910c3e0" },
-      { "url": "https://github.com/AlexaDeWit/Ecluse/actions/runs/38152695813", "commit": "45f589e0496b54936307be97fadc06f26946272e" },
-      { "url": "https://github.com/AlexaDeWit/Ecluse/actions/runs/38155193255", "commit": "45f589e0496b54936307be97fadc06f26946272e" },
-      { "url": "https://github.com/AlexaDeWit/Ecluse/actions/runs/38155896119", "commit": "45f589e0496b54936307be97fadc06f26946272e" },
-      { "url": "https://github.com/AlexaDeWit/Ecluse/actions/runs/38156369698", "commit": "45f589e0496b54936307be97fadc06f26946272e" },
-      { "url": "https://github.com/AlexaDeWit/Ecluse/actions/runs/38157214161", "commit": "45f589e0496b54936307be97fadc06f26946272e" },
-      { "url": "https://github.com/AlexaDeWit/Ecluse/actions/runs/38157535075", "commit": "45f589e0496b54936307be97fadc06f26946272e" },
-      { "url": "https://github.com/AlexaDeWit/Ecluse/actions/runs/38158022411", "commit": "45f589e0496b54936307be97fadc06f26946272e" },
-      { "url": "https://github.com/AlexaDeWit/Ecluse/actions/runs/38158356831", "commit": "45f589e0496b54936307be97fadc06f26946272e" },
-      { "url": "https://github.com/AlexaDeWit/Ecluse/actions/runs/38158835377", "commit": "45f589e0496b54936307be97fadc06f26946272e" },
-      { "url": "https://github.com/AlexaDeWit/Ecluse/actions/runs/38200556056", "commit": "4528093eb2834801f1a099713834ed4743426ff7" },
-      { "url": "https://github.com/AlexaDeWit/Ecluse/actions/runs/38200589796", "commit": "4528093eb2834801f1a099713834ed4743426ff7" },
-      { "url": "https://github.com/AlexaDeWit/Ecluse/actions/runs/38200594184", "commit": "4528093eb2834801f1a099713834ed4743426ff7" },
-      { "url": "https://github.com/AlexaDeWit/Ecluse/actions/runs/38200597390", "commit": "4528093eb2834801f1a099713834ed4743426ff7" },
-      { "url": "https://github.com/AlexaDeWit/Ecluse/actions/runs/38200601256", "commit": "4528093eb2834801f1a099713834ed4743426ff7" },
-      { "url": "https://github.com/AlexaDeWit/Ecluse/actions/runs/38200654848", "commit": "4528093eb2834801f1a099713834ed4743426ff7" },
-      { "url": "https://github.com/AlexaDeWit/Ecluse/actions/runs/38200658446", "commit": "4528093eb2834801f1a099713834ed4743426ff7" },
-      { "url": "https://github.com/AlexaDeWit/Ecluse/actions/runs/38200664633", "commit": "4528093eb2834801f1a099713834ed4743426ff7" },
-      { "url": "https://github.com/AlexaDeWit/Ecluse/actions/runs/38200668442", "commit": "4528093eb2834801f1a099713834ed4743426ff7" },
-      { "url": "https://github.com/AlexaDeWit/Ecluse/actions/runs/38239869524", "commit": "48166311b42f035e2a8ea96ead28f35886b4d713" },
-      { "url": "https://github.com/AlexaDeWit/Ecluse/actions/runs/38247813334", "commit": "30ca5206bbb5402c144a29f8857b029a0f54353a" },
-      { "url": "https://github.com/AlexaDeWit/Ecluse/actions/runs/38247818451", "commit": "30ca5206bbb5402c144a29f8857b029a0f54353a" },
-      { "url": "https://github.com/AlexaDeWit/Ecluse/actions/runs/38247824220", "commit": "30ca5206bbb5402c144a29f8857b029a0f54353a" },
-      { "url": "https://github.com/AlexaDeWit/Ecluse/actions/runs/38247829156", "commit": "30ca5206bbb5402c144a29f8857b029a0f54353a" },
-      { "url": "https://github.com/AlexaDeWit/Ecluse/actions/runs/38247834023", "commit": "30ca5206bbb5402c144a29f8857b029a0f54353a" },
-      { "url": "https://github.com/AlexaDeWit/Ecluse/actions/runs/38497708999", "commit": "ba4276f8e31077c72d41415b90f3847c3f51ae3a" },
-      { "url": "https://github.com/AlexaDeWit/Ecluse/actions/runs/38508047442", "commit": "ba4276f8e31077c72d41415b90f3847c3f51ae3a" },
-      { "url": "https://github.com/AlexaDeWit/Ecluse/actions/runs/38518124038", "commit": "ba4276f8e31077c72d41415b90f3847c3f51ae3a" },
-      { "url": "https://github.com/AlexaDeWit/Ecluse/actions/runs/40016327682", "commit": "e72c13663bbccc4cd2f49b2d2e418f0a5bd284b0" },
-      { "url": "https://github.com/AlexaDeWit/Ecluse/actions/runs/40018954941", "commit": "e72c13663bbccc4cd2f49b2d2e418f0a5bd284b0" },
-      { "url": "https://github.com/AlexaDeWit/Ecluse/actions/runs/40019366641", "commit": "e72c13663bbccc4cd2f49b2d2e418f0a5bd284b0" },
-      { "url": "https://github.com/AlexaDeWit/Ecluse/actions/runs/40134641614", "commit": "0040aaca9f2722cd331c2cd9ab5f605ecb0a01a8" },
-      { "url": "https://github.com/AlexaDeWit/Ecluse/actions/runs/40134643827", "commit": "0040aaca9f2722cd331c2cd9ab5f605ecb0a01a8" },
-      { "url": "https://github.com/AlexaDeWit/Ecluse/actions/runs/40134645719", "commit": "0040aaca9f2722cd331c2cd9ab5f605ecb0a01a8" },
-      { "url": "https://github.com/AlexaDeWit/Ecluse/actions/runs/40134647640", "commit": "0040aaca9f2722cd331c2cd9ab5f605ecb0a01a8" },
-      { "url": "https://github.com/AlexaDeWit/Ecluse/actions/runs/40138804551", "commit": "e584d7eba3d864e567c2c5616d82ecf597cc08ce" },
-      { "url": "https://github.com/AlexaDeWit/Ecluse/actions/runs/40138820330", "commit": "e584d7eba3d864e567c2c5616d82ecf597cc08ce" },
-      { "url": "https://github.com/AlexaDeWit/Ecluse/actions/runs/40142650212", "commit": "b4000350653e0dd41c5577183328c4363ce9615d" },
-      { "url": "https://github.com/AlexaDeWit/Ecluse/actions/runs/40143174575", "commit": "b4000350653e0dd41c5577183328c4363ce9615d" },
-      { "url": "https://github.com/AlexaDeWit/Ecluse/actions/runs/40143181139", "commit": "b4000350653e0dd41c5577183328c4363ce9615d" },
-      { "url": "https://github.com/AlexaDeWit/Ecluse/actions/runs/40148240836", "commit": "b4000350653e0dd41c5577183328c4363ce9615d" },
-      { "url": "https://github.com/AlexaDeWit/Ecluse/actions/runs/40148248838", "commit": "b4000350653e0dd41c5577183328c4363ce9615d" },
-      { "url": "https://github.com/AlexaDeWit/Ecluse/actions/runs/40152892339", "commit": "b4000350653e0dd41c5577183328c4363ce9615d" },
-      { "url": "https://github.com/AlexaDeWit/Ecluse/actions/runs/40308556913", "commit": "406b7719283c4d1a217d56a2f1bef799698ccc6c" },
-      { "url": "https://github.com/AlexaDeWit/Ecluse/actions/runs/40344077603", "commit": "314721f635c04c889e9c159a5cb7824c9126e369" },
-      { "url": "https://github.com/AlexaDeWit/Ecluse/actions/runs/40415498969", "commit": "a0a865903d30cfb3994cef20daadf6224029d31d" },
-      { "url": "https://github.com/AlexaDeWit/Ecluse/actions/runs/40623487662", "commit": "86ea1d7029b4d24bca1d56c4c7470cfefee0a448" },
-      { "url": "https://github.com/AlexaDeWit/Ecluse/actions/runs/40624490490", "commit": "86ea1d7029b4d24bca1d56c4c7470cfefee0a448" },
-      { "url": "https://github.com/AlexaDeWit/Ecluse/actions/runs/40633488093", "commit": "86ea1d7029b4d24bca1d56c4c7470cfefee0a448" },
-      { "url": "https://github.com/AlexaDeWit/Ecluse/actions/runs/40643698023", "commit": "86ea1d7029b4d24bca1d56c4c7470cfefee0a448" },
-      { "url": "https://github.com/AlexaDeWit/Ecluse/actions/runs/40727385913", "commit": "86ea1d7029b4d24bca1d56c4c7470cfefee0a448" },
-      { "url": "https://github.com/AlexaDeWit/Ecluse/actions/runs/40727575953", "commit": "86ea1d7029b4d24bca1d56c4c7470cfefee0a448" },
-      { "url": "https://github.com/AlexaDeWit/Ecluse/actions/runs/40744387530", "commit": "86ea1d7029b4d24bca1d56c4c7470cfefee0a448" },
-      { "url": "https://github.com/AlexaDeWit/Ecluse/actions/runs/40792850698", "commit": "a64a08e8ebb4b987302054a27e7c03753d6bba32" }
-    ],
-    "operatingPoint": {
-      "durationSeconds": 30,
-      "concurrency": 100,
-      "payloadBytes": 363520,
-      "upstreamLatencyMs": 5,
-      "cacheMaxEntries": 3,
-      "workingSet": 64,
-      "serveMaxInFlight": null,
-      "publicConnectionsPerHost": null,
-      "privateConnectionsPerHost": null,
-      "scenarios": null,
-      "patternOverrides": []
-    },
-    "npmInjectedLatency": {
-      "rule": "The ceiling is 1.5 times the lowest of the pod shapes' highest latencies, rounded up to 10 ms. A latency-bound floor first breaches near twice the highest latency of its own pod shape, so the pod shape with the lowest one binds.",
-      "highestMs": { "unlimited": 153, "2cpu-1gib": 151, "4cpu-1gib": 177, "4cpu-2gib": 203 },
-      "ceilingMs": 230
-    },
-    "pypiInjectedLatency": {
-      "rule": "Derive the future ceiling after selecting bootstrap samples under existing applicable constraints. Use 1.5 times the lowest per-shape maximum, rounded up to 10 ms. Recorded maxima can exceed the derived ceiling. Only runs 38497708999, 38508047442 and 38518124038 supply these maxima.",
-      "highestMs": {
-        "unlimited": 23,
-        "2cpu-1gib": 10,
-        "4cpu-1gib": 19,
-        "4cpu-2gib": 22
-      },
-      "ceilingMs": 20
-    },
-    "cargoInjectedLatency": {
-      "rule": "Select these three bootstrap runs under existing native constraints, then derive the future Cargo ceiling as 1.5 times the lowest per-shape maximum, rounded up to 10 ms. Only runs 40308556913, 40344077603 and 40415498969 supply these maxima. Recorded maxima can exceed the derived future ceiling.",
-      "highestMs": {
-        "unlimited": 4,
-        "2cpu-1gib": 15,
-        "4cpu-1gib": 16,
-        "4cpu-2gib": 12
-      },
-      "ceilingMs": 10
-    },
-    "rubygemsInjectedLatency": {
-      "rule": "Native /info maxima from all seven historical runs and the focused run. The existing ceiling formula applies to future runs only.",
-      "highestMs": {
-        "unlimited": 23,
-        "2cpu-1gib": 14,
-        "4cpu-1gib": 24,
-        "4cpu-2gib": 11
-      },
-      "ceilingMs": 20
-    }
+      { "id": 41191783409, "url": "https://github.com/AlexaDeWit/Ecluse/actions/runs/41191783409", "commit": "9b5e47246f70cffcf3218707f8bd3466fdf432c5", "event": "workflow_dispatch" },
+      { "id": 41191785301, "url": "https://github.com/AlexaDeWit/Ecluse/actions/runs/41191785301", "commit": "9b5e47246f70cffcf3218707f8bd3466fdf432c5", "event": "workflow_dispatch" },
+      { "id": 41191787032, "url": "https://github.com/AlexaDeWit/Ecluse/actions/runs/41191787032", "commit": "9b5e47246f70cffcf3218707f8bd3466fdf432c5", "event": "workflow_dispatch" }
+    ]
   },
   "floors": {
     "unlimited": {
-      "npm/merge-cold": { "loaded": 1535, "concurrencyOne": 54 },
-      "npm/merge-cold-advisories": { "loaded": 1461, "concurrencyOne": 55 },
-      "npm/merge-cold-all-advisory-rules": { "loaded": 1397, "concurrencyOne": 54 },
-      "npm/heavy-private-25pct": { "loaded": 609, "concurrencyOne": 55 },
-      "npm/heavy-private": { "loaded": 242, "concurrencyOne": 52 },
-      "npm/slow-readers": { "loaded": 320 },
-      "npm/assembled-response-hit": { "loaded": 1759, "concurrencyOne": 54 },
-      "npm/revalidate-not-modified": { "loaded": 2040, "concurrencyOne": 51 },
-      "npm/revalidate-not-modified-advisories": { "loaded": 2023, "concurrencyOne": 51 },
-      "npm/cache-fits-large": { "loaded": 1779, "concurrencyOne": 61 },
-      "npm/cache-evicts-large": { "loaded": 1586, "concurrencyOne": 54 },
-      "npm/tarball-hot-path": { "loaded": 10575, "concurrencyOne": 106 },
-      "npm/tarball-onboarding": { "loaded": 2780, "concurrencyOne": 28 },
-      "npm/tarball-ceiling": { "loaded": 22856, "concurrencyOne": 4274 },
-      "npm/herd": { "loaded": 15 },
-      "npm/herd-under-heavy-private": { "loaded": 197 },
-      "npm/warm-under-cold": { "loaded": 197 },
-      "npm/ramp": { "loaded": 413 },
-      "npm/worker-mirroring": { "loaded": 106, "concurrencyOne": 106 },
-      "npm/pattern-hot-set-control": { "loaded": 72 },
-      "npm/pattern-cold-install": { "loaded": 4 },
-      "npm/pattern-ci-fleet": { "loaded": 18 },
-      "npm/pattern-heterogeneous": { "loaded": 2 },
-      "npm/pattern-zipf": { "loaded": 72 },
-      "npm/pattern-scan": { "loaded": 18 },
-      "npm/pattern-cold-install-default-body-cap": { "loaded": 4 },
-      "pypi/index-cold": { "loaded": 2845, "concurrencyOne": 160 },
-      "pypi/index-cold-advisories": { "loaded": 2715, "concurrencyOne": 167 },
-      "pypi/index-cold-all-advisory-rules": { "loaded": 2606, "concurrencyOne": 161 },
-      "pypi/heavy-private-25pct": { "loaded": 1048, "concurrencyOne": 155 },
-      "pypi/heavy-private": { "loaded": 452, "concurrencyOne": 145 },
-      "pypi/slow-readers": { "loaded": 721 },
-      "pypi/assembled-response-hit": { "loaded": 3882, "concurrencyOne": 189 },
-      "pypi/revalidate-not-modified": { "loaded": 3528, "concurrencyOne": 163 },
-      "pypi/revalidate-not-modified-advisories": { "loaded": 3079, "concurrencyOne": 164 },
-      "pypi/cache-fits-large": { "loaded": 4438, "concurrencyOne": 228 },
-      "pypi/cache-evicts-large": { "loaded": 4188, "concurrencyOne": 207 },
-      "pypi/wheel-hot-path": { "loaded": 13366, "concurrencyOne": 305 },
-      "pypi/wheel-onboarding": { "loaded": 4461, "concurrencyOne": 45 },
-      "pypi/wheel-ceiling": { "loaded": 14948, "concurrencyOne": 2474 },
-      "pypi/herd": { "loaded": 50 },
-      "pypi/herd-under-heavy-private": { "loaded": 472 },
-      "pypi/warm-under-cold": { "loaded": 859 },
-      "pypi/ramp": { "loaded": 1497 },
-      "pypi/mirror-native-baseline": { "loaded": 984, "concurrencyOne": 269 },
-      "pypi/mirror-managed-warm": { "loaded": 481, "concurrencyOne": 127 },
-      "pypi/mirror-managed-revision": { "loaded": 44, "concurrencyOne": 38 },
-      "pypi/worker-mirroring": { "loaded": 27, "concurrencyOne": 27 },
-      "pypi/pattern-hot-set-control": { "loaded": 24 },
-      "pypi/pattern-cold-install": { "loaded": 1 },
-      "pypi/pattern-ci-fleet": { "loaded": 6 },
-      "pypi/pattern-heterogeneous": { "loaded": 2 },
-      "pypi/pattern-zipf": { "loaded": 24 },
-      "pypi/pattern-scan": { "loaded": 6 },
-      "pypi/pattern-cold-install-default-body-cap": { "loaded": 1 },
-      "cargo/assembled-response-hit": { "loaded": 3569, "concurrencyOne": 167 },
-      "cargo/cache-evicts-large": { "loaded": 3128, "concurrencyOne": 180 },
-      "cargo/cache-fits-large": { "loaded": 3508, "concurrencyOne": 183 },
-      "cargo/crate-ceiling": { "loaded": 17258, "concurrencyOne": 1729 },
-      "cargo/crate-hot-path": { "loaded": 21159, "concurrencyOne": 1005 },
-      "cargo/crate-onboarding": { "loaded": 11696, "concurrencyOne": 512 },
-      "cargo/heavy-private-25pct": { "loaded": 416, "concurrencyOne": 144 },
-      "cargo/heavy-private": { "loaded": 97, "concurrencyOne": 55 },
-      "cargo/herd-under-heavy-private": { "loaded": 89 },
-      "cargo/herd": { "loaded": 50 },
-      "cargo/index-cold-advisories": { "loaded": 2277, "concurrencyOne": 164 },
-      "cargo/index-cold-all-advisory-rules": { "loaded": 2223, "concurrencyOne": 163 },
-      "cargo/index-cold": { "loaded": 2839, "concurrencyOne": 164 },
-      "cargo/pattern-ci-fleet": { "loaded": 12 },
-      "cargo/pattern-cold-install-default-body-cap": { "loaded": 3 },
-      "cargo/pattern-cold-install": { "loaded": 3 },
-      "cargo/pattern-heterogeneous": { "loaded": 4 },
-      "cargo/pattern-hot-set-control": { "loaded": 48 },
-      "cargo/pattern-scan": { "loaded": 12 },
-      "cargo/pattern-zipf": { "loaded": 48 },
-      "cargo/ramp": { "loaded": 1815 },
-      "cargo/revalidate-not-modified-advisories": { "loaded": 7080, "concurrencyOne": 148 },
-      "cargo/revalidate-not-modified": { "loaded": 7440, "concurrencyOne": 149 },
-      "cargo/slow-readers": { "loaded": 649 },
-      "cargo/warm-under-cold": { "loaded": 1810 },
-      "cargo/worker-mirroring": { "loaded": 209, "concurrencyOne": 209 },
-      "rubygems/gem-ceiling": { "loaded": 4305, "concurrencyOne": 57 },
-      "rubygems/gem-hot-path": { "loaded": 4043, "concurrencyOne": 46 },
-      "rubygems/gem-onboarding": { "loaded": 1536, "concurrencyOne": 25 },
-      "rubygems/heavy-private": { "loaded": 1272, "concurrencyOne": 310 },
-      "rubygems/heavy-private-25pct": { "loaded": 3182, "concurrencyOne": 317 },
-      "rubygems/herd": { "loaded": 50 },
-      "rubygems/herd-under-heavy-private": { "loaded": 1236 },
-      "rubygems/info-cold": { "loaded": 11588, "concurrencyOne": 324 },
-      "rubygems/info-cold-advisories": { "loaded": 6923, "concurrencyOne": 319 },
-      "rubygems/info-cold-all-advisory-rules": { "loaded": 6341, "concurrencyOne": 321 },
-      "rubygems/info-repeated-corpus": { "loaded": 11504, "concurrencyOne": 321 },
-      "rubygems/info-working-set-many": { "loaded": 11260, "concurrencyOne": 321 },
-      "rubygems/info-working-set-one": { "loaded": 13799, "concurrencyOne": 336 },
-      "rubygems/pattern-ci-fleet": { "loaded": 6 },
-      "rubygems/pattern-cold-install": { "loaded": 1 },
-      "rubygems/pattern-cold-install-default-body-cap": { "loaded": 1 },
-      "rubygems/pattern-heterogeneous": { "loaded": 2 },
-      "rubygems/pattern-hot-set-control": { "loaded": 24 },
-      "rubygems/pattern-scan": { "loaded": 6 },
-      "rubygems/pattern-zipf": { "loaded": 24 },
-      "rubygems/quick-gemspec": { "loaded": 2953, "concurrencyOne": 50 },
-      "rubygems/ramp": { "loaded": 3567 },
-      "rubygems/revalidate-not-modified": { "loaded": 13849, "concurrencyOne": 338 },
-      "rubygems/revalidate-not-modified-advisories": { "loaded": 10666, "concurrencyOne": 332 },
-      "rubygems/slow-readers": { "loaded": 1217 },
-      "rubygems/warm-under-cold": { "loaded": 4193 },
-      "rubygems/worker-mirroring": { "loaded": 14, "concurrencyOne": 14 }
+      "cargo/assembled-response-hit": {
+        "loaded": { "floor": 9068, "median": 15113, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 152, "median": 252, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "cargo/cache-evicts-large": {
+        "loaded": { "floor": 10329, "median": 17215, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 159, "median": 264, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "cargo/cache-fits-large": {
+        "loaded": { "floor": 10397, "median": 17328, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 162, "median": 270, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "cargo/crate-ceiling": {
+        "loaded": { "floor": 27171, "median": 45285, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 2154, "median": 3589, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "cargo/crate-hot-path": {
+        "loaded": { "floor": 22648, "median": 37746, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 285, "median": 474, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "cargo/crate-onboarding": {
+        "loaded": { "floor": 14367, "median": 23944, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 172, "median": 286, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "cargo/heavy-private": {
+        "loaded": { "floor": 450, "median": 750, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 141, "median": 235, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "cargo/heavy-private-25pct": {
+        "loaded": { "floor": 1355, "median": 2257, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 147, "median": 244, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "cargo/herd": {
+        "loaded": { "floor": 60, "median": 100, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "cargo/herd-under-heavy-private": {
+        "loaded": { "floor": 392, "median": 653, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "cargo/index-cold": {
+        "loaded": { "floor": 8325, "median": 13874, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 150, "median": 250, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "cargo/index-cold-advisories": {
+        "loaded": { "floor": 7331, "median": 12218, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 147, "median": 245, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "cargo/index-cold-all-advisory-rules": {
+        "loaded": { "floor": 6745, "median": 11241, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 147, "median": 245, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "cargo/pattern-ci-fleet": {
+        "loaded": { "floor": 15, "median": 24, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "cargo/pattern-cold-install": {
+        "loaded": { "floor": 4, "median": 6, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "cargo/pattern-cold-install-default-body-cap": {
+        "loaded": { "floor": 4, "median": 6, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "cargo/pattern-heterogeneous": {
+        "loaded": { "floor": 5, "median": 8, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "cargo/pattern-hot-set-control": {
+        "loaded": { "floor": 58, "median": 96, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "cargo/pattern-scan": {
+        "loaded": { "floor": 15, "median": 24, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "cargo/pattern-zipf": {
+        "loaded": { "floor": 58, "median": 96, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "cargo/ramp": {
+        "loaded": { "floor": 1736, "median": 2893, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "cargo/revalidate-not-modified": {
+        "loaded": { "floor": 7297, "median": 12161, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 137, "median": 228, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "cargo/revalidate-not-modified-advisories": {
+        "loaded": { "floor": 7272, "median": 12120, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 138, "median": 229, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "cargo/slow-readers": {
+        "loaded": { "floor": 1127, "median": 1878, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "cargo/warm-under-cold": {
+        "loaded": { "floor": 4235, "median": 7058, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "cargo/worker-mirroring": {
+        "loaded": { "floor": 58, "median": 96, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 58, "median": 96, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "npm/assembled-response-hit": {
+        "loaded": { "floor": 4446, "median": 7410, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 159, "median": 265, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "npm/cache-evicts-large": {
+        "loaded": { "floor": 4332, "median": 7220, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 162, "median": 269, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "npm/cache-fits-large": {
+        "loaded": { "floor": 4714, "median": 7856, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 169, "median": 281, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "npm/heavy-private": {
+        "loaded": { "floor": 308, "median": 512, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 142, "median": 236, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "npm/heavy-private-25pct": {
+        "loaded": { "floor": 882, "median": 1470, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 144, "median": 240, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "npm/herd": {
+        "loaded": { "floor": 60, "median": 100, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "npm/herd-under-heavy-private": {
+        "loaded": { "floor": 254, "median": 423, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "npm/merge-cold": {
+        "loaded": { "floor": 3569, "median": 5948, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 146, "median": 243, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "npm/merge-cold-advisories": {
+        "loaded": { "floor": 1498, "median": 2496, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 153, "median": 254, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "npm/merge-cold-all-advisory-rules": {
+        "loaded": { "floor": 1458, "median": 2430, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 141, "median": 234, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "npm/pattern-ci-fleet": {
+        "loaded": { "floor": 22, "median": 36, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "npm/pattern-cold-install": {
+        "loaded": { "floor": 6, "median": 9, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "npm/pattern-cold-install-default-body-cap": {
+        "loaded": { "floor": 6, "median": 9, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "npm/pattern-heterogeneous": {
+        "loaded": { "floor": 3, "median": 4, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "npm/pattern-hot-set-control": {
+        "loaded": { "floor": 87, "median": 144, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "npm/pattern-scan": {
+        "loaded": { "floor": 22, "median": 36, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "npm/pattern-zipf": {
+        "loaded": { "floor": 87, "median": 144, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "npm/ramp": {
+        "loaded": { "floor": 1181, "median": 1967, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "npm/revalidate-not-modified": {
+        "loaded": { "floor": 6192, "median": 10320, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 149, "median": 247, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "npm/revalidate-not-modified-advisories": {
+        "loaded": { "floor": 5832, "median": 9720, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 148, "median": 246, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "npm/slow-readers": {
+        "loaded": { "floor": 321, "median": 535, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "npm/tarball-ceiling": {
+        "loaded": { "floor": 43224, "median": 72039, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 5410, "median": 9016, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "npm/tarball-hot-path": {
+        "loaded": { "floor": 51523, "median": 85871, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 836, "median": 1393, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "npm/tarball-onboarding": {
+        "loaded": { "floor": 26807, "median": 44677, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 422, "median": 703, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "npm/warm-under-cold": {
+        "loaded": { "floor": 1433, "median": 2388, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "npm/worker-mirroring": {
+        "loaded": { "floor": 805, "median": 1341, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 804, "median": 1339, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "pypi/assembled-response-hit": {
+        "loaded": { "floor": 9564, "median": 15940, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 274, "median": 456, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "pypi/cache-evicts-large": {
+        "loaded": { "floor": 11423, "median": 19037, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 311, "median": 518, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "pypi/cache-fits-large": {
+        "loaded": { "floor": 12156, "median": 20260, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 313, "median": 521, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "pypi/heavy-private": {
+        "loaded": { "floor": 638, "median": 1062, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 221, "median": 368, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "pypi/heavy-private-25pct": {
+        "loaded": { "floor": 1827, "median": 3044, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 233, "median": 388, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "pypi/herd": {
+        "loaded": { "floor": 60, "median": 100, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "pypi/herd-under-heavy-private": {
+        "loaded": { "floor": 578, "median": 962, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "pypi/index-cold": {
+        "loaded": { "floor": 8033, "median": 13388, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 245, "median": 408, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "pypi/index-cold-advisories": {
+        "loaded": { "floor": 4272, "median": 7120, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 231, "median": 384, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "pypi/index-cold-all-advisory-rules": {
+        "loaded": { "floor": 4371, "median": 7284, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 239, "median": 398, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "pypi/mirror-managed-revision": {
+        "loaded": { "floor": 60, "median": 99, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 50, "median": 82, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "pypi/mirror-managed-warm": {
+        "loaded": { "floor": 662, "median": 1102, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 174, "median": 290, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "pypi/mirror-native-baseline": {
+        "loaded": { "floor": 1545, "median": 2575, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 393, "median": 654, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "pypi/pattern-ci-fleet": {
+        "loaded": { "floor": 8, "median": 12, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "pypi/pattern-cold-install": {
+        "loaded": { "floor": 2, "median": 3, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "pypi/pattern-cold-install-default-body-cap": {
+        "loaded": { "floor": 2, "median": 3, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "pypi/pattern-heterogeneous": {
+        "loaded": { "floor": 3, "median": 4, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "pypi/pattern-hot-set-control": {
+        "loaded": { "floor": 29, "median": 48, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "pypi/pattern-scan": {
+        "loaded": { "floor": 8, "median": 12, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "pypi/pattern-zipf": {
+        "loaded": { "floor": 29, "median": 48, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "pypi/ramp": {
+        "loaded": { "floor": 2412, "median": 4020, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "pypi/revalidate-not-modified": {
+        "loaded": { "floor": 8635, "median": 14391, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 243, "median": 405, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "pypi/revalidate-not-modified-advisories": {
+        "loaded": { "floor": 8166, "median": 13610, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 240, "median": 399, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "pypi/slow-readers": {
+        "loaded": { "floor": 1001, "median": 1668, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "pypi/warm-under-cold": {
+        "loaded": { "floor": 2709, "median": 4515, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "pypi/wheel-ceiling": {
+        "loaded": { "floor": 32153, "median": 53587, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 3072, "median": 5120, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "pypi/wheel-hot-path": {
+        "loaded": { "floor": 32028, "median": 53380, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 425, "median": 708, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "pypi/wheel-onboarding": {
+        "loaded": { "floor": 21972, "median": 36620, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 284, "median": 472, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "pypi/worker-mirroring": {
+        "loaded": { "floor": 38, "median": 62, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 38, "median": 62, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "rubygems/gem-ceiling": {
+        "loaded": { "floor": 22022, "median": 36702, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 1874, "median": 3122, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "rubygems/gem-hot-path": {
+        "loaded": { "floor": 19080, "median": 31799, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 281, "median": 467, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "rubygems/gem-onboarding": {
+        "loaded": { "floor": 14729, "median": 24548, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 212, "median": 352, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "rubygems/heavy-private": {
+        "loaded": { "floor": 1562, "median": 2602, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 403, "median": 671, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "rubygems/heavy-private-25pct": {
+        "loaded": { "floor": 3787, "median": 6311, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 416, "median": 692, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "rubygems/herd": {
+        "loaded": { "floor": 60, "median": 100, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "rubygems/herd-under-heavy-private": {
+        "loaded": { "floor": 1502, "median": 2502, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "rubygems/info-cold": {
+        "loaded": { "floor": 14571, "median": 24285, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 419, "median": 698, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "rubygems/info-cold-advisories": {
+        "loaded": { "floor": 8130, "median": 13549, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 416, "median": 693, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "rubygems/info-cold-all-advisory-rules": {
+        "loaded": { "floor": 7913, "median": 13187, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 416, "median": 693, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "rubygems/info-repeated-corpus": {
+        "loaded": { "floor": 14571, "median": 24285, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 423, "median": 705, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "rubygems/info-working-set-many": {
+        "loaded": { "floor": 14069, "median": 23447, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 423, "median": 704, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "rubygems/info-working-set-one": {
+        "loaded": { "floor": 17585, "median": 29308, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 441, "median": 734, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "rubygems/pattern-ci-fleet": {
+        "loaded": { "floor": 8, "median": 12, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "rubygems/pattern-cold-install": {
+        "loaded": { "floor": 2, "median": 3, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "rubygems/pattern-cold-install-default-body-cap": {
+        "loaded": { "floor": 2, "median": 3, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "rubygems/pattern-heterogeneous": {
+        "loaded": { "floor": 3, "median": 4, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "rubygems/pattern-hot-set-control": {
+        "loaded": { "floor": 29, "median": 48, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "rubygems/pattern-scan": {
+        "loaded": { "floor": 8, "median": 12, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "rubygems/pattern-zipf": {
+        "loaded": { "floor": 29, "median": 48, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "rubygems/quick-gemspec": {
+        "loaded": { "floor": 23738, "median": 39562, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 420, "median": 700, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "rubygems/ramp": {
+        "loaded": { "floor": 4538, "median": 7563, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "rubygems/revalidate-not-modified": {
+        "loaded": { "floor": 17930, "median": 29883, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 442, "median": 736, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "rubygems/revalidate-not-modified-advisories": {
+        "loaded": { "floor": 13071, "median": 21785, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 434, "median": 723, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "rubygems/slow-readers": {
+        "loaded": { "floor": 1604, "median": 2672, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "rubygems/warm-under-cold": {
+        "loaded": { "floor": 5206, "median": 8676, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "rubygems/worker-mirroring": {
+        "loaded": { "floor": 20, "median": 33, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 20, "median": 33, "from": [41191783409, 41191785301, 41191787032] }
+      }
     },
     "2cpu-1gib": {
-      "npm/merge-cold": { "loaded": 717, "concurrencyOne": 52 },
-      "npm/merge-cold-advisories": { "loaded": 722, "concurrencyOne": 46 },
-      "npm/merge-cold-all-advisory-rules": { "loaded": 697, "concurrencyOne": 48 },
-      "npm/heavy-private-25pct": { "loaded": 358, "concurrencyOne": 48 },
-      "npm/heavy-private": { "loaded": 145, "concurrencyOne": 52 },
-      "npm/slow-readers": { "loaded": 113 },
-      "npm/assembled-response-hit": { "loaded": 777, "concurrencyOne": 54 },
-      "npm/revalidate-not-modified": { "loaded": 960, "concurrencyOne": 49 },
-      "npm/revalidate-not-modified-advisories": { "loaded": 947, "concurrencyOne": 49 },
-      "npm/cache-fits-large": { "loaded": 772, "concurrencyOne": 55 },
-      "npm/cache-evicts-large": { "loaded": 715, "concurrencyOne": 53 },
-      "npm/tarball-hot-path": { "loaded": 10699, "concurrencyOne": 108 },
-      "npm/tarball-onboarding": { "loaded": 2797, "concurrencyOne": 28 },
-      "npm/tarball-ceiling": { "loaded": 19364, "concurrencyOne": 4327 },
-      "npm/herd": { "loaded": 10 },
-      "npm/herd-under-heavy-private": { "loaded": 169 },
-      "npm/warm-under-cold": { "loaded": 116 },
-      "npm/ramp": { "loaded": 234 },
-      "npm/pattern-hot-set-control": { "loaded": 72 },
-      "npm/pattern-cold-install": { "loaded": 4 },
-      "npm/pattern-ci-fleet": { "loaded": 18 },
-      "npm/pattern-heterogeneous": { "loaded": 2 },
-      "npm/pattern-zipf": { "loaded": 72 },
-      "npm/pattern-scan": { "loaded": 18 },
-      "npm/pattern-cold-install-default-body-cap": { "loaded": 4 },
-      "pypi/index-cold": { "loaded": 1984, "concurrencyOne": 187 },
-      "pypi/index-cold-advisories": { "loaded": 1945, "concurrencyOne": 185 },
-      "pypi/index-cold-all-advisory-rules": { "loaded": 1790, "concurrencyOne": 185 },
-      "pypi/heavy-private-25pct": { "loaded": 647, "concurrencyOne": 185 },
-      "pypi/heavy-private": { "loaded": 286, "concurrencyOne": 165 },
-      "pypi/slow-readers": { "loaded": 162 },
-      "pypi/assembled-response-hit": { "loaded": 2465, "concurrencyOne": 219 },
-      "pypi/revalidate-not-modified": { "loaded": 1968, "concurrencyOne": 196 },
-      "pypi/revalidate-not-modified-advisories": { "loaded": 1958, "concurrencyOne": 189 },
-      "pypi/cache-fits-large": { "loaded": 2970, "concurrencyOne": 273 },
-      "pypi/cache-evicts-large": { "loaded": 2784, "concurrencyOne": 248 },
-      "pypi/wheel-hot-path": { "loaded": 13256, "concurrencyOne": 664 },
-      "pypi/wheel-onboarding": { "loaded": 5078, "concurrencyOne": 52 },
-      "pypi/wheel-ceiling": { "loaded": 12223, "concurrencyOne": 2312 },
-      "pypi/herd": { "loaded": 40 },
-      "pypi/herd-under-heavy-private": { "loaded": 363 },
-      "pypi/warm-under-cold": { "loaded": 516 },
-      "pypi/ramp": { "loaded": 997 },
-      "pypi/mirror-native-baseline": { "loaded": 668, "concurrencyOne": 356 },
-      "pypi/mirror-managed-warm": { "loaded": 199, "concurrencyOne": 166 },
-      "pypi/mirror-managed-revision": { "loaded": 38, "concurrencyOne": 40 },
-      "pypi/pattern-hot-set-control": { "loaded": 24 },
-      "pypi/pattern-cold-install": { "loaded": 1 },
-      "pypi/pattern-ci-fleet": { "loaded": 6 },
-      "pypi/pattern-heterogeneous": { "loaded": 2 },
-      "pypi/pattern-zipf": { "loaded": 24 },
-      "pypi/pattern-scan": { "loaded": 6 },
-      "pypi/pattern-cold-install-default-body-cap": { "loaded": 1 },
-      "cargo/assembled-response-hit": { "loaded": 1936, "concurrencyOne": 138 },
-      "cargo/cache-evicts-large": { "loaded": 1498, "concurrencyOne": 143 },
-      "cargo/cache-fits-large": { "loaded": 2111, "concurrencyOne": 147 },
-      "cargo/crate-ceiling": { "loaded": 13165, "concurrencyOne": 1752 },
-      "cargo/crate-hot-path": { "loaded": 15687, "concurrencyOne": 311 },
-      "cargo/crate-onboarding": { "loaded": 7612, "concurrencyOne": 155 },
-      "cargo/heavy-private-25pct": { "loaded": 222, "concurrencyOne": 116 },
-      "cargo/heavy-private": { "loaded": 62, "concurrencyOne": 53 },
-      "cargo/herd-under-heavy-private": { "loaded": 63 },
-      "cargo/herd": { "loaded": 50 },
-      "cargo/index-cold-advisories": { "loaded": 1470, "concurrencyOne": 131 },
-      "cargo/index-cold-all-advisory-rules": { "loaded": 1418, "concurrencyOne": 133 },
-      "cargo/index-cold": { "loaded": 1337, "concurrencyOne": 134 },
-      "cargo/pattern-ci-fleet": { "loaded": 12 },
-      "cargo/pattern-cold-install-default-body-cap": { "loaded": 3 },
-      "cargo/pattern-cold-install": { "loaded": 3 },
-      "cargo/pattern-heterogeneous": { "loaded": 4 },
-      "cargo/pattern-hot-set-control": { "loaded": 48 },
-      "cargo/pattern-scan": { "loaded": 12 },
-      "cargo/pattern-zipf": { "loaded": 48 },
-      "cargo/ramp": { "loaded": 756 },
-      "cargo/revalidate-not-modified-advisories": { "loaded": 4280, "concurrencyOne": 123 },
-      "cargo/revalidate-not-modified": { "loaded": 4299, "concurrencyOne": 123 },
-      "cargo/slow-readers": { "loaded": 334 },
-      "cargo/warm-under-cold": { "loaded": 864 },
-      "rubygems/gem-ceiling": { "loaded": 1402, "concurrencyOne": 57 },
-      "rubygems/gem-hot-path": { "loaded": 3392, "concurrencyOne": 57 },
-      "rubygems/gem-onboarding": { "loaded": 1126, "concurrencyOne": 28 },
-      "rubygems/heavy-private": { "loaded": 789, "concurrencyOne": 506 },
-      "rubygems/heavy-private-25pct": { "loaded": 1632, "concurrencyOne": 545 },
-      "rubygems/herd": { "loaded": 50 },
-      "rubygems/herd-under-heavy-private": { "loaded": 770 },
-      "rubygems/info-cold": { "loaded": 4558, "concurrencyOne": 565 },
-      "rubygems/info-cold-advisories": { "loaded": 2468, "concurrencyOne": 562 },
-      "rubygems/info-cold-all-advisory-rules": { "loaded": 2389, "concurrencyOne": 552 },
-      "rubygems/info-repeated-corpus": { "loaded": 5010, "concurrencyOne": 566 },
-      "rubygems/info-working-set-many": { "loaded": 6490, "concurrencyOne": 569 },
-      "rubygems/info-working-set-one": { "loaded": 10515, "concurrencyOne": 614 },
-      "rubygems/pattern-ci-fleet": { "loaded": 6 },
-      "rubygems/pattern-cold-install": { "loaded": 1 },
-      "rubygems/pattern-cold-install-default-body-cap": { "loaded": 1 },
-      "rubygems/pattern-heterogeneous": { "loaded": 2 },
-      "rubygems/pattern-hot-set-control": { "loaded": 24 },
-      "rubygems/pattern-scan": { "loaded": 6 },
-      "rubygems/pattern-zipf": { "loaded": 24 },
-      "rubygems/quick-gemspec": { "loaded": 2104, "concurrencyOne": 53 },
-      "rubygems/ramp": { "loaded": 3536 },
-      "rubygems/revalidate-not-modified": { "loaded": 10818, "concurrencyOne": 611 },
-      "rubygems/revalidate-not-modified-advisories": { "loaded": 6045, "concurrencyOne": 598 },
-      "rubygems/slow-readers": { "loaded": 1335 },
-      "rubygems/warm-under-cold": { "loaded": 2570 }
+      "cargo/assembled-response-hit": {
+        "loaded": { "floor": 5281, "median": 8801, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 151, "median": 251, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "cargo/cache-evicts-large": {
+        "loaded": { "floor": 5744, "median": 9573, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 157, "median": 261, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "cargo/cache-fits-large": {
+        "loaded": { "floor": 5902, "median": 9836, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 160, "median": 266, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "cargo/crate-ceiling": {
+        "loaded": { "floor": 21041, "median": 35068, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 2140, "median": 3566, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "cargo/crate-hot-path": {
+        "loaded": { "floor": 15939, "median": 26564, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 286, "median": 476, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "cargo/crate-onboarding": {
+        "loaded": { "floor": 9558, "median": 15930, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 173, "median": 287, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "cargo/heavy-private": {
+        "loaded": { "floor": 310, "median": 516, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 144, "median": 240, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "cargo/heavy-private-25pct": {
+        "loaded": { "floor": 893, "median": 1487, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 144, "median": 240, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "cargo/herd": {
+        "loaded": { "floor": 60, "median": 100, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "cargo/herd-under-heavy-private": {
+        "loaded": { "floor": 270, "median": 450, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "cargo/index-cold": {
+        "loaded": { "floor": 4610, "median": 7683, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 146, "median": 242, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "cargo/index-cold-advisories": {
+        "loaded": { "floor": 3179, "median": 5297, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 149, "median": 248, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "cargo/index-cold-all-advisory-rules": {
+        "loaded": { "floor": 3522, "median": 5869, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 146, "median": 242, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "cargo/pattern-ci-fleet": {
+        "loaded": { "floor": 15, "median": 24, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "cargo/pattern-cold-install": {
+        "loaded": { "floor": 4, "median": 6, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "cargo/pattern-cold-install-default-body-cap": {
+        "loaded": { "floor": 4, "median": 6, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "cargo/pattern-heterogeneous": {
+        "loaded": { "floor": 5, "median": 8, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "cargo/pattern-hot-set-control": {
+        "loaded": { "floor": 58, "median": 96, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "cargo/pattern-scan": {
+        "loaded": { "floor": 15, "median": 24, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "cargo/pattern-zipf": {
+        "loaded": { "floor": 58, "median": 96, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "cargo/ramp": {
+        "loaded": { "floor": 1497, "median": 2494, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "cargo/revalidate-not-modified": {
+        "loaded": { "floor": 4848, "median": 8080, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 137, "median": 227, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "cargo/revalidate-not-modified-advisories": {
+        "loaded": { "floor": 4776, "median": 7960, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 136, "median": 226, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "cargo/slow-readers": {
+        "loaded": { "floor": 833, "median": 1388, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "cargo/warm-under-cold": {
+        "loaded": { "floor": 2461, "median": 4101, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "npm/assembled-response-hit": {
+        "loaded": { "floor": 1788, "median": 2980, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 166, "median": 276, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "npm/cache-evicts-large": {
+        "loaded": { "floor": 2101, "median": 3501, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 165, "median": 275, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "npm/cache-fits-large": {
+        "loaded": { "floor": 1671, "median": 2785, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 160, "median": 266, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "npm/heavy-private": {
+        "loaded": { "floor": 215, "median": 357, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 143, "median": 238, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "npm/heavy-private-25pct": {
+        "loaded": { "floor": 569, "median": 948, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 138, "median": 229, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "npm/herd": {
+        "loaded": { "floor": 48, "median": 80, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "npm/herd-under-heavy-private": {
+        "loaded": { "floor": 222, "median": 370, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "npm/merge-cold": {
+        "loaded": { "floor": 1730, "median": 2882, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 146, "median": 242, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "npm/merge-cold-advisories": {
+        "loaded": { "floor": 903, "median": 1504, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 146, "median": 242, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "npm/merge-cold-all-advisory-rules": {
+        "loaded": { "floor": 890, "median": 1483, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 143, "median": 238, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "npm/pattern-ci-fleet": {
+        "loaded": { "floor": 22, "median": 36, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "npm/pattern-cold-install": {
+        "loaded": { "floor": 6, "median": 9, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "npm/pattern-cold-install-default-body-cap": {
+        "loaded": { "floor": 6, "median": 9, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "npm/pattern-heterogeneous": {
+        "loaded": { "floor": 3, "median": 4, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "npm/pattern-hot-set-control": {
+        "loaded": { "floor": 87, "median": 144, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "npm/pattern-scan": {
+        "loaded": { "floor": 22, "median": 36, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "npm/pattern-zipf": {
+        "loaded": { "floor": 87, "median": 144, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "npm/ramp": {
+        "loaded": { "floor": 762, "median": 1270, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "npm/revalidate-not-modified": {
+        "loaded": { "floor": 3964, "median": 6606, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 150, "median": 250, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "npm/revalidate-not-modified-advisories": {
+        "loaded": { "floor": 3678, "median": 6129, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 149, "median": 248, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "npm/slow-readers": {
+        "loaded": { "floor": 290, "median": 482, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "npm/tarball-ceiling": {
+        "loaded": { "floor": 37084, "median": 61806, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 5405, "median": 9007, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "npm/tarball-hot-path": {
+        "loaded": { "floor": 38232, "median": 63719, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 836, "median": 1392, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "npm/tarball-onboarding": {
+        "loaded": { "floor": 21137, "median": 35228, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 423, "median": 705, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "npm/warm-under-cold": {
+        "loaded": { "floor": 672, "median": 1120, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "pypi/assembled-response-hit": {
+        "loaded": { "floor": 6057, "median": 10095, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 269, "median": 448, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "pypi/cache-evicts-large": {
+        "loaded": { "floor": 6746, "median": 11243, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 314, "median": 522, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "pypi/cache-fits-large": {
+        "loaded": { "floor": 7210, "median": 12016, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 314, "median": 522, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "pypi/heavy-private": {
+        "loaded": { "floor": 445, "median": 741, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 226, "median": 376, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "pypi/heavy-private-25pct": {
+        "loaded": { "floor": 1172, "median": 1953, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 234, "median": 390, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "pypi/herd": {
+        "loaded": { "floor": 60, "median": 100, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "pypi/herd-under-heavy-private": {
+        "loaded": { "floor": 425, "median": 708, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "pypi/index-cold": {
+        "loaded": { "floor": 4593, "median": 7654, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 240, "median": 400, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "pypi/index-cold-advisories": {
+        "loaded": { "floor": 2378, "median": 3962, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 244, "median": 406, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "pypi/index-cold-all-advisory-rules": {
+        "loaded": { "floor": 2369, "median": 3948, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 243, "median": 405, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "pypi/mirror-managed-revision": {
+        "loaded": { "floor": 52, "median": 86, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 49, "median": 81, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "pypi/mirror-managed-warm": {
+        "loaded": { "floor": 278, "median": 463, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 171, "median": 284, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "pypi/mirror-native-baseline": {
+        "loaded": { "floor": 1025, "median": 1707, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 386, "median": 642, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "pypi/pattern-ci-fleet": {
+        "loaded": { "floor": 8, "median": 12, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "pypi/pattern-cold-install": {
+        "loaded": { "floor": 2, "median": 3, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "pypi/pattern-cold-install-default-body-cap": {
+        "loaded": { "floor": 2, "median": 3, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "pypi/pattern-heterogeneous": {
+        "loaded": { "floor": 3, "median": 4, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "pypi/pattern-hot-set-control": {
+        "loaded": { "floor": 29, "median": 48, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "pypi/pattern-scan": {
+        "loaded": { "floor": 8, "median": 12, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "pypi/pattern-zipf": {
+        "loaded": { "floor": 29, "median": 48, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "pypi/ramp": {
+        "loaded": { "floor": 2102, "median": 3502, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "pypi/revalidate-not-modified": {
+        "loaded": { "floor": 5405, "median": 9008, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 237, "median": 395, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "pypi/revalidate-not-modified-advisories": {
+        "loaded": { "floor": 5197, "median": 8661, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 236, "median": 392, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "pypi/slow-readers": {
+        "loaded": { "floor": 751, "median": 1251, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "pypi/warm-under-cold": {
+        "loaded": { "floor": 1725, "median": 2875, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "pypi/wheel-ceiling": {
+        "loaded": { "floor": 27808, "median": 46346, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 3039, "median": 5064, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "pypi/wheel-hot-path": {
+        "loaded": { "floor": 28655, "median": 47758, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 425, "median": 708, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "pypi/wheel-onboarding": {
+        "loaded": { "floor": 18997, "median": 31661, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 284, "median": 473, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "rubygems/gem-ceiling": {
+        "loaded": { "floor": 14880, "median": 24800, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 1868, "median": 3113, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "rubygems/gem-hot-path": {
+        "loaded": { "floor": 14006, "median": 23342, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 280, "median": 466, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "rubygems/gem-onboarding": {
+        "loaded": { "floor": 10124, "median": 16872, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 212, "median": 352, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "rubygems/heavy-private": {
+        "loaded": { "floor": 952, "median": 1586, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 395, "median": 657, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "rubygems/heavy-private-25pct": {
+        "loaded": { "floor": 2438, "median": 4062, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 411, "median": 685, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "rubygems/herd": {
+        "loaded": { "floor": 60, "median": 100, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "rubygems/herd-under-heavy-private": {
+        "loaded": { "floor": 956, "median": 1592, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "rubygems/info-cold": {
+        "loaded": { "floor": 8411, "median": 14017, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 416, "median": 692, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "rubygems/info-cold-advisories": {
+        "loaded": { "floor": 4679, "median": 7797, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 413, "median": 688, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "rubygems/info-cold-all-advisory-rules": {
+        "loaded": { "floor": 4523, "median": 7537, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 408, "median": 679, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "rubygems/info-repeated-corpus": {
+        "loaded": { "floor": 8420, "median": 14032, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 413, "median": 688, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "rubygems/info-working-set-many": {
+        "loaded": { "floor": 8019, "median": 13365, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 420, "median": 700, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "rubygems/info-working-set-one": {
+        "loaded": { "floor": 11717, "median": 19527, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 438, "median": 729, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "rubygems/pattern-ci-fleet": {
+        "loaded": { "floor": 8, "median": 12, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "rubygems/pattern-cold-install": {
+        "loaded": { "floor": 2, "median": 3, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "rubygems/pattern-cold-install-default-body-cap": {
+        "loaded": { "floor": 2, "median": 3, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "rubygems/pattern-heterogeneous": {
+        "loaded": { "floor": 3, "median": 4, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "rubygems/pattern-hot-set-control": {
+        "loaded": { "floor": 29, "median": 48, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "rubygems/pattern-scan": {
+        "loaded": { "floor": 8, "median": 12, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "rubygems/pattern-zipf": {
+        "loaded": { "floor": 29, "median": 48, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "rubygems/quick-gemspec": {
+        "loaded": { "floor": 15906, "median": 26509, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 421, "median": 701, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "rubygems/ramp": {
+        "loaded": { "floor": 3734, "median": 6222, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "rubygems/revalidate-not-modified": {
+        "loaded": { "floor": 12066, "median": 20109, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 438, "median": 729, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "rubygems/revalidate-not-modified-advisories": {
+        "loaded": { "floor": 9548, "median": 15912, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 433, "median": 721, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "rubygems/slow-readers": {
+        "loaded": { "floor": 1190, "median": 1983, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "rubygems/warm-under-cold": {
+        "loaded": { "floor": 3140, "median": 5232, "from": [41191783409, 41191785301, 41191787032] }
+      }
     },
     "4cpu-1gib": {
-      "npm/merge-cold": { "loaded": 1921, "concurrencyOne": 71 },
-      "npm/merge-cold-advisories": { "loaded": 1951, "concurrencyOne": 71 },
-      "npm/merge-cold-all-advisory-rules": { "loaded": 1823, "concurrencyOne": 66 },
-      "npm/heavy-private-25pct": { "loaded": 826, "concurrencyOne": 69 },
-      "npm/heavy-private": { "loaded": 271, "concurrencyOne": 64 },
-      "npm/slow-readers": { "loaded": 318 },
-      "npm/assembled-response-hit": { "loaded": 2417, "concurrencyOne": 71 },
-      "npm/revalidate-not-modified": { "loaded": 2645, "concurrencyOne": 64 },
-      "npm/revalidate-not-modified-advisories": { "loaded": 2564, "concurrencyOne": 64 },
-      "npm/cache-fits-large": { "loaded": 2484, "concurrencyOne": 80 },
-      "npm/cache-evicts-large": { "loaded": 2328, "concurrencyOne": 72 },
-      "npm/tarball-hot-path": { "loaded": 10322, "concurrencyOne": 104 },
-      "npm/tarball-onboarding": { "loaded": 2750, "concurrencyOne": 27 },
-      "npm/tarball-ceiling": { "loaded": 20519, "concurrencyOne": 4297 },
-      "npm/herd": { "loaded": 20 },
-      "npm/herd-under-heavy-private": { "loaded": 268 },
-      "npm/warm-under-cold": { "loaded": 343 },
-      "npm/ramp": { "loaded": 523 },
-      "npm/pattern-hot-set-control": { "loaded": 72 },
-      "npm/pattern-cold-install": { "loaded": 4 },
-      "npm/pattern-ci-fleet": { "loaded": 18 },
-      "npm/pattern-heterogeneous": { "loaded": 2 },
-      "npm/pattern-zipf": { "loaded": 72 },
-      "npm/pattern-scan": { "loaded": 18 },
-      "npm/pattern-cold-install-default-body-cap": { "loaded": 4 },
-      "pypi/index-cold": { "loaded": 3587, "concurrencyOne": 165 },
-      "pypi/index-cold-advisories": { "loaded": 3365, "concurrencyOne": 160 },
-      "pypi/index-cold-all-advisory-rules": { "loaded": 3119, "concurrencyOne": 165 },
-      "pypi/heavy-private-25pct": { "loaded": 1326, "concurrencyOne": 167 },
-      "pypi/heavy-private": { "loaded": 453, "concurrencyOne": 143 },
-      "pypi/slow-readers": { "loaded": 817 },
-      "pypi/assembled-response-hit": { "loaded": 4355, "concurrencyOne": 197 },
-      "pypi/revalidate-not-modified": { "loaded": 4357, "concurrencyOne": 171 },
-      "pypi/revalidate-not-modified-advisories": { "loaded": 3451, "concurrencyOne": 172 },
-      "pypi/cache-fits-large": { "loaded": 5214, "concurrencyOne": 235 },
-      "pypi/cache-evicts-large": { "loaded": 5022, "concurrencyOne": 215 },
-      "pypi/wheel-hot-path": { "loaded": 14027, "concurrencyOne": 365 },
-      "pypi/wheel-onboarding": { "loaded": 4636, "concurrencyOne": 47 },
-      "pypi/wheel-ceiling": { "loaded": 14012, "concurrencyOne": 2370 },
-      "pypi/herd": { "loaded": 50 },
-      "pypi/herd-under-heavy-private": { "loaded": 512 },
-      "pypi/warm-under-cold": { "loaded": 1046 },
-      "pypi/ramp": { "loaded": 1556 },
-      "pypi/mirror-native-baseline": { "loaded": 1175, "concurrencyOne": 285 },
-      "pypi/mirror-managed-warm": { "loaded": 225, "concurrencyOne": 133 },
-      "pypi/mirror-managed-revision": { "loaded": 40, "concurrencyOne": 39 },
-      "pypi/pattern-hot-set-control": { "loaded": 24 },
-      "pypi/pattern-cold-install": { "loaded": 1 },
-      "pypi/pattern-ci-fleet": { "loaded": 6 },
-      "pypi/pattern-heterogeneous": { "loaded": 2 },
-      "pypi/pattern-zipf": { "loaded": 24 },
-      "pypi/pattern-scan": { "loaded": 6 },
-      "pypi/pattern-cold-install-default-body-cap": { "loaded": 1 },
-      "cargo/assembled-response-hit": { "loaded": 6512, "concurrencyOne": 136 },
-      "cargo/cache-evicts-large": { "loaded": 5721, "concurrencyOne": 145 },
-      "cargo/cache-fits-large": { "loaded": 6159, "concurrencyOne": 146 },
-      "cargo/crate-ceiling": { "loaded": 17940, "concurrencyOne": 1729 },
-      "cargo/crate-hot-path": { "loaded": 21567, "concurrencyOne": 294 },
-      "cargo/crate-onboarding": { "loaded": 12373, "concurrencyOne": 146 },
-      "cargo/heavy-private-25pct": { "loaded": 274, "concurrencyOne": 114 },
-      "cargo/heavy-private": { "loaded": 71, "concurrencyOne": 53 },
-      "cargo/herd-under-heavy-private": { "loaded": 70 },
-      "cargo/herd": { "loaded": 50 },
-      "cargo/index-cold-advisories": { "loaded": 3838, "concurrencyOne": 132 },
-      "cargo/index-cold-all-advisory-rules": { "loaded": 3787, "concurrencyOne": 134 },
-      "cargo/index-cold": { "loaded": 4882, "concurrencyOne": 132 },
-      "cargo/pattern-ci-fleet": { "loaded": 12 },
-      "cargo/pattern-cold-install-default-body-cap": { "loaded": 3 },
-      "cargo/pattern-cold-install": { "loaded": 3 },
-      "cargo/pattern-heterogeneous": { "loaded": 4 },
-      "cargo/pattern-hot-set-control": { "loaded": 48 },
-      "cargo/pattern-scan": { "loaded": 12 },
-      "cargo/pattern-zipf": { "loaded": 48 },
-      "cargo/ramp": { "loaded": 1564 },
-      "cargo/revalidate-not-modified-advisories": { "loaded": 7960, "concurrencyOne": 123 },
-      "cargo/revalidate-not-modified": { "loaded": 8280, "concurrencyOne": 122 },
-      "cargo/slow-readers": { "loaded": 813 },
-      "cargo/warm-under-cold": { "loaded": 2583 },
-      "rubygems/gem-ceiling": { "loaded": 6825, "concurrencyOne": 57 },
-      "rubygems/gem-hot-path": { "loaded": 6845, "concurrencyOne": 57 },
-      "rubygems/gem-onboarding": { "loaded": 2286, "concurrencyOne": 28 },
-      "rubygems/heavy-private": { "loaded": 804, "concurrencyOne": 496 },
-      "rubygems/heavy-private-25pct": { "loaded": 3961, "concurrencyOne": 529 },
-      "rubygems/herd": { "loaded": 50 },
-      "rubygems/herd-under-heavy-private": { "loaded": 817 },
-      "rubygems/info-cold": { "loaded": 14430, "concurrencyOne": 541 },
-      "rubygems/info-cold-advisories": { "loaded": 6288, "concurrencyOne": 534 },
-      "rubygems/info-cold-all-advisory-rules": { "loaded": 6372, "concurrencyOne": 531 },
-      "rubygems/info-repeated-corpus": { "loaded": 13955, "concurrencyOne": 544 },
-      "rubygems/info-working-set-many": { "loaded": 14621, "concurrencyOne": 563 },
-      "rubygems/info-working-set-one": { "loaded": 17711, "concurrencyOne": 608 },
-      "rubygems/pattern-ci-fleet": { "loaded": 6 },
-      "rubygems/pattern-cold-install": { "loaded": 1 },
-      "rubygems/pattern-cold-install-default-body-cap": { "loaded": 1 },
-      "rubygems/pattern-heterogeneous": { "loaded": 2 },
-      "rubygems/pattern-hot-set-control": { "loaded": 24 },
-      "rubygems/pattern-scan": { "loaded": 6 },
-      "rubygems/pattern-zipf": { "loaded": 24 },
-      "rubygems/quick-gemspec": { "loaded": 3909, "concurrencyOne": 49 },
-      "rubygems/ramp": { "loaded": 5348 },
-      "rubygems/revalidate-not-modified": { "loaded": 18073, "concurrencyOne": 610 },
-      "rubygems/revalidate-not-modified-advisories": { "loaded": 10416, "concurrencyOne": 594 },
-      "rubygems/slow-readers": { "loaded": 3526 },
-      "rubygems/warm-under-cold": { "loaded": 5065 }
+      "cargo/assembled-response-hit": {
+        "loaded": { "floor": 11632, "median": 19386, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 150, "median": 250, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "cargo/cache-evicts-large": {
+        "loaded": { "floor": 12932, "median": 21552, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 159, "median": 264, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "cargo/cache-fits-large": {
+        "loaded": { "floor": 13002, "median": 21669, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 163, "median": 271, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "cargo/crate-ceiling": {
+        "loaded": { "floor": 19164, "median": 31940, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 2119, "median": 3531, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "cargo/crate-hot-path": {
+        "loaded": { "floor": 23780, "median": 39632, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 285, "median": 475, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "cargo/crate-onboarding": {
+        "loaded": { "floor": 16688, "median": 27813, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 172, "median": 286, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "cargo/heavy-private": {
+        "loaded": { "floor": 684, "median": 1139, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 142, "median": 236, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "cargo/heavy-private-25pct": {
+        "loaded": { "floor": 1911, "median": 3184, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 144, "median": 239, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "cargo/herd": {
+        "loaded": { "floor": 60, "median": 100, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "cargo/herd-under-heavy-private": {
+        "loaded": { "floor": 615, "median": 1024, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "cargo/index-cold": {
+        "loaded": { "floor": 10920, "median": 18199, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 147, "median": 244, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "cargo/index-cold-advisories": {
+        "loaded": { "floor": 10294, "median": 17156, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 147, "median": 244, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "cargo/index-cold-all-advisory-rules": {
+        "loaded": { "floor": 10179, "median": 16965, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 145, "median": 241, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "cargo/pattern-ci-fleet": {
+        "loaded": { "floor": 15, "median": 24, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "cargo/pattern-cold-install": {
+        "loaded": { "floor": 4, "median": 6, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "cargo/pattern-cold-install-default-body-cap": {
+        "loaded": { "floor": 4, "median": 6, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "cargo/pattern-heterogeneous": {
+        "loaded": { "floor": 5, "median": 8, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "cargo/pattern-hot-set-control": {
+        "loaded": { "floor": 58, "median": 96, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "cargo/pattern-scan": {
+        "loaded": { "floor": 15, "median": 24, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "cargo/pattern-zipf": {
+        "loaded": { "floor": 58, "median": 96, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "cargo/ramp": {
+        "loaded": { "floor": 1743, "median": 2904, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "cargo/revalidate-not-modified": {
+        "loaded": { "floor": 9613, "median": 16021, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 137, "median": 227, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "cargo/revalidate-not-modified-advisories": {
+        "loaded": { "floor": 9360, "median": 15600, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 135, "median": 225, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "cargo/slow-readers": {
+        "loaded": { "floor": 1173, "median": 1955, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "cargo/warm-under-cold": {
+        "loaded": { "floor": 5786, "median": 9642, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "npm/assembled-response-hit": {
+        "loaded": { "floor": 7017, "median": 11694, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 159, "median": 264, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "npm/cache-evicts-large": {
+        "loaded": { "floor": 6900, "median": 11500, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 167, "median": 277, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "npm/cache-fits-large": {
+        "loaded": { "floor": 7508, "median": 12512, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 180, "median": 300, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "npm/heavy-private": {
+        "loaded": { "floor": 374, "median": 623, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 129, "median": 214, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "npm/heavy-private-25pct": {
+        "loaded": { "floor": 1488, "median": 2480, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 149, "median": 248, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "npm/herd": {
+        "loaded": { "floor": 60, "median": 100, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "npm/herd-under-heavy-private": {
+        "loaded": { "floor": 325, "median": 541, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "npm/merge-cold": {
+        "loaded": { "floor": 5672, "median": 9453, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 153, "median": 255, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "npm/merge-cold-advisories": {
+        "loaded": { "floor": 2868, "median": 4780, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 149, "median": 247, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "npm/merge-cold-all-advisory-rules": {
+        "loaded": { "floor": 3017, "median": 5027, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 138, "median": 229, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "npm/pattern-ci-fleet": {
+        "loaded": { "floor": 22, "median": 36, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "npm/pattern-cold-install": {
+        "loaded": { "floor": 6, "median": 9, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "npm/pattern-cold-install-default-body-cap": {
+        "loaded": { "floor": 6, "median": 9, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "npm/pattern-heterogeneous": {
+        "loaded": { "floor": 3, "median": 4, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "npm/pattern-hot-set-control": {
+        "loaded": { "floor": 87, "median": 144, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "npm/pattern-scan": {
+        "loaded": { "floor": 22, "median": 36, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "npm/pattern-zipf": {
+        "loaded": { "floor": 87, "median": 144, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "npm/ramp": {
+        "loaded": { "floor": 1398, "median": 2330, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "npm/revalidate-not-modified": {
+        "loaded": { "floor": 8154, "median": 13590, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 149, "median": 247, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "npm/revalidate-not-modified-advisories": {
+        "loaded": { "floor": 7392, "median": 12320, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 150, "median": 249, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "npm/slow-readers": {
+        "loaded": { "floor": 448, "median": 746, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "npm/tarball-ceiling": {
+        "loaded": { "floor": 49495, "median": 82491, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 5381, "median": 8967, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "npm/tarball-hot-path": {
+        "loaded": { "floor": 48683, "median": 81138, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 836, "median": 1392, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "npm/tarball-onboarding": {
+        "loaded": { "floor": 28625, "median": 47708, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 423, "median": 704, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "npm/warm-under-cold": {
+        "loaded": { "floor": 2108, "median": 3513, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "pypi/assembled-response-hit": {
+        "loaded": { "floor": 12198, "median": 20329, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 268, "median": 446, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "pypi/cache-evicts-large": {
+        "loaded": { "floor": 14278, "median": 23796, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 309, "median": 515, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "pypi/cache-fits-large": {
+        "loaded": { "floor": 15134, "median": 25223, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 307, "median": 511, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "pypi/heavy-private": {
+        "loaded": { "floor": 657, "median": 1095, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 221, "median": 367, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "pypi/heavy-private-25pct": {
+        "loaded": { "floor": 2422, "median": 4036, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 233, "median": 387, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "pypi/herd": {
+        "loaded": { "floor": 60, "median": 100, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "pypi/herd-under-heavy-private": {
+        "loaded": { "floor": 680, "median": 1132, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "pypi/index-cold": {
+        "loaded": { "floor": 10870, "median": 18116, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 237, "median": 395, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "pypi/index-cold-advisories": {
+        "loaded": { "floor": 5821, "median": 9701, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 233, "median": 387, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "pypi/index-cold-all-advisory-rules": {
+        "loaded": { "floor": 5815, "median": 9691, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 236, "median": 393, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "pypi/mirror-managed-revision": {
+        "loaded": { "floor": 54, "median": 90, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 50, "median": 82, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "pypi/mirror-managed-warm": {
+        "loaded": { "floor": 312, "median": 519, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 173, "median": 287, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "pypi/mirror-native-baseline": {
+        "loaded": { "floor": 1904, "median": 3173, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 384, "median": 640, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "pypi/pattern-ci-fleet": {
+        "loaded": { "floor": 8, "median": 12, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "pypi/pattern-cold-install": {
+        "loaded": { "floor": 2, "median": 3, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "pypi/pattern-cold-install-default-body-cap": {
+        "loaded": { "floor": 2, "median": 3, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "pypi/pattern-heterogeneous": {
+        "loaded": { "floor": 3, "median": 4, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "pypi/pattern-hot-set-control": {
+        "loaded": { "floor": 29, "median": 48, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "pypi/pattern-scan": {
+        "loaded": { "floor": 8, "median": 12, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "pypi/pattern-zipf": {
+        "loaded": { "floor": 29, "median": 48, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "pypi/ramp": {
+        "loaded": { "floor": 2333, "median": 3887, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "pypi/revalidate-not-modified": {
+        "loaded": { "floor": 10800, "median": 18000, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 234, "median": 390, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "pypi/revalidate-not-modified-advisories": {
+        "loaded": { "floor": 9819, "median": 16365, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 234, "median": 390, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "pypi/slow-readers": {
+        "loaded": { "floor": 1037, "median": 1727, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "pypi/warm-under-cold": {
+        "loaded": { "floor": 3213, "median": 5355, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "pypi/wheel-ceiling": {
+        "loaded": { "floor": 31886, "median": 53142, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 3008, "median": 5013, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "pypi/wheel-hot-path": {
+        "loaded": { "floor": 31990, "median": 53316, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 425, "median": 708, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "pypi/wheel-onboarding": {
+        "loaded": { "floor": 22844, "median": 38072, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 284, "median": 473, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "rubygems/gem-ceiling": {
+        "loaded": { "floor": 20646, "median": 34410, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 1836, "median": 3059, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "rubygems/gem-hot-path": {
+        "loaded": { "floor": 20530, "median": 34216, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 280, "median": 466, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "rubygems/gem-onboarding": {
+        "loaded": { "floor": 16968, "median": 28279, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 211, "median": 351, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "rubygems/heavy-private": {
+        "loaded": { "floor": 952, "median": 1586, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 397, "median": 661, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "rubygems/heavy-private-25pct": {
+        "loaded": { "floor": 4871, "median": 8118, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 407, "median": 677, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "rubygems/herd": {
+        "loaded": { "floor": 60, "median": 100, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "rubygems/herd-under-heavy-private": {
+        "loaded": { "floor": 937, "median": 1561, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "rubygems/info-cold": {
+        "loaded": { "floor": 18752, "median": 31252, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 417, "median": 694, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "rubygems/info-cold-advisories": {
+        "loaded": { "floor": 9757, "median": 16261, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 409, "median": 681, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "rubygems/info-cold-all-advisory-rules": {
+        "loaded": { "floor": 9231, "median": 15385, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 408, "median": 679, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "rubygems/info-repeated-corpus": {
+        "loaded": { "floor": 18596, "median": 30992, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 413, "median": 688, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "rubygems/info-working-set-many": {
+        "loaded": { "floor": 18311, "median": 30517, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 409, "median": 681, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "rubygems/info-working-set-one": {
+        "loaded": { "floor": 20631, "median": 34385, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 435, "median": 724, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "rubygems/pattern-ci-fleet": {
+        "loaded": { "floor": 8, "median": 12, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "rubygems/pattern-cold-install": {
+        "loaded": { "floor": 2, "median": 3, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "rubygems/pattern-cold-install-default-body-cap": {
+        "loaded": { "floor": 2, "median": 3, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "rubygems/pattern-heterogeneous": {
+        "loaded": { "floor": 3, "median": 4, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "rubygems/pattern-hot-set-control": {
+        "loaded": { "floor": 29, "median": 48, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "rubygems/pattern-scan": {
+        "loaded": { "floor": 8, "median": 12, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "rubygems/pattern-zipf": {
+        "loaded": { "floor": 29, "median": 48, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "rubygems/quick-gemspec": {
+        "loaded": { "floor": 28212, "median": 47019, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 419, "median": 697, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "rubygems/ramp": {
+        "loaded": { "floor": 4571, "median": 7618, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "rubygems/revalidate-not-modified": {
+        "loaded": { "floor": 21441, "median": 35735, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 434, "median": 722, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "rubygems/revalidate-not-modified-advisories": {
+        "loaded": { "floor": 14286, "median": 23809, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 428, "median": 713, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "rubygems/slow-readers": {
+        "loaded": { "floor": 2457, "median": 4095, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "rubygems/warm-under-cold": {
+        "loaded": { "floor": 5709, "median": 9515, "from": [41191783409, 41191785301, 41191787032] }
+      }
     },
     "4cpu-2gib": {
-      "npm/merge-cold": { "loaded": 2230, "concurrencyOne": 58 },
-      "npm/merge-cold-advisories": { "loaded": 2175, "concurrencyOne": 56 },
-      "npm/merge-cold-all-advisory-rules": { "loaded": 2053, "concurrencyOne": 59 },
-      "npm/heavy-private-25pct": { "loaded": 928, "concurrencyOne": 54 },
-      "npm/heavy-private": { "loaded": 322, "concurrencyOne": 55 },
-      "npm/slow-readers": { "loaded": 421 },
-      "npm/assembled-response-hit": { "loaded": 2464, "concurrencyOne": 59 },
-      "npm/revalidate-not-modified": { "loaded": 2610, "concurrencyOne": 56 },
-      "npm/revalidate-not-modified-advisories": { "loaded": 2525, "concurrencyOne": 55 },
-      "npm/cache-fits-large": { "loaded": 2531, "concurrencyOne": 64 },
-      "npm/cache-evicts-large": { "loaded": 2341, "concurrencyOne": 57 },
-      "npm/tarball-hot-path": { "loaded": 8823, "concurrencyOne": 88 },
-      "npm/tarball-onboarding": { "loaded": 2500, "concurrencyOne": 25 },
-      "npm/tarball-ceiling": { "loaded": 20860, "concurrencyOne": 4078 },
-      "npm/herd": { "loaded": 20 },
-      "npm/herd-under-heavy-private": { "loaded": 351 },
-      "npm/warm-under-cold": { "loaded": 308 },
-      "npm/ramp": { "loaded": 495 },
-      "npm/pattern-hot-set-control": { "loaded": 72 },
-      "npm/pattern-cold-install": { "loaded": 4 },
-      "npm/pattern-ci-fleet": { "loaded": 18 },
-      "npm/pattern-heterogeneous": { "loaded": 2 },
-      "npm/pattern-zipf": { "loaded": 72 },
-      "npm/pattern-scan": { "loaded": 18 },
-      "npm/pattern-cold-install-default-body-cap": { "loaded": 4 },
-      "pypi/index-cold": { "loaded": 4048, "concurrencyOne": 160 },
-      "pypi/index-cold-advisories": { "loaded": 3783, "concurrencyOne": 160 },
-      "pypi/index-cold-all-advisory-rules": { "loaded": 3501, "concurrencyOne": 159 },
-      "pypi/heavy-private-25pct": { "loaded": 1398, "concurrencyOne": 153 },
-      "pypi/heavy-private": { "loaded": 600, "concurrencyOne": 145 },
-      "pypi/slow-readers": { "loaded": 824 },
-      "pypi/assembled-response-hit": { "loaded": 4866, "concurrencyOne": 186 },
-      "pypi/revalidate-not-modified": { "loaded": 4713, "concurrencyOne": 166 },
-      "pypi/revalidate-not-modified-advisories": { "loaded": 3853, "concurrencyOne": 167 },
-      "pypi/cache-fits-large": { "loaded": 5755, "concurrencyOne": 234 },
-      "pypi/cache-evicts-large": { "loaded": 5266, "concurrencyOne": 217 },
-      "pypi/wheel-hot-path": { "loaded": 14192, "concurrencyOne": 319 },
-      "pypi/wheel-onboarding": { "loaded": 4504, "concurrencyOne": 46 },
-      "pypi/wheel-ceiling": { "loaded": 14088, "concurrencyOne": 2372 },
-      "pypi/herd": { "loaded": 50 },
-      "pypi/herd-under-heavy-private": { "loaded": 757 },
-      "pypi/warm-under-cold": { "loaded": 1206 },
-      "pypi/ramp": { "loaded": 1597 },
-      "pypi/mirror-native-baseline": { "loaded": 1257, "concurrencyOne": 275 },
-      "pypi/mirror-managed-warm": { "loaded": 579, "concurrencyOne": 129 },
-      "pypi/mirror-managed-revision": { "loaded": 41, "concurrencyOne": 38 },
-      "pypi/pattern-hot-set-control": { "loaded": 24 },
-      "pypi/pattern-cold-install": { "loaded": 1 },
-      "pypi/pattern-ci-fleet": { "loaded": 6 },
-      "pypi/pattern-heterogeneous": { "loaded": 2 },
-      "pypi/pattern-zipf": { "loaded": 24 },
-      "pypi/pattern-scan": { "loaded": 6 },
-      "pypi/pattern-cold-install-default-body-cap": { "loaded": 1 },
-      "cargo/assembled-response-hit": { "loaded": 6437, "concurrencyOne": 142 },
-      "cargo/cache-evicts-large": { "loaded": 5918, "concurrencyOne": 154 },
-      "cargo/cache-fits-large": { "loaded": 6631, "concurrencyOne": 154 },
-      "cargo/crate-ceiling": { "loaded": 16328, "concurrencyOne": 1691 },
-      "cargo/crate-hot-path": { "loaded": 21230, "concurrencyOne": 383 },
-      "cargo/crate-onboarding": { "loaded": 12453, "concurrencyOne": 191 },
-      "cargo/heavy-private-25pct": { "loaded": 346, "concurrencyOne": 122 },
-      "cargo/heavy-private": { "loaded": 80, "concurrencyOne": 52 },
-      "cargo/herd-under-heavy-private": { "loaded": 80 },
-      "cargo/herd": { "loaded": 50 },
-      "cargo/index-cold-advisories": { "loaded": 3867, "concurrencyOne": 138 },
-      "cargo/index-cold-all-advisory-rules": { "loaded": 3750, "concurrencyOne": 140 },
-      "cargo/index-cold": { "loaded": 4798, "concurrencyOne": 138 },
-      "cargo/pattern-ci-fleet": { "loaded": 12 },
-      "cargo/pattern-cold-install-default-body-cap": { "loaded": 3 },
-      "cargo/pattern-cold-install": { "loaded": 3 },
-      "cargo/pattern-heterogeneous": { "loaded": 4 },
-      "cargo/pattern-hot-set-control": { "loaded": 48 },
-      "cargo/pattern-scan": { "loaded": 12 },
-      "cargo/pattern-zipf": { "loaded": 48 },
-      "cargo/ramp": { "loaded": 1645 },
-      "cargo/revalidate-not-modified-advisories": { "loaded": 7960, "concurrencyOne": 128 },
-      "cargo/revalidate-not-modified": { "loaded": 8240, "concurrencyOne": 128 },
-      "cargo/slow-readers": { "loaded": 833 },
-      "cargo/warm-under-cold": { "loaded": 3006 },
-      "rubygems/gem-ceiling": { "loaded": 6799, "concurrencyOne": 57 },
-      "rubygems/gem-hot-path": { "loaded": 6418, "concurrencyOne": 52 },
-      "rubygems/gem-onboarding": { "loaded": 2184, "concurrencyOne": 27 },
-      "rubygems/heavy-private": { "loaded": 1628, "concurrencyOne": 410 },
-      "rubygems/heavy-private-25pct": { "loaded": 4059, "concurrencyOne": 425 },
-      "rubygems/herd": { "loaded": 50 },
-      "rubygems/herd-under-heavy-private": { "loaded": 1581 },
-      "rubygems/info-cold": { "loaded": 13953, "concurrencyOne": 430 },
-      "rubygems/info-cold-advisories": { "loaded": 6971, "concurrencyOne": 428 },
-      "rubygems/info-cold-all-advisory-rules": { "loaded": 6945, "concurrencyOne": 425 },
-      "rubygems/info-repeated-corpus": { "loaded": 14618, "concurrencyOne": 430 },
-      "rubygems/info-working-set-many": { "loaded": 14291, "concurrencyOne": 432 },
-      "rubygems/info-working-set-one": { "loaded": 16587, "concurrencyOne": 458 },
-      "rubygems/pattern-ci-fleet": { "loaded": 6 },
-      "rubygems/pattern-cold-install": { "loaded": 1 },
-      "rubygems/pattern-cold-install-default-body-cap": { "loaded": 1 },
-      "rubygems/pattern-heterogeneous": { "loaded": 2 },
-      "rubygems/pattern-hot-set-control": { "loaded": 24 },
-      "rubygems/pattern-scan": { "loaded": 6 },
-      "rubygems/pattern-zipf": { "loaded": 24 },
-      "rubygems/quick-gemspec": { "loaded": 4318, "concurrencyOne": 54 },
-      "rubygems/ramp": { "loaded": 4649 },
-      "rubygems/revalidate-not-modified": { "loaded": 17341, "concurrencyOne": 459 },
-      "rubygems/revalidate-not-modified-advisories": { "loaded": 11066, "concurrencyOne": 449 },
-      "rubygems/slow-readers": { "loaded": 2428 },
-      "rubygems/warm-under-cold": { "loaded": 4932 }
+      "cargo/assembled-response-hit": {
+        "loaded": { "floor": 11946, "median": 19909, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 150, "median": 250, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "cargo/cache-evicts-large": {
+        "loaded": { "floor": 13351, "median": 22251, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 161, "median": 268, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "cargo/cache-fits-large": {
+        "loaded": { "floor": 13446, "median": 22409, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 163, "median": 271, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "cargo/crate-ceiling": {
+        "loaded": { "floor": 22465, "median": 37441, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 2090, "median": 3483, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "cargo/crate-hot-path": {
+        "loaded": { "floor": 24360, "median": 40599, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 285, "median": 474, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "cargo/crate-onboarding": {
+        "loaded": { "floor": 16779, "median": 27965, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 172, "median": 286, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "cargo/heavy-private": {
+        "loaded": { "floor": 658, "median": 1096, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 143, "median": 237, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "cargo/heavy-private-25pct": {
+        "loaded": { "floor": 1963, "median": 3271, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 147, "median": 244, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "cargo/herd": {
+        "loaded": { "floor": 60, "median": 100, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "cargo/herd-under-heavy-private": {
+        "loaded": { "floor": 584, "median": 972, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "cargo/index-cold": {
+        "loaded": { "floor": 11309, "median": 18847, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 149, "median": 248, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "cargo/index-cold-advisories": {
+        "loaded": { "floor": 10718, "median": 17863, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 150, "median": 249, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "cargo/index-cold-all-advisory-rules": {
+        "loaded": { "floor": 10569, "median": 17614, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 147, "median": 245, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "cargo/pattern-ci-fleet": {
+        "loaded": { "floor": 15, "median": 24, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "cargo/pattern-cold-install": {
+        "loaded": { "floor": 4, "median": 6, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "cargo/pattern-cold-install-default-body-cap": {
+        "loaded": { "floor": 4, "median": 6, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "cargo/pattern-heterogeneous": {
+        "loaded": { "floor": 5, "median": 8, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "cargo/pattern-hot-set-control": {
+        "loaded": { "floor": 58, "median": 96, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "cargo/pattern-scan": {
+        "loaded": { "floor": 15, "median": 24, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "cargo/pattern-zipf": {
+        "loaded": { "floor": 58, "median": 96, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "cargo/ramp": {
+        "loaded": { "floor": 1749, "median": 2914, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "cargo/revalidate-not-modified": {
+        "loaded": { "floor": 9648, "median": 16080, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 137, "median": 228, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "cargo/revalidate-not-modified-advisories": {
+        "loaded": { "floor": 9422, "median": 15702, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 137, "median": 227, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "cargo/slow-readers": {
+        "loaded": { "floor": 1185, "median": 1975, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "cargo/warm-under-cold": {
+        "loaded": { "floor": 5884, "median": 9806, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "npm/assembled-response-hit": {
+        "loaded": { "floor": 6872, "median": 11453, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 161, "median": 268, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "npm/cache-evicts-large": {
+        "loaded": { "floor": 6730, "median": 11216, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 162, "median": 270, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "npm/cache-fits-large": {
+        "loaded": { "floor": 7500, "median": 12500, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 167, "median": 277, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "npm/heavy-private": {
+        "loaded": { "floor": 494, "median": 823, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 134, "median": 223, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "npm/heavy-private-25pct": {
+        "loaded": { "floor": 1423, "median": 2371, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 144, "median": 240, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "npm/herd": {
+        "loaded": { "floor": 60, "median": 100, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "npm/herd-under-heavy-private": {
+        "loaded": { "floor": 414, "median": 689, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "npm/merge-cold": {
+        "loaded": { "floor": 5854, "median": 9756, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 143, "median": 237, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "npm/merge-cold-advisories": {
+        "loaded": { "floor": 2660, "median": 4432, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 143, "median": 238, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "npm/merge-cold-all-advisory-rules": {
+        "loaded": { "floor": 2738, "median": 4563, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 154, "median": 256, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "npm/pattern-ci-fleet": {
+        "loaded": { "floor": 22, "median": 36, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "npm/pattern-cold-install": {
+        "loaded": { "floor": 6, "median": 9, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "npm/pattern-cold-install-default-body-cap": {
+        "loaded": { "floor": 6, "median": 9, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "npm/pattern-heterogeneous": {
+        "loaded": { "floor": 3, "median": 4, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "npm/pattern-hot-set-control": {
+        "loaded": { "floor": 87, "median": 144, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "npm/pattern-scan": {
+        "loaded": { "floor": 22, "median": 36, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "npm/pattern-zipf": {
+        "loaded": { "floor": 87, "median": 144, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "npm/ramp": {
+        "loaded": { "floor": 1383, "median": 2304, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "npm/revalidate-not-modified": {
+        "loaded": { "floor": 7872, "median": 13120, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 149, "median": 248, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "npm/revalidate-not-modified-advisories": {
+        "loaded": { "floor": 7248, "median": 12080, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 151, "median": 251, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "npm/slow-readers": {
+        "loaded": { "floor": 542, "median": 903, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "npm/tarball-ceiling": {
+        "loaded": { "floor": 44851, "median": 74751, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 5453, "median": 9088, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "npm/tarball-hot-path": {
+        "loaded": { "floor": 48989, "median": 81648, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 836, "median": 1392, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "npm/tarball-onboarding": {
+        "loaded": { "floor": 28146, "median": 46910, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 423, "median": 705, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "npm/warm-under-cold": {
+        "loaded": { "floor": 2131, "median": 3551, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "pypi/assembled-response-hit": {
+        "loaded": { "floor": 12693, "median": 21154, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 269, "median": 448, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "pypi/cache-evicts-large": {
+        "loaded": { "floor": 15116, "median": 25192, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 309, "median": 515, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "pypi/cache-fits-large": {
+        "loaded": { "floor": 15863, "median": 26437, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 312, "median": 519, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "pypi/heavy-private": {
+        "loaded": { "floor": 909, "median": 1514, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 227, "median": 377, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "pypi/heavy-private-25pct": {
+        "loaded": { "floor": 2646, "median": 4410, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 233, "median": 387, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "pypi/herd": {
+        "loaded": { "floor": 60, "median": 100, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "pypi/herd-under-heavy-private": {
+        "loaded": { "floor": 880, "median": 1466, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "pypi/index-cold": {
+        "loaded": { "floor": 11304, "median": 18839, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 241, "median": 401, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "pypi/index-cold-advisories": {
+        "loaded": { "floor": 6635, "median": 11057, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 236, "median": 392, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "pypi/index-cold-all-advisory-rules": {
+        "loaded": { "floor": 6440, "median": 10732, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 242, "median": 402, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "pypi/mirror-managed-revision": {
+        "loaded": { "floor": 54, "median": 90, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 50, "median": 83, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "pypi/mirror-managed-warm": {
+        "loaded": { "floor": 856, "median": 1426, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 174, "median": 290, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "pypi/mirror-native-baseline": {
+        "loaded": { "floor": 2044, "median": 3406, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 388, "median": 646, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "pypi/pattern-ci-fleet": {
+        "loaded": { "floor": 8, "median": 12, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "pypi/pattern-cold-install": {
+        "loaded": { "floor": 2, "median": 3, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "pypi/pattern-cold-install-default-body-cap": {
+        "loaded": { "floor": 2, "median": 3, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "pypi/pattern-heterogeneous": {
+        "loaded": { "floor": 3, "median": 4, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "pypi/pattern-hot-set-control": {
+        "loaded": { "floor": 29, "median": 48, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "pypi/pattern-scan": {
+        "loaded": { "floor": 8, "median": 12, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "pypi/pattern-zipf": {
+        "loaded": { "floor": 29, "median": 48, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "pypi/ramp": {
+        "loaded": { "floor": 2394, "median": 3989, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "pypi/revalidate-not-modified": {
+        "loaded": { "floor": 11340, "median": 18899, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 240, "median": 399, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "pypi/revalidate-not-modified-advisories": {
+        "loaded": { "floor": 10499, "median": 17497, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 237, "median": 394, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "pypi/slow-readers": {
+        "loaded": { "floor": 1046, "median": 1743, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "pypi/warm-under-cold": {
+        "loaded": { "floor": 3432, "median": 5719, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "pypi/wheel-ceiling": {
+        "loaded": { "floor": 34196, "median": 56993, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 3029, "median": 5047, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "pypi/wheel-hot-path": {
+        "loaded": { "floor": 32993, "median": 54988, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 425, "median": 707, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "pypi/wheel-onboarding": {
+        "loaded": { "floor": 23843, "median": 39737, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 284, "median": 472, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "rubygems/gem-ceiling": {
+        "loaded": { "floor": 18594, "median": 30989, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 1848, "median": 3080, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "rubygems/gem-hot-path": {
+        "loaded": { "floor": 20534, "median": 34222, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 280, "median": 466, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "rubygems/gem-onboarding": {
+        "loaded": { "floor": 17321, "median": 28867, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 211, "median": 351, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "rubygems/heavy-private": {
+        "loaded": { "floor": 2040, "median": 3400, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 399, "median": 665, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "rubygems/heavy-private-25pct": {
+        "loaded": { "floor": 5135, "median": 8557, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 410, "median": 682, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "rubygems/herd": {
+        "loaded": { "floor": 60, "median": 100, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "rubygems/herd-under-heavy-private": {
+        "loaded": { "floor": 2021, "median": 3367, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "rubygems/info-cold": {
+        "loaded": { "floor": 18624, "median": 31040, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 414, "median": 690, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "rubygems/info-cold-advisories": {
+        "loaded": { "floor": 9639, "median": 16064, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 410, "median": 682, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "rubygems/info-cold-all-advisory-rules": {
+        "loaded": { "floor": 9409, "median": 15681, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 410, "median": 683, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "rubygems/info-repeated-corpus": {
+        "loaded": { "floor": 19187, "median": 31978, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 418, "median": 696, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "rubygems/info-working-set-many": {
+        "loaded": { "floor": 19006, "median": 31676, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 422, "median": 702, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "rubygems/info-working-set-one": {
+        "loaded": { "floor": 21419, "median": 35698, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 438, "median": 730, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "rubygems/pattern-ci-fleet": {
+        "loaded": { "floor": 8, "median": 12, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "rubygems/pattern-cold-install": {
+        "loaded": { "floor": 2, "median": 3, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "rubygems/pattern-cold-install-default-body-cap": {
+        "loaded": { "floor": 2, "median": 3, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "rubygems/pattern-heterogeneous": {
+        "loaded": { "floor": 3, "median": 4, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "rubygems/pattern-hot-set-control": {
+        "loaded": { "floor": 29, "median": 48, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "rubygems/pattern-scan": {
+        "loaded": { "floor": 8, "median": 12, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "rubygems/pattern-zipf": {
+        "loaded": { "floor": 29, "median": 48, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "rubygems/quick-gemspec": {
+        "loaded": { "floor": 28727, "median": 47877, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 420, "median": 700, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "rubygems/ramp": {
+        "loaded": { "floor": 4788, "median": 7979, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "rubygems/revalidate-not-modified": {
+        "loaded": { "floor": 21827, "median": 36377, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 440, "median": 733, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "rubygems/revalidate-not-modified-advisories": {
+        "loaded": { "floor": 14959, "median": 24931, "from": [41191783409, 41191785301, 41191787032] },
+        "concurrencyOne": { "floor": 434, "median": 723, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "rubygems/slow-readers": {
+        "loaded": { "floor": 2664, "median": 4439, "from": [41191783409, 41191785301, 41191787032] }
+      },
+      "rubygems/warm-under-cold": {
+        "loaded": { "floor": 6102, "median": 10170, "from": [41191783409, 41191785301, 41191787032] }
+      }
     }
   }
 }

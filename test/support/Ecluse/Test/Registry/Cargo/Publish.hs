@@ -10,11 +10,21 @@ module Ecluse.Test.Registry.Cargo.Publish (
     cargoResolverMetadata,
     cargoResolverAgreements,
     cargoResolverContradictions,
+    cargoResolverDependencyField,
+    cargoForeignRegistryManifest,
+    cargoForeignRegistryMetadata,
+    cargoForeignRegistryArchive,
+    cargoForeignRegistryRefusal,
+    cargoForeignDevManifest,
+    cargoForeignDevMetadata,
+    cargoForeignDevArchive,
+    cargoUnstableManifestArchive,
+    cargoUnstableManifestRefusal,
     cargoSourceVersion,
     observeCargoRelay,
 ) where
 
-import Data.Aeson (Value (..), object, toJSON, (.=))
+import Data.Aeson (Key, Value (..), object, toJSON, (.=))
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.Text qualified as T
 import Network.HTTP.Client (defaultManagerSettings, newManager)
@@ -30,6 +40,7 @@ import Ecluse.Core.Registry.Cargo.Projection (projectCargoRecord)
 import Ecluse.Core.Registry.Cargo.Publish (cargoPublish)
 import Ecluse.Core.Registry.Metadata (VersionDoc (..))
 import Ecluse.Core.Registry.Origin (originClient)
+import Ecluse.Core.Registry.Request (nativePresentation)
 import Ecluse.Core.Registry.ServedDocument (stringField)
 import Ecluse.Core.Security (defaultLimits, maxNestingDepth)
 import Ecluse.Core.Security.Egress (RegistryUrl)
@@ -48,7 +59,7 @@ observeCargoRelay registryAt bytes =
     withRoutedStub (const (status200, [], "{}")) $ \target ->
         withExchangeClient (newManager defaultManagerSettings) $ \client -> do
             let origin = originClient defaultLimits client (registryAt (stubBaseUrl target)) Nothing
-            void (publishRelay (cargoPublish (ChargeFactors 1000 1000 1000)) origin cargoTestName (PublishRequestBody bytes Nothing NoPublishExtras) >>= expectRight)
+            void (publishRelay (cargoPublish (ChargeFactors 1000 1000 1000)) nativePresentation origin cargoTestName (PublishRequestBody bytes Nothing NoPublishExtras) >>= expectRight)
             captured <-
                 allCaptured target >>= \case
                     [written] -> pure written
@@ -64,30 +75,97 @@ cargoPublicationFixture = do
     bytes <- cargoCrateArchive "fixture" "1.0.0" [("README.md", "owned readme"), ("Cargo.toml", manifest), ("src/lib.rs", "pub fn owned() {}\n")]
     pure (minimalCargoRelease "fixture" "1.0.0"){releaseArchive = bytes, releaseChecksum = hexSha256Of bytes, releaseReadme = "owned readme"}
 
--- | Literal resolver declarations pair native normalisation controls with an independently authored upload.
+{- | Literal resolver declarations pair native normalisation controls with an independently authored upload.
+The renamed dependency names Écluse's registry, spelled without its trailing slash.
+-}
 cargoResolverManifest :: ByteString
-cargoResolverManifest =
-    "[package]\nname='fixture'\nversion='1.0.0'\nrust-version='1.74'\nlinks='native_foo'\nbuild='build.rs'\n"
-        <> "[dependencies]\nlocal={version='1.2',registry-index='sparse+https://proxy.test/cargo/private/',features=['beta','alpha'],default-features=false}\n"
-        <> "foreign={package='original',version='1.X',registry-index='sparse+https://foreign.test/index/',optional=true}\nauto={version='0.3',optional=true}\n"
-        <> "[dev-dependencies]\nhelper='1.0.0+build'\n"
-        <> "[target.'cfg(all(unix,target_os = \"linux\",))'.build-dependencies]\ntool={version='>=1.2.3-alpha, <2',features=['derive']}\n"
-        <> "[features]\ndefault=['full','auto']\nfull=['dep:foreign','foreign?/extra','local/alpha']\n"
+cargoResolverManifest = resolverManifest "sparse+https://proxy.test/cargo"
 
 -- | The upload uses current-registry null, canonical requirements, and an explicit implicit optional feature.
 cargoResolverMetadata :: Value
-cargoResolverMetadata =
+cargoResolverMetadata = resolverMetadata "sparse+https://proxy.test/cargo/"
+
+-- | The effective manifest remains independent of the literal upload claims.
+cargoResolverArchive :: IO ByteString
+cargoResolverArchive = resolverArchive cargoResolverManifest
+
+-- | The resolver manifest with its renamed dependency declared from a registry outside Écluse.
+cargoForeignRegistryManifest :: ByteString
+cargoForeignRegistryManifest = resolverManifest "sparse+https://foreign.test/index/"
+
+-- | An upload that agrees with 'cargoForeignRegistryManifest', so only the dependency source is refused.
+cargoForeignRegistryMetadata :: Value
+cargoForeignRegistryMetadata = resolverMetadata "sparse+https://foreign.test/index/"
+
+-- | The crate archive that carries 'cargoForeignRegistryManifest'.
+cargoForeignRegistryArchive :: IO ByteString
+cargoForeignRegistryArchive = resolverArchive cargoForeignRegistryManifest
+
+-- | The publication refusal for the foreign fixture, written out so a wording change shows in every spec.
+cargoForeignRegistryRefusal :: Text
+cargoForeignRegistryRefusal = "Cargo dependency 'original' comes from a registry other than crates.io or this proxy: publish it through this proxy first, then depend on this proxy's copy"
+
+-- | The resolver manifest with its development dependency declared from a registry outside Écluse.
+cargoForeignDevManifest :: ByteString
+cargoForeignDevManifest = resolverManifestWith "sparse+https://proxy.test/cargo" "helper={version='1.0.0+build',registry-index='sparse+https://foreign.test/index/'}"
+
+-- | An upload that agrees with 'cargoForeignDevManifest', whose only foreign source is a development dependency.
+cargoForeignDevMetadata :: Value
+cargoForeignDevMetadata = resolverMetadataWith "sparse+https://proxy.test/cargo/" "sparse+https://foreign.test/index/"
+
+-- | The crate archive that carries 'cargoForeignDevManifest'.
+cargoForeignDevArchive :: IO ByteString
+cargoForeignDevArchive = resolverArchive cargoForeignDevManifest
+
+{- | The resolver archive whose crates.io build dependency @tool@ also carries the given manifest
+declaration, such as an unstable key, which 'cargoResolverMetadata' omits.
+-}
+cargoUnstableManifestArchive :: ByteString -> IO ByteString
+cargoUnstableManifestArchive declaration = resolverArchive (resolverManifestWithTool "sparse+https://proxy.test/cargo" "helper='1.0.0+build'" ("," <> declaration))
+
+-- | The publication refusal of a manifest dependency carrying an unstable key, written out so a wording change shows in every spec.
+cargoUnstableManifestRefusal :: Text -> Text
+cargoUnstableManifestRefusal name = "Cargo manifest dependency '" <> name <> "' carries an unstable artifact, target, lib or public key"
+
+resolverManifest :: ByteString -> ByteString
+resolverManifest renamedSource = resolverManifestWith renamedSource "helper='1.0.0+build'"
+
+resolverManifestWith :: ByteString -> ByteString -> ByteString
+resolverManifestWith renamedSource helper = resolverManifestWithTool renamedSource helper ""
+
+-- The renamed and development dependencies and the build dependency's extra keys vary. Every other declaration comes from crates.io or the publication registry.
+resolverManifestWithTool :: ByteString -> ByteString -> ByteString -> ByteString
+resolverManifestWithTool renamedSource helper toolExtra =
+    "[package]\nname='fixture'\nversion='1.0.0'\nrust-version='1.74'\nlinks='native_foo'\nbuild='build.rs'\n"
+        <> "[dependencies]\nlocal={version='1.2',registry-index='sparse+https://proxy.test/cargo/',features=['beta','alpha'],default-features=false}\n"
+        <> "renamed={package='original',version='1.X',registry-index='"
+        <> renamedSource
+        <> "',optional=true}\nauto={version='0.3',optional=true}\n"
+        <> "[dev-dependencies]\n"
+        <> helper
+        <> "\n[target.'cfg(all(unix,target_os = \"linux\",))'.build-dependencies]\ntool={version='>=1.2.3-alpha, <2',features=['derive']"
+        <> toolExtra
+        <> "}\n"
+        <> "[features]\ndefault=['full','auto']\nfull=['dep:renamed','renamed?/extra','local/alpha']\n"
+
+resolverMetadata :: Text -> Value
+resolverMetadata renamedSource = resolverMetadataWith renamedSource cratesIo
+  where
+    cratesIo = "https://github.com/rust-lang/crates.io-index"
+
+resolverMetadataWith :: Text -> Text -> Value
+resolverMetadataWith renamedSource helperSource =
     object
         [ "name" .= ("fixture" :: Text)
         , "vers" .= ("1.0.0" :: Text)
         , "deps"
             .= [ dep "tool" ">=1.2.3-alpha, <2" ["derive"] False True (Just "cfg(all(unix, target_os=\"linux\"))") "build" (Just cratesIo) Nothing
-               , dep "original" "1.*" [] True True Nothing "normal" (Just "sparse+https://foreign.test/index/") (Just "foreign")
-               , dep "helper" "^1.0.0" [] False True Nothing "dev" (Just cratesIo) (Just "helper")
+               , dep "original" "1.*" [] True True Nothing "normal" (Just renamedSource) (Just "renamed")
+               , dep "helper" "^1.0.0" [] False True Nothing "dev" (Just helperSource) (Just "helper")
                , dep "local" "^1.2" ["alpha", "beta"] False False Nothing "normal" Nothing Nothing
                , dep "auto" "^0.3" [] True True Nothing "normal" (Just "sparse+https://index.crates.io/") Nothing
                ]
-        , "features" .= object ["default" .= ["auto", "full" :: Text], "full" .= ["local/alpha", "foreign?/extra", "dep:foreign" :: Text], "auto" .= ["dep:auto" :: Text]]
+        , "features" .= object ["default" .= ["auto", "full" :: Text], "full" .= ["local/alpha", "renamed?/extra", "dep:renamed" :: Text], "auto" .= ["dep:auto" :: Text]]
         , "rust_version" .= ("1.74.0" :: Text)
         , "links" .= ("native_foo" :: Text)
         , "authors" .= ["Unrestricted author text" :: Text]
@@ -102,22 +180,23 @@ cargoResolverMetadata =
     dep name requirement features isOptional defaults target kind registry alias =
         object ["name" .= name, "version_req" .= requirement, "features" .= features, "optional" .= isOptional, "default_features" .= defaults, "target" .= target, "kind" .= kind, "registry" .= registry, "explicit_name_in_toml" .= alias]
 
--- | The effective manifest remains independent of the literal upload claims.
-cargoResolverArchive :: IO ByteString
-cargoResolverArchive =
-    cargoCrateArchive "fixture" "1.0.0" [("README.md", "owned readme"), ("Cargo.toml", cargoResolverManifest), ("build.rs", "fn main() {}\n"), ("src/lib.rs", "pub fn owned() {}\n")]
+resolverArchive :: ByteString -> IO ByteString
+resolverArchive manifest =
+    cargoCrateArchive "fixture" "1.0.0" [("README.md", "owned readme"), ("Cargo.toml", manifest), ("build.rs", "fn main() {}\n"), ("src/lib.rs", "pub fn owned() {}\n")]
 
 -- | Native registry interning can retain a different equivalent spelling from the archived declaration.
 cargoResolverAgreements :: [Value]
 cargoResolverAgreements =
-    cargoResolverMetadata : case cargoResolverMetadata of
-        Object fields -> case KeyMap.lookup "deps" fields of
-            Just (Array dependencies) -> case toList dependencies of
-                Object dependency : rest ->
-                    [Object (KeyMap.insert "deps" (toJSON (Object (KeyMap.insert "registry" (String source) dependency) : rest)) fields) | source <- ["https://github.com/rust-lang/crates.io-index/", "https://GITHUB.com/RUST-LANG/CRATES.IO-INDEX.git/"]]
-                _ -> []
-            _ -> []
-        _ -> []
+    cargoResolverMetadata : [cargoResolverDependencyField "registry" (String source) | source <- ["https://github.com/rust-lang/crates.io-index/", "https://GITHUB.com/RUST-LANG/CRATES.IO-INDEX.git/"]]
+
+-- | The literal upload with one field of its first dependency, the crates.io build dependency, replaced.
+cargoResolverDependencyField :: Key -> Value -> Value
+cargoResolverDependencyField key value = case cargoResolverMetadata of
+    Object fields
+        | Just (Array dependencies) <- KeyMap.lookup "deps" fields
+        , Object firstDependency : rest <- toList dependencies ->
+            Object (KeyMap.insert "deps" (toJSON (Object (KeyMap.insert key value firstDependency) : rest)) fields)
+    _ -> Null
 
 -- | Each wire-valid mutation changes one resolver fact against the same literal agreeing control.
 cargoResolverContradictions :: [Value]
@@ -127,18 +206,15 @@ cargoResolverContradictions = case cargoResolverMetadata of
                 Just (Array values) -> toList values
                 _ -> []
             changed key value = Object (KeyMap.insert key value fields)
-            changeDependency key value = case dependencies of
-                Object firstDependency : rest -> changed "deps" (toJSON (Object (KeyMap.insert key value firstDependency) : rest))
-                _ -> Null
             features = case KeyMap.lookup "features" fields of
                 Just (Object values) -> values
                 _ -> mempty
             extra = [Object (KeyMap.insert "name" (String "extra") fields') | Object fields' <- take 1 dependencies]
          in [changed "deps" (toJSON (drop 1 dependencies)), changed "deps" (toJSON (dependencies <> take 1 dependencies)), changed "deps" (toJSON (dependencies <> extra))]
-                <> [changeDependency key value | (key, value) <- [("name", String "another"), ("explicit_name_in_toml", String "another"), ("target", String "cfg(windows)"), ("target", String "cfg(any(unix,,windows))"), ("target", String ("cfg(" <> T.replicate (maxNestingDepth defaultLimits) "not(" <> "unix" <> T.replicate (maxNestingDepth defaultLimits) ")" <> ")")), ("kind", String "dev"), ("registry", Null), ("registry", String "git+https://github.com/rust-lang/crates.io-index"), ("registry", String "not a registry URL"), ("registry", String "sparse+https://index.crates.io/.git/"), ("version_req", String ">1.2.3-alpha, <2"), ("optional", Bool True), ("default_features", Bool False), ("features", toJSON ["other" :: Text])]]
+                <> [cargoResolverDependencyField key value | (key, value) <- [("name", String "another"), ("explicit_name_in_toml", String "another"), ("target", String "cfg(windows)"), ("target", String "cfg(any(unix,,windows))"), ("target", String ("cfg(" <> T.replicate (maxNestingDepth defaultLimits) "not(" <> "unix" <> T.replicate (maxNestingDepth defaultLimits) ")" <> ")")), ("kind", String "dev"), ("registry", Null), ("registry", String "git+https://github.com/rust-lang/crates.io-index"), ("registry", String "not a registry URL"), ("registry", String "sparse+https://index.crates.io/.git/"), ("version_req", String ">1.2.3-alpha, <2"), ("optional", Bool True), ("default_features", Bool False), ("features", toJSON ["other" :: Text])]]
                 <> [ changed "features" (Object (KeyMap.delete "full" features))
                    , changed "features" (Object (KeyMap.insert "extra" (toJSON ([] :: [Text])) features))
-                   , changed "features" (Object (KeyMap.insert "full" (toJSON ["dep:foreign", "foreign/extra", "local/alpha" :: Text]) features))
+                   , changed "features" (Object (KeyMap.insert "full" (toJSON ["dep:renamed", "renamed/extra", "local/alpha" :: Text]) features))
                    , changed "features" (Object (KeyMap.insert "full" (toJSON ["local/alpha" :: Text]) features))
                    , changed "rust_version" (String "1.75")
                    , changed "rust_version" Null

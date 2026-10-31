@@ -5,47 +5,54 @@
 -- | Genuine publication preserves native bytes and keeps caller credentials out of read roles.
 module Ecluse.Core.Registry.RubyGems.PublishSpec (spec) where
 
+import Codec.Archive.Tar qualified as Tar
 import Data.ByteString.Lazy qualified as LBS
 import Data.List (lookup)
 import Data.Map.Strict qualified as Map
+import Data.Text qualified as T
 import Network.HTTP.Client (Request (method, requestBody, requestHeaders), RequestBody (RequestBodyBS), defaultManagerSettings, newManager)
 import Network.HTTP.Types.Status (status200)
 import Test.Hspec
 
 import Ecluse.Core.Credential (ClientCredential (ClientCredential), bareCredential, mkSecret)
 import Ecluse.Core.Package (PackageDetails (..), PackageInfo (..))
+import Ecluse.Core.Package.Hash (sha256Hex)
+import Ecluse.Core.Registry (ParseError (..), PublishBodyFault (PublishMalformed), PublishFault (PublishSourceUnavailable))
 import Ecluse.Core.Registry.Adapter.Capability
 import Ecluse.Core.Registry.CachedDocument (rubyGemsCached)
 import Ecluse.Core.Registry.Metadata (VersionDoc (..))
 import Ecluse.Core.Registry.MirrorUpload
 import Ecluse.Core.Registry.Origin (OriginClient (ocChargeFullReadWorkspace), originClient)
 import Ecluse.Core.Registry.Publish (MirrorPublish (mpProbeInventory), MirrorTransport (..), PublishCodec (..), PublishPlan (PublishPlan), newMirrorPublish)
-import Ecluse.Core.Registry.RubyGems.Credential (rubyCodeArtifactPublishCredential)
+import Ecluse.Core.Registry.Request (nativePresentation)
 import Ecluse.Core.Registry.RubyGems.Document
 import Ecluse.Core.Registry.RubyGems.Project (projectName)
 import Ecluse.Core.Registry.RubyGems.Projection (projectGemRows)
 import Ecluse.Core.Registry.RubyGems.Publish
+import Ecluse.Core.Registry.RubyGems.Wire (decodeInfoRow)
 import Ecluse.Core.Security (Limits (maxMirrorArtifactBytes), defaultLimits)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Core.Server.Admission.Types (ChargeFactors (ChargeFactors))
 import Ecluse.Server.Admission.Support (refuseCharge)
+import Ecluse.Test.Credential (basicReadsBearerWrites)
 import Ecluse.Test.Deadline (withExchangeClient, withSweeper)
 import Ecluse.Test.Port (passthroughTracingPort)
-import Ecluse.Test.Registry.Publish (publishOnlyFile)
+import Ecluse.Test.Registry.Archive (patchFirstHeader, pax, paxRecord, tarEntries)
+import Ecluse.Test.Registry.Publish (anonymousPublishAt, publishOnlyFile)
 import Ecluse.Test.Registry.RubyGems.Fixtures (loadFixtureInfo)
-import Ecluse.Test.Stub (Captured (..), allCaptured, headerValue, stubBaseUrl, withRoutedStub)
+import Ecluse.Test.Stub (Captured (..), Stub, allCaptured, headerValue, stubBaseUrl, withRoutedStub)
 import Ecluse.Test.Support (expectRight)
 
 spec :: Spec
 spec = describe "RubyGems publication" $ do
     it "relays the original gem body with the caller's native key and checked OTP" $
         withRoutedStub (const (status200, [], "owned native reply")) $ \target -> do
-            archive <- readFileBS "test/fixtures/rubygems/gems/ecluse-fixture-root-1.0.0.gem"
+            archive <- readFileBS rootArchive
             name <- expectRight (projectName "ecluse-fixture-root")
             extras <- expectRight (publishRequestExtras publisher [("OTP", "opaque-code")])
             withExchangeClient (newManager defaultManagerSettings) $ \client -> do
                 let origin = originClient defaultLimits client (loopbackRegistryUrl (stubBaseUrl target <> "/private")) (Just (bareCredential (mkSecret "native-api-key")))
-                void (publishRelay publisher origin name (PublishRequestBody archive (Just "application/octet-stream") extras) >>= expectRight)
+                void (publishRelay publisher nativePresentation origin name (PublishRequestBody archive (Just "application/octet-stream") extras) >>= expectRight)
                 allCaptured target >>= \case
                     [written] -> do
                         capMethod written `shouldBe` "POST"
@@ -55,13 +62,22 @@ spec = describe "RubyGems publication" $ do
                         headerValue "OTP" written `shouldBe` Just "opaque-code"
                     _ -> expectationFailure "expected exactly one native publication"
 
+    it "relays a static key under a store-declared Bearer write" $
+        withRoutedStub (const (status200, [], "owned native reply")) $ \target -> do
+            archive <- readFileBS rootArchive
+            name <- expectRight (projectName "ecluse-fixture-root")
+            withExchangeClient (newManager defaultManagerSettings) $ \client -> do
+                let origin = originClient defaultLimits client (loopbackRegistryUrl (stubBaseUrl target <> "/private")) (Just (bareCredential (mkSecret "static-key")))
+                void (publishRelay publisher basicReadsBearerWrites origin name (PublishRequestBody archive (Just "application/octet-stream") NoPublishExtras) >>= expectRight)
+                map (headerValue "Authorization") <$> allCaptured target `shouldReturn` [Just "Bearer static-key"]
+
     it "relays an authorised body without inspecting the archive a second time" $
         withRoutedStub (const (status200, [], "owned native reply")) $ \target -> do
-            archive <- readFileBS "test/fixtures/rubygems/gems/ecluse-fixture-root-1.0.0.gem"
+            archive <- readFileBS rootArchive
             name <- expectRight (projectName "ecluse-fixture-root")
             withExchangeClient (newManager defaultManagerSettings) $ \client -> do
                 let origin = (originClient defaultLimits client (loopbackRegistryUrl (stubBaseUrl target <> "/private")) (Just (bareCredential (mkSecret "native-api-key")))){ocChargeFullReadWorkspace = refuseCharge}
-                void (publishRelay publisher origin name (PublishRequestBody archive (Just "application/octet-stream") NoPublishExtras) >>= expectRight)
+                void (publishRelay publisher nativePresentation origin name (PublishRequestBody archive (Just "application/octet-stream") NoPublishExtras) >>= expectRight)
                 map capMethod <$> allCaptured target `shouldReturn` ["POST"]
 
     it "accepts native-extension builds and refuses malformed or oversized archives" $ do
@@ -71,11 +87,41 @@ spec = describe "RubyGems publication" $ do
         uploadClaims defaultLimits{maxMirrorArtifactBytes = 1} (const pass) "unused" body >>= (`shouldSatisfy` isLeft)
         uploadClaims defaultLimits (const pass) "unused" (PublishRequestBody "not a native archive" Nothing NoPublishExtras) >>= (`shouldSatisfy` isLeft)
 
+    it "refuses an extended outer header as a malformed upload" $ do
+        entries <- readFileBS "test/fixtures/rubygems/gems/ecluse-fixture-native-1.0.0.gem" >>= tarEntries . LBS.fromStrict
+        global <- pax 'g' (paxRecord "comment=opaque\n")
+        let claims written = uploadClaims defaultLimits (const pass) "unused" (PublishRequestBody (LBS.toStrict (Tar.write written)) Nothing NoPublishExtras)
+        claims entries `shouldReturn` Right ["ecluse-fixture-native"]
+        claims (global : entries) `shouldReturn` Left (PublishMalformed (ParseError "gem envelope carries an extended or prefixed tar header"))
+
+    it "does not mirror a public gem whose outer tar carries an extended header" $
+        withRoutedStub (const (status200, [], "written")) $ \target -> do
+            entries <- readFileBS rootArchive >>= tarEntries . LBS.fromStrict
+            global <- pax 'g' (paxRecord "comment=opaque\n")
+            let plain = LBS.toStrict (Tar.write entries)
+            mirrorTo target plain `shouldReturn` Right ()
+            mirrorTo target (LBS.toStrict (Tar.write (global : entries))) `shouldReturn` Left (PublishSourceUnavailable "gem envelope carries an extended or prefixed tar header")
+            map capBody <$> allCaptured target `shouldReturn` [plain]
+
+    -- metadata.gz is each fixture's first outer member. Its name fills 11 bytes of the name field, and the prefix field starts at byte 345.
+    for_ [("name", 11), ("prefix", 345)] $ \(field, offset) -> do
+        it ("refuses bytes after the NUL in an outer " <> field <> " field as a malformed upload") $ do
+            archive <- readFileBS "test/fixtures/rubygems/gems/ecluse-fixture-native-1.0.0.gem"
+            let claims bytes = uploadClaims defaultLimits (const pass) "unused" (PublishRequestBody bytes Nothing NoPublishExtras)
+            claims archive `shouldReturn` Right ["ecluse-fixture-native"]
+            claims (patchFirstHeader offset "\NULx" archive) `shouldReturn` Left (PublishMalformed (ParseError "gem envelope carries an extended or prefixed tar header"))
+
+        it ("does not mirror a public gem with bytes after the NUL in an outer " <> field <> " field") $
+            withRoutedStub (const (status200, [], "written")) $ \target -> do
+                archive <- readFileBS rootArchive
+                mirrorTo target (patchFirstHeader offset "\NULx" archive) `shouldReturn` Left (PublishSourceUnavailable "gem envelope carries an extended or prefixed tar header")
+                allCaptured target `shouldReturn` []
+
     it "publishes only the admitted digest and preserves verified bytes without an OTP" $ do
-        archive <- readFileBS "test/fixtures/rubygems/gems/ecluse-fixture-root-1.0.0.gem"
+        archive <- readFileBS rootArchive
         doc <- sourceVersion
         let details = vdDetails doc
-        case rubyPublishCodec factors of
+        case rubyPublishCodec factors nativePresentation of
             PublishCodec{pcPrepareSource, pcPrepareUpload, pcPublishRequest, pcNativeComplete} -> do
                 (inventory, source) <- expectRight (pcPrepareSource (pkgName details) (pkgVersion details) doc)
                 file <- case inventoryFiles inventory of
@@ -93,10 +139,10 @@ spec = describe "RubyGems publication" $ do
                     _ -> expectationFailure "native publication replaced the verified byte body"
                 pcNativeComplete (pkgName details) (pkgVersion details) (PackageInfo (pkgName details) (Map.singleton "1.0.0" details) mempty []) `shouldBe` False
 
-    for_ [("declared CodeArtifact roles", rubyPublishCodecWith rubyCodeArtifactPublishCredential factors, "Bearer worker-key"), ("generic roles with username aws", rubyPublishCodec factors, "worker-key")] $ \(label, codec, expectedKey) ->
-        it ("uses Basic reads and the selected native writer mapping for " <> label) $ do
+    for_ [("a store declaring Basic reads and Bearer writes", rubyPublishCodec factors basicReadsBearerWrites, "Bearer worker-key"), ("the protocol's own presentation", rubyPublishCodec factors nativePresentation, "worker-key")] $ \(label, codec, expectedKey) ->
+        it ("presents Basic reads and the worker key's write under " <> label) $ do
             listing <- readFileBS "test/fixtures/rubygems/info/ecluse-fixture-root"
-            archive <- readFileBS "test/fixtures/rubygems/gems/ecluse-fixture-root-1.0.0.gem"
+            archive <- readFileBS rootArchive
             doc <- sourceVersion
             let reply captured = (status200, [("Content-Type", "text/plain")], if capMethod captured == "POST" then "written" else LBS.fromStrict listing)
                 details = vdDetails doc
@@ -122,7 +168,7 @@ spec = describe "RubyGems publication" $ do
                         _ -> expectationFailure "expected one authorised native write"
 
     it "requires durable native state and an independent proof after every publication reply" $ do
-        mirrorStateRequirement (publishMirrorRequirements publisher) `shouldBe` DurableVersionState
+        isJust (durableMirrorDocuments (mirrorStateRequirement (publishMirrorRequirements publisher))) `shouldBe` True
         classifyPublish 200 "written" `shouldBe` Right ()
         classifyPublish 409 "already present" `shouldSatisfy` isLeft
         classifyPublish 403 "refused" `shouldSatisfy` isLeft
@@ -133,10 +179,28 @@ publisher = rubyPublish factors
 factors :: ChargeFactors
 factors = ChargeFactors 1000 1000 1000
 
+rootArchive :: FilePath
+rootArchive = "test/fixtures/rubygems/gems/ecluse-fixture-root-1.0.0.gem"
+
 sourceVersion :: IO VersionDoc
-sourceVersion = do
+sourceVersion = readFileBS rootArchive >>= sourceVersionOf
+
+-- | Mirror the root fixture's 1.0.0 version to the stub as the given archive, which its source row advertises.
+mirrorTo :: Stub -> ByteString -> IO (Either PublishFault ())
+mirrorTo target archive = do
+    doc <- sourceVersionOf archive
+    withSweeper $ \deadlines -> do
+        writer <- anonymousPublishAt deadlines (rubyPublishCodec factors nativePresentation) (loopbackRegistryUrl (stubBaseUrl target <> "/private"))
+        publishOnlyFile writer doc (PublishPlan (pkgVersion (vdDetails doc))) archive
+
+-- | The root fixture's 1.0.0 version, its source row advertising the given archive's SHA-256.
+sourceVersionOf :: ByteString -> IO VersionDoc
+sourceVersionOf archive = do
+    genuine <- sha256Hex <$> readFileBS rootArchive
     (name, rows) <- loadFixtureInfo "ecluse-fixture-root"
-    info <- expectRight (projectGemRows defaultLimits name "https://public.test" rows)
+    let advertise row = decodeInfoRow name (grEntryKey row) (encodeUtf8 (T.replace genuine (sha256Hex archive) (decodeUtf8 (grSource row))))
+    advertised <- traverse (either (fail . show) pure . advertise) rows
+    info <- expectRight (projectGemRows defaultLimits name "https://public.test" advertised)
     details <- maybe (fail "missing native fixture version") pure (Map.lookup "1.0.0" (infoVersions info))
-    source <- maybe (fail "missing native fixture document") pure (selectGemVersion (pkgVersion details) (GemDocument name "---\n" rows))
+    source <- maybe (fail "missing native fixture document") pure (selectGemVersion (pkgVersion details) (GemDocument name "---\n" advertised))
     pure (VersionDoc details (Just (fst rubyGemsCached source)))

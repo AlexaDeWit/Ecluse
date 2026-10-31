@@ -53,6 +53,7 @@ import UnliftIO (try)
 import Ecluse.Core.Deadline (Deadlines, timeout)
 import Ecluse.Core.Fault (TransportCause (TransportTimeout), transportFault)
 import Ecluse.Core.Fault.Http (classifyTransport, typedTlsManagerSettings)
+import Ecluse.Core.Fault.RetryAfter (responseRetryAfter)
 import Ecluse.Core.Registry (
     BodyOutcome (SuccessBody, UnreadStatus),
     FetchFault (FetchBoundExceeded, FetchCooldown, FetchTransport),
@@ -163,7 +164,7 @@ withSuccessBodyUsing control client progress consume request = runExchangeUsing 
     let code = statusCode (responseStatus response)
     if isSuccessStatus code
         then fmap (SuccessBody code) <$> consume (brRead (responseBody response))
-        else pure (Right (UnreadStatus code))
+        else Right . UnreadStatus code <$> responseRetryAfter (responseHeaders response)
 
 -- | Run a consumer over a source that hashes each chunk it passes on. A success carries the digest of every chunk read.
 digestingRead :: (IO ByteString -> IO (Either e a)) -> IO ByteString -> IO (Either e (a, ContentDigest))

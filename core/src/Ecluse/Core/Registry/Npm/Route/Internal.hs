@@ -251,8 +251,10 @@ publishRoute =
         \self-reported name. Only a document with a non-empty `_attachments` object, exactly one \
         \version, and every `dist-tags` value on that version is relayed: any other body, such as the \
         \one `npm deprecate` sends, answers `501`. A body that repeats a key, is not a JSON object, or \
-        \files its version under a key other than its `version` field answers `400`. The target's \
-        \status and JSON-labelled bytes are relayed transparently."
+        \files its version under a key other than its `version` field answers `400`. So does a version \
+        \whose `dependencies`, `optionalDependencies` or `peerDependencies` name a git source or a \
+        \remote URL, which a client would fetch from outside Écluse. The target's status and \
+        \JSON-labelled bytes are relayed transparently."
         (Just publishRequest)
         npmPublishContract
 
@@ -300,15 +302,15 @@ npmPackumentContract =
             ( chooseContract
                 (jsonContract status401 "Edge authentication failed." npmErrorCodec)
                 ( chooseContract
-                    (jsonContract status403 "Private access was refused, or no version survived policy and admission." npmErrorCodec)
+                    (jsonContract status403 "Private access was refused, or no version reached policy and admission." npmErrorCodec)
                     ( chooseContract
-                        (jsonContract status404 "A first-party name the private upstream does not have. It is never fetched from the public upstream." npmErrorCodec)
+                        (jsonContract status404 "A name no configured upstream has, a first-party name the private upstream does not have, which is never fetched from the public upstream, or a package with no version that passed policy and admission, whose refusals the `error` field names." npmErrorCodec)
                         ( chooseContract
                             (jsonContract status406 "The request's `Accept-Encoding` excludes both gzip and identity coding." npmErrorCodec)
                             ( chooseContract
                                 (jsonContract status500 "A permanent or internal inability to decide." npmErrorCodec)
                                 ( chooseContract
-                                    (jsonContract status502 "A responding upstream returned a packument for a different package." npmErrorCodec)
+                                    (jsonContract status502 "An upstream reply was invalid or unusable, such as a packument for a different package." npmErrorCodec)
                                     (jsonContract status503 "A transient upstream or advisory condition; retry (see `Retry-After`)." npmErrorCodec)
                                 )
                             )
@@ -324,7 +326,7 @@ npmPackumentReplies = metadataReplies summarisedRejections (NpmError . renderRef
 npmTarballContract :: ResponseContract PassthroughResponse
 npmTarballContract =
     passthroughContract
-        "An upstream-controlled artifact response is relayed transparently. Local authentication, policy, availability, and internal failures use npm's JSON error body under their corresponding status."
+        "An upstream-controlled artifact response is relayed transparently. Local authentication, policy, availability, and internal failures use npm's JSON error body under their corresponding status. A private upstream reply that was invalid or unusable answers a local `502`."
 
 npmTarballReplies :: TarballReplies PassthroughResponse
 npmTarballReplies =

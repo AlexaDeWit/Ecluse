@@ -162,8 +162,16 @@ The keys each tag admits depend on the endpoint, because the endpoints hold diff
 | `mirrorTarget` | `url`, `token` | `url`, optional `tokenDuration` | `url`, `token`, optional `permitDeletion` |
 | `publicationTarget` | `url`, optional `token` | `url`, optional `token` | `url`, optional `token` |
 
-Native upload fields extend this table as the configuration reference describes.
-Cargo mirror and publication targets require distinct sparse read and approved API coordinates.
+On `mirrorTarget` and `publicationTarget`, `url` is where Écluse reads and `uploadUrl` is where it writes.
+Whether a target takes `uploadUrl`, under any tag, depends on how the ecosystem's protocol publishes:
+
+| Ecosystem | `uploadUrl` on `mirrorTarget` and `publicationTarget` |
+| --- | --- |
+| npm | Refused at load. Écluse publishes below `url`. |
+| RubyGems | Refused at load. Écluse posts to `api/v1/gems` below `url`. |
+| PyPI | Required at load. It names the native upload endpoint. |
+| Cargo | Required at load. It names the approved API base. |
+
 See [Cargo protocol support](@/docs/protocol-support.md#cargo) and [Cargo mirror setup](@/docs/mirror-setup.md#cargo).
 
 Proxy reads forward the caller's own credential to the private upstream, while public reads
@@ -194,15 +202,17 @@ different tags are refused for every role, because one store has one backend.
 
 [Complete PyPI setup](@/docs/pypi-setup.md) combines the repositories, roles, credentials and rollout order.
 
-PyPI mirror tags also admit `uploadUrl` and `username`. Publication tags also admit `username`.
+PyPI mirror and publication tags also admit `username`.
 The role requires these fields as described below.
 
-A PyPI mirror declares the registry root, from which reads append `simple/`, and an explicit native `uploadUrl`. A generic static
-write token also declares its Basic `username`. CodeArtifact supplies `aws` at its backend binding.
+A PyPI mirror or publication target declares the registry root as `url`, from which reads append `simple/`, and the native upload endpoint as `uploadUrl`. A write token
+on a `registry` or `verdaccio` target also declares its Basic `username`, which PyPI's own Basic
+presentation sends. A store that declares its own write mechanism needs none: CodeArtifact supplies
+`aws` at its backend binding.
 A CodeArtifact upload URL must name the same domain, account, region and repository as its read root.
 Its supported upload paths are listed in the [configuration reference](#the-configuration-reference).
-The refresh provider still owns only the secret. Client publication uses the exact configured
-publication URL and retains the caller's Basic pair when no static replacement is configured.
+The refresh provider still owns only the secret. Client publication posts to `uploadUrl`
+and retains the caller's Basic pair when no static replacement is configured.
 
 Configure `mirrorState.url` independently from `advisories.url`. Its S3-compatible store must
 support strong reads, conditional creation and conditional replacement. The proxy needs reads
@@ -275,34 +285,41 @@ your scopes that the private upstream does not have answers `404`, and Écluse d
 the public registry for it. That refusal is the point: a public package published under a scope you
 own is a dependency-confusion attack.
 
+Cargo's `/cargo/` registry merges `privateUpstream` with admitted crates.io crates in the same way.
+A private crate whose name is not declared, and which also exists on crates.io, receives the admitted
+crates.io versions beside its private ones. Declare every private crate name or prefix.
+
 The private upstream is that name's one authority, so why it did not answer decides what your
-client sees. A `404` from it settles the question, and Écluse answers `404`. An upstream Écluse
-cannot reach, one that faults, and one whose body does not decode all leave the question open
-instead, so Écluse answers `503` and the client retries rather than treating the install as
-missing.
+client sees. A `404` from it settles the question, and Écluse answers `404`. Any other failure
+leaves the question open, so the client treats the install as failed rather than missing. An
+upstream Écluse cannot reach, a `5xx` and a `429` answer `503`. A redirect, another unexpected
+status, and a body that does not decode or names another package answer `502`.
 
 This is a privilege over names, not authentication. It says which names are yours, never who may
 use them, so the private upstream stays the authority on every caller.
 
-For npm and PyPI, a private `401` or `403` stops the read with a local `403`.
+For npm, PyPI and RubyGems, a private `401` or `403` stops the read with a local `403`.
 This applies to metadata and artifacts, including HEAD and conditional requests. Public content cannot replace the private
 copy, even if it has the same name and version or passes public admission and integrity checks.
 This protects a private patch from substitution when the caller's private credential fails.
 Écluse forwards no upstream error body or headers. npm receives a fixed explanation.
 PyPI keeps its local refusal format: an empty body, or the configured operator help message.
 
-Cargo preserves a native `401` challenge for credential-provider retry and treats a real `403` as refusal.
-The private alternate never substitutes a public copy, including after a private `404`.
+Cargo is the only exception. It preserves a native `401` challenge for credential-provider retry and treats a real `403` as refusal.
 
-RubyGems keeps a private `401` or `403` status on metadata and archive reads, and never substitutes
-a public copy after either.
+Bundler treats a `403` on Compact Index metadata as an unavailable index. It then tries the
+Dependencies API and the full index, which Écluse answers with `404`, so the install fails with
+Bundler's `Could not fetch specs` error rather than a credential prompt. A gem download fails with
+the `403`.
 
 For sparse index and archive requests, Cargo's public policy and evaluation refusals include Écluse's reason plus configured `server.helpMessage`.
-Private refusals, access refusals on either view, and missing or excluded package replies keep only configured operator help.
+Private refusals, access refusals, and missing or excluded package replies keep only configured operator help.
 Without configured help, those replies have no body.
 
-Check the caller's private credential and access when this refusal appears. Ordinary private
-`404` responses and other transient or transport failures keep their existing fallback policy.
+Check the caller's private credential and access when this refusal appears. A private `404` lets
+admitted public content serve for a name outside your first-party namespaces. Any other private
+read failure refuses with `503` or `502` for every name, as
+[a failing private registry](@/docs/private-reads.md#private-outage) describes.
 First-party names remain private-only. A backend that masks an access refusal as `404` supplies
 no proof that authentication succeeded.
 
@@ -357,7 +374,7 @@ The policy is a named map of rules over the deny-by-default gate described in
 `ECLUSE_RULES` carries the same object as JSON, which suits a one-rule tweak, and the document
 stays the reviewable home for a real policy.
 
-Écluse ships eleven built-in rule types, catalogued below. A shipped name patches the rule it names,
+Écluse ships twelve built-in rule types, catalogued below. A shipped name patches the rule it names,
 `enabled: false` suppresses it, and a new name with a `type` adds a rule. A rule reads only its own
 type's knobs, and a knob written under a type that does not read it fails the load. The table lists
 the types from the highest default precedence to the lowest, so an earlier row wins over a later
@@ -368,7 +385,8 @@ one:
 | `DenyByIdentity` | No | Denies a package or `package@version`. This is the revoke. | `identity` |
 | `DenyIfDeprecated` | No | Denies a version carrying the npm deprecation flag, including whole packages and release lines. | None |
 | `DenyIfYanked` | No | Denies a yanked Cargo version or a PyPI release whose every file is yanked. | None |
-| `DenyInstallTimeExecution` | npm only | `deny-scripts` denies npm install scripts at admission. Cargo requires explicit activation and verified archive evidence. Stored copies stay. | None |
+| `DenyInstallTimeExecution` | npm only | `deny-scripts` denies npm install scripts at admission. Stored copies stay. | None |
+| `DenyExternalDependencies` | npm and Cargo | `deny-external-dependencies` denies a public npm version whose `dependencies`, `optionalDependencies` or `peerDependencies` name a git source, a remote tarball URL or an unsupported scheme such as `jsr:`, at admission. On Cargo it denies a public crate whose normal or build dependency names a registry other than crates.io. Stored copies stay. | None |
 | `DenyIfKnownMalicious` | With `advisories.url` | Denies affected versions named by an active primary `MAL-` advisory. Named `deny-known-malicious`, precedence 300, both phases. | `onUnavailable` |
 | `AllowByIdentity` | No | Admits a package or `package@version`, and a bare name matches every version. It overrides scored advisory denies. Override MAL denial with precedence above 300. | `identity` |
 | `DenyIfCve` | No | Denies a version that a synced advisory marks as affected at or above a CVSS threshold. | `minCvss` (0-10), `onUnavailable` |
@@ -414,12 +432,29 @@ deprecates or yanks a first-party release at the publication target. Écluse ans
 result: a first-party npm version keeps its `deprecated` member, and a PyPI file keeps its
 `yanked` status.
 
-The npm mount adds `deny-scripts` at precedence 300 with `appliesTo: [admission]`.
-The default applies only when you enable the npm mount. It does not enable a mount itself.
+The npm mount adds `deny-scripts` and `deny-external-dependencies`, each at precedence 300 with
+`appliesTo: [admission]`. The Cargo mount adds `deny-external-dependencies` the same way. These
+defaults apply only when you enable their mount. They do not enable a mount themselves.
 PyPI inherits only the shared defaults, so an admitted release keeps its source distributions and wheels.
 
-Disable this default under `mounts.npm.rules`, or admit a named package with an `AllowByIdentity`
-pin whose explicit `precedence` is above 300:
+`deny-external-dependencies` denies a public version whose installable dependencies a client would
+fetch from outside Écluse. Only a registry range or dist-tag, an `npm:` alias, a `file:`, `link:` or
+`workspace:` spec, or a local path passes. A git source (`git+https:`, `git:`, `git+ssh:`, `ssh:`,
+`github:`, `gitlab:`, `bitbucket:`, `gist:`, `sourcehut:`, `user/repo` shorthand, or a
+`user@host:path` address), a remote tarball URL (`http:` or `https:`), and every other scheme, such
+as pnpm's `jsr:` or one a client adds later, trigger it. It reads the specs the packument already
+carries, so it adds no fetch. `devDependencies`, which consumers do not install, do not trigger it.
+PyPI and RubyGems block the type at boot, as the table of blocked types below lists.
+
+On the Cargo mount, `deny-external-dependencies` denies a public crate whose index row names a
+registry other than crates.io for a normal or build dependency, which a client would fetch from
+directly. A null registry, which names the index the row came from, either crates.io spelling and
+every development dependency pass. crates.io refuses such crates at upload, so the rule acts on a
+`publicUpstream` other than crates.io. The index reader knows no address for Écluse, so a row that
+names Écluse's own index by URL is denied too.
+
+Disable a default under its mount's rules, `mounts.npm.rules` or `mounts.cargo.rules`, or admit a
+named package with an `AllowByIdentity` pin whose explicit `precedence` is above 300:
 
 ```yaml
 mounts:
@@ -441,12 +476,13 @@ mounts:
         precedence: 301
 ```
 
-`ECLUSE_MOUNTS__NPM__RULES` carries the same patch as JSON, for example
-`'{"deny-scripts":{"enabled":false}}'`. Disabling `deny-scripts` in the shared `rules` object
-fails the load because that shared list defines no rule by this name.
+`ECLUSE_MOUNTS__NPM__RULES` and `ECLUSE_MOUNTS__CARGO__RULES` carry the same patch as JSON, for
+example `'{"deny-external-dependencies":{"enabled":false}}'`, a rule both mounts ship. Disabling
+`deny-scripts` or `deny-external-dependencies` in the shared `rules` object fails the load because
+that shared list defines no rule by either name.
 Mount rules resolve over the shared policy, then the shipped mount rules, then your mount patch.
-To extend the npm deny to stored copies, set
-`deny-scripts: {appliesTo: [admission, revocation]}` under `mounts.npm.rules`.
+To extend an npm deny to stored copies, restate its phases under `mounts.npm.rules`, for example
+`deny-scripts: {appliesTo: [admission, revocation]}`.
 
 Each adapter declares the rule types its ecosystem blocks, with a reason.
 Boot and `ecluse check-config` refuse every blocked entry in each active mount's resolved policy.
@@ -457,16 +493,20 @@ The following types are blocked:
 | Ecosystem | Blocked type | Reason |
 |---|---|---|
 | pypi | `DenyInstallTimeExecution` | Most PyPI releases offer a source distribution, which runs its own build on install, so this rule would deny nearly every release. |
+| pypi | `DenyExternalDependencies` | The PyPI adapter does not read where a release's dependencies install from. |
 | npm | `DenyIfYanked` | npm reports no yank flag. Removed releases disappear from its metadata. |
 | pypi | `DenyIfDeprecated` | The PyPI adapter supplies no deprecation flag. |
 | pypi | `AllowScope` | A PyPI project name has no scope, so this rule can never match one. |
+| cargo | `DenyInstallTimeExecution` | Cargo's sparse index does not declare build scripts or procedural macros. This rule is unsupported for the ecosystem. |
 | cargo | `AllowScope` | Cargo package names have no scope. |
 | cargo | `DenyIfDeprecated` | Cargo's sparse index supplies no deprecation flag. |
 | rubygems | `DenyInstallTimeExecution` | RubyGems native builds are normal installation behaviour. This rule is unsupported for the ecosystem. |
+| rubygems | `DenyIfYanked` | RubyGems reports no yank flag in a gem's metadata. Yanked versions disappear from it. |
+| rubygems | `DenyExternalDependencies` | A RubyGems dependency names only a gem and its requirements, never a source, so this rule can never match one. |
 | rubygems | `DenyIfDeprecated` | RubyGems metadata supplies no supported deprecation flag. |
 | rubygems | `AllowScope` | RubyGems package names have no scope. |
 
-Move `DenyInstallTimeExecution`, `AllowScope`, or `DenyIfDeprecated` from shared `rules` into `mounts.npm.rules`:
+Move `DenyInstallTimeExecution`, `DenyExternalDependencies`, `AllowScope`, or `DenyIfDeprecated` from shared `rules` into `mounts.npm.rules`:
 
 ```yaml
 mounts:
@@ -499,7 +539,7 @@ mounts:
 
 `ECLUSE_MOUNTS__PYPI__RULES` takes that mount patch as JSON, for example
 `'{"custom-code":{"enabled":false},"custom-scope":{"enabled":false}}'`.
-The shipped npm default remains under `mounts.npm.rules.deny-scripts`.
+The shipped npm defaults remain under `mounts.npm.rules`.
 PyPI's install-code signal and the served source distributions and wheels remain unchanged.
 
 The advisory rules carry details the table leaves out:
@@ -560,8 +600,8 @@ The precedence values, the patch/add/suppress merge model, and the strict valida
 
 ### Where a rule applies
 
-A new rule applies at two phases unless you limit it. The shipped npm `deny-scripts` applies only
-at admission. Admission is the gate: a listing, an artifact request, and the mirror worker's check before it writes a version to your mirror target.
+A new rule applies at two phases unless you limit it. The shipped npm `deny-scripts` and
+`deny-external-dependencies`, and the shipped Cargo `deny-external-dependencies`, apply only at admission. Admission is the gate: a listing, an artifact request, and the mirror worker's check before it writes a version to your mirror target.
 Revocation is the Dredger's check of the versions your stores already hold. The `appliesTo` list
 on a rule names its phases:
 

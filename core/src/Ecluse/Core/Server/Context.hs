@@ -13,7 +13,6 @@ module Ecluse.Core.Server.Context (
 
     -- * Packument-serve dependencies
     PackumentDeps (..),
-    ReadSourceSelection (..),
     pdPrivateBaseUrl,
     pdPublicBaseUrl,
     pdPrivateBase,
@@ -59,9 +58,8 @@ import Ecluse.Core.Queue (MirrorQueue)
 import Ecluse.Core.Registry.Adapter.Capability (AdapterArtifact, AdapterMetadata, AdapterPublish, ProjectName)
 import Ecluse.Core.Registry.Exchange.Types (ExchangeClient)
 import Ecluse.Core.Registry.Public (PublicControl)
-import Ecluse.Core.Registry.Request (BaseRequest, CredentialMapping)
+import Ecluse.Core.Registry.Request (BaseRequest, CredentialMapping, ServicePresentation)
 import Ecluse.Core.Rules (PreparedRule)
-import Ecluse.Core.Rules.Install (InstallEvidenceProvider)
 import Ecluse.Core.Rules.Outage (AdmissionIdentity)
 import Ecluse.Core.Security (HostPort, Limits, Origin, TarballHostGate, tarballHostAllowed, thgAllowlist, thgEcosystemHosts)
 import Ecluse.Core.Security.Egress (RegistryUrl)
@@ -108,27 +106,16 @@ data ServeRuntime = ServeRuntime
     -- ^ The tracing port the serve path opens its hand-added domain spans through.
     }
 
--- | Which origins may contribute to one served view.
-data ReadSourceSelection
-    = MergePrivateAndPublic
-    | ManagedMirrorAndPublic
-    | PrivateOnly
-    deriving stock (Eq, Show)
-
 -- | Mount inputs shared by packument and tarball handlers, resolved at boot.
 data PackumentDeps = PackumentDeps
     { pdUpstreams :: MountUpstreams
     -- ^ Upstreams bound to their derived host gate, so their authorities cannot diverge.
-    , pdReadSourceSelection :: ReadSourceSelection
-    -- ^ Restrict origin reads and managed mirror contributions for this view.
     , pdMirrorState :: Maybe MirrorView
     -- ^ Source-only state, validated after each caller authorises the private read.
     , pdFirstParty :: PackageName -> Bool
     -- ^ Whether this deployment owns the name, derived once at the composition root and deny by default. Only the private upstream serves it, and a private miss is @404@.
     , pdMountBaseUrl :: Text
     -- ^ The mount's external base URL, under which served artifact URLs route back through the gate.
-    , pdInstallEvidence :: Maybe InstallEvidenceProvider
-    -- ^ The native provider resolves unknown facts only at a reached execution rule.
     , pdRules :: [PreparedRule]
     -- ^ Rules prepared at boot and evaluated against every public version.
     , pdAdditionalBlockedRanges :: [IPRange]
@@ -202,6 +189,8 @@ data PublishDeps = PublishDeps
     -- ^ Whether this package may publish here, checked before any upstream write. It is 'pdFirstParty'.
     , pubStaticCredential :: Maybe ClientCredential
     -- ^ Replaces the authenticated edge token on publishes. Requires 'pubInboundToken' at boot.
+    , pubStaticPresentation :: ServicePresentation
+    -- ^ How the publication target's store asks for 'pubStaticCredential'. A caller credential keeps its own.
     , pubInboundToken :: Maybe Secret
     -- ^ The read paths' inbound edge token (@ECLUSE_SERVER__AUTH_TOKEN@). 'Nothing' leaves the edge open.
     , pubMaxRequestBytes :: Int

@@ -161,7 +161,7 @@ publishTargetFault = \case
     MetadataFetch fault -> PublishFetch fault
     MetadataBoundExceeded fault -> PublishFetch (FetchBoundExceeded fault)
     MetadataAuthorisationFailure status -> rejected status
-    MetadataHttpFailure status -> rejected status
+    MetadataHttpFailure status _ -> rejected status
     MetadataAbsent -> rejected 404
     MetadataUndecodable -> PublishRejected (PublishError "the target discovery is malformed or names an unapproved API root")
     MetadataNameMismatch _ -> PublishRejected (PublishError "the target discovery has an inconsistent identity")

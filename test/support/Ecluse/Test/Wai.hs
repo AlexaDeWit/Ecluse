@@ -3,7 +3,7 @@
 -- SPDX-License-Identifier: MIT
 
 {- | Readers for an in-process WAI stub and the responses a proxy serves from it, and the
-shared stub shapes: a counted stub and a body paced over time.
+shared stub shapes: a counted stub, a body paced over time, and a closed connection.
 
 The integration pipeline fixture, the publish spec, and the load bench all address
 loopback stubs the same way and read the same fields off a served response, so the
@@ -20,6 +20,7 @@ module Ecluse.Test.Wai (
     -- * Stub shapes
     countingUpstream,
     pacedBody,
+    closedResponse,
 
     -- * Reading a request
     lookupAuth,
@@ -48,10 +49,10 @@ import Data.ByteString.Lazy qualified as LBS
 import Data.CaseInsensitive qualified as CI
 import Data.List (lookup)
 import Data.Text qualified as T
-import Network.HTTP.Types (Header, hAuthorization, status200, statusCode, statusMessage)
+import Network.HTTP.Types (Header, hAuthorization, status200, status503, statusCode, statusMessage)
 import Network.HTTP.Types.Header (hHost, hIfNoneMatch)
 import Network.Socket (close)
-import Network.Wai (Application, Request (requestHeaders), responseStream)
+import Network.Wai (Application, Request (requestHeaders), Response, responseLBS, responseRaw, responseStream)
 import Network.Wai.Handler.Warp (Port, openFreePort)
 import Network.Wai.Test (SResponse (simpleBody, simpleHeaders, simpleStatus))
 import Test.Hspec (Spec, SpecWith, around)
@@ -101,6 +102,10 @@ pacedBody :: [(Int, ByteString)] -> Application
 pacedBody chunks _ respond =
     respond . responseStream status200 [] $ \write flush ->
         for_ chunks $ \(pause, chunk) -> threadDelay pause >> write (byteString chunk) >> flush
+
+-- | Close the connection without an HTTP response, a transport failure to the client.
+closedResponse :: Response
+closedResponse = responseRaw (\_ _ -> pass) (responseLBS status503 [] "")
 
 -- | The @Authorization@ header value a request carried, if any.
 lookupAuth :: [Header] -> Maybe ByteString

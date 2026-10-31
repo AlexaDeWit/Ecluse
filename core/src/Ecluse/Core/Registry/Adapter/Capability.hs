@@ -20,6 +20,8 @@ module Ecluse.Core.Registry.Adapter.Capability (
     MirrorRequirements (..),
     WorkerMetadataRead (..),
     MirrorStateRequirement (..),
+    durableMirrorDocuments,
+    companionsAgree,
     UploadEndpointRequirement (..),
     UploadIdentityRequirement (..),
 
@@ -37,9 +39,12 @@ import Network.HTTP.Client (Request)
 import Network.HTTP.Types.Header (RequestHeaders)
 
 import Ecluse.Core.Credential (ClientCredential, Secret)
+import Ecluse.Core.Mirror.Documents (MirrorDocuments)
+import Ecluse.Core.Mirror.State.Format (MirrorStateFormat (msfCompanions))
 import Ecluse.Core.Package (PackageName)
 import Ecluse.Core.Package.Merge (MergePlan, SourceId)
 import Ecluse.Core.Registry (
+    CompanionRequirement (NativeCompanions),
     FetchFault,
     PublishBodyFault,
     PublishRelayResponse,
@@ -52,8 +57,8 @@ import Ecluse.Core.Registry.Maintenance (StoreRefusal)
 import Ecluse.Core.Registry.Maintenance.NameSpace (NameAlphabet)
 import Ecluse.Core.Registry.Metadata.Fetch.Preparation (PrepareRead)
 import Ecluse.Core.Registry.Origin (OriginClient)
-import Ecluse.Core.Registry.Publish (PublishCodec)
-import Ecluse.Core.Registry.Request (CredentialMapping)
+import Ecluse.Core.Registry.Publish (PublishCodec (pcMirrorCompanion))
+import Ecluse.Core.Registry.Request (CredentialMapping, ServicePresentation, nativePresentation)
 import Ecluse.Core.Registry.ServedDocument (RenderRefused)
 import Ecluse.Core.Security (Limits)
 import Ecluse.Core.Server.Admission.Types (ChargeFactors)
@@ -118,10 +123,16 @@ data WorkerMetadataRead
 -- | Completion uses native inventory or requires durable version state.
 data MirrorStateRequirement
     = NativeVersionState
-    | DurableVersionState
-    deriving stock (Eq, Show)
+    | -- | Completion and outage reads restore retained source documents through these operations.
+      DurableVersionState MirrorDocuments
 
--- | Mirror uploads use the read root or require a separate endpoint.
+-- | The durable format's document operations, absent where native inventory proves completion.
+durableMirrorDocuments :: MirrorStateRequirement -> Maybe MirrorDocuments
+durableMirrorDocuments = \case
+    NativeVersionState -> Nothing
+    DurableVersionState documents -> Just documents
+
+-- | Whether the protocol writes at its read root or at a separate endpoint.
 data UploadEndpointRequirement
     = ReadRootUpload
     | ExplicitUploadEndpoint
@@ -137,10 +148,10 @@ data UploadIdentityRequirement
 data MirrorRequirements = MirrorRequirements
     { mirrorWorkerRead :: WorkerMetadataRead
     -- ^ Cache and charging policy for worker metadata.
+    , mirrorStateFormat :: MirrorStateFormat
+    -- ^ How mirror state records, weighs and rechecks the format's read data.
     , mirrorStateRequirement :: MirrorStateRequirement
     -- ^ State the configured mirror requires at boot.
-    , mirrorUploadEndpoint :: UploadEndpointRequirement
-    -- ^ Whether the writer requires a separate endpoint.
     }
 
 -- | Native relay, identity validation, and mirror publication for one ecosystem.
@@ -149,17 +160,25 @@ data AdapterPublish = AdapterPublish
     -- ^ Recover publication credentials independently from read credentials.
     , publishRequestExtras :: RequestHeaders -> Either PublishBodyFault PublishExtras
     -- ^ Admit only native publication headers before buffering the body.
-    , publishRelay :: OriginClient -> PackageName -> PublishRequestBody -> IO (Either FetchFault PublishRelayResponse)
-    -- ^ Relay a client's publish document to the target named as the origin, and return its answer.
+    , publishRelay :: ServicePresentation -> OriginClient -> PackageName -> PublishRequestBody -> IO (Either FetchFault PublishRelayResponse)
+    -- ^ Relay a client's publish document to the target named as the origin, under the target store's presentation, and return its answer.
     , publishUploadClaims :: Limits -> (Int -> IO ()) -> Text -> PublishRequestBody -> IO (Either PublishBodyFault [Text])
-    -- ^ Check claims before target IO using the selected logical view base. Charge extra workspace as an absolute total.
-    , publishCodec :: PublishCodec
-    -- ^ The mirror write's document, requests, probe, and status semantics. The transport owns the manager, mint, and fault classification.
+    -- ^ Check claims before target IO against the mount's own base URL. Charge extra workspace as an absolute total.
+    , publishCodec :: ServicePresentation -> PublishCodec
+    -- ^ The mirror write's document, requests, probe, and status semantics under the target store's presentation. The transport owns the manager, mint, and fault classification.
     , publishMirrorRequirements :: MirrorRequirements
     -- ^ The worker read and boot obligations for configured mirrors.
+    , publishUploadEndpoint :: UploadEndpointRequirement
+    -- ^ Where mirror and client uploads go: derived from the read root, or a separate endpoint.
     , publishIdentity :: UploadIdentityRequirement
     -- ^ Static credential requirements for mirror and client uploads.
     }
+
+-- | Whether the mirror codec prepares native companions exactly where the state format requires them.
+companionsAgree :: AdapterPublish -> Bool
+companionsAgree publish = isJust (pcMirrorCompanion (publishCodec publish nativePresentation)) == (required == NativeCompanions)
+  where
+    required = msfCompanions (mirrorStateFormat (publishMirrorRequirements publish))
 
 -- | Store maintenance verbs for "Ecluse.Core.Registry.Maintenance.Protocol". A missing verb makes the Dredger refuse.
 data AdapterMaintenance = AdapterMaintenance

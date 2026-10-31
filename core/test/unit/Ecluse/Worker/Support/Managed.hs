@@ -31,6 +31,7 @@ import Ecluse.Core.Registry.Metadata (VersionDoc (..), VersionEvaluation (Versio
 import Ecluse.Core.Registry.MirrorUpload
 import Ecluse.Core.Registry.MirrorUpload.Internal (restoreMirrorInventory)
 import Ecluse.Core.Registry.Publish.Internal (MirrorPublish (..), PreparedMirrorUpload (..), PreparedMirrorVersion (..))
+import Ecluse.Core.Registry.PyPI.Mirror (pypiStateFormat)
 import Ecluse.Core.Security (defaultLimits)
 import Ecluse.Core.Worker.Job (JobOutcome, processJob)
 import Ecluse.Core.Worker.Types (WorkerMirrorState (..), WorkerPolicy (..), WorkerStateBudget (..))
@@ -65,7 +66,7 @@ data ManagedFixture = ManagedFixture
 
 -- | Unit fixtures keep production region boundaries without claiming process memory admission.
 unmeteredStateBudget :: WorkerStateBudget
-unmeteredStateBudget = WorkerStateBudget ignore ignore ignore ignore ignore ignore ignore Nothing
+unmeteredStateBudget = WorkerStateBudget ignore ignore ignore ignore ignore ignore ignore
   where
     ignore = const (pure ())
 
@@ -91,7 +92,7 @@ managedFixture location companion = do
         binding = WorkerMirrorState store targetIdentity defaultLimits (\action -> Just <$> action unmeteredStateBudget)
         publish = fixturePublish record target uploads probes reject loseReply transform onProbe
         resolve _ _ = modifyIORef' resolves (+ 1) >> readIORef sourceRef
-        policy = (npmPolicy resolve [admitRule]){wpMirrorState = Just binding, wpPublish = publish}
+        policy = (npmPolicy resolve [admitRule]){wpMirrorState = Just binding, wpPublish = publish, wpMirrorFormat = pypiStateFormat}
     pure (ManagedFixture policy binding record target uploads probes resolves sourceRef stateFault reject loseReply transform onProbe companions)
 
 -- | Exact digests and paired source entries for a changing admitted snapshot.
@@ -149,7 +150,7 @@ fixturePublish record target uploads probes reject loseReply transform onProbe =
             number <- atomicModifyIORef' probes (\n -> (n + 1, n + 1))
             readIORef onProbe >>= ($ number)
             files <- readIORef target
-            let versions = maybe mempty (Map.singleton "1" . PackageDetails name mirrorVersion Nothing NoCodeOnInstall Available) (nonEmpty files)
+            let versions = maybe mempty (Map.singleton "1" . PackageDetails name mirrorVersion Nothing NoCodeOnInstall DependencySourcesUnknown Available) (nonEmpty files)
             pure (Right (PackageInfo name versions mempty []))
         , mpPrepareVersion = \name version doc -> do
             raw <- maybeToRight (PublishSourceUnavailable "missing fixture source") (vdRaw doc >>= snd pypiSimpleCached)

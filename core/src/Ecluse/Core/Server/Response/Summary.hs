@@ -66,6 +66,7 @@ policyExplanation :: Text -> Text
 policyExplanation = \case
     "BlockedByDefault" -> "no allow rule matched"
     "DenyInstallTimeExecution" -> "installation runs code"
+    "DenyExternalDependencies" -> "dependencies install from outside the registry"
     "DenyIfKnownMalicious" -> "known malicious advisories affect the versions"
     "DenyIfCve" -> "advisories deny admission under the configured severity policy"
     "DenyIfEpss" -> "advisories deny admission under the configured exploit probability policy"

@@ -43,9 +43,8 @@ a client resolve metadata through the proxy and then download the bytes straight
 the gate. A mount therefore rewrites embedded artifact URLs under its own protocol-specific
 route and prefix before serving metadata.
 
-Cargo's sparse index contains no artifact URL. Local discovery supplies a checked proxy download template for each native view.
-The public view replaces crates.io. The private alternate keeps its own discovery, archives, and optional publication API under `/cargo/private/`.
-The [registry model](registry-model.md#cargo-integration) explains source selection and credential authority.
+Cargo's sparse index contains no artifact URL. Local discovery under `/cargo/` supplies the proxy's download template and, when publication is configured, its one publication API.
+The [registry model](registry-model.md#cargo-integration) explains the merged view and credential authority.
 
 Same-host artifacts have a second benefit. The npm client attaches credentials only to requests on
 the registry host. A same-host artifact URL keeps that auth on a tarball fetch. A separate host
@@ -210,7 +209,7 @@ and one entry bound. No store reserves a static share. Under pressure, the inser
 least-recently used entries until the aggregate fits or its eviction floor stops it. The shipped
 floors are zero. One store cannot evict another store's live entries. Reads and retaining inserts
 reclaim expired entries across every store, so TTL bounds this unfairness to one TTL window during
-active use. No gauge reports the directory store's bytes.
+active use. The directory store reports its bytes on the full-store gauge under `store=directory`.
 Per-store recency and expiry indexes change with the entries and aggregate accounting in one
 transaction. Recency updates add work to cache hits but avoid sorting a whole store during eviction.
 
@@ -313,6 +312,12 @@ Health probes, cheap local routes and other trusted private artifact hits bypass
 mirror worker runs outside the gates. A slow artifact client therefore holds no serve metadata slot while its
 download drains.
 
+First-party publication reads its upload under a separate byte-weighted gate alone, then passes
+both gates once the body is in memory. It holds them through upload inspection, target preparation
+and the relay, as a listing holds its slot through its upstream reads. A slow uploader therefore
+holds byte budget but no CPU slot, so it cannot make listings and artifact decisions shed. The
+memory gate still bounds Cargo and RubyGems archive inspection, which runs in memory.
+
 The public and private connection pools take independent settings. The private pool takes the larger
 share, because a trusted tarball hit streams outside admission, which makes its demand the
 steady-state inbound hit fan-out.
@@ -329,13 +334,18 @@ into a generic 403 or 500 response. For a concrete artifact request the decision
 | Policy denial (incl. deny-by-default) | `403` + denial body |
 | Undecidable, transient | `503` + `Retry-After` |
 | Undecidable, permanent | `500` |
+| Upstream reply invalid | `502` |
 | upstream miss | `404` (forwarded) |
 
 The rule: return `503` only when the condition should resolve, such as a transient upstream or
 advisory condition. Otherwise return `500`, because retrying a permanent inability to decide cannot
 help.
 
-A packument request has no single status. Écluse
+A failed private read is decided before any merge. Its cause alone sets the status, `503` for an
+unavailable private registry and `502` for an invalid reply, on listings and artifacts alike
+([Private availability](registry-model.md#private-availability)).
+
+A packument request otherwise has no single status. Écluse
 [merges the document across upstreams](registry-model.md#packument-merge-across-upstreams) and
 filters it by provenance (see [Applying verdicts](rules-engine.md#applying-verdicts-to-a-packument)).
 The proxy chooses a status only when nothing survives the merge, and the most recoverable cause
@@ -344,13 +354,26 @@ wins:
 - `503` if any rejection was transient, or a needed upstream was unavailable.
 - Otherwise `502` if a responding upstream returned an invalid response: a packument whose
   self-reported name is for a different package (see
-  [name validation](registry-model.md#the-route-name-is-the-served-names-validation-authority)).
+  [name validation](registry-model.md#the-route-name-is-the-served-names-validation-authority)),
+  or a public reply Écluse cannot use, a `401` or `403` included, beside a private `404`, beside a
+  private document that admits nothing, or with no private upstream.
 - Otherwise `500` if none is retryable but an exclusion is a permanent inability.
-- Otherwise `403`.
+- Otherwise `404` if every exclusion is a policy or integrity refusal. The body names the
+  refusals on npm, Cargo and RubyGems. A PyPI body carries only the operator's help message, so
+  there the reasons are in the logs only: each refused version gets a `denied` line at debug level
+  on every ecosystem, with the deciding rule and the reason class but not the refusal text. The
+  serve decision and denial metrics record a denial. A private `404` beside such a public document
+  is settled too, so it does not turn the answer into `503`.
+- Otherwise `403`, when nothing was excluded and no version reached the gate.
 
-Never `404`: the versions existed and Écluse withheld them, and a genuinely absent package is a
-separate upstream miss. (`packumentStatus` in `Ecluse.Core.Server.Response` is the counterpart of
-`artifactStatus`.)
+A listing that admits nothing answers `404` because no installable package exists under that name
+for the client, and a `403` would suggest a credential problem. The versions existed, so the
+response keeps the deciding rules, in the body or, on PyPI, in the logs, and an artifact request
+for one of them still answers `403`. The RubyGems compact specification and archive routes resolve
+their coordinate through the listing, and keep that `403` as well. A name no configured upstream
+holds is a separate miss, decided before any merge (see
+[settled absence](registry-model.md#packument-merge-across-upstreams)).
+(`packumentStatus` in `Ecluse.Core.Server.Response` is the counterpart of `artifactStatus`.)
 
 The serve-outcome model decides the status, not the body shape: an ecosystem's route contract
 supplies the matching response constructor and codec. A request matching no mount is a neutral

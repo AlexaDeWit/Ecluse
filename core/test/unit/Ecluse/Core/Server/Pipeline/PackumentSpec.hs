@@ -53,7 +53,7 @@ import Ecluse.Core.Server.Contract (responseToWai)
 import Ecluse.Core.Server.Encoding (MetadataCompression (GzipWhenAccepted, IdentityOnly))
 import Ecluse.Core.Server.MetadataGzip (gzipBufferChargeBytes, gzipWorkspaceBytes)
 import Ecluse.Core.Server.Pipeline.Internal (denialLabels, packumentServeDecision)
-import Ecluse.Core.Server.Pipeline.Origin (OriginMiss (MissAbsent, MissUnresolved))
+import Ecluse.Core.Server.Pipeline.Origin (OriginMiss (MissAbsent, MissUnresolved), ReadFailure (ReadInvalid, ReadUnavailable))
 import Ecluse.Core.Server.Pipeline.Packument (
     PackumentReplies (..),
     firstPartyMissDecision,
@@ -63,8 +63,10 @@ import Ecluse.Core.Server.Pipeline.Packument (
  )
 import Ecluse.Core.Server.Response (
     PackumentStatus (..),
-    RejectReason (Unavailable, UpstreamInvalid),
+    RejectReason (ByPolicy, Unavailable, UpstreamInvalid),
     Rejection (Rejection),
+    RetryAfter (RetryAfter),
+    RuleName (RuleName),
     ServeDecision (Reject),
     Transience (WillResolve),
     mkHelpMessage,
@@ -205,7 +207,7 @@ metadataGzipSpec = describe "native metadata gzip over the live listing path" $
                     statusOf <$> serve withPrivate ((hIfNoneMatch, tag) : signed) `shouldReturn` 403
                     publicTag <- validator =<< serve publicOnly signed
                     statusOf <$> serve publicOnly ((hIfNoneMatch, publicTag) : signed) `shouldReturn` 304
-                    statusOf <$> serve publicOnly{pdRules = []} ((hIfNoneMatch, publicTag) : signed) `shouldReturn` 403
+                    statusOf <$> serve publicOnly{pdRules = []} ((hIfNoneMatch, publicTag) : signed) `shouldReturn` 404
         it "returns its admission slot and charges when cancelled while it responds" $ withSweeper $ \deadlines -> do
             admission <- newServeAdmissionTuned deadlines 1 0 0
             rt <- testServeRuntimeWith deadlines admission noopMetricsPort
@@ -315,7 +317,7 @@ noSurvivorsSpec = describe "the refusal for a listing no version survived" $ do
             `shouldThrow` (== Evaluated)
 
     it "finishes grouped rejection text before an ignoring reply constructor returns" $
-        evaluate (noSurvivors namedReplies{packumentForbiddenText = summarisedRejections} Nothing PackumentForbidden (Reject (Rejection UpstreamInvalid "detail") : impureThrow Evaluated))
+        evaluate (noSurvivors namedReplies{packumentDeniedText = summarisedRejections} Nothing PackumentDenied (Reject (Rejection UpstreamInvalid "detail") : impureThrow Evaluated))
             `shouldThrow` (== Evaluated)
 
     for_ [(PackumentOk, 500), (PackumentUnavailable Nothing, 503), (PackumentBadGateway, 502), (PackumentServerError, 500)] $ \(status, code) ->
@@ -323,6 +325,12 @@ noSurvivorsSpec = describe "the refusal for a listing no version survived" $ do
             let response = responseToWai npmPackumentContract (noSurvivors npmPackumentReplies (Just (mkHelpMessage "Help.")) status [Reject (Rejection UpstreamInvalid "full upstream detail")])
             statusOf response `shouldBe` code
             responseBytes response `shouldReturn` encode (object ["error" .= ("full upstream detail Help." :: Text)])
+
+    it "answers a listing that admitted nothing 404 under the npm error contract, naming the refusals" $ do
+        let denied = Reject (Rejection (ByPolicy (RuleName "BlockedByDefault") []) "thing@1.0.0 was denied (no rule allowed it)")
+            response = responseToWai npmPackumentContract (noSurvivors npmPackumentReplies (Just (mkHelpMessage "Help.")) PackumentDenied [denied])
+        statusOf response `shouldBe` 404
+        responseBytes response `shouldReturn` encode (object ["error" .= ("BlockedByDefault: no allow rule matched (rejection entries: 1) Help." :: Text)])
 
     it "keeps private-access refusal text outside the grouped metadata response" $ do
         let response = responseToWai npmPackumentContract (packumentForbidden npmPackumentReplies [] (mkRefusal (Just (mkHelpMessage "Help.")) "private access was refused"))
@@ -340,7 +348,7 @@ noSurvivorsSpec = describe "the refusal for a listing no version survived" $ do
                         let deps = withPrivateBaseUrl (Just (loopbackRegistryUrl ("http://localhost:" <> show privatePort))) original{pdFirstParty = const True, pdHelp = Just (mkHelpMessage "Contact the operator.")}
                         denied <- captureListing rt listing deps methodGet []
                         headed <- captureListing rt listing deps methodHead []
-                        map statusOf [denied, headed] `shouldBe` [403, 403]
+                        map statusOf [denied, headed] `shouldBe` [404, 404]
                         responseBytes headed `shouldReturn` ""
                         responseBytes denied `shouldReturn` encode (object ["error" .= (cause <> " (rejection entries: 1) Contact the operator.")])
 
@@ -354,7 +362,7 @@ noSurvivorsSpec = describe "the refusal for a listing no version survived" $ do
                     let deps = original{pdRules = prepared, pdHelp = Just (mkHelpMessage "Contact the operator.")}
                     denied <- captureListing rt listing deps methodGet []
                     headed <- captureListing rt listing deps methodHead []
-                    map statusOf [denied, headed] `shouldBe` [403, 403]
+                    map statusOf [denied, headed] `shouldBe` [404, 404]
                     responseBytes headed `shouldReturn` ""
                     bytes <- responseBytes denied
                     if listingLabel listing == "npm"
@@ -373,27 +381,36 @@ firstPartyMissSpec = describe "a first-party name whose private origin yielded n
         replyFor MissAbsent `shouldBe` "not-found"
 
     it "renders an origin that was never read as a 503" $
-        replyFor MissUnresolved `shouldBe` "unavailable"
+        replyFor (MissUnresolved (ReadUnavailable Nothing)) `shouldBe` "unavailable"
+
+    it "renders an origin whose reply was invalid as a 502" $
+        replyFor (MissUnresolved ReadInvalid) `shouldBe` "bad-gateway"
 
     it "counts an absence as a denial the first-party rule decided" $ do
         packumentServeDecision [decisionFor MissAbsent] `shouldBe` Metric.Deny
         fmap denialLabels (reasonOf (decisionFor MissAbsent))
             `shouldBe` Just (Just "first-party", Metric.ReasonPolicy)
 
-    it "counts an unread origin as an outage, suggesting no delay" $ do
-        packumentServeDecision [decisionFor MissUnresolved] `shouldBe` Metric.Unavailable
-        reasonOf (decisionFor MissUnresolved) `shouldBe` Just (Unavailable (WillResolve Nothing))
+    it "counts an unread origin as an outage, carrying only the delay the origin asked for" $ do
+        packumentServeDecision [decisionFor (MissUnresolved (ReadUnavailable Nothing))] `shouldBe` Metric.Unavailable
+        reasonOf (decisionFor (MissUnresolved (ReadUnavailable Nothing))) `shouldBe` Just (Unavailable (WillResolve Nothing))
+        reasonOf (decisionFor (MissUnresolved (ReadUnavailable (Just (RetryAfter 30))))) `shouldBe` Just (Unavailable (WillResolve (Just (RetryAfter 30))))
+
+    it "counts an invalid private reply as an invalid upstream" $ do
+        packumentServeDecision [decisionFor (MissUnresolved ReadInvalid)] `shouldBe` Metric.Unavailable
+        reasonOf (decisionFor (MissUnresolved ReadInvalid)) `shouldBe` Just UpstreamInvalid
 
 -- Each reply factory answers its own name, so a case reads back which one the pipeline chose.
 namedReplies :: PackumentReplies Text
 namedReplies =
     PackumentReplies
-        { packumentForbiddenText = detailedRejections
+        { packumentDeniedText = detailedRejections
         , packumentOk = \_ _ -> "ok"
         , packumentNotModified = const "not-modified"
         , packumentUnauthorised = \_ _ -> "unauthorised"
         , packumentPrivateRefused = \_ _ _ -> "private-refused"
         , packumentForbidden = \_ _ -> "forbidden"
+        , packumentDenied = \_ _ -> "denied"
         , packumentNotFound = \_ _ -> "not-found"
         , packumentNotAcceptable = \_ _ -> "not-acceptable"
         , packumentInternal = \_ _ -> "internal"

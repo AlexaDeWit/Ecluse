@@ -28,6 +28,7 @@ module Ecluse.Config (
     MirrorTarget (..),
     StoreTag (..),
     storeTagName,
+    taggedKeyPath,
     Target (..),
     PrivateEndpoint (..),
     DeletionConsent (..),
@@ -250,7 +251,7 @@ resolveGlobalPolicy shared overridesAst = do
 
 sharedPolicyErrors :: [PolicyError] -> [ConfigError]
 sharedPolicyErrors errors
-    | SuppressUnknownRule "deny-scripts" `elem` errors = [SharedPolicyErrors errors]
+    | any ((`elem` errors) . SuppressUnknownRule . fst) shippedMountRules = [SharedPolicyErrors errors]
     | otherwise = [PolicyErrors errors]
 
 -- The resolved mounts, and the source-activated rules any of them runs.
@@ -304,9 +305,7 @@ resolveMirrored policy eco privateUpstream mirrorTarget mcfg = do
                             { mtUrl = meUrl mirrorTarget
                             , mtBackend = backend
                             , mtUploadUrl = fromMaybe (meUrl mirrorTarget) (meUploadUrl mirrorTarget)
-                            , mtUsername = case sbMint backend of
-                                MintCodeArtifact{} -> Just "aws"
-                                MintStatic{} -> meUsername mirrorTarget
+                            , mtUsername = meUsername mirrorTarget
                             }
                     }
 

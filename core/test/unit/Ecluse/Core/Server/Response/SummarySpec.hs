@@ -30,6 +30,7 @@ spec = describe "grouped rejection text" $ do
     for_
         [ ("DenyIfCve", exposure, "DenyIfCve: advisories deny admission under the configured severity policy (rejection entries: 1)")
         , ("DenyIfEpss", AffectedBy Epss 0.5 (mkAdvisoryIds ("GHSA-test-0001" :| [])), "DenyIfEpss: advisories deny admission under the configured exploit probability policy (rejection entries: 1)")
+        , ("DenyExternalDependencies", FetchesOutside "dependency 'left-pad' in dependencies names a git source", "DenyExternalDependencies: dependencies install from outside the registry (rejection entries: 1)")
         , ("DenyIfYanked", VersionYanked, "DenyIfYanked: the versions are yanked (rejection entries: 1)")
         , ("DenyIfDeprecated", VersionDeprecated, "DenyIfDeprecated: the versions are deprecated (rejection entries: 1)")
         , ("DenyByIdentity", revocation, "DenyByIdentity: the operator revoked the package identity (rejection entries: 1)")

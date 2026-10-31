@@ -10,11 +10,11 @@ module Ecluse.Core.Server.Pipeline.OriginIntegrationSpec (spec) where
 import Data.Aeson (Value (String))
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
-import Ecluse.Composition (firstPartyName)
-import Ecluse.Config.Types (FirstParty (FirstPartyNpmScopes))
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Package (PackageName, mkPackageName, mkScope)
+import Ecluse.Core.Registry.FirstParty (FirstParty (FirstParty), firstPartyName)
 import Ecluse.Core.Registry.Maintenance (StoredVersion (StoredVersion, storedVersion), VersionPresence (VersionServed))
+import Ecluse.Core.Registry.Npm.Adapter (npmFirstPartyNames)
 import Ecluse.Core.Registry.Sweep.Package (sweepPackageGroup)
 import Ecluse.Core.Registry.Sweep.Types (SweepMount (smFirstParty, smStore), newSweepState)
 import Ecluse.Core.Rules (prepare)
@@ -38,7 +38,7 @@ import Ecluse.Test.Rules (atDefaultPrecedence, inertRuleDeps)
 import Ecluse.Test.Sweep (RecordedSweep (recPorts, recResults), recordingPorts, testMount, testPacing)
 import Ecluse.Test.Wai
 import Katip (Environment (Environment), closeScribes)
-import Network.HTTP.Types (status200, status401, status403, status404, status429, status503, statusCode)
+import Network.HTTP.Types (status200, status401, status403, status429, status503, statusCode)
 import Network.Wai (Request (pathInfo, requestHeaders), responseLBS)
 import Network.Wai.Test (simpleBody)
 import Test.Hspec
@@ -126,20 +126,21 @@ privateAuthorisationSpec = describe "private authorisation refusal" $ do
                 publicUp <- servingUpstream (encodePackument (admittingPublic "1.0.0"))
                 queue <- newTestMemoryQueue
                 withProxyEnvQueueDeps queue privateUp publicUp Nothing (\d -> d{pdFirstParty = const firstParty}) $ \app _ _ -> do
+                    let served = not firstParty && outcomeId == "absent"
                     response <- getThing Nothing app
-                    status response `shouldBe` if firstParty then firstPartyStatus else 200
-                    servedVersions response `shouldBe` ["1.0.0" | not firstParty]
+                    status response `shouldBe` if served then 200 else firstPartyStatus
+                    servedVersions response `shouldBe` ["1.0.0" | served]
                     seenAuth publicUp `shouldReturn` [Nothing | not firstParty]
 
 -- The private outcomes a first-party name must tell apart, with the status each renders for it.
--- A merged name serves the public set whichever it is.
+-- A merged name serves the public set only after a private 404.
 privateOutcomes :: [(Text, String, IO Upstream, Int)]
 privateOutcomes =
-    -- Only the origin's own 404 settles the question. A 5xx and an undecodable body leave it
-    -- open, so both invite a retry rather than report the name as gone.
-    [ ("absent", "HTTP 404", upstreamRespondingWith (responseLBS status404 [] "not found"), 404)
+    -- Only the origin's own 404 settles the question. A 5xx leaves it open with a 503, and an
+    -- undecodable body is an invalid reply with a 502.
+    [ ("absent", "HTTP 404", absentUpstream, 404)
     , ("unavailable", "HTTP 503", upstreamRespondingWith (responseLBS status503 [] "unavailable"), 503)
-    , ("malformed", "an undecodable body", servingUpstream "this is not json at all", 503)
+    , ("malformed", "an undecodable body", servingUpstream "this is not json at all", 502)
     ]
 
 credentialSpec :: Spec
@@ -214,7 +215,7 @@ namespaceTransitionSpec = describe "declaring a namespace after public ingestion
                     }
         privateUp <- servingUpstreamIO (storedTransitionBody store)
         publicUp <- servingUpstreamIO (pure . transitionBody ["1.0.0", "2.0.0"])
-        absentPrivate <- failingUpstream
+        absentPrivate <- absentUpstream
         withProxy absentPrivate publicUp Nothing $ \app -> do
             original <- getPath (transitionArtifactPath "1.0.0") app
             status original `shouldBe` 200
@@ -227,7 +228,7 @@ namespaceTransitionSpec = describe "declaring a namespace after public ingestion
         publicRequests <- seenAuth publicUp
         publicRequests `shouldSatisfy` (not . null)
         rules <- prepare inertRuleDeps [atDefaultPrecedence (DenyByIdentity "@acme/thing")]
-        let declared = firstPartyName (FirstPartyNpmScopes (mkScope "acme" :| []))
+        let declared = firstPartyName (FirstParty npmFirstPartyNames (mkScope "acme" :| []))
             afterDeclaration deps = deps{pdFirstParty = declared, pdRules = rules}
             maintenance = fakeMaintenance store
             protectedMount = (testMount maintenance rules [DenyByIdentity "@acme/thing"]){smFirstParty = declared}
@@ -287,15 +288,15 @@ storedTransitionBody store req = do
 
 partialAvailabilitySpec :: Spec
 partialAvailabilitySpec = describe "partial-upstream availability" $ do
-    it (caseLabel "integration/origin/native-012" "serves the public set when the private upstream is unavailable") $ do
+    it (caseLabel "integration/origin/native-012" "refuses with 503 when the private upstream is unavailable, serving no public versions") $ do
         privateUp <- failingUpstream
         publicUp <-
             servingUpstream
                 (encodePackument (packument [("2.0.0", plainVersion "2.0.0")] "2.0.0" [("2.0.0", publishedDaysAgo 30)]))
         withProxy privateUp publicUp Nothing $ \app -> do
             resp <- getThing Nothing app
-            status resp `shouldBe` 200
-            servedVersions resp `shouldBe` ["2.0.0"]
+            status resp `shouldBe` 503
+            servedVersions resp `shouldBe` []
 
     it (caseLabel "integration/origin/native-013" "serves the private set when the public upstream is unavailable") $ do
         privateUp <- servingUpstream (encodePackument (privatePackument [("1.0.0", plainVersion "1.0.0")] "1.0.0"))
@@ -305,27 +306,27 @@ partialAvailabilitySpec = describe "partial-upstream availability" $ do
             status resp `shouldBe` 200
             servedVersions resp `shouldBe` ["1.0.0"]
 
-    it (caseLabel "integration/origin/native-014" "degrades a private leg whose body is unparseable, serving the public set") $ do
+    it (caseLabel "integration/origin/native-014" "refuses with 502 when the private body is unparseable") $ do
         privateUp <- servingUpstream "this is not json at all"
         publicUp <-
             servingUpstream
                 (encodePackument (packument [("2.0.0", plainVersion "2.0.0")] "2.0.0" [("2.0.0", publishedDaysAgo 30)]))
         withProxy privateUp publicUp Nothing $ \app -> do
             resp <- getThing Nothing app
-            status resp `shouldBe` 200
-            servedVersions resp `shouldBe` ["2.0.0"]
+            status resp `shouldBe` 502
+            servedVersions resp `shouldBe` []
 
-    it (caseLabel "integration/origin/native-015" "degrades a private leg that decodes but does not project to a packument") $ do
+    it (caseLabel "integration/origin/native-015" "refuses with 502 when the private body decodes but does not project to a packument") $ do
         privateUp <- servingUpstream "[1, 2, 3]"
         publicUp <-
             servingUpstream
                 (encodePackument (packument [("2.0.0", plainVersion "2.0.0")] "2.0.0" [("2.0.0", publishedDaysAgo 30)]))
         withProxy privateUp publicUp Nothing $ \app -> do
             resp <- getThing Nothing app
-            status resp `shouldBe` 200
-            servedVersions resp `shouldBe` ["2.0.0"]
+            status resp `shouldBe` 502
+            servedVersions resp `shouldBe` []
 
-    it (caseLabel "integration/origin/native-016" "drops a private leg that self-reports a different package, serving the public set (200)") $ do
+    it (caseLabel "integration/origin/native-016" "refuses with 502 when the private leg self-reports a different package, serving no public versions") $ do
         privateUp <-
             servingUpstream
                 (encodePackument (packumentNamed "other" [("1.0.0", plainVersion "1.0.0")] "1.0.0" [("1.0.0", publishedDaysAgo 30)]))
@@ -334,9 +335,8 @@ partialAvailabilitySpec = describe "partial-upstream availability" $ do
                 (encodePackument (packument [("2.0.0", plainVersion "2.0.0")] "2.0.0" [("2.0.0", publishedDaysAgo 30)]))
         withProxy privateUp publicUp Nothing $ \app -> do
             resp <- getThing Nothing app
-            status resp `shouldBe` 200
-            servedVersions resp `shouldBe` ["2.0.0"]
-            fieldAt "name" (decodedBody resp) `shouldBe` Just (String "thing")
+            status resp `shouldBe` 502
+            servedVersions resp `shouldBe` []
 
     it (caseLabel "integration/origin/native-017" "drops a public leg that self-reports a different package, serving the private set (200)") $ do
         privateUp <- servingUpstream (encodePackument (privatePackument [("1.0.0", plainVersion "1.0.0")] "1.0.0"))
@@ -354,7 +354,7 @@ cooldownSpec = describe "public authority cooldown" $
     it (caseLabel "integration/origin/native-018" "refuses locally during public cooldown and resumes after its deadline") $ do
         fixture <- newPublicFixture
         busy <- newIORef True
-        privateUp <- upstreamRespondingWith (responseLBS status404 [] "absent")
+        privateUp <- absentUpstream
         publicUp <- recordingUpstreamIO $ \request -> do
             throttled <- readIORef busy
             pure $

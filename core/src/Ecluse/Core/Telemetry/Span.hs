@@ -81,6 +81,10 @@ data TracingPort = TracingPort
         IO a ->
         IO a
     -- ^ Bracket extraction after a successful metadata response. Streaming body reads can occur inside.
+    , spanDirectoryFetch :: forall a. IO a -> IO a
+    -- ^ Bracket one registry-wide directory fetch, refusals included. The directory names no package.
+    , spanDirectoryDecode :: forall a. IO a -> IO a
+    -- ^ Bracket directory extraction after a successful response. Streaming body reads can occur inside.
     }
 
 -- | The mirror worker's tracing port, inert when tracing is off, so the worker brackets unconditionally.

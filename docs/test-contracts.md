@@ -90,11 +90,12 @@ Each suffix expands to integration.serving.npm, integration.serving.pypi, integr
 
 | Case suffix | Assertions and original home |
 | --- | --- |
-| default-denial | Listing and artifact denial without allow rules, added paired coverage |
+| default-denial | Listing and artifact denial without allow rules, added paired coverage. The listing answers 404 for GET and HEAD and the artifact 403, beside a private origin that holds nothing, one that answers 404, and none |
 | identity-precedence | Explicit identity permits a young release, explicit deny defeats allow on listing and artifact, added paired coverage |
-| authorised-union | npm and PyPI combine trusted-private and gated-public versions. Cargo tests managed mirrors in the public replacement and no public fallback in the private alternate. |
+| authorised-union | npm, PyPI, Cargo and RubyGems combine trusted-private and gated-public versions. |
 | quarantine-private-authority | Shared private young-release authority with old public survivor and rejected young public version. npm native latest-tag assertion remains in its existing gate case |
 | private-divergence | Shared private digest and exact bytes on same-version divergence. npm native latest-tag/divergence cases remain |
+| private-availability | An unavailable private origin (HTTP 429, 500 or 503, a closed connection) refuses listing and artifact with 503, and an invalid private reply (HTTP 302 or 400) refuses them with 502. A private 404 serves the gated public release, a private 401 or 403 refuses, and a public 503 serves the private release alone. A private 404 beside a public 404 answers listing and artifact with 404, and beside a public 503 with 503. With no private origin configured, a public 404 answers listing and artifact with 404. New in every provider |
 | public-integrity | npm "filters a hashless public version out of the served listing" moves here, with PyPI counterpart |
 | trusted-integrity | npm "drops a hashless trusted-private version from the listing by default" moves here, with PyPI counterpart |
 | artifact-integrity | PyPI exact distribution bytes and advertised sha256 checks move here, with npm counterpart. Require fixture bytes, advertised digest and digest of actual response bytes |
@@ -104,10 +105,10 @@ Each suffix expands to integration.serving.npm, integration.serving.pypi, integr
 | metadata-gzip-validators | The gzip ETag is weak and differs from the identity ETag. A gzip HEAD states the gzip GET's length and ETag with no body. Only the selected coding's ETag answers 304, on GET and HEAD |
 | metadata-gzip-refusal | A request that refuses both gzip and identity gets 406 with `Vary: Accept-Encoding` |
 | metadata-gzip-opt-out | With native gzip off, gzip-accepting and `*;q=0` requests get the identity response unchanged, with no `Vary` |
-| metadata-gzip-policy | A gzip validator from an admitting policy gets 403, not 304, once policy denies the release |
+| metadata-gzip-policy | A gzip validator from an admitting policy gets 404, not 304, once policy denies the release |
 | artifact-uncoded | Artifact GET and HEAD under `Accept-Encoding: gzip` match the plain requests in status, headers and bytes, with no Content-Encoding |
 
-Seven native duplicate example bodies are removed. Thirty-two shared serving examples run.
+Seven native duplicate example bodies are removed. Sixty-eight shared serving examples run.
 Native npm tags, weaker/stronger floors, empty digests, retention, mutable cache representations, private authorisation, edge authorisation, origin failures and HEAD refusal cases remain.
 Native PyPI media type, multi-file identity, exact mount-local URLs, canonical sidecar advertisement and legacy-alias removal with adversarial retained-field controls, trailing slash, project-name canonicalization, content negotiation, helpful refusals, indexed-private credential routing, foreign-host refusal and mutable integrity-floor validators remain.
 Native deprecation/yank policy tests from the current baseline remain unchanged.
@@ -225,7 +226,7 @@ These measurement paths retain their native sampling and verdict logic:
 | Load | `BenchLoad.Harness`, native fixtures, `Scenarios`, and `Verdict` | Process isolation, quotas, affinity, RTS flags, upstream latency, request patterns, concurrency-one passes, success floors, refused/unavailable rows, and gating semantics. |
 | Live native protocol | npm, PyPI and RubyGems registry smoke specs | npm abbreviated parsing, bounded abbreviated fetch, raw SHA-1/SRI syntax, PyPI exact wheel observations, and RubyGems archive coordinate and checksum checks remain native. |
 
-Existing corpus bytes, expected outputs, remaining floor values, and RTS settings stay fixed.
+Existing corpus bytes, expected outputs, and RTS settings stay fixed.
 Provider coverage runs outside measured operations. New PyPI stress rows add samples without changing that boundary.
 
 The `ReadLoadFoundation` scope requires the shared routine read and stress laws for npm, PyPI, Cargo, and RubyGems.
@@ -236,8 +237,7 @@ PyPI also requires its three managed-read comparisons.
 RubyGems replies use no assembled-response retention, so RubyGems omits the assembled-hit, cache-fit and cache-evict laws.
 It adds three per-gem info working sets and a compact specification row.
 The new PyPI ceiling, herd, warm-under-cold and ramp rows use the shared law bodies.
-Their pass floors use three branch observations per pod shape, recorded in `bench/load/floors.json`.
-The existing floors and measured settings stay fixed.
+Their pass floors come from a calibration ([`docs/testing.md`, Success floors](testing.md#success-floors)).
 
 The allocation, live acceptance, benchmark and regular load workflows produce per-ecosystem
 performance receipts after native measurement. Each receipt binds actual observations and
@@ -260,15 +260,16 @@ An unheld or missing status produces diagnostic-only evidence and keeps the nati
 | Memory queue with an in-process worker | Supported with destructive receive. Split roles over the memory queue remain boot refusals. |
 | SQS queue and S3 advisory transport | Supported with native lease, redelivery, and advisory transport checks. S3 advisory storage grants no package-store capability. |
 | PyPI publication and mirroring | Supported. Keep native multipart publication, every supported wheel and source distribution, retained companions, and durable complete-version evidence. |
-| Cargo sparse reads, mirroring, and publication | Cargo 1.74+ through sparse HTTPS. Keep native discovery, records, dependencies, source identity, checksums, and original-source durable state. Prove archive requests traverse Écluse with real clients. |
-| Cargo source views and authentication | Keep crates.io replacement separate from the private alternate. Preserve native credential-provider retry, private authorisation, no public fallback from private, and read/upload authority checks. |
+| Cargo sparse reads, mirroring, and publication | Cargo 1.74+ through sparse HTTPS. Keep native discovery, records, dependencies, source identity, checksums, and original-source durable state. Prove archive requests traverse Écluse with real clients. Keep the shipped admission-only deny of a public row whose normal or build dependency names another registry (`integration/cargo/native-028`). |
+| Cargo merged registry and authentication | One registry replaces crates.io. Preserve native credential-provider retry on an edge `401`, local discovery and its `auth-required` rule, private authorisation, first-party private-only reads, build-metadata version identity, and read/upload authority checks. |
 | Cargo CodeArtifact maintenance | Physical deletion through deterministic native fixtures. A generic registry's yank API does not provide deletion. No live AWS fidelity claim. |
 | Hosted incremental PyPI copying | Supported under [#1639](https://github.com/AlexaDeWit/Ecluse/issues/1639). Contracts require a complete authorised served view or explicit unavailability, retry/restart, and offline completion. |
 | Filesystem or S3 package storage | Planned under [#1239](https://github.com/AlexaDeWit/Ecluse/issues/1239). Future contracts require committed completion visibility, interrupted writes, failed markers, restart, concurrent publication, and direct-read/listing invisibility. |
-| PyPI scope allow and install-time execution denial | Refused because the adapter blocks those rule types. Existing boot and capability tests keep the reasons explicit. |
+| PyPI scope allow, install-time execution denial, and external-dependency denial | Refused because the adapter blocks those rule types. Existing boot and capability tests keep the reasons explicit. |
 | RubyGems Compact Index reads, mirroring, and publication | Bundler 2.6.9 and 4.0.23. Keep `/versions` discovery, on-demand `/info` metadata, archive SHA-256 values, complete platform mirrors with original-source durable state, and native publication. See the [protocol reference](https://ecluse-proxy.com/docs/protocol-support/#rubygems). |
 | RubyGems CodeArtifact maintenance | Inventory and physical deletion through deterministic native fixtures. A native yank is not deletion. No live AWS fidelity claim. |
-| RubyGems install-time execution denial, scope allow, and deprecation rules | Refused because the adapter blocks those rule types. Existing boot and capability tests keep the reasons explicit. |
+| RubyGems install-time execution denial, yank, external-dependency, scope allow, and deprecation rules | Refused because the adapter blocks those rule types. Existing boot and capability tests keep the reasons explicit. |
+| Cargo install-time execution denial, scope allow, and deprecation rules | Refused because the adapter blocks those rule types. Existing boot and capability tests keep the reasons explicit. |
 | Missing external service in smoke | Unavailable evidence, never a passing conformance result. Deterministic mirrors remain gating. |
 | Missing image, client, ownership, or Docker in required E2E | Failed setup. Pending or absent cases cannot satisfy the execution audit. |
 
@@ -490,6 +491,7 @@ The native modules retain scenario providers. The fixed suite declarations regis
 | Case ID | Original assertion |
 |---|---|
 | `npm/install/default-denial` | uses the shipped default to block install scripts and never mirrors the package |
+| `npm/install/external-dependency-denial` | uses the shipped default to deny a version whose dependency names a git source, and never mirrors it |
 | `npm/install/lifecycle-script-control` | runs no package lifecycle script during a harness install (defence in depth) |
 | `npm/install/deprecation-relay` | relays a deprecated version's notice to the client, before and after the worker mirrors the version |
 | `npm/install/deprecation-negative-control` | rejects the deprecation warning assertion for a version without the member |

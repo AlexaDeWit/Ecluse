@@ -41,7 +41,7 @@ import Ecluse.Composition.Executable (
 import Ecluse.Composition.Maintenance (StoreBuilds (StoreBuilds, sbDeleting, sbObserving, sbProbing), StorePorts (spCredential))
 import Ecluse.Composition.Maintenance.Plan (ClearedBackend (cbUrl))
 import Ecluse.Composition.Plan (BootPlan (bpRole))
-import Ecluse.Composition.Support (NoCredentials (NoCredentials), clearedUrl, codeArtifactEnvVars, codeArtifactMirrorUrl, codeArtifactPypiCacheUrl, codeArtifactPypiMirrorUrl, expectConfig, expectPlanFor, noCeiling, overrideEnv, privateUpstreamUrl, pypiMirrorEnv, staticEnvVars, twoStoreEnv, withObservablePrivate)
+import Ecluse.Composition.Support (NoCredentials (NoCredentials), clearedUrl, codeArtifactEnvVars, codeArtifactMirrorUrl, codeArtifactPypiCacheUrl, codeArtifactPypiMirrorUrl, expectConfig, expectPlanFor, noCeiling, overrideEnv, privateUpstreamUrl, pypiMirrorEnv, slotCredentials, staticEnvVars, twoStoreEnv, withObservablePrivate)
 import Ecluse.Composition.Types (
     BootRole (BootMirrorPipeline, BootStorePreview, BootStorePruner, BootWithoutPipeline),
     MirrorRole (MirrorOnly, ServeAndMirror, ServeOnly),
@@ -111,7 +111,7 @@ spec = describe "planExecutable" $ do
     it "refuses, and yields no plan, where a cleared mount resolves to no binding" $ do
         -- The refusal this phase raises without a cloud. The injected resolver stands in for a
         -- build shipping no adapter, which is what makes the wiring, not the pure pass, refuse.
-        outcome <- planFor (BootMirrorPipeline ServeAndMirror) (\_ _ _ _ -> Nothing) inertQueue inertStore
+        outcome <- planFor (BootMirrorPipeline ServeAndMirror) (\_ _ _ -> Nothing) inertQueue inertStore
         case outcome of
             Right _ -> expectationFailure "expected the planning phase to refuse"
             Left errs -> errs `shouldBe` [MissingAdapter Npm]
@@ -128,7 +128,7 @@ spec = describe "planExecutable" $ do
     it "reports the queue refusal and the wiring refusal from one run" $ do
         -- The two refusable steps accumulate, so an operator fixes both before the next boot
         -- rather than meeting the second one only once the first is gone.
-        outcome <- planFor (BootMirrorPipeline ServeAndMirror) (\_ _ _ _ -> Nothing) refusingQueue inertStore
+        outcome <- planFor (BootMirrorPipeline ServeAndMirror) (\_ _ _ -> Nothing) refusingQueue inertStore
         case outcome of
             Right _ -> expectationFailure "expected the planning phase to refuse"
             Left [MirrorQueueUnavailable _, MissingAdapter Npm] -> pass
@@ -146,7 +146,7 @@ spec = describe "planExecutable" $ do
     it "reports the advisory refusal beside the queue and wiring refusals from one run" $ do
         -- The advisory sync accumulates with the other two rather than short-circuiting them,
         -- which is what keeps one launch reporting every problem an operator must fix.
-        outcome <- planWith unwritableAdvisoryEnv (BootMirrorPipeline ServeAndMirror) (\_ _ _ _ -> Nothing) refusingQueue inertStore
+        outcome <- planWith unwritableAdvisoryEnv (BootMirrorPipeline ServeAndMirror) (\_ _ _ -> Nothing) refusingQueue inertStore
         case outcome of
             Right _ -> expectationFailure "expected the planning phase to refuse"
             Left [AdvisorySyncUnavailable _, MirrorQueueUnavailable _, MissingAdapter Npm] -> pass
@@ -189,13 +189,13 @@ spec = describe "planExecutable" $ do
     it "plans the store pruner a sweepable mount per cleared store" $ do
         -- The build carries a sweep, so the arm yields the plan rather than refusing: one mount
         -- per store the pass cleared, carrying what decides for it.
-        pruner <- expectExecutableWith codeArtifactEnvVars BootStorePruner (\_ _ _ _ -> Nothing) refusingQueue inertStore >>= expectPrunerWiring
+        pruner <- expectExecutableWith codeArtifactEnvVars BootStorePruner (\_ _ _ -> Nothing) refusingQueue inertStore >>= expectPrunerWiring
         map smEcosystem (pwMounts pruner) `shouldBe` [Npm]
 
     it "plans the preview role through the observing build alone" $ do
         -- The role picks its own build, so a preview's boot never runs the one holding a delete.
         preview <-
-            expectExecutableWith (withObservablePrivate codeArtifactEnvVars) BootStorePreview (\_ _ _ _ -> Nothing) refusingQueue observingOnly
+            expectExecutableWith (withObservablePrivate codeArtifactEnvVars) BootStorePreview (\_ _ _ -> Nothing) refusingQueue observingOnly
                 >>= expectPrunerWiring
         map smEcosystem (pwMounts preview) `shouldBe` [Npm]
 
@@ -206,7 +206,7 @@ spec = describe "planExecutable" $ do
                 let expected = [store | store@((eco, _), _, _) <- swept, eco `elem` ecosystems]
                 (buildCredentials, calls) <- recordingCredentials slotCredentials
                 (recordingBuilds, tokens) <- recordingStoreTokens builds
-                pruner <- expectRightIO (planUnder env role (\_ _ _ _ -> Nothing) refusingQueue buildCredentials recordingBuilds) >>= expectPrunerWiring
+                pruner <- expectRightIO (planUnder env role (\_ _ _ -> Nothing) refusingQueue buildCredentials recordingBuilds) >>= expectPrunerWiring
                 calls `shouldReturn` [[(slot, backend) | (slot, backend, _) <- expected]]
                 sort <$> tokens `shouldReturn` sort [(url, Just (show slot)) | (slot, _, url) <- expected]
                 map smEcosystem (pwMounts pruner) `shouldBe` ecosystems
@@ -223,7 +223,7 @@ spec = describe "planExecutable" $ do
                         modifyIORef' builds (url :)
                         pure (fakeObservation (if url == privateUpstreamUrl then cache else mirror))
                     }
-        wiring <- expectExecutableWith env BootStorePreview (\_ _ _ _ -> Nothing) refusingQueue onlyReads >>= expectPrunerWiring
+        wiring <- expectExecutableWith env BootStorePreview (\_ _ _ -> Nothing) refusingQueue onlyReads >>= expectPrunerWiring
         beforeMirror <- readFakeContents mirror
         beforeCache <- readFakeContents cache
         recorded <- recordingPortsUnder previewingReport Nothing
@@ -253,7 +253,7 @@ spec = describe "planExecutable" $ do
                                 pure (fakeObservation (if registryUrlText (cbUrl backend) == privateUpstreamUrl then cache else mirror))
                             }
                 wiring <-
-                    expectExecutableWith (overrideEnv "ECLUSE_RULES" revoke (withObservablePrivate codeArtifactEnvVars)) BootStorePreview (\_ _ _ _ -> Nothing) refusingQueue onlyReads
+                    expectExecutableWith (overrideEnv "ECLUSE_RULES" revoke (withObservablePrivate codeArtifactEnvVars)) BootStorePreview (\_ _ _ -> Nothing) refusingQueue onlyReads
                         >>= expectPrunerWiring
                 recorded <- recordingPortsUnder previewingReport Nothing
                 map (sort . map ruleName . smConfigured) (pwMounts wiring) `shouldBe` [evaluated]
@@ -265,7 +265,7 @@ spec = describe "planExecutable" $ do
     it "reports a store maintenance client the live environment cannot build" $ do
         -- The client discovers an AWS identity when it is built, so an environment with none
         -- refuses here rather than failing the Dredger's first call against the store.
-        outcome <- planWith codeArtifactEnvVars BootStorePruner (\_ _ _ _ -> Nothing) refusingQueue refusingStore
+        outcome <- planWith codeArtifactEnvVars BootStorePruner (\_ _ _ -> Nothing) refusingQueue refusingStore
         case outcome of
             Right _ -> expectationFailure "expected the planning phase to refuse"
             Left [StoreMaintenanceUnavailable Npm (ClientBuildFailed detail), StoreMaintenanceUnavailable Npm (PrivateCacheUnavailable _)] ->
@@ -281,7 +281,7 @@ spec = describe "planExecutable" $ do
                                 then sbObserving refusingStore ports limits backend
                                 else sbObserving observingOnly ports limits backend
                         }
-            outcome <- planWith (withObservablePrivate codeArtifactEnvVars) BootStorePreview (\_ _ _ _ -> Nothing) refusingQueue builds
+            outcome <- planWith (withObservablePrivate codeArtifactEnvVars) BootStorePreview (\_ _ _ -> Nothing) refusingQueue builds
             case (mirrorFails, outcome) of
                 {- The mirror store was built and its cache was not, so the boot names the cache
                 it could not build and the mirror target it will not sweep without one. -}
@@ -297,14 +297,14 @@ spec = describe "planExecutable" $ do
     it "reports a mirror-write mint the live environment refuses" $ do
         -- The Dredger reads the mirror store's manifests with the mirror write's credential,
         -- so it mints at boot as the proxy does, and an identity that cannot answer refuses here.
-        outcome <- planUnder codeArtifactEnvVars BootStorePruner (\_ _ _ _ -> Nothing) refusingQueue refusingCredentials inertStore
+        outcome <- planUnder codeArtifactEnvVars BootStorePruner (\_ _ _ -> Nothing) refusingQueue refusingCredentials inertStore
         case outcome of
             Right _ -> expectationFailure "expected the planning phase to refuse"
             Left errs -> errs `shouldBe` [refusedMint]
 
     it "reports a refused mint and a store client it cannot build together" $ do
         -- All three refusable steps accumulate, so one launch names every problem.
-        outcome <- planUnder codeArtifactEnvVars BootStorePruner (\_ _ _ _ -> Nothing) refusingQueue refusingCredentials refusingStore
+        outcome <- planUnder codeArtifactEnvVars BootStorePruner (\_ _ _ -> Nothing) refusingQueue refusingCredentials refusingStore
         case outcome of
             Right _ -> expectationFailure "expected the planning phase to refuse"
             Left [CodeArtifactMintFailed _ _, StoreMaintenanceUnavailable Npm (ClientBuildFailed _), StoreMaintenanceUnavailable Npm (PrivateCacheUnavailable _)] -> pass
@@ -313,7 +313,7 @@ spec = describe "planExecutable" $ do
     it "plans the pilot through the same phase, on its own arm" $ do
         -- Nothing here needs a live environment, so ports that refuse outright leave the role
         -- clearing as working ones do. The gate ahead of it is where the Pilot's refusal is spent.
-        pilot <- expectExecutable BootWithoutPipeline (\_ _ _ _ -> Nothing) refusingQueue refusingStore
+        pilot <- expectExecutable BootWithoutPipeline (\_ _ _ -> Nothing) refusingQueue refusingStore
         plannedArm (epRoleWiring pilot) `shouldBe` "pilot"
         bpRole (epBootPlan pilot) `shouldBe` BootWithoutPipeline
         -- No advisory store is configured here, so the export loop idles.
@@ -400,7 +400,7 @@ spec = describe "planExecutable" $ do
 
 -- | Plan a store role over the CodeArtifact fixture, whose private cache the case's builds answer for.
 storePlan :: BootRole -> StoreBuilds -> IO ([Advisory], Either [BootError] ExecutablePlan)
-storePlan role = reportWith codeArtifactEnvVars role (\_ _ _ _ -> Nothing) refusingQueue
+storePlan role = reportWith codeArtifactEnvVars role (\_ _ _ -> Nothing) refusingQueue
 
 -- | Plan a mirror-pipeline role over a probe that answers the same way for every mount.
 probedPlan :: MirrorRole -> UpstreamSafety -> IO ([Advisory], Either [BootError] ExecutablePlan)
@@ -505,11 +505,6 @@ npmAndPypiMirrorTargets =
     [ ((Npm, MirrorCredential), BackendRegistry (mkSecret "mirror-write-token"))
     , ((PyPI, MirrorCredential), BackendRegistry (mkSecret "fixture-token"))
     ]
-
--- Mints each slot a static token that spells the slot, so a store's ports show which credential reached it.
-slotCredentials :: BuildCredentials
-slotCredentials reportersFor targets =
-    initTargetCredentialProviders reportersFor [(slot, BackendRegistry (mkSecret (show slot))) | (slot, _) <- targets]
 
 -- Store builds that record each store's URL beside the token its ports carry, then build as the given ones do.
 recordingStoreTokens :: StoreBuilds -> IO (StoreBuilds, IO [(Text, Maybe Text)])

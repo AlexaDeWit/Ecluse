@@ -31,6 +31,7 @@ import Data.Aeson (
 
 import Ecluse.Core.Json.Lenient (lenientOptional, typeMismatchOneOf)
 import Ecluse.Core.Package (Availability (Available, Deprecated))
+import Ecluse.Core.Registry.Npm.DependencySource (ExternalDependency, externalDependencyOf)
 
 -- | A publisher or contributor. Packed person strings stay verbatim in 'personName'.
 data Person = Person
@@ -99,7 +100,7 @@ distFromFields :: (Applicative f) => f Text -> f (Maybe Text) -> f (Maybe Text) 
 distFromFields tarball shasum integrity size = Dist <$> tarball <*> shasum <*> integrity <*> size
 {-# INLINE distFromFields #-}
 
--- | A release's policy inputs. Dependency maps and maintainers stay outside the typed facts.
+-- | A release's policy inputs. Maintainers stay outside the typed facts, and dependency maps keep one external dependency.
 data VersionManifest = VersionManifest
     { vmName :: Text
     -- ^ The package name as sent, possibly scoped (@"\@scope\/name"@).
@@ -113,6 +114,8 @@ data VersionManifest = VersionManifest
     , vmScripts :: Map Text Text
     -- ^ The @scripts@ map, lifecycle name to command, empty when absent.
     , vmLicense :: Maybe License
+    , vmExternalDependency :: Maybe ExternalDependency
+    -- ^ The installable dependency a client would fetch from outside the registry, read as 'externalDependencyOf' reads it.
     }
     deriving stock (Eq, Show)
 
@@ -126,6 +129,7 @@ instance FromJSON VersionManifest where
             <*> o .:? "hasInstallScript"
             <*> o .:? "scripts" .!= mempty
             <*> o .:? "license"
+            <*> pure (externalDependencyOf o)
 
 -- | Only a nonempty string or @true@ declares deprecation. Other values remain available.
 availability :: Maybe Value -> Availability

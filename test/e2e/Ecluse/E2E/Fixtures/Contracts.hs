@@ -62,6 +62,7 @@ npmRegistryFixture =
                 , groupPartition = "npm"
                 , groupCases =
                     [ Case "npm/install/default-denial" ["npm/install"]
+                    , Case "npm/install/external-dependency-denial" ["npm/install"]
                     , Case "npm/install/lifecycle-script-control" ["npm/install"]
                     , Case "npm/install/deprecation-relay" ["npm/install"]
                     , Case "npm/install/deprecation-negative-control" ["npm/install"]

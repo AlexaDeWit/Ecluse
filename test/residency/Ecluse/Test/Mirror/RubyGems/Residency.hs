@@ -26,6 +26,7 @@ import Ecluse.Core.Mirror.State (CompanionState (CompanionRetained), ProjectMirr
 import Ecluse.Core.Mirror.State.Codec (chargedDecodeProjectRecord)
 import Ecluse.Core.Mirror.State.Internal (StateTarget (StateTarget), targetKey)
 import Ecluse.Core.Package (PackageName, renderPackageName)
+import Ecluse.Core.Registry.RubyGems.Mirror (rubyGemsStateFormat)
 import Ecluse.Core.Registry.RubyGems.Project (projectName)
 import Ecluse.Core.Security (defaultLimits)
 import Ecluse.Test.Mirror.RubyGems
@@ -81,4 +82,4 @@ readRubyStateRecord :: FilePath -> IO ProjectMirrorRecord
 readRubyStateRecord directory = do
     (target, name) <- readRubyStateIdentity directory
     bytes <- BS.readFile (directory </> "state.json")
-    chargedDecodeProjectRecord (const pass) defaultLimits target name bytes >>= expectRight
+    chargedDecodeProjectRecord rubyGemsStateFormat (const pass) defaultLimits target name bytes >>= expectRight

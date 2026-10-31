@@ -35,7 +35,7 @@ import Ecluse.Core.Registry.Npm.Publish (npmPublishCodec)
 import Ecluse.Core.Registry.Npm.Request (artifactRequestByUrl)
 import Ecluse.Core.Registry.Origin (OriginClient (..), ocBaseUrl)
 import Ecluse.Core.Registry.Publish (MirrorPublish (..), MirrorTransport (..), PublishPlan (..), newMirrorPublish)
-import Ecluse.Core.Rules.Install (unavailableInstallArtifactRead)
+import Ecluse.Core.Registry.Request (nativePresentation)
 import Ecluse.Core.Security (BodyLimit (MirrorArtifactBodyLimit), defaultLimits)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Test.Contract.PackageStore
@@ -78,7 +78,7 @@ withNpmSession maintenance use = do
   where
     build boundary base exchanges = do
         let origin = writeTokenNpmConfig (loopbackRegistryUrl base) exchanges defaultLimits
-            publisher = newMirrorPublish (MirrorTransport exchanges (pure (Just (bareCredential mirrorWriteToken))) defaultLimits passthroughTracingPort) (ocBaseUrl origin) (ocBaseUrl origin) npmPublishCodec
+            publisher = newMirrorPublish (MirrorTransport exchanges (pure (Just (bareCredential mirrorWriteToken))) defaultLimits passthroughTracingPort) (ocBaseUrl origin) (ocBaseUrl origin) (npmPublishCodec nativePresentation)
         store <- maintenance origin boundary
         pure (operations origin publisher store)
 
@@ -129,9 +129,8 @@ protocolMaintenance origin _ = do
                     ProtocolRead
                         { prOrigin = origin
                         , prListing = listing
-                        , prCodec = npmPublishCodec
+                        , prCodec = npmPublishCodec nativePresentation
                         , prReadManifest = readStoreManifestOver origin
-                        , prReadArtifact = unavailableInstallArtifactRead
                         , prBackendName = "verdaccio"
                         , prPermitDeletion = True
                         , prConsentDescriptor = "test fixture permits deletion"

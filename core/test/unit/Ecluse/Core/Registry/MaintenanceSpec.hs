@@ -85,7 +85,7 @@ readFaultSpec = do
 
         for_ [(301, RetryFutile), (400, RetryFutile), (410, RetryFutile), (408, RetryWorthwhile), (429, RetryWorthwhile), (500, RetryWorthwhile), (503, RetryWorthwhile), (599, RetryWorthwhile)] $ \(code, advice) ->
             it ("retains HTTP " <> show code <> " with " <> show advice) $ do
-                let fault = storeFaultOfMetadata (MetadataHttpFailure code)
+                let fault = storeFaultOfMetadata (MetadataHttpFailure code Nothing)
                 faultRetry fault `shouldBe` advice
                 tfDetail (faultTransport fault) `shouldBe` "the store refused the metadata read with HTTP " <> show code
 

@@ -295,7 +295,7 @@ headLengthUpstream _req respond =
 answerOutcome :: (Response -> IO ResponseReceived) -> UpstreamResult ((), ResponseReceived) -> IO ResponseReceived
 answerOutcome respond = \case
     UpstreamRelayed (_, received) -> pure received
-    UpstreamRejected status -> respond (responseLBS status [] "REJECTED")
+    UpstreamRejected status _ -> respond (responseLBS status [] "REJECTED")
     UpstreamTransportFailure -> respond (responseLBS status502 [] "TRANSPORT-FAILURE")
     UpstreamCooling (RetryAfter seconds) -> respond (responseLBS status503 [("Retry-After", show seconds)] "COOLDOWN")
 

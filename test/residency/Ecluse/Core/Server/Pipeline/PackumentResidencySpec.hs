@@ -25,7 +25,6 @@ import Ecluse.Core.Deadline (Deadlines, sweepTick)
 import Ecluse.Core.Ecosystem (Ecosystem (Cargo, Npm, PyPI, RubyGems), ecosystemName)
 import Ecluse.Core.Package (PackageName, pkgEcosystem, renderPackageName)
 import Ecluse.Core.Package.Hash (sha256Hex)
-import Ecluse.Core.Registry.Adapter (adapterFor)
 import Ecluse.Core.Rules (prepare)
 import Ecluse.Core.Rules.Types (Rule (AllowIfOlderThan))
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
@@ -47,7 +46,7 @@ import Ecluse.Test.Registry.Cargo.Fixtures (cargoShard, cargoViewDiscovery)
 import Ecluse.Test.Rules (atDefaultPrecedence, inertRuleDeps)
 import Ecluse.Test.Server.Cache (defaultCacheConfig, newMetadataCache)
 import Ecluse.Test.Server.Handler (deliverServe, testServeRuntime)
-import Ecluse.Test.Server.Mount (serveDepsFor)
+import Ecluse.Test.Server.Mount (requiredAdapter, serveDepsFor)
 import Ecluse.Test.Support (expectRight, testMemoryMeter)
 import Ecluse.Test.Wai (rebaseAuthority, selfBaseUrl)
 
@@ -120,12 +119,12 @@ takeCensus package captured capture = withSweeper $ \deadlines -> do
     gate <- newIORef Nothing
     planned <- newIORef Nothing
     responded <- newIORef Nothing
-    adapter <- maybe (fail "census ecosystem has no adapter") pure (adapterFor (pkgEcosystem name))
+    adapter <- requiredAdapter (pkgEcosystem name)
     testWithApplication (servingCapture (pkgEcosystem name) captured capture) $ \publicPort ->
         testWithApplication (servingCapture (pkgEcosystem name) captured capture) $ \privatePort -> do
             -- Every version is old enough to pass, so the policy evaluates the whole document.
             let deps = serveDepsFor adapter (Just (origin privatePort)) (origin publicPort) NoMirrorWrite rules (pure (UTCTime (fromGregorian 2030 1 1) 0))
-            binding <- maybe (fail "census ecosystem has no mount") pure (mountBindingFor (pkgEcosystem name) deps Nothing Nothing)
+            binding <- maybe (fail "census ecosystem has no mount") pure (mountBindingFor (pkgEcosystem name) deps Nothing)
             warmUp <- testServeRuntime deadlines noopMetricsPort
             listing logEnv warmUp binding (const pass)
             meter <- testMemoryMeter

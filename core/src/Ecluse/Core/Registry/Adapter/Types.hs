@@ -13,7 +13,6 @@ module Ecluse.Core.Registry.Adapter.Types (
     AdapterServe (..),
 ) where
 
-import Ecluse.Core.Deadline (Deadlines)
 import Ecluse.Core.Ecosystem (Ecosystem)
 import Ecluse.Core.Registry.Adapter.Capability (
     AdapterArtifact,
@@ -22,11 +21,10 @@ import Ecluse.Core.Registry.Adapter.Capability (
     AdapterPublish,
     ProjectName,
  )
+import Ecluse.Core.Registry.FirstParty (FirstPartyDeclaration)
 import Ecluse.Core.Registry.Request (CredentialMapping)
-import Ecluse.Core.Rules.Install (InstallEvidenceProvider)
 import Ecluse.Core.Rules.Types (RuleType)
-import Ecluse.Core.Security (Limits)
-import Ecluse.Core.Server.Context (MountRouter, PackumentDeps)
+import Ecluse.Core.Server.Context (MountRouter)
 import Ecluse.Core.Server.RouteDescription (RouteSpec)
 
 {- | One ecosystem's complete capability record, which the composition root wires every
@@ -47,22 +45,22 @@ data RegistryAdapter = RegistryAdapter
     {- ^ The ecosystem's own name parser, which every caller that turns a raw string into a
     'Ecluse.Core.Package.PackageName' reads.
     -}
+    , adapterFirstParty :: FirstPartyDeclaration
+    -- ^ How the mount's @firstParty@ entries read and which names they own.
     , adapterPublish :: Maybe AdapterPublish
     {- ^ 'Nothing' for an ecosystem this build writes nothing for, whose publish route then
     answers @405@ and whose declared write destination refuses the boot.
     -}
     , adapterMaintenance :: AdapterMaintenance
     -- ^ The store maintenance verbs. Either may be absent, and a Dredger then refuses the mount.
-    , adapterInstallEvidence :: Maybe (Deadlines -> Limits -> IO InstallEvidenceProvider)
-    -- ^ The native install-evidence provider, built once per mount. 'Nothing' keeps projected install facts.
     }
 
 {- | The ecosystem's web-facing serve surface. Both routing fields are derived from one
 declarative route table, so the routed surface and the documented one cannot drift apart.
 -}
 data AdapterServe = AdapterServe
-    { serveRouter :: Maybe PackumentDeps -> MountRouter
-    -- ^ Bind an optional private view before routing. Unrecognised paths answer @404@.
+    { serveRouter :: MountRouter
+    -- ^ Route a request. Unrecognised paths answer @404@.
     , serveRoutes :: NonEmpty RouteSpec
     -- ^ The same route table as data, which the OpenAPI spec ("Ecluse.Manifest") renders.
     , serveCredential :: CredentialMapping

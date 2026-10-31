@@ -69,6 +69,7 @@ import Ecluse.Core.Registry.MirrorUpload (expectedDescriptor, inventoryDetails, 
 import Ecluse.Core.Registry.Npm.Publish (npmPublishCodec, npmPublishDocument, prepareNpmSource, prepareNpmUpload)
 import Ecluse.Core.Registry.Public (newPublicControl)
 import Ecluse.Core.Registry.Publish.Internal (MirrorPublish (..), PreparedMirrorUpload (..), PreparedMirrorVersion (..), PublishCodec (pcNativeComplete), PublishPlan)
+import Ecluse.Core.Registry.Request (nativePresentation)
 import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), LimitError (BodyTooLarge))
 import Ecluse.Core.Telemetry.Record (WorkerMetricsPort)
 import Ecluse.Core.Version (Version, renderVersion)
@@ -110,7 +111,7 @@ recordingPublish :: IORef PublishLog -> Either PublishFault () -> MirrorPublish
 recordingPublish logRef outcome =
     MirrorPublish
         { mpMirrorCompanion = Nothing
-        , mpNativeComplete = pcNativeComplete npmPublishCodec
+        , mpNativeComplete = pcNativeComplete (npmPublishCodec nativePresentation)
         , mpProbeInventory = \_ name -> do
             targets <- plTargets <$> readIORef logRef
             pure (Right (PackageInfo name targets mempty []))
@@ -153,7 +154,7 @@ probeUnreadablePublish logRef outcome =
 probeRefusingPublish :: IORef PublishLog -> Either PublishFault () -> MirrorPublish
 probeRefusingPublish logRef outcome =
     (recordingPublish logRef outcome)
-        { mpProbeInventory = \_ -> const (pure (Left (MetadataHttpFailure 503)))
+        { mpProbeInventory = \_ -> const (pure (Left (MetadataHttpFailure 503 Nothing)))
         }
 
 -- | 'recordingPublish' whose inventory probe overruns the response bound, the probe leg's terminal fault.

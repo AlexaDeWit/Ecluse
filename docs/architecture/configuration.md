@@ -367,11 +367,14 @@ advisory evidence is unavailable (see
 `deny-known-malicious` (`DenyIfKnownMalicious`) ranks at 300, above every default allow (see
 [Rules engine](rules-engine.md#denyifknownmalicious-primary-namespace-evidence)). Without a source,
 neither shared advisory rule is active. The age rule supplies the shared allow, and npm's
-install-script deny still applies.
+install-script and external-dependency denies and Cargo's external-dependency deny still apply.
 
-The npm mount adds `deny-scripts` (`DenyInstallTimeExecution`) at admission only. It does not
-activate a mount. The operator can disable it under `mounts.npm.rules`, widen its phases, or add
-an `AllowByIdentity` pin with explicit precedence above 300. PyPI has no shipped mount rules.
+The npm mount adds `deny-scripts` (`DenyInstallTimeExecution`) and `deny-external-dependencies`
+(`DenyExternalDependencies`) at admission only. They do not activate a mount. The operator can
+disable either under `mounts.npm.rules`, widen its phases, or add an `AllowByIdentity` pin with
+explicit precedence above 300. The shared layer cannot disable either, because it defines neither.
+The Cargo mount adds `deny-external-dependencies` the same way, under `mounts.cargo.rules`. PyPI
+and RubyGems have no shipped mount rules.
 Every remaining built-in rule is off and opts in by name. The scored advisory denies (`DenyIfCve`
 and `DenyIfEpss`) in particular can deny historical versions an existing build depends on, if an
 operator enables them before the mirror is warm. Read their
@@ -415,6 +418,11 @@ error, not a silent skip:
   rejects a path that is not the repository endpoint for the mount's own ecosystem
   (`/npm/{repository}/` for an npm mount) and an ecosystem CodeArtifact carries no package format
   for. Each refusal names the key path it was written at.
+- On `mirrorTarget` and `publicationTarget`, `url` is where Écluse reads and `uploadUrl` is where
+  it writes. Where the protocol derives its write address from `url` (npm, RubyGems), the load
+  refuses `uploadUrl`, because the key could only send uploads to another address. Where the
+  protocol uploads to a separate endpoint (PyPI, Cargo), the load requires `uploadUrl` on both
+  targets in every role, because the write address cannot be derived from `url`.
 - A static publish credential requires a verifiable edge. A `token` under a `publicationTarget`
   tag without `ECLUSE_SERVER__AUTH_TOKEN` is refused as
   `PublishStaticCredentialNeedsEdge`. That pairing would let any unauthenticated client publish

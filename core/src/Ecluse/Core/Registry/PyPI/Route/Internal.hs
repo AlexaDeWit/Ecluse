@@ -185,15 +185,15 @@ pypiIndexContract =
             ( chooseContract
                 (refusalContract status401 "Edge authentication failed.")
                 ( chooseContract
-                    (refusalContract status403 "Private access was refused, or no release survived policy and admission.")
+                    (refusalContract status403 "Private access was refused, or no release reached policy and admission.")
                     ( chooseContract
-                        (refusalContract status404 "A first-party project the private upstream does not have. It is never fetched from the public upstream.")
+                        (refusalContract status404 "A project no configured upstream has, a first-party project the private upstream does not have, which is never fetched from the public upstream, or a project with no release that passed policy and admission.")
                         ( chooseContract
                             (refusalContract status406 "The request admits no representation this index serves: only the PEP 691 JSON form exists, in gzip or identity coding.")
                             ( chooseContract
                                 (refusalContract status500 "A permanent or internal inability to decide.")
                                 ( chooseContract
-                                    (refusalContract status502 "A responding upstream returned an index for a different project.")
+                                    (refusalContract status502 "An upstream reply was invalid or unusable, such as an index for a different project.")
                                     (refusalContract status503 "A transient upstream or advisory condition; retry (see `Retry-After`).")
                                 )
                             )
@@ -220,7 +220,7 @@ notAcceptable headers help =
 pypiArtifactContract :: ResponseContract PassthroughResponse
 pypiArtifactContract =
     passthroughContract
-        "An upstream-controlled distribution response is relayed transparently. Local authentication, policy, availability, and internal failures answer a bare status under their own code."
+        "An upstream-controlled distribution response is relayed transparently. Local authentication, policy, availability, and internal failures answer a bare status under their own code. A private upstream reply that was invalid or unusable answers a local `502`."
 
 pypiArtifactReplies :: TarballReplies PassthroughResponse
 pypiArtifactReplies =

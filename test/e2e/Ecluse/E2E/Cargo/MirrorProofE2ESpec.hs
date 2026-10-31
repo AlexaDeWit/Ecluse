@@ -44,9 +44,9 @@ cargoMirrorProofContract = DeclaredGroup metadata $ \recorder ->
         it (label "lost-reply" "recovers a physically committed native upload after its response is lost") lostReply
         it (label "missing-archive" "fails a fresh locked native build when the target loses a completed archive") (faultCase MissingArchive)
         it (label "checksum-mutation" "refuses a target checksum which differs from retained source proof") (faultCase ChangedChecksum)
-        it (label "missing-state" "excludes unmanaged target rows when retained source state is absent") (faultCase MissingState)
+        it (label "missing-state" "serves target rows as trusted private content when retained source state is absent") missingState
         it (label "corrupt-state" "refuses malformed retained source state") (faultCase CorruptState)
-        it (label "private-auth" "requires current target authorisation before exposing retained source metadata") (faultCase PrivateAuthorisation)
+        it (label "private-auth" "requires current private upstream authorisation before exposing retained source metadata") (faultCase PrivateAuthorisation)
   where
     fixture = cargoWriteFixture "mirror-proof" ["read", "mirror", "client-install"]
     metadata =
@@ -147,7 +147,7 @@ lostReply plane = withCargoMirrorFixture plane $ \registry releases -> do
         withObservedNativeProxy config{ecArgs = ["proxy", "--no-worker"]} plane $ \observed ->
             cargoConsumer (observedProxy observed) currentCargo $ \project -> void (runCargo project ["build"] >>= shouldSucceed)
 
-data MirrorFault = MissingArchive | ChangedChecksum | MissingState | CorruptState | PrivateAuthorisation
+data MirrorFault = MissingArchive | ChangedChecksum | CorruptState | PrivateAuthorisation
 
 faultCase :: MirrorFault -> GlobalDataPlane -> IO ()
 faultCase fault plane = withCargoMirrorFixture plane $ \registry releases -> do
@@ -157,7 +157,6 @@ faultCase fault plane = withCargoMirrorFixture plane $ \registry releases -> do
     case fault of
         MissingArchive -> setCargoRegistryFault registry (CargoRegistryMissingArchive cargoRoot cargoVersion)
         ChangedChecksum -> atomically (modifyTVar' (registryFiles registry) (Map.adjust changed ("cargo-mirror", cargoRoot, cargoVersion)))
-        MissingState -> mutateState plane "DELETE" ""
         CorruptState -> mutateState plane "PUT" "{invalid retained Cargo state"
         PrivateAuthorisation -> setCargoRegistryFault registry (CargoRegistryRequireToken True)
     withStubFault plane (CargoBackend (registryPort registry) True) $
@@ -169,11 +168,27 @@ faultCase fault plane = withCargoMirrorFixture plane $ \registry releases -> do
                     responseStatus response `shouldBe` 401
                     LBS.toStrict (responseBody response) `shouldSatisfy` (not . ("ecluse-fixture" `T.isInfixOf`) . decodeUtf8)
                 _ -> responseStatus response `shouldBe` 503
-            cargoConsumer (observedProxy observed) currentCargo $ \project -> do
+            -- A wrong token keeps the authorisation fault effective, since a valid token now passes it.
+            withCargoProject currentCargo CargoConsumer (observedProxy observed) ("sparse+" <> e2eBaseUrl (observedProxy observed) <> "/cargo/") (Just "wrong-cargo-token") $ \project -> do
                 writeFileText (cargoDirectory project </> "Cargo.lock") (cargoFixtureLock "registry+https://github.com/rust-lang/crates.io-index" releases)
                 void (runCargo project ["build", "--locked"] >>= shouldFail)
   where
     changed stored = stored{storedRow = case storedRow stored of Object row -> Object (KeyMap.insert "cksum" (String (T.replicate 64 "0")) row); other -> other}
+
+-- Without a durable record the target's rows are trusted private content with the target's own publication time.
+missingState :: GlobalDataPlane -> IO ()
+missingState plane = withCargoMirrorFixture plane $ \registry releases -> do
+    queue <- sharedMirrorQueue plane
+    let config = cargoMirrorConfig{ecQueueUrl = Just queue}
+    complete plane registry releases config
+    mutateState plane "DELETE" ""
+    withStubFault plane (CargoBackend (registryPort registry) True) $
+        withObservedNativeProxy config{ecArgs = ["proxy", "--no-worker"]} plane $ \observed -> do
+            rows <- cargoReadIndex (observedProxy observed) "/cargo/" cargoRoot
+            map (KeyMap.lookup "pubtime") rows `shouldBe` [Just (String "2099-01-01T00:00:00Z")]
+            cargoConsumer (observedProxy observed) currentCargo $ \project -> do
+                writeFileText (cargoDirectory project </> "Cargo.lock") (cargoFixtureLock "registry+https://github.com/rust-lang/crates.io-index" releases)
+                void (runCargo project ["build", "--locked"] >>= shouldSucceed)
 
 mutateState :: GlobalDataPlane -> ByteString -> ByteString -> IO ()
 mutateState plane = mutateMirrorStateObject plane key

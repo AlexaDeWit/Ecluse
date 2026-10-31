@@ -11,7 +11,6 @@ generator and the stub upstreams stay outside the limit.
 module Ecluse.BenchLoad.Pod (
     -- * Pod shapes
     PodShape (..),
-    scheduledPodShapes,
     parsePodShape,
     renderPodShape,
     podCpuQuota,
@@ -58,10 +57,6 @@ data PodShape
       MemoryOnly Int
     deriving stock (Eq, Ord, Show, Generic)
     deriving anyclass (FromJSON, ToJSON)
-
--- | The shapes the committed floors must hold. The workflow's matrix lists the scheduled ones.
-scheduledPodShapes :: [PodShape]
-scheduledPodShapes = [Unlimited, Limited 2 gib, Limited 4 gib, Limited 4 (2 * gib)]
 
 -- | A mebibyte in bytes.
 mib :: Int

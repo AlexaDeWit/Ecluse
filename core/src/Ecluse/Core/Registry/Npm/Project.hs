@@ -30,6 +30,7 @@ import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Package (
     Artifact (..),
     CodeExecSignal (NoCodeOnInstall, RunsCodeOnInstall),
+    DependencySources (FetchesOutsideRegistry, RegistryDependencies),
     Hash,
     HashAlg (SHA1),
     PackageDetails (..),
@@ -43,6 +44,7 @@ import Ecluse.Core.Package (
  )
 import Ecluse.Core.Package.Entry (EntryKey (ObjectEntry))
 import Ecluse.Core.Registry (ParseError (..))
+import Ecluse.Core.Registry.Npm.DependencySource (renderExternalDependency)
 import Ecluse.Core.Registry.Npm.Wire (
     Dist (..),
     VersionManifest (..),
@@ -87,6 +89,7 @@ projectVersionManifest name version publishedAt vm =
         , pkgVersion = version
         , pkgPublishedAt = publishedAt
         , pkgInstallCode = installCode vm
+        , pkgDependencySources = maybe RegistryDependencies (FetchesOutsideRegistry . renderExternalDependency) (vmExternalDependency vm)
         , pkgAvailability = vmAvailability vm
         , pkgArtifacts = (:| []) $! projectArtifact version (vmDist vm)
         }

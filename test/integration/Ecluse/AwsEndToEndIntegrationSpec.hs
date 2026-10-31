@@ -155,7 +155,7 @@ mountBinding privateUrl publicUrl mirrorUrl = do
                 { pdMountBaseUrl = "https://proxy.test/npm"
                 , pdEgressUrl = Right . loopbackRegistryUrl
                 }
-    pure (mountBindingFor Npm deps Nothing Nothing)
+    pure (mountBindingFor Npm deps Nothing)
 
 -- Source metadata uses the stub's own authority so artifact location checks apply.
 withPublicUpstream :: (Text -> IO a) -> IO a

@@ -62,7 +62,7 @@ requiredFamilyLaws FullPackageStore =
     , ("recovery", ["publish-retry", "reopen", "delete-retry"])
     ]
 requiredFamilyLaws scope =
-    [ ("proxying", ["identity-precedence", "authorised-union", "private-divergence", "artifact-integrity", "artifact-head", "conditional-coherence"] <> contentCodingLaws <> map ("metadata-fetch/" <>) metadataFetchLaws <> map ("metadata-projection/" <>) metadataProjectionLaws)
+    [ ("proxying", ["identity-precedence", "authorised-union", "private-divergence", "private-availability", "artifact-integrity", "artifact-head", "conditional-coherence"] <> contentCodingLaws <> map ("metadata-fetch/" <>) metadataFetchLaws <> map ("metadata-projection/" <>) metadataProjectionLaws)
     , ("installation", ["accepted-install", "default-denial", "artifact-integrity", "artifact-head", "artifact-identity-coding"])
     , ("policy", ["default-denial", "quarantine-private-authority", "public-integrity", "trusted-integrity", "metadata-gzip-policy"])
     , ("advisories", ["exact-fix", "partial-fix", "deny-cve", "deny-epss", "mal-denial", "last-good-generation"])

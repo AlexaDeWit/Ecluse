@@ -2,7 +2,7 @@
 --
 -- SPDX-License-Identifier: MIT
 
--- | Cargo sparse views and local archive coordinates share one route table.
+-- | The Cargo sparse registry and its local archive coordinates share one route table.
 module Ecluse.Core.Registry.Cargo.Route (
     cargoRouter,
     cargoRouteSpecs,

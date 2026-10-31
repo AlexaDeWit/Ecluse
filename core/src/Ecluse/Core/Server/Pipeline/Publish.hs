@@ -28,11 +28,11 @@ import Ecluse.Core.Registry.Exchange.Types (ExchangeClient (ecDeadlines))
 import Ecluse.Core.Registry.Metadata (MetadataError (..))
 import Ecluse.Core.Registry.Origin (OriginClient (ocBaseRequest, ocChargeFullRead, ocClient), originClient)
 import Ecluse.Core.Registry.Publish (PublishCodec (pcPrepareTarget, pcTargetReadPermille))
-import Ecluse.Core.Registry.Request (credentialRecover, mkBaseRequest)
+import Ecluse.Core.Registry.Request (ServicePresentation, credentialRecover, mkBaseRequest, nativePresentation)
 import Ecluse.Core.Security (BodyLimit (PublishRequestBodyLimit), Limits (maxPublishRequestBytes, progressFloor), boundedRead)
 import Ecluse.Core.Server.Admission.Budget (scaleCharge)
 import Ecluse.Core.Server.Admission.Bytes (withByteAdmission)
-import Ecluse.Core.Server.Admission.Meter (charge, newChargeRegion)
+import Ecluse.Core.Server.Admission.Meter (MemoryTicket, charge, newChargeRegion)
 import Ecluse.Core.Server.Context (
     Handler,
     MountBinding (bindingPackumentDeps, bindingPublishDeps),
@@ -70,6 +70,8 @@ servePublish replies name request respond = do
         Nothing -> liftIO (respond (publishDisabledReply replies [("Allow", publishAllowedMethods replies)] (pdHelp (bindingPackumentDeps mount))))
         Just deps -> publishWithDeps replies deps (pdMountBaseUrl (bindingPackumentDeps mount)) (credentialRecover (publishCredential (pubAdapter deps)) (requestHeaders request)) name request respond
 
+-- The body is read under the byte gate alone, so a slow upload holds no CPU slot or memory charge.
+-- Memory and CPU admission start after the read and cover inspection, target preparation and relay.
 publishWithDeps ::
     PublishReplies response ->
     PublishDeps ->
@@ -85,24 +87,16 @@ publishWithDeps replies deps registry clientToken name request respond
     | Just pathName <- name
     , not (pubAllowed deps pathName) =
         liftIO (respond (outOfScope replies deps pathName))
-    | Left fault <- extras =
-        liftIO (respond (bodyRefusal replies deps fault))
-    | overDeclaredCap =
-        liftIO (respond (publishTooLarge replies deps))
-    | otherwise = do
-        rt <- asks ctxRuntime
-        withMetadataAdmission
-            rt
-            (\headers -> liftIO (respond (publishError replies shedStatus headers shedMessage)))
-            ( \ticket -> do
-                workspace <- liftIO (newChargeRegion (charge ticket))
-                withByteAdmission (srMetrics rt) (pubBodyBudget deps) bodyWeight $
-                    liftIO (readAndRelay replies deps registry workspace (publicationTarget deps rt clientToken) name request)
-            )
-            (liftIO . respond . fromMaybe (bodyBudgetShed replies deps))
+    | otherwise = case publishRequestExtras (pubAdapter deps) (requestHeaders request) of
+        Left fault -> liftIO (respond (bodyRefusal replies deps fault))
+        Right extras
+            | overDeclaredCap -> liftIO (respond (publishTooLarge replies deps))
+            | otherwise -> do
+                rt <- asks ctxRuntime
+                liftIO $ do
+                    outcome <- withByteAdmission (srMetrics rt) (pubBodyBudget deps) bodyWeight (readThenAdmit rt extras)
+                    respond (fromMaybe (bodyBudgetShed replies deps) outcome)
   where
-    extras = publishRequestExtras (pubAdapter deps) (requestHeaders request)
-
     overDeclaredCap = case requestBodyLength request of
         KnownLength n -> n > fromIntegral (pubMaxRequestBytes deps)
         ChunkedBody -> False
@@ -111,37 +105,48 @@ publishWithDeps replies deps registry clientToken name request respond
         KnownLength n -> fromIntegral n
         ChunkedBody -> pubMaxRequestBytes deps
 
--- The body reservation stays live through validation, discovery and relay.
-readAndRelay ::
+    (credential, presentation) = publicationAuthority deps clientToken
+
+    readThenAdmit rt extras =
+        boundedRead (PublishRequestBodyLimit (pubMaxRequestBytes deps)) (getRequestBodyChunk request) >>= \case
+            Left _ -> pure (publishTooLarge replies deps)
+            Right (_, bytes) -> do
+                let body = PublishRequestBody bytes (lookup hContentType (requestHeaders request)) extras
+                withMetadataAdmission
+                    rt
+                    (\headers -> pure (publishError replies shedStatus headers shedMessage))
+                    (\ticket -> inspectAndRelay replies deps registry ticket (publicationTarget deps rt credential) presentation name body)
+                    pure
+
+-- The byte reservation, the memory ticket and the CPU slot all stay held through the relay.
+inspectAndRelay ::
     PublishReplies response ->
     PublishDeps ->
     Text ->
-    (Int -> IO ()) ->
+    MemoryTicket ->
     OriginClient ->
+    ServicePresentation ->
     Maybe PackageName ->
-    Request ->
+    PublishRequestBody ->
     IO response
-readAndRelay replies deps registry workspace target name request =
-    boundedRead (PublishRequestBodyLimit (pubMaxRequestBytes deps)) (getRequestBodyChunk request) >>= \case
-        Left _ -> pure (publishTooLarge replies deps)
-        Right (_, bytes) -> case publishRequestExtras (pubAdapter deps) (requestHeaders request) of
-            Left fault -> pure (bodyRefusal replies deps fault)
-            Right extras -> do
-                let body = PublishRequestBody bytes (lookup hContentType (requestHeaders request)) extras
-                claims <- publishUploadClaims (pubAdapter deps) ((pubLimits deps){maxPublishRequestBytes = pubMaxRequestBytes deps}) workspace registry body
-                case claims of
-                    Left fault -> pure (bodyRefusal replies deps fault)
-                    Right declared -> case resolveName declared of
-                        Left refusal -> pure refusal
-                        Right agreed -> do
-                            outcome <- withinServeCap (ecDeadlines (ocClient target)) (progressFloor (pubLimits deps)) MetadataFetch $ do
-                                fullRead <- accumulatingCharge (workspace . scaleCharge (pcTargetReadPermille (publishCodec (pubAdapter deps))))
-                                prepared <- pcPrepareTarget (publishCodec (pubAdapter deps)) target{ocChargeFullRead = fullRead} (pubTargetUrl deps)
-                                case prepared of
-                                    Left fault -> pure (Left fault)
-                                    Right approved -> first MetadataFetch <$> publishRelay (pubAdapter deps) target{ocBaseRequest = mkBaseRequest approved} agreed body
-                            pure (either (targetRefusal replies deps) (renderRelay replies deps . Right) outcome)
+inspectAndRelay replies deps registry ticket target presentation name body = do
+    workspace <- newChargeRegion (charge ticket)
+    claims <- publishUploadClaims (pubAdapter deps) ((pubLimits deps){maxPublishRequestBytes = pubMaxRequestBytes deps}) workspace registry body
+    case claims of
+        Left fault -> pure (bodyRefusal replies deps fault)
+        Right declared -> case resolveName declared of
+            Left refusal -> pure refusal
+            Right agreed -> do
+                outcome <- withinServeCap (ecDeadlines (ocClient target)) (progressFloor (pubLimits deps)) MetadataFetch $ do
+                    fullRead <- accumulatingCharge (workspace . scaleCharge (pcTargetReadPermille codec))
+                    prepared <- pcPrepareTarget codec target{ocChargeFullRead = fullRead} (pubTargetUrl deps)
+                    case prepared of
+                        Left fault -> pure (Left fault)
+                        Right approved -> first MetadataFetch <$> publishRelay (pubAdapter deps) presentation target{ocBaseRequest = mkBaseRequest approved} agreed body
+                pure (either (targetRefusal replies deps) (renderRelay replies deps . Right) outcome)
   where
+    codec = publishCodec (pubAdapter deps) presentation
+
     resolveName claims = case name of
         Just pathName -> case bodyNameDisagreement (pubProjectName deps) pathName claims of
             Just declared -> Left (bodyNameMismatch replies deps pathName declared)
@@ -157,25 +162,24 @@ readAndRelay replies deps registry workspace target name request =
     invalidName = publishError replies status400 [] (appendHelp (pubHelp deps) "the publish body must declare one valid agreed package name")
 
 publicationTarget :: PublishDeps -> ServeRuntime -> Maybe ClientCredential -> OriginClient
-publicationTarget deps rt clientToken =
+publicationTarget deps rt =
     originClient
         ((pubLimits deps){maxPublishRequestBytes = pubMaxRequestBytes deps})
         (srPrivateClient rt)
         (pubReadUrl deps)
-        (publicationCredential deps clientToken)
 
--- Static publication credentials require an authenticated edge.
-publicationCredential :: PublishDeps -> Maybe ClientCredential -> Maybe ClientCredential
-publicationCredential deps clientToken = case (pubInboundToken deps, pubStaticCredential deps) of
-    (Just _, Just staticToken) -> Just staticToken
-    _ -> clientToken
+-- Static publication credentials require an authenticated edge, and present as the target's store asks.
+publicationAuthority :: PublishDeps -> Maybe ClientCredential -> (Maybe ClientCredential, ServicePresentation)
+publicationAuthority deps clientToken = case (pubInboundToken deps, pubStaticCredential deps) of
+    (Just _, Just staticToken) -> (Just staticToken, pubStaticPresentation deps)
+    _ -> (clientToken, nativePresentation)
 
 targetRefusal :: PublishReplies response -> PublishDeps -> MetadataError -> response
 targetRefusal replies deps = \case
     MetadataFetch fault -> renderRelay replies deps (Left fault)
     MetadataBoundExceeded fault -> renderRelay replies deps (Left (FetchBoundExceeded fault))
     MetadataAuthorisationFailure status -> publishError replies (mkStatus status "") [] "the publication registry refused access"
-    MetadataHttpFailure status -> publishError replies (mkStatus status "") [] "the publication registry discovery failed"
+    MetadataHttpFailure status _ -> publishError replies (mkStatus status "") [] "the publication registry discovery failed"
     MetadataAbsent -> publishError replies status502 [] "the publication registry has no discovery document"
     MetadataUndecodable -> publishError replies status502 [] "the publication registry discovery is malformed or names an unapproved API root"
     MetadataNameMismatch _ -> publishError replies status502 [] "the publication registry discovery identity disagrees"

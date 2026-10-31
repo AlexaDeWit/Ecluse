@@ -23,6 +23,7 @@ module Ecluse.BenchLoad.Exposition (
     -- * Metadata cache outcomes
     expositionName,
     storeLabel,
+    storeSamples,
     CacheOutcomes (..),
     storeOutcomes,
     cacheWindow,
@@ -34,7 +35,7 @@ import Data.Universe.Class qualified as Universe
 
 import Ecluse.Core.Ecosystem (Ecosystem)
 import Ecluse.Core.Telemetry.Catalogue (MetricName (AdvisoryDatabaseAgeSeconds, AssembledCacheRequests, MetadataCacheRequests, RuleEffectfulFailures, SingleVersionCacheRequests), metricName)
-import Ecluse.Core.Telemetry.Metrics (CacheResult (Collapsed, Hit, Miss), CacheStore (AssembledStore, FullStore, VersionStore), Label (LCacheResult, LCacheStore, LEcosystem), renderLabel)
+import Ecluse.Core.Telemetry.Metrics (CacheResult (Collapsed, Hit, Miss), CacheStore (AssembledStore, DirectoryStore, FullStore, VersionStore), Label (LCacheResult, LCacheStore, LEcosystem), renderLabel)
 import Ecluse.Test.Exposition (Sample (..), parseExposition)
 
 -- | Sum matching series. An absent series stays distinct from a zero value.
@@ -105,6 +106,12 @@ expositionName = T.replace "." "_" . metricName
 storeLabel :: CacheStore -> Text
 storeLabel = snd . renderLabel . LCacheStore
 
+-- | The samples of one store's series. Only directory points carry a store label on the full-store instruments.
+storeSamples :: CacheStore -> [Sample] -> [Sample]
+storeSamples store = filter (\sample -> (directory `elem` sampleLabels sample) == (store == DirectoryStore))
+  where
+    directory = renderLabel (LCacheStore DirectoryStore)
+
 -- | One metadata cache store's request outcomes. A collapsed request waited on another's fetch.
 data CacheOutcomes = CacheOutcomes
     { coHits :: Int
@@ -118,11 +125,12 @@ data CacheOutcomes = CacheOutcomes
 storeOutcomes :: [Sample] -> CacheStore -> CacheOutcomes
 storeOutcomes samples store = CacheOutcomes (count Hit) (count Miss) (count Collapsed)
   where
-    count result = round (fromMaybe 0 (seriesTotal (expositionName (requests store)) [renderLabel (LCacheResult result)] samples))
+    count result = round (fromMaybe 0 (seriesTotal (expositionName (requests store)) [renderLabel (LCacheResult result)] (storeSamples store samples)))
     requests = \case
         FullStore -> MetadataCacheRequests
         VersionStore -> SingleVersionCacheRequests
         AssembledStore -> AssembledCacheRequests
+        DirectoryStore -> MetadataCacheRequests
 
 -- | Each store's outcomes between two scrapes of one process, keyed by its @store@ label value.
 cacheWindow :: [Sample] -> [Sample] -> [(Text, CacheOutcomes)]

@@ -17,6 +17,7 @@ import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import Data.Text qualified as T
 import Data.Time (UTCTime)
+import Data.Universe.Class qualified as Universe
 import Hedgehog (MonadTest, cover, forAll, (===))
 import Hedgehog.Gen qualified as Gen
 import Hedgehog.Range qualified as Range
@@ -54,6 +55,7 @@ import Ecluse.Core.Registry.Metadata (
     VersionRead (vrBodyBytes, vrUpstreamLatest, vrVersion),
  )
 import Ecluse.Core.Registry.Metadata.Projection (projectionResult, streamError, validateReportedName)
+import Ecluse.Core.Registry.Npm.DependencySource (installableFieldName)
 import Ecluse.Core.Registry.Npm.Document (PackedPackument (..), tarballHole, tarballUrl)
 import Ecluse.Core.Registry.Npm.Filter (assembleMergedDocument, serialiseMergedDocument)
 import Ecluse.Core.Registry.Npm.Metadata (npmPackumentWalk, projectNpmPacked, projectNpmStream, selectNpmVersionDoc)
@@ -778,7 +780,7 @@ basePackedStep writer limits name (BasePackedRead acc heldReleases) field next =
 baseRebases :: Value -> Bool
 baseRebases release = isJust (tarballUrl release >>= rebaseArtifactUrl Just)
 baseTypedMembers :: Pick
-baseTypedMembers = Only [(field, if field == "dist" then Only [(member, Whole) | member <- distFields] else Whole) | field <- versionListFields]
+baseTypedMembers = Only [(field, if field == "dist" then Only [(member, Whole) | member <- distFields] else Whole) | field <- versionListFields <> map installableFieldName Universe.universe]
 baseFinishPacked :: Limits -> PackageName -> Text -> DocTable -> BasePackedRead -> Either MetadataError (PackageInfo, PackedPackument)
 baseFinishPacked limits requested authorPointer table (BasePackedRead acc heldReleases) = second document <$> baseFinishParts limits requested acc
   where

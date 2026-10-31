@@ -21,7 +21,6 @@ import Ecluse.Core.Ecosystem (Ecosystem (Cargo, Npm, PyPI))
 import Ecluse.Core.Registry.Maintenance (StoreFault, StoreMaintenance, StoreManifestRead, protocolFault)
 import Ecluse.Core.Registry.Maintenance.NameSpace (mkNameAlphabet)
 import Ecluse.Core.Registry.Origin (OriginClient)
-import Ecluse.Core.Rules.Install (unavailableInstallArtifactRead)
 import Ecluse.Runtime.Maintenance.CodeArtifact.Decide (CodeArtifactStore (..), codeArtifactFormat)
 import Ecluse.Runtime.Maintenance.CodeArtifact.Internal (ControlPlane (..), maintenanceFor)
 import Ecluse.Runtime.Maintenance.CodeArtifact.Read (ReadPlane (..))
@@ -77,7 +76,7 @@ codeArtifactMaintenance ecosystem expectedFormat readManifest origin boundary = 
                 , casRepository = "contract-store"
                 , casFormat = format
                 }
-    pure (maintenanceFor (mkNameAlphabet "c") (readManifest origin) unavailableInstallArtifactRead store (controlPlane expectedFormat boundary))
+    pure (maintenanceFor (mkNameAlphabet "c") (readManifest origin) store (controlPlane expectedFormat boundary))
 
 controlPlane :: CA.PackageFormat -> StoreBoundary -> ControlPlane
 controlPlane expectedFormat boundary =

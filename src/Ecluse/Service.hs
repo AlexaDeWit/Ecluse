@@ -269,17 +269,17 @@ workerSupervision =
         | otherwise = Transient
 
 -- | Resolve an 'Ecosystem' to its complete 'MountBinding', or 'Nothing' when that ecosystem has no registered adapter. The path prefix derives from the ecosystem ('prefixFor'), never config.
-mountBindingFor :: Ecosystem -> PackumentDeps -> Maybe PackumentDeps -> Maybe PublishDeps -> Maybe MountBinding
-mountBindingFor eco packumentDeps privateView publishDeps =
-    adapterFor eco <&> \adapter -> mountOf adapter packumentDeps privateView publishDeps
+mountBindingFor :: Ecosystem -> PackumentDeps -> Maybe PublishDeps -> Maybe MountBinding
+mountBindingFor eco packumentDeps publishDeps =
+    adapterFor eco <&> \adapter -> mountOf adapter packumentDeps publishDeps
 
 {- The mount projection of one adapter: its serve router under the derived prefix.
 'Nothing' publish deps leave @PUT \/{pkg}@ answering @405@: no publication target. -}
-mountOf :: RegistryAdapter -> PackumentDeps -> Maybe PackumentDeps -> Maybe PublishDeps -> MountBinding
-mountOf adapter packumentDeps privateView publishDeps =
+mountOf :: RegistryAdapter -> PackumentDeps -> Maybe PublishDeps -> MountBinding
+mountOf adapter packumentDeps publishDeps =
     MountBinding
         { bindingPrefix = prefixFor (adapterEcosystem adapter)
-        , bindingRouter = serveRouter (adapterServe adapter) privateView
+        , bindingRouter = serveRouter (adapterServe adapter)
         , bindingCredential = serveCredential (adapterServe adapter)
         , bindingPackumentDeps = packumentDeps
         , bindingPublishDeps = publishDeps

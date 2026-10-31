@@ -20,7 +20,7 @@ import UnliftIO.Exception (throwIO)
 import Ecluse.Core.Registry.PyPI.Archive.Tar (extractTar)
 import Ecluse.Core.Security.Limits (Limits (..), defaultLimits)
 import Ecluse.Test.Package (pypiVersion, unscopedPyPI)
-import Ecluse.Test.Registry.Archive (paxRecord, tarBytes)
+import Ecluse.Test.Registry.Archive (checksumHeader, pax, paxRecord, regular, tarBytes)
 import Ecluse.Test.Registry.JsonStream (byteChunks)
 import Ecluse.Test.Registry.PyPI.Archive (metadata)
 import Ecluse.Test.Support (expectRight)
@@ -211,21 +211,11 @@ spec = describe "extractTar" $ do
 readChunks :: Limits -> [ByteString] -> IO (Either ParseError ByteString)
 readChunks limits chunks = extractTar limits (const (pure ())) (unscopedPyPI "example") (pypiVersion "1") ($ yieldMany chunks)
 
-regular :: FilePath -> ByteString -> IO Tar.Entry
-regular path bytes = do
-    name <- expectRight (Tar.toTarPath False path)
-    pure (Tar.fileEntry name (BSL.fromStrict bytes))
-
 link :: Bool -> FilePath -> FilePath -> IO Tar.Entry
 link symbolic path target = do
     name <- expectRight (Tar.toTarPath False path)
     destination <- maybe (fail "invalid fixture link") pure (Tar.toLinkTarget target)
     pure (Tar.simpleEntry name (if symbolic then Tar.SymbolicLink destination else Tar.HardLink destination))
-
-pax :: Char -> BSL.ByteString -> IO Tar.Entry
-pax code bytes = do
-    path <- expectRight (Tar.toTarPath False "PaxHeaders/entry")
-    pure (Tar.simpleEntry path (Tar.OtherEntryType code bytes (BSL.length bytes)))
 
 zeroSizeHeader :: ByteString -> ByteString
 zeroSizeHeader header = checksumHeader (BS.take 124 header <> "00000000000\NUL" <> BS.drop 136 header)
@@ -233,13 +223,6 @@ zeroSizeHeader header = checksumHeader (BS.take 124 header <> "00000000000\NUL" 
 -- The native link constructor rejects absolute targets before the extractor can inspect them.
 linkTargetHeader :: ByteString -> ByteString -> ByteString
 linkTargetHeader target header = checksumHeader (BS.take 157 header <> target <> BS.replicate (100 - BS.length target) 0 <> BS.drop 257 header)
-
-checksumHeader :: ByteString -> ByteString
-checksumHeader header = BS.take 148 changed <> checksum <> BS.drop 156 changed
-  where
-    changed = BS.take 148 header <> BS.replicate 8 32 <> BS.drop 156 header
-    digits = toText (showOct (BS.foldl' (\total byte -> total + fromIntegral byte) (0 :: Integer) changed) "")
-    checksum = encodeUtf8 (T.replicate (6 - T.length digits) "0" <> digits) <> "\NUL "
 
 data TarChargeStopped = TarChargeStopped
     deriving stock (Eq, Show)

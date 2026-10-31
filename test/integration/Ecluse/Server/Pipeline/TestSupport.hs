@@ -20,6 +20,7 @@ module Ecluse.Server.Pipeline.TestSupport (
     servingUpstreamPer,
     servingUpstreamIO,
     failingUpstream,
+    absentUpstream,
     mutatingUpstream,
     twoServingUpstreams,
     artifactUpstream,
@@ -210,6 +211,10 @@ servingUpstreamIO bodyFor = recordingUpstreamIO $ \req -> do
 -- | Return HTTP 500 for upstream availability cases.
 failingUpstream :: IO Upstream
 failingUpstream = upstreamRespondingWith (responseLBS status500 [] "upstream error")
+
+-- | Return HTTP 404 for every request, a settled absence.
+absentUpstream :: IO Upstream
+absentUpstream = upstreamRespondingWith (responseLBS status404 [] "not found")
 
 -- | Advance through response bodies, retaining the final body for later requests.
 mutatingUpstream :: NonEmpty LByteString -> IO Upstream
@@ -559,7 +564,7 @@ withProxyOverRuntime tweakEnv logEnv queue privateUp publicUp inbound tweakDeps 
 -- | Mount one ecosystem over the supplied runtime and native dependencies.
 proxyApplication :: Ecosystem -> Env -> PackumentDeps -> Application
 proxyApplication ecosystem env dependencies =
-    application (mkServerConfig (maybeToList (mountBindingFor ecosystem dependencies Nothing Nothing))) env
+    application (mkServerConfig (maybeToList (mountBindingFor ecosystem dependencies Nothing))) env
 
 -- | Apply dependency changes before the proxy handles requests.
 withProxyEnvQueueDeps ::

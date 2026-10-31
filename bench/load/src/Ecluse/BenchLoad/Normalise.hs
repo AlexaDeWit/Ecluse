@@ -2,13 +2,13 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | Attribute service latency where the public baseline applies.
-Derive saturation from loaded latency above concurrency-one service time.
+{- | Attribute service latency where the public baseline applies: the latency the stubs inject is the
+upstream share. Derive saturation from loaded latency above concurrency-one service time.
 -}
 module Ecluse.BenchLoad.Normalise (
     -- * The public-leg baseline
     publicLegMultiple,
-    BaselineSource (..),
+    LiveFetch (..),
 
     -- * Service-time attribution
     Attribution (..),
@@ -32,18 +32,13 @@ import Ecluse.Report.Markdown (cells, fixed)
 publicLegMultiple :: Double
 publicLegMultiple = 1.0
 
--- | The live probe or injected latency that supplies the public baseline in milliseconds.
-data BaselineSource
-    = -- | A live probe: the mean round trip in milliseconds and how many samples it averaged.
-      MeasuredRtt Double Int
-    | -- | The probe was unavailable, so the configured injected latency (ms) stood in.
-      InjectedFallback Double
+-- | The live public fetch time a probe measured, which places the overhead at a real deployment's distance.
+data LiveFetch
+    = -- | The mean fetch time in milliseconds and how many samples it averaged.
+      LiveFetch Double Int
+    | -- | The probe was off, or no fetch succeeded.
+      NoLiveFetch
     deriving stock (Eq, Show)
-
-baselineMs :: BaselineSource -> Double
-baselineMs = \case
-    MeasuredRtt rtt _ -> rtt
-    InjectedFallback ms -> ms
 
 -- | A latency split into public upstream and overhead, in milliseconds and fractions in @[0, 1]@.
 data Attribution = Attribution
@@ -84,33 +79,47 @@ data NormalisedRow = NormalisedRow
     }
     deriving stock (Eq, Show)
 
--- | Render the service-time attribution as a Markdown section, one row per scenario.
-renderNormalised :: BaselineSource -> [NormalisedRow] -> Text
-renderNormalised source rows =
+{- | Render the service-time attribution as a Markdown section, one row per scenario: the injected
+latency in milliseconds is the upstream share, and the live fetch time places the overhead at a deployment's distance.
+-}
+renderNormalised :: Double -> LiveFetch -> [NormalisedRow] -> Text
+renderNormalised injectedMs live rows =
     T.unlines $
         [ "## Service-time attribution: upstream against Écluse overhead (concurrency 1)"
         , ""
         , "Concurrency-1 pass. For scenarios with an applicable public baseline, successful latency is "
-            <> "the upstream baseline plus the Écluse overhead. Baseline = "
-            <> baselineLabel source
-            <> ", "
-            <> "subtracted once per request (the public leg, with concurrent fan-out and single-flight). "
+            <> "the upstream baseline plus the Écluse overhead. Baseline = the injected upstream latency, "
+            <> fmt1 injectedMs
+            <> " ms, subtracted once per request (the public leg, with concurrent fan-out and single-flight). "
             <> "Overhead is everything Écluse adds on top of hitting the public registry (the private "
             <> "leg, the merge, the decode, the re-serialise). p50 is primary. p99 is the tail, GC included."
         , ""
+        , liveLine
+        , ""
         , "Rows without an applicable public baseline retain their raw totals. Their upstream and overhead attribution is unavailable."
         , ""
-        , "| scenario | p50 total | p50 upstream | p50 overhead | p99 total | p99 upstream | p99 overhead | public-leg attribution |"
-        , "| --- | --- | --- | --- | --- | --- | --- | --- |"
+        , "| scenario | p50 total | p50 upstream | p50 overhead | p99 total | p99 upstream | p99 overhead | p50 at the live distance | public-leg attribution |"
+        , "| --- | --- | --- | --- | --- | --- | --- | --- | --- |"
         ]
-            <> map (renderRow (baselineMs source)) rows
+            <> map (renderRow injectedMs live) rows
+  where
+    liveLine = case live of
+        LiveFetch ms n ->
+            "Live public fetch time: "
+                <> fmt1 ms
+                <> " ms, the mean of "
+                <> show n
+                <> " live samples. A deployment at that distance from the public registry would see a p50 of "
+                <> "the p50 overhead plus that time, which the column \"p50 at the live distance\" shows."
+        NoLiveFetch -> "Live public fetch time: unavailable, because the probe was off or no fetch succeeded."
 
-renderRow :: Double -> NormalisedRow -> Text
-renderRow rttMs row =
+renderRow :: Double -> LiveFetch -> NormalisedRow -> Text
+renderRow injectedMs live row =
     cells
         ( nrName row
             : cellsFor (nrP50Ms row)
                 <> cellsFor (nrP99Ms row)
+                <> [atDistance]
                 <> [maybe "available" ("unavailable: " <>) (nrPublicLegUnavailableReason row)]
         )
   where
@@ -118,12 +127,15 @@ renderRow rttMs row =
     cellsFor Nothing = ["n/a", "n/a", "n/a"]
     cellsFor (Just totalMs) | isJust (nrPublicLegUnavailableReason row) = [msCell totalMs, "n/a", "n/a"]
     cellsFor (Just totalMs) =
-        let a = attribute rttMs totalMs
+        let a = attribute injectedMs totalMs
          in [ msCell (attrTotalMs a)
             , split (attrUpstreamMs a) (attrUpstreamFraction a)
             , split (attrOverheadMs a) (attrOverheadFraction a)
             ]
     split ms frac = msCell ms <> " (" <> pctCell frac <> ")"
+    atDistance = case (live, nrP50Ms row, nrPublicLegUnavailableReason row) of
+        (LiveFetch liveMs _, Just totalMs, Nothing) -> msCell (attrOverheadMs (attribute injectedMs totalMs) + liveMs)
+        _ -> "n/a"
 
 -- | The loaded-latency fraction above which queuing dominates per-request work.
 queuingDominanceThreshold :: Double
@@ -253,13 +265,6 @@ msMaybe = maybe "n/a" msCell
 
 pctCell :: Double -> Text
 pctCell frac = fmt0 (frac * 100) <> "%"
-
-baselineLabel :: BaselineSource -> Text
-baselineLabel = \case
-    MeasuredRtt rtt n ->
-        "measured public RTT " <> fmt1 rtt <> " ms (mean of " <> show n <> " live samples)"
-    InjectedFallback ms ->
-        "injected fallback " <> fmt1 ms <> " ms (live probe unavailable)"
 
 fmt0, fmt1 :: Double -> Text
 fmt0 = fixed 0

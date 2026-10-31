@@ -5,7 +5,11 @@
 -- | Check native policies and endpoint capabilities for each boot role.
 module Ecluse.Composition.ValidateSpec (spec) where
 
+import Data.List (lookup)
 import Data.Map.Strict qualified as Map
+import Data.Text qualified as T
+import Data.Traversable (for)
+import Network.HTTP.Client qualified as Client
 import Test.Hspec
 
 import Ecluse.Composition.BootError (
@@ -32,12 +36,14 @@ import Ecluse.Composition.BootError (
         UploadConfigurationRequired
     ),
     StoreMaintenanceReason (NoControlPlane, NoProtocolMaintenance, PrivateCacheUnavailable),
+    renderBootError,
  )
 import Ecluse.Composition.Endpoints (publicationTargetUrl)
 import Ecluse.Composition.Support (
     cargoCodeArtifactEnv,
     cargoDeprecationRefusal,
     cargoGateEnv,
+    cargoInstallRefusal,
     cargoMirrorEnv,
     cargoScopeRefusal,
     clearedUrl,
@@ -50,9 +56,12 @@ import Ecluse.Composition.Support (
     overrideEnv,
     publicGateEnv,
     pypiMirrorEnv,
+    rubyDependencyRefusal,
     rubyDeprecationRefusal,
+    rubyGemsMirrorEnv,
     rubyInstallRefusal,
     rubyScopeRefusal,
+    rubyYankRefusal,
     staticEnvVars,
     withDredgeablePrivate,
     withObservablePrivate,
@@ -63,17 +72,18 @@ import Ecluse.Composition.Types (BootRole (..), MirrorRole (..), RegistryRole (M
 import Ecluse.Composition.Validate (
     ValidatedPlan (vpMirrorStores, vpMounts, vpPrivateCaches, vpProgressFloor, vpPublications, vpSettings),
     VettedMount (vmEcosystem, vmMount),
-    VettedPublication (vpubFirstParty, vpubStaticCredential, vpubTarget),
+    VettedPublication (vpubFirstParty, vpubStaticCredential, vpubStaticPresentation, vpubTarget),
     vetBoot,
     vetBootWith,
     vetMirrorCapabilities,
+    vetMirrorCapabilitiesWith,
  )
 import Ecluse.Composition.Vet (runVet)
 import Ecluse.Config (
     AppConfig (cfgMirrorState, cfgMounts),
     Config (configApp),
-    FirstParty (FirstPartyNpmScopes),
-    MirrorEndpoint (meUploadUrl, meUsername),
+    FirstParty (FirstParty),
+    MirrorEndpoint (meUsername),
     MountConfig (mntMirrorTarget, mntPublicationTarget),
     PublicationEndpoint (peUsername),
     StoreTag (TagRegistry),
@@ -83,10 +93,18 @@ import Ecluse.Core.Credential (ClientCredential (credSecret), unSecret)
 import Ecluse.Core.Ecosystem (Ecosystem (Cargo, Npm, PyPI, RubyGems))
 import Ecluse.Core.Package (mkScope)
 import Ecluse.Core.Registry.Adapter (RegistryAdapter (adapterPublish), adapterFor)
+import Ecluse.Core.Registry.Adapter.Capability (AdapterPublish (publishCodec))
+import Ecluse.Core.Registry.Npm.Adapter (npmFirstPartyNames)
+import Ecluse.Core.Registry.Publish (MirrorCompanion, PublishCodec (pcMirrorCompanion))
+import Ecluse.Core.Registry.PyPI.Credential (pypiCredential)
+import Ecluse.Core.Registry.Request (StoreOperation (StoreWrite), attachCredential, presentedMapping)
+import Ecluse.Core.Registry.RubyGems.Mirror (rubyMirrorCompanion)
 import Ecluse.Core.Registry.Sweep.Types (minimumChunkPause)
-import Ecluse.Core.Rules.Types (PrecededRule (prRule), RuleType (AllowScopeType, DenyInstallTimeExecutionType), ruleName)
+import Ecluse.Core.Rules.Types (PrecededRule (prRule), RuleType (AllowScopeType, DenyExternalDependenciesType, DenyIfYankedType, DenyInstallTimeExecutionType), ruleName)
 import Ecluse.Core.Security (mkProgressFloor, serveCapSeconds)
 import Ecluse.Core.Security.Egress (registryUrlText)
+import Ecluse.Test.Credential (basicReadsBearerWrites)
+import Ecluse.Test.Support (parseRequestOrFail)
 
 -- | Check accumulated refusals and the plans cleared for each registry role.
 spec :: Spec
@@ -107,36 +125,24 @@ mirrorCapabilitiesSpec :: Spec
 mirrorCapabilitiesSpec = describe "role-specific mirror capabilities" $ do
     it "requires durable state on a producer without requiring a writer endpoint" $ do
         config <- expectConfig pypiMirrorEnv Nothing
-        let app = withoutWriteSettings PyPI (configApp config)
+        let app = withoutWriteUsername PyPI (configApp config)
         capabilityResult (BootMirrorPipeline ServeOnly) app `shouldBe` Right ()
         capabilityResult (BootMirrorPipeline ServeOnly) app{cfgMirrorState = Nothing} `shouldBe` Left [MirrorStateRequired PyPI]
     it "requires native write settings in embedded and standalone workers" $ do
         config <- expectConfig pypiMirrorEnv Nothing
-        let app = (withoutWriteSettings PyPI (configApp config)){cfgMirrorState = Nothing}
+        let app = (withoutWriteUsername PyPI (configApp config)){cfgMirrorState = Nothing}
         for_ [ServeAndMirror, MirrorOnly] $ \role ->
             capabilityResult (BootMirrorPipeline role) app
-                `shouldBe` Left
-                    [ MirrorStateRequired PyPI
-                    , UploadConfigurationRequired PyPI "mirrorTarget.registry.uploadUrl"
-                    , UploadConfigurationRequired PyPI "mirrorTarget.registry.username"
-                    ]
+                `shouldBe` Left [MirrorStateRequired PyPI, UploadConfigurationRequired PyPI "mirrorTarget.registry.username"]
     it "does not add mirror-state or writer dependencies to Dredger and Pilot" $ do
         config <- expectConfig pypiMirrorEnv Nothing
-        let app = (withoutWriteSettings PyPI (configApp config)){cfgMirrorState = Nothing}
+        let app = (withoutWriteUsername PyPI (configApp config)){cfgMirrorState = Nothing}
         for_ [BootStorePruner, BootStorePreview, BootWithoutPipeline] $ \role -> capabilityResult role app `shouldBe` Right ()
     it "requires durable Cargo state in every mirror pipeline role" $ do
         config <- expectConfig cargoMirrorEnv Nothing
         let app = (configApp config){cfgMirrorState = Nothing}
         for_ [ServeOnly, ServeAndMirror, MirrorOnly] $ \role ->
             capabilityResult (BootMirrorPipeline role) app `shouldBe` Left [MirrorStateRequired Cargo]
-    it "requires only the native Cargo upload setting in both writer roles" $ do
-        config <- expectConfig cargoMirrorEnv Nothing
-        let app = withoutWriteSettings Cargo (configApp config)
-            upload = UploadConfigurationRequired Cargo "mirrorTarget.registry.uploadUrl"
-        for_ [ServeAndMirror, MirrorOnly] $ \role -> do
-            capabilityResult (BootMirrorPipeline role) app `shouldBe` Left [upload]
-            capabilityResult (BootMirrorPipeline role) app{cfgMirrorState = Nothing} `shouldBe` Left [MirrorStateRequired Cargo, upload]
-        capabilityResult (BootMirrorPipeline ServeOnly) app `shouldBe` Right ()
     it "clears token-only Cargo mirror settings without a username" $ do
         config <- expectConfig cargoMirrorEnv Nothing
         (Map.lookup Cargo (cfgMounts (configApp config)) >>= mntMirrorTarget >>= meUsername) `shouldBe` Nothing
@@ -147,13 +153,48 @@ mirrorCapabilitiesSpec = describe "role-specific mirror capabilities" $ do
         capabilityResult (BootMirrorPipeline ServeOnly) (configApp config) `shouldBe` Right ()
     it "adds no Cargo mirror state or upload setting to maintenance and Pilot" $ do
         config <- expectConfig cargoMirrorEnv Nothing
-        let app = (withoutWriteSettings Cargo (configApp config)){cfgMirrorState = Nothing}
+        let app = (configApp config){cfgMirrorState = Nothing}
         for_ [BootStorePruner, BootStorePreview, BootWithoutPipeline] $ \role ->
             capabilityResult role app `shouldBe` Right ()
+    it "requires an upload username exactly where the write target's store declares no write mechanism" $ do
+        observed <- for ["REGISTRY", "VERDACCIO", "CODE_ARTIFACT"] $ \tag -> do
+            config <- expectConfig (pypiWriteTargetsEnv tag) Nothing
+            pure (tag, capabilityResult (BootMirrorPipeline ServeAndMirror) (configApp config))
+        observed
+            `shouldBe` [ ("REGISTRY", Left [UploadConfigurationRequired PyPI "mirrorTarget.registry.username", UploadConfigurationRequired PyPI "publicationTarget.registry.username"])
+                       , ("VERDACCIO", Left [UploadConfigurationRequired PyPI "mirrorTarget.verdaccio.username", UploadConfigurationRequired PyPI "publicationTarget.verdaccio.username"])
+                       , ("CODE_ARTIFACT", Right ())
+                       ]
+    it "requires no upload username where the write target's store declares Bearer for PyPI writes" $ do
+        config <- expectConfig (pypiWriteTargetsEnv "REGISTRY") Nothing
+        capabilityResultUnder (\_ _ -> basicReadsBearerWrites) (BootMirrorPipeline ServeAndMirror) (configApp config) `shouldBe` Right ()
   where
-    withoutWriteSettings eco app = app{cfgMounts = Map.adjust stripWriter eco (cfgMounts app)}
-    stripWriter mount = mount{mntMirrorTarget = fmap (\endpoint -> endpoint{meUploadUrl = Nothing, meUsername = Nothing}) (mntMirrorTarget mount)}
+    withoutWriteUsername eco app = app{cfgMounts = Map.adjust stripUsername eco (cfgMounts app)}
+    stripUsername mount = mount{mntMirrorTarget = fmap (\endpoint -> endpoint{meUsername = Nothing}) (mntMirrorTarget mount)}
     capabilityResult role = snd . runVet (registryRoleOf role) . vetMirrorCapabilities role
+    capabilityResultUnder presentationOf role = snd . runVet (registryRoleOf role) . vetMirrorCapabilitiesWith presentationOf role
+
+-- PyPI mirror and publication targets under one store tag, each with a static or minted token and no username.
+pypiWriteTargetsEnv :: String -> [(String, String)]
+pypiWriteTargetsEnv tag =
+    [ ("ECLUSE_MOUNTS__PYPI__ENABLED", "true")
+    , ("ECLUSE_MIRROR_STATE__URL", "s3://mirror-state/records")
+    , ("ECLUSE_MOUNTS__PYPI__FIRST_PARTY", "acme-*")
+    , ("ECLUSE_MOUNTS__PYPI__PRIVATE_UPSTREAM__REGISTRY__URL", "https://private.example.test/pypi/")
+    , (mirror <> "URL", mirrorUrl)
+    , (mirror <> "UPLOAD_URL", mirrorUrl)
+    , (publication <> "URL", publicationUrl)
+    , (publication <> "UPLOAD_URL", publicationUrl)
+    , (publication <> "TOKEN", "publish-token")
+    ]
+        <> [(mirror <> "TOKEN", "mirror-token") | tag /= "CODE_ARTIFACT"]
+        <> publicGateEnv
+  where
+    mirror = "ECLUSE_MOUNTS__PYPI__MIRROR_TARGET__" <> tag <> "__"
+    publication = "ECLUSE_MOUNTS__PYPI__PUBLICATION_TARGET__" <> tag <> "__"
+    (mirrorUrl, publicationUrl)
+        | tag == "CODE_ARTIFACT" = (codeArtifactDomain <> "/pypi/mirror/", codeArtifactDomain <> "/pypi/internal/")
+        | otherwise = ("https://mirror.example.test/pypi/", "https://publish.example.test/pypi/")
 
 publicationCapabilitiesSpec :: Spec
 publicationCapabilitiesSpec = describe "PyPI publication credentials by boot role" $ do
@@ -179,7 +220,8 @@ publicationCapabilitiesSpec = describe "PyPI publication credentials by boot rol
         , ("ECLUSE_MOUNTS__PYPI__ENABLED", "true")
         , ("ECLUSE_MOUNTS__PYPI__FIRST_PARTY", "acme-*")
         , ("ECLUSE_MOUNTS__PYPI__PRIVATE_UPSTREAM__REGISTRY__URL", "https://private.example.test/pypi/")
-        , (publicationKey <> "URL", "https://publish.example.test/legacy/")
+        , (publicationKey <> "URL", "https://publish.example.test/")
+        , (publicationKey <> "UPLOAD_URL", "https://publish.example.test/legacy/")
         ]
             <> publicGateEnv
     tokenEnv = overrideEnv (publicationKey <> "TOKEN") "publish-write-token" publicationEnv
@@ -192,22 +234,19 @@ publicationResult role config =
 cargoPublicationCapabilitiesSpec :: Spec
 cargoPublicationCapabilitiesSpec = describe "Cargo publication API by boot role" $ do
     for_ [BootMirrorPipeline ServeAndMirror, BootMirrorPipeline ServeOnly] $ \role -> do
-        it ("requires the native Cargo API root under " <> show role) $ do
-            config <- expectConfig publicationEnv Nothing
-            publicationResult role config `shouldBe` Left [UploadConfigurationRequired Cargo "publicationTarget.registry.uploadUrl"]
         it ("clears a Cargo token without a username under " <> show role) $ do
-            config <- expectConfig (overrideEnv (publicationKey <> "TOKEN") "publisher-token" completeEnv) Nothing
+            config <- expectConfig tokenEnv Nothing
             (Map.lookup Cargo (cfgMounts (configApp config)) >>= mntPublicationTarget >>= peUsername) `shouldBe` Nothing
             publicationResult role config `shouldBe` Right [Cargo]
         it ("clears anonymous Cargo publication with an explicit API under " <> show role) $ do
-            config <- expectConfig completeEnv Nothing
+            config <- expectConfig publicationEnv Nothing
             publicationResult role config `shouldBe` Right [Cargo]
     for_ [BootMirrorPipeline MirrorOnly, BootStorePruner, BootStorePreview, BootWithoutPipeline] $ \role ->
-        it ("adds no unused Cargo publication API requirement under " <> show role) $ do
-            config <- expectConfig (overrideEnv (publicationKey <> "TOKEN") "publisher-token" publicationEnv) Nothing
+        it ("clears a Cargo publication target it does not write through under " <> show role) $ do
+            config <- expectConfig tokenEnv Nothing
             publicationResult role config `shouldBe` Right [Cargo]
     it "keeps a Cargo publication endpoint colocated with private reads valid for writers" $ do
-        config <- expectConfig (overrideEnv (publicationKey <> "URL") "https://private.example.test/" (overrideEnv (publicationKey <> "UPLOAD_URL") "https://private.example.test/api/" completeEnv)) Nothing
+        config <- expectConfig (overrideEnv (publicationKey <> "URL") "https://private.example.test/" (overrideEnv (publicationKey <> "UPLOAD_URL") "https://private.example.test/api/" publicationEnv)) Nothing
         publicationResult (BootMirrorPipeline ServeAndMirror) config `shouldBe` Right [Cargo]
   where
     publicationKey = "ECLUSE_MOUNTS__CARGO__PUBLICATION_TARGET__REGISTRY__"
@@ -217,8 +256,9 @@ cargoPublicationCapabilitiesSpec = describe "Cargo publication API by boot role"
                , ("ECLUSE_MOUNTS__CARGO__FIRST_PARTY", "acme-*")
                , ("ECLUSE_MOUNTS__CARGO__PRIVATE_UPSTREAM__REGISTRY__URL", "https://private.example.test/")
                , (publicationKey <> "URL", "https://publish.example.test/")
+               , (publicationKey <> "UPLOAD_URL", "https://publish.example.test/api/")
                ]
-    completeEnv = overrideEnv (publicationKey <> "UPLOAD_URL") "https://publish.example.test/api/" publicationEnv
+    tokenEnv = overrideEnv (publicationKey <> "TOKEN") "publisher-token" publicationEnv
 
 cargoRuleBlocksSpec :: Spec
 cargoRuleBlocksSpec = describe "resolved Cargo rule blocks" $
@@ -226,13 +266,17 @@ cargoRuleBlocksSpec = describe "resolved Cargo rule blocks" $
         it "clears the shipped policy for the Cargo mount alone" $ do
             plan <- expectVetted role cargoGateEnv
             map vmEcosystem (vpMounts plan) `shouldBe` [Cargo]
-            map (ruleName . prRule) (concatMap (mountPolicy . vmMount) (vpMounts plan)) `shouldBe` ["AllowIfOlderThan"]
-        for_ [(scopeRule, cargoScopeRefusal), (deprecatedRule, cargoDeprecationRefusal)] $ \(rules, refusal) ->
+            map (ruleName . prRule) (concatMap (mountPolicy . vmMount) (vpMounts plan)) `shouldBe` ["DenyExternalDependencies", "AllowIfOlderThan"]
+        for_ [(scopeRule, cargoScopeRefusal), (deprecatedRule, cargoDeprecationRefusal), (installRule, cargoInstallRefusal)] $ \(rules, refusal) ->
             it ("refuses the shared " <> show refusal) $
                 refusalsFor role (overrideEnv "ECLUSE_RULES" rules cargoGateEnv) `shouldReturn` [refusal]
+        it "clears a shared external-dependency deny on the Cargo mount" $ do
+            refusalsFor role (overrideEnv "ECLUSE_RULES" dependencyRule cargoGateEnv) `shouldReturn` []
+            plan <- expectVetted role (overrideEnv "ECLUSE_RULES" dependencyRule cargoGateEnv)
+            map (ruleName . prRule) (concatMap (mountPolicy . vmMount) (vpMounts plan)) `shouldMatchList` ["AllowIfOlderThan", "DenyExternalDependencies", "DenyExternalDependencies"]
         it "refuses aliased Cargo blocks below a higher allow with an admission-only deny" $ do
-            errors <- refusalsFor role (overrideEnv "ECLUSE_MOUNTS__CARGO__RULES" "{\"alias-scope\":{\"type\":\"AllowScope\",\"scope\":\"acme\",\"precedence\":1},\"alias-deprecated\":{\"type\":\"DenyIfDeprecated\",\"precedence\":1,\"appliesTo\":[\"admission\"]},\"pin\":{\"type\":\"AllowByIdentity\",\"identity\":\"fixture@1.0.0\",\"precedence\":999}}" cargoGateEnv)
-            errors `shouldMatchList` [cargoScopeRefusal, cargoDeprecationRefusal]
+            errors <- refusalsFor role (overrideEnv "ECLUSE_MOUNTS__CARGO__RULES" "{\"alias-scope\":{\"type\":\"AllowScope\",\"scope\":\"acme\",\"precedence\":1},\"alias-deprecated\":{\"type\":\"DenyIfDeprecated\",\"precedence\":1,\"appliesTo\":[\"admission\"]},\"alias-install\":{\"type\":\"DenyInstallTimeExecution\",\"precedence\":1,\"appliesTo\":[\"admission\"]},\"pin\":{\"type\":\"AllowByIdentity\",\"identity\":\"fixture@1.0.0\",\"precedence\":999}}" cargoGateEnv)
+            errors `shouldMatchList` [cargoScopeRefusal, cargoDeprecationRefusal, cargoInstallRefusal]
         it "accumulates duplicate Cargo blocks and an independent advisory refusal" $ do
             let shared = "{\"scope-a\":{\"type\":\"AllowScope\",\"scope\":\"acme\"},\"scope-b\":{\"type\":\"AllowScope\",\"scope\":\"acme\"},\"deprecated\":{\"type\":\"DenyIfDeprecated\"}}"
                 cve = "{\"cve\":{\"type\":\"DenyIfCve\",\"minCvss\":8}}"
@@ -241,15 +285,18 @@ cargoRuleBlocksSpec = describe "resolved Cargo rule blocks" $
         it "reports independent Ruby and Cargo scope blocks" $ do
             errors <- refusalsFor role (overrideEnv "ECLUSE_MOUNTS__RUBYGEMS__ENABLED" "true" (overrideEnv "ECLUSE_RULES" scopeRule cargoGateEnv))
             errors `shouldMatchList` [rubyScopeRefusal, cargoScopeRefusal]
+        it "reports independent Ruby and Cargo installation blocks" $ do
+            errors <- refusalsFor role (overrideEnv "ECLUSE_MOUNTS__RUBYGEMS__ENABLED" "true" (overrideEnv "ECLUSE_RULES" installRule cargoGateEnv))
+            errors `shouldMatchList` [rubyInstallRefusal, cargoInstallRefusal]
         it "removes both blocked types through matching Cargo rule keys" $ do
             let env = overrideEnv "ECLUSE_MOUNTS__CARGO__RULES" "{\"scope\":{\"enabled\":false},\"deprecated\":{\"enabled\":false}}" (overrideEnv "ECLUSE_RULES" bothRules cargoGateEnv)
             plan <- expectVetted role env
-            map (ruleName . prRule) (concatMap (mountPolicy . vmMount) (vpMounts plan)) `shouldBe` ["AllowIfOlderThan"]
+            map (ruleName . prRule) (concatMap (mountPolicy . vmMount) (vpMounts plan)) `shouldBe` ["DenyExternalDependencies", "AllowIfOlderThan"]
         it "keeps npm mount policy out of the Cargo policy" $ do
             plan <- expectVetted role (overrideEnv "ECLUSE_MOUNTS__NPM__RULES" bothRules (overrideEnv "ECLUSE_MOUNTS__NPM__ENABLED" "true" cargoGateEnv))
             map vmEcosystem (vpMounts plan) `shouldBe` [Npm, Cargo]
             let cargoPolicies = [mountPolicy (vmMount mount) | mount <- vpMounts plan, vmEcosystem mount == Cargo]
-            map (map (ruleName . prRule)) cargoPolicies `shouldBe` [["AllowIfOlderThan"]]
+            map (map (ruleName . prRule)) cargoPolicies `shouldBe` [["DenyExternalDependencies", "AllowIfOlderThan"]]
         it "ignores blocked declarations on a disabled Cargo mount" $ do
             let env = overrideEnv "ECLUSE_MOUNTS__NPM__ENABLED" "true" (overrideEnv "ECLUSE_MOUNTS__CARGO__ENABLED" "false" (overrideEnv "ECLUSE_RULES" bothRules cargoGateEnv))
             plan <- expectVetted role env
@@ -257,6 +304,8 @@ cargoRuleBlocksSpec = describe "resolved Cargo rule blocks" $
   where
     scopeRule = "{\"scope\":{\"type\":\"AllowScope\",\"scope\":\"acme\"}}"
     deprecatedRule = "{\"deprecated\":{\"type\":\"DenyIfDeprecated\"}}"
+    installRule = "{\"install\":{\"type\":\"DenyInstallTimeExecution\"}}"
+    dependencyRule = "{\"dependency\":{\"type\":\"DenyExternalDependencies\"}}"
     bothRules = "{\"scope\":{\"type\":\"AllowScope\",\"scope\":\"acme\"},\"deprecated\":{\"type\":\"DenyIfDeprecated\"}}"
 
 cargoMaintenanceCapabilitiesSpec :: Spec
@@ -266,11 +315,11 @@ cargoMaintenanceCapabilitiesSpec = describe "Cargo maintenance capabilities" $ d
             errors <- refusalsFor role cargoMirrorEnv
             errors `shouldMatchList` [StoreMaintenanceUnavailable Cargo (NoControlPlane TagRegistry), StoreMaintenanceUnavailable Cargo (PrivateCacheUnavailable "registry has no inventory control plane")]
         it "refuses protocol maintenance without native physical deletion" $ do
-            let document = mountDocFor "cargo" ["\"privateUpstream\":{\"codeArtifact\":{\"url\":\"" <> codeArtifactDomain <> "/cargo/internal/\"}}", "\"mirrorTarget\":{\"verdaccio\":{\"url\":\"https://target.example.test/\",\"token\":\"t\",\"permitDeletion\":true}}"]
+            let document = mountDocFor "cargo" ["\"privateUpstream\":{\"codeArtifact\":{\"url\":\"" <> codeArtifactDomain <> "/cargo/internal/\"}}", "\"mirrorTarget\":{\"verdaccio\":{\"url\":\"https://target.example.test/\",\"uploadUrl\":\"https://target.example.test/api/\",\"token\":\"t\",\"permitDeletion\":true}}"]
             config <- expectConfig cargoGateEnv (Just document)
             leftToMaybe (vetted role config) `shouldBe` Just [StoreMaintenanceUnavailable Cargo NoProtocolMaintenance]
         it "refuses an incompatible Cargo private cache while retaining a supported mirror" $ do
-            let document = mountDocFor "cargo" ["\"privateUpstream\":{\"verdaccio\":{\"url\":\"https://private.example.test/\",\"token\":\"t\",\"permitDeletion\":true}}", "\"mirrorTarget\":{\"codeArtifact\":{\"url\":\"" <> codeArtifactDomain <> "/cargo/mirror/\"}}"]
+            let document = mountDocFor "cargo" ["\"privateUpstream\":{\"verdaccio\":{\"url\":\"https://private.example.test/\",\"token\":\"t\",\"permitDeletion\":true}}", "\"mirrorTarget\":{\"codeArtifact\":{\"url\":\"" <> codeArtifactDomain <> "/cargo/mirror/\",\"uploadUrl\":\"" <> codeArtifactDomain <> "/cargo/mirror/\"}}"]
             config <- expectConfig cargoGateEnv (Just document)
             leftToMaybe (vetted role config) `shouldBe` Just [StoreMaintenanceUnavailable Cargo NoProtocolMaintenance]
         it "clears native CodeArtifact mirror and private-cache maintenance" $ do
@@ -290,7 +339,7 @@ ruleBlocksSpec = describe "vetBoot -- ecosystem rule blocks" $ do
             map vmEcosystem (vpMounts plan) `shouldBe` ecosystems
             for_ (vpMounts plan) $ \mount ->
                 map (ruleName . prRule) (mountPolicy (vmMount mount))
-                    `shouldMatchList` (["AllowIfOlderThan"] <> ["DenyInstallTimeExecution" | vmEcosystem mount == Npm])
+                    `shouldMatchList` (["AllowIfOlderThan"] <> concat [["DenyExternalDependencies", "DenyInstallTimeExecution"] | vmEcosystem mount == Npm])
 
     for_ [MirrorWriter, MirrorPruner, MirrorPreviewer] $ \role -> describe (show role) $ do
         it "refuses a shared install-code deny" $
@@ -325,6 +374,11 @@ ruleBlocksSpec = describe "vetBoot -- ecosystem rule blocks" $ do
                 `shouldReturn` [rubyDeprecationRefusal]
             refusalsFor role (overrideEnv "ECLUSE_MOUNTS__RUBYGEMS__RULES" deprecatedRule rubyBeside)
                 `shouldReturn` [rubyDeprecationRefusal]
+        it "refuses a shared yank deny on npm and RubyGems, and a mount-specific one on RubyGems" $ do
+            refusalsFor role (overrideEnv "ECLUSE_RULES" yankedRule rubyBeside)
+                >>= (`shouldMatchList` [npmYankBlock, rubyYankRefusal])
+            refusalsFor role (overrideEnv "ECLUSE_MOUNTS__RUBYGEMS__RULES" yankedRule rubyBeside)
+                `shouldReturn` [rubyYankRefusal]
         it "clears the same-key suppression in the PyPI patch" $
             refusalsFor
                 role
@@ -346,6 +400,12 @@ ruleBlocksSpec = describe "vetBoot -- ecosystem rule blocks" $ do
         it "ignores a disabled PyPI mount's blocked declaration" $
             refusalsFor role (overrideEnv "ECLUSE_MOUNTS__PYPI__ENABLED" "false" (overrideEnv "ECLUSE_RULES" installRule bothMounts))
                 `shouldReturn` []
+        it "refuses a shared external-dependency deny on the PyPI and RubyGems mounts, and not on Cargo" $
+            refusalsFor role (overrideEnv "ECLUSE_MOUNTS__CARGO__ENABLED" "true" (overrideEnv "ECLUSE_MOUNTS__RUBYGEMS__ENABLED" "true" (overrideEnv "ECLUSE_RULES" "{\"no-external\":{\"type\":\"DenyExternalDependencies\"}}" bothMounts)))
+                >>= (`shouldMatchList` [pypiDependencyBlock, rubyDependencyRefusal])
+        it "clears the external-dependency deny when it lives under npm alone" $
+            refusalsFor role (overrideEnv "ECLUSE_MOUNTS__NPM__RULES" "{\"no-external\":{\"type\":\"DenyExternalDependencies\"}}" bothMounts)
+                `shouldReturn` []
         it "preserves suppression of the shipped npm default" $
             refusalsFor role (overrideEnv "ECLUSE_MOUNTS__NPM__RULES" "{\"deny-scripts\":{\"enabled\":false}}" bothMounts)
                 `shouldReturn` []
@@ -355,9 +415,12 @@ ruleBlocksSpec = describe "vetBoot -- ecosystem rule blocks" $ do
     rubyBeside = overrideEnv "ECLUSE_MOUNTS__RUBYGEMS__ENABLED" "true" publicGateEnv
     installRule = "{\"custom-code\":{\"type\":\"DenyInstallTimeExecution\"}}"
     deprecatedRule = "{\"custom-deprecated\":{\"type\":\"DenyIfDeprecated\"}}"
+    yankedRule = "{\"custom-yanked\":{\"type\":\"DenyIfYanked\"}}"
     scopeRule = "{\"custom-scope\":{\"type\":\"AllowScope\",\"scope\":\"acme\"}}"
     installBlock = RuleBlockedOnMount PyPI DenyInstallTimeExecutionType "Most PyPI releases offer a source distribution, which runs its own build on install, so this rule would deny nearly every release."
     scopeBlock = RuleBlockedOnMount PyPI AllowScopeType "A PyPI project name has no scope, so this rule can never match one."
+    npmYankBlock = RuleBlockedOnMount Npm DenyIfYankedType "npm reports no yank flag. Removed releases disappear from its metadata."
+    pypiDependencyBlock = RuleBlockedOnMount PyPI DenyExternalDependenciesType "The PyPI adapter does not read where a release's dependencies install from."
 
 advisoryStoreSpec :: Spec
 advisoryStoreSpec = describe "vetBoot -- an advisory deny with no advisory store" $ do
@@ -466,6 +529,19 @@ firstPartyAuthoritySpec = describe "first-party authority" $
                     plan <- expectVetted role (overrideEnv (key "ENABLED") "false" ownedEnv)
                     map vmEcosystem (vpMounts plan) `shouldBe` []
 
+-- A PyPI mount publishing to CodeArtifact under a static token, behind an authenticated edge.
+codeArtifactPublishEnv :: [(String, String)]
+codeArtifactPublishEnv =
+    [ ("ECLUSE_SERVER__AUTH_TOKEN", "edge-token")
+    , ("ECLUSE_MOUNTS__PYPI__ENABLED", "true")
+    , ("ECLUSE_MOUNTS__PYPI__FIRST_PARTY", "acme-*")
+    , ("ECLUSE_MOUNTS__PYPI__PRIVATE_UPSTREAM__REGISTRY__URL", "https://private.example.test/pypi/")
+    , ("ECLUSE_MOUNTS__PYPI__PUBLICATION_TARGET__CODE_ARTIFACT__URL", codeArtifactDomain <> "/pypi/internal/")
+    , ("ECLUSE_MOUNTS__PYPI__PUBLICATION_TARGET__CODE_ARTIFACT__UPLOAD_URL", codeArtifactDomain <> "/pypi/internal/")
+    , ("ECLUSE_MOUNTS__PYPI__PUBLICATION_TARGET__CODE_ARTIFACT__TOKEN", "publish-token")
+    ]
+        <> publicGateEnv
+
 clearedSpec :: Spec
 clearedSpec = describe "vetBoot -- what a cleared configuration reifies" $ do
     it "clears the active mounts and leaves the raw settings on the plan beside them" $ do
@@ -480,8 +556,15 @@ clearedSpec = describe "vetBoot -- what a cleared configuration reifies" $ do
             Just publication -> do
                 registryUrlText (publicationTargetUrl (vpubTarget publication))
                     `shouldBe` "https://publish.example.test"
-                vpubFirstParty publication `shouldBe` FirstPartyNpmScopes (pure (mkScope "acme"))
+                vpubFirstParty publication `shouldBe` FirstParty npmFirstPartyNames (pure (mkScope "acme"))
                 fmap (unSecret . credSecret) (vpubStaticCredential publication) `shouldBe` Just "publish-write-token"
+
+    it "renders a static CodeArtifact publication token under its store's Basic username" $ do
+        plan <- expectVetted MirrorWriter codeArtifactPublishEnv
+        publication <- maybe (fail "expected the PyPI publication to clear") pure (Map.lookup PyPI (vpPublications plan))
+        request <- parseRequestOrFail (codeArtifactDomain <> "/pypi/internal/")
+        lookup "Authorization" (Client.requestHeaders (attachCredential (presentedMapping (vpubStaticPresentation publication) StoreWrite pypiCredential) (vpubStaticCredential publication) request))
+            `shouldBe` Just "Basic YXdzOnB1Ymxpc2gtdG9rZW4="
 
     it "clears no publication for a mount that declares no target, so PUT stays a 405" $ do
         plan <- expectVetted MirrorWriter staticEnvVars
@@ -528,7 +611,8 @@ refusalSpec = describe "vetBoot -- the refusals its groups earn" $ do
             , overrideEnv "ECLUSE_MOUNTS__PYPI__ENABLED" "true" $
                 overrideEnv "ECLUSE_MOUNTS__PYPI__FIRST_PARTY" "acme-*" $
                     overrideEnv "ECLUSE_MOUNTS__PYPI__PRIVATE_UPSTREAM__REGISTRY__URL" "https://private.example.test/pypi/" $
-                        overrideEnv "ECLUSE_MOUNTS__PYPI__PUBLICATION_TARGET__REGISTRY__URL" "https://publish.example.test/pypi/" staticEnvVars
+                        overrideEnv "ECLUSE_MOUNTS__PYPI__PUBLICATION_TARGET__REGISTRY__URL" "https://publish.example.test/pypi/" $
+                            overrideEnv "ECLUSE_MOUNTS__PYPI__PUBLICATION_TARGET__REGISTRY__UPLOAD_URL" "https://publish.example.test/pypi/legacy/" staticEnvVars
             )
         ]
         $ \(target, refusal, env) -> describe (target <> " publisher capability") $ do
@@ -539,6 +623,16 @@ refusalSpec = describe "vetBoot -- the refusals its groups earn" $ do
                 void (snd (runVet MirrorWriter (vetBootWith withoutPublisher config))) `shouldBe` Left [refusal]
             it "clears the target with the real PyPI publisher" $
                 refusalsFor MirrorWriter env `shouldReturn` []
+
+    describe "mirror companion preparation" $ do
+        it "refuses a mirror target whose adapter requires native companions it does not prepare" $
+            companionOutcome RubyGems Nothing rubyGemsMirrorEnv
+                >>= (`shouldSatisfy` refusesCompanions "ECLUSE_MOUNTS__RUBYGEMS__MIRROR_TARGET")
+        it "refuses a mirror target whose adapter prepares native companions its declaration does not require" $
+            companionOutcome PyPI (Just rubyMirrorCompanion) pypiMirrorEnv
+                >>= (`shouldSatisfy` refusesCompanions "ECLUSE_MOUNTS__PYPI__MIRROR_TARGET")
+        it "clears a RubyGems mirror target whose adapter prepares its native companions" $
+            refusalsFor MirrorWriter rubyGemsMirrorEnv `shouldReturn` []
 
     it "refuses a publication target that leaves the anti-shadowing guard nothing to enforce" $
         refusalsFor MirrorWriter (withoutFirstParty publishingEnv)
@@ -649,6 +743,21 @@ isStoreRefusal = \case
 
 vetted :: RegistryRole -> Config -> Either [BootError] ValidatedPlan
 vetted role config = snd (runVet role (vetBoot config))
+
+-- Rendered boot refusals with one adapter's mirror codec preparing the given native companion.
+companionOutcome :: Ecosystem -> Maybe MirrorCompanion -> [(String, String)] -> IO (Either [Text] ())
+companionOutcome changed companion envVars = do
+    config <- expectConfig envVars Nothing
+    let resolve eco
+            | eco == changed = fmap preparing (adapterFor eco)
+            | otherwise = adapterFor eco
+        preparing adapter = adapter{adapterPublish = fmap (\publish -> publish{publishCodec = \presentation -> (publishCodec publish presentation){pcMirrorCompanion = companion}}) (adapterPublish adapter)}
+    pure (first (map renderBootError) (void (snd (runVet MirrorWriter (vetBootWith resolve config)))))
+
+refusesCompanions :: Text -> Either [Text] () -> Bool
+refusesCompanions key = \case
+    Left [line] -> key `T.isInfixOf` line && "native metadata companions" `T.isInfixOf` line
+    _ -> False
 
 -- The shipped resolver with one ecosystem's adapter absent, as a build without it would resolve.
 withoutAdapter :: Ecosystem -> Ecosystem -> Maybe RegistryAdapter

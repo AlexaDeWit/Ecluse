@@ -25,7 +25,7 @@ import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Data.Time (UTCTime (UTCTime), fromGregorian)
 import Network.HTTP.Client (defaultManagerSettings, newManager)
-import Network.HTTP.Types (Method, RequestHeaders, hContentLength, methodHead, status200, status204, status205, status304, status404, statusCode, statusIsInformational)
+import Network.HTTP.Types (Method, RequestHeaders, hContentLength, methodHead, mkStatus, status200, status204, status205, status304, status404, statusCode, statusIsInformational)
 import Network.Wai (rawPathInfo, responseLBS)
 import Network.Wai qualified as Wai
 import Network.Wai.Handler.Warp (testWithApplication)
@@ -35,10 +35,10 @@ import Ecluse.Core.Ecosystem (Ecosystem (Cargo, Npm, PyPI))
 import Ecluse.Core.Mirror.State (StateRead (..), extendProjectRecord, stateTarget)
 import Ecluse.Core.Mirror.State.Internal (StateRevision (..), retainVerifiedIdentity)
 import Ecluse.Core.Package (mkPackageName)
-import Ecluse.Core.Registry.Adapter (adapterFor)
 import Ecluse.Core.Registry.Adapter.Capability (AdapterMetadata (metadataRead))
 import Ecluse.Core.Registry.Adapter.Types (RegistryAdapter (adapterMetadata))
 import Ecluse.Core.Registry.CachedDocument (cargoCached)
+import Ecluse.Core.Registry.Cargo.Mirror (cargoMirrorDocuments, cargoStateFormat)
 import Ecluse.Core.Registry.Metadata (VersionDoc (..), VersionRead (..))
 import Ecluse.Core.Registry.Metadata.Fetch.Preparation (prepareVersion)
 import Ecluse.Core.Registry.MirrorUpload (MirrorReadData (CargoMirrorRead), checkedMirrorInventory, inventoryFiles, verifyMirrorBytes)
@@ -46,17 +46,17 @@ import Ecluse.Core.Registry.Npm.Adapter (npmAdapter)
 import Ecluse.Core.Registry.Origin (OriginClient, originClient)
 import Ecluse.Core.Registry.PyPI.Adapter (pypiAdapter)
 import Ecluse.Core.Rules (prepare)
+import Ecluse.Core.Rules.Types (Rule)
 import Ecluse.Core.Security (defaultLimits)
+import Ecluse.Core.Security.Egress (RegistryUrl)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
-import Ecluse.Core.Server.Context (PackumentDeps (..), ReadSourceSelection (ManagedMirrorAndPublic, PrivateOnly))
+import Ecluse.Core.Server.Context (PackumentDeps (..))
 import Ecluse.Core.Server.Encoding (CodingChoice (ServeCoding), ContentCoding (GzipCoding), MetadataCompression (GzipWhenAccepted), chooseCoding, gzipEncodingHeader)
 import Ecluse.Core.Server.MirrorView (MirrorView)
 import Ecluse.Core.Server.Upstream (MirrorServePlan (NoMirrorWrite))
 import Ecluse.Core.Version (mkVersion)
-import Ecluse.Runtime.Server (application, mkServerConfig)
 import Ecluse.Server.Pipeline.TestSupport (newTestEnvWithQueue, packument, proxyApplication, publishedDaysAgo, requestAt)
-import Ecluse.Service (mountBindingFor)
-import Ecluse.Test.Contract.Serving (ServingDriver (..), ServingLayout (..), ServingRelease (..), ServingResponse (..), ServingSession (..))
+import Ecluse.Test.Contract.Serving (OriginFault (..), ServingDriver (..), ServingFaults (..), ServingRelease (..), ServingResponse (..), ServingSession (..))
 import Ecluse.Test.Deadline (untracedClient, withSweeper)
 import Ecluse.Test.Json (fieldAt, textAtPath)
 import Ecluse.Test.Mirror.State (mirrorViewWith)
@@ -67,9 +67,9 @@ import Ecluse.Test.Registry.Cargo.Fixtures qualified as Cargo
 import Ecluse.Test.Registry.Cargo.Reference qualified as Reference
 import Ecluse.Test.Registry.Npm (VersionSpec (..), versionSpec, versionValue)
 import Ecluse.Test.Rules (atDefaultPrecedence, inertRuleDeps)
-import Ecluse.Test.Server.Mount (serveDepsFor)
+import Ecluse.Test.Server.Mount (requiredAdapter, serveDepsFor)
 import Ecluse.Test.Support (expectRight)
-import Ecluse.Test.Wai (decodedBody, localhost, selfBaseUrl)
+import Ecluse.Test.Wai (closedResponse, decodedBody, localhost, selfBaseUrl)
 
 -- | npm's native JSON and tarball paths.
 npmServingDriver :: ServingDriver
@@ -82,9 +82,6 @@ pypiServingDriver = nativeDriver PyPI pypiAdapter "/pypi" "/simple/thing" pypiAr
 -- | Cargo uses the production registration, native LF records and checksum observations.
 cargoServingDriver :: ServingDriver
 cargoServingDriver = cargoDriver
-
-requiredCargoAdapter :: IO RegistryAdapter
-requiredCargoAdapter = maybe (fail "Cargo has no production adapter registration") pure (adapterFor Cargo)
 
 nativeDriver :: Ecosystem -> RegistryAdapter -> ByteString -> ByteString -> (Text -> ByteString) -> (Text -> [ServingRelease] -> Value) -> (SResponse -> ServingResponse) -> (ByteString -> Text) -> ServingDriver
 nativeDriver ecosystem adapter mount metadataPath artifactPath document observe =
@@ -100,46 +97,58 @@ data NativeObservation = NativeObservation
 nativeByteDriver :: Ecosystem -> IO RegistryAdapter -> ByteString -> ByteString -> ByteString -> (Text -> ByteString) -> (Text -> [ServingRelease] -> ByteString) -> NativeObservation -> (ByteString -> Text) -> ServingDriver
 nativeByteDriver ecosystem acquireAdapter mount clientMetadataPath upstreamMetadataPath artifactPath document observe digest =
     ServingDriver
-        { withServing = \compression rules privateReleases publicReleases action -> do
-            adapter <- acquireAdapter
-            testWithApplication (pure (upstream privateReleases)) $ \privatePort ->
-                testWithApplication (pure (upstream publicReleases)) $ \publicPort -> withSweeper $ \deadlines -> do
-                    queue <- newTestMemoryQueue
-                    manager <- newManager defaultManagerSettings
-                    env <- newTestEnvWithQueue deadlines queue manager
-                    prepared <- prepare inertRuleDeps (map atDefaultPrecedence rules)
-                    let deps =
-                            (serveDepsFor adapter (Just (loopbackRegistryUrl (localhost privatePort))) (loopbackRegistryUrl (localhost publicPort)) NoMirrorWrite prepared (pure now))
-                                { pdMountBaseUrl = "http://ecluse.test" <> decodeUtf8 mount
-                                , pdEgressUrl = Right . loopbackRegistryUrl
-                                , pdMetadataCompression = compression
-                                }
-                        app = proxyApplication ecosystem env deps
-                        raw method path headers = requestAt method (mount <> path) Wai.defaultRequest{Wai.requestHeaders = headers} app
-                        artifact method headers version = raw method (artifactPath version) headers
-                        metadata method headers = raw method clientMetadataPath headers >>= observeNativeMetadata observe artifact method
-                        artifactRequest method headers version = artifact method headers version >>= observeNativeArtifact observe method
-                    action
-                        ServingSession
-                            { requestMetadata = metadata
-                            , requestArtifact = artifactRequest
-                            , requestPrivateMetadata = metadata
-                            , requestPrivateArtifact = artifactRequest
-                            , publicSourceIdentity = decodeUtf8 mount
-                            , privateSourceIdentity = decodeUtf8 mount
-                            }
-        , servingLayout = CombinedRegistry
+        { withServing = \compression -> serving compression (ServingFaults Nothing Nothing)
+        , withFaultedServing = serving GzipWhenAccepted
         , servingIdentity = ("thing@" <>)
         , servingDigest = digest
         }
   where
     now = UTCTime (fromGregorian 2026 6 20) 0
+    serving :: MetadataCompression -> ServingFaults -> [Rule] -> [ServingRelease] -> [ServingRelease] -> (ServingSession -> IO a) -> IO a
+    serving compression faults rules privateReleases publicReleases action = do
+        adapter <- acquireAdapter
+        testWithApplication (pure (faulted (privateFault faults) (upstream privateReleases))) $ \privatePort ->
+            testWithApplication (pure (faulted (publicFault faults) (upstream publicReleases))) $ \publicPort -> withSweeper $ \deadlines -> do
+                queue <- newTestMemoryQueue
+                manager <- newManager defaultManagerSettings
+                env <- newTestEnvWithQueue deadlines queue manager
+                prepared <- prepare inertRuleDeps (map atDefaultPrecedence rules)
+                let deps =
+                        (serveDepsFor adapter (configuredPrivate faults privatePort) (loopbackRegistryUrl (localhost publicPort)) NoMirrorWrite prepared (pure now))
+                            { pdMountBaseUrl = "http://ecluse.test" <> decodeUtf8 mount
+                            , pdEgressUrl = Right . loopbackRegistryUrl
+                            , pdMetadataCompression = compression
+                            }
+                    app = proxyApplication ecosystem env deps
+                    raw method path headers = requestAt method (mount <> path) Wai.defaultRequest{Wai.requestHeaders = headers} app
+                    artifact method headers version = raw method (artifactPath version) headers
+                    metadata method headers = raw method clientMetadataPath headers >>= observeNativeMetadata observe artifact method
+                    artifactRequest method headers version = artifact method headers version >>= observeNativeArtifact observe method
+                action
+                    ServingSession
+                        { requestMetadata = metadata
+                        , requestArtifact = artifactRequest
+                        }
     upstream releases request respond
         | BS.dropWhileEnd (== 47) (rawPathInfo request) == upstreamMetadataPath =
             respond (responseLBS status200 [] (toLazy (document (selfBaseUrl request) releases)))
         | Just release <- find ((== rawPathInfo request) . artifactPath . releaseVersion) releases =
             respond (artifactResponse (Wai.requestHeaders request) (releaseBytes release))
         | otherwise = respond (responseLBS status404 [] "")
+
+-- Answer every request with the fault, or leave the origin as it is. An unconfigured origin is never read.
+faulted :: Maybe OriginFault -> Wai.Application -> Wai.Application
+faulted fault app = case fault of
+    Nothing -> app
+    Just (FaultStatus code) -> \_ respond -> respond (responseLBS (mkStatus code "") [] "")
+    Just FaultClosed -> \_ respond -> respond closedResponse
+    Just FaultUnconfigured -> app
+
+-- The private origin the mount configures, unless the faults leave it out.
+configuredPrivate :: ServingFaults -> Int -> Maybe RegistryUrl
+configuredPrivate faults port
+    | privateFault faults == Just FaultUnconfigured = Nothing
+    | otherwise = Just (loopbackRegistryUrl (localhost port))
 
 -- A CDN can gzip archive responses. HEAD needs an explicit length because Warp cannot infer it.
 artifactResponse :: RequestHeaders -> ByteString -> Wai.Response
@@ -259,44 +268,41 @@ responseBytes method response
 cargoDriver :: ServingDriver
 cargoDriver =
     ServingDriver
-        { withServing = \compression rules privateReleases publicReleases action ->
-            testWithApplication (pure (cargoUpstream privateReleases)) $ \privatePort ->
-                testWithApplication (pure (cargoUpstream publicReleases)) $ \publicPort -> withSweeper $ \deadlines -> do
-                    adapter <- requiredCargoAdapter
-                    queue <- newTestMemoryQueue
-                    manager <- newManager defaultManagerSettings
-                    env <- newTestEnvWithQueue deadlines queue manager
-                    prepared <- prepare inertRuleDeps (map atDefaultPrecedence rules)
-                    let privateUrl = loopbackRegistryUrl (localhost privatePort)
-                        publicUrl = loopbackRegistryUrl (localhost publicPort)
-                        origin = originClient defaultLimits (untracedClient manager deadlines) publicUrl Nothing
-                    view <- cargoManagedView adapter origin (localhost privatePort) privateReleases publicReleases
-                    let publicDeps =
-                            (serveDepsFor adapter (Just privateUrl) publicUrl NoMirrorWrite prepared (pure now))
-                                { pdReadSourceSelection = ManagedMirrorAndPublic
-                                , pdMountBaseUrl = "http://ecluse.test/cargo"
-                                , pdMirrorState = Just view
-                                , pdEgressUrl = Right . loopbackRegistryUrl
-                                , pdMetadataCompression = compression
-                                }
-                        privateDeps = publicDeps{pdReadSourceSelection = PrivateOnly, pdMountBaseUrl = "http://ecluse.test/cargo/private", pdMirrorState = Nothing}
-                        app = application (mkServerConfig (maybeToList (mountBindingFor Cargo publicDeps (Just privateDeps) Nothing))) env
-                        request base method path headers = cargoObservation method <$> requestAt method (base <> path) Wai.defaultRequest{Wai.requestHeaders = headers} app
-                    action
-                        ServingSession
-                            { requestMetadata = \method headers -> request "/cargo" method "/th/in/thing" headers
-                            , requestArtifact = \method headers version -> request "/cargo" method (cargoArtifact version) headers
-                            , requestPrivateMetadata = \method headers -> request "/cargo/private" method "/th/in/thing" headers
-                            , requestPrivateArtifact = \method headers version -> request "/cargo/private" method (cargoArtifact version) headers
-                            , publicSourceIdentity = "sparse+http://ecluse.test/cargo/"
-                            , privateSourceIdentity = "sparse+http://ecluse.test/cargo/private/"
-                            }
-        , servingLayout = SeparateRegistries
+        { withServing = \compression -> serving compression (ServingFaults Nothing Nothing)
+        , withFaultedServing = serving GzipWhenAccepted
         , servingIdentity = ("thing@" <>)
         , servingDigest = hexSha256Of
         }
   where
     now = UTCTime (fromGregorian 2026 6 20) 0
+    serving :: MetadataCompression -> ServingFaults -> [Rule] -> [ServingRelease] -> [ServingRelease] -> (ServingSession -> IO a) -> IO a
+    serving compression faults rules privateReleases publicReleases action =
+        testWithApplication (pure (faulted (privateFault faults) (cargoUpstream privateReleases))) $ \privatePort ->
+            testWithApplication (pure (faulted (publicFault faults) (cargoUpstream publicReleases))) $ \publicPort -> withSweeper $ \deadlines -> do
+                adapter <- requiredAdapter Cargo
+                queue <- newTestMemoryQueue
+                manager <- newManager defaultManagerSettings
+                env <- newTestEnvWithQueue deadlines queue manager
+                prepared <- prepare inertRuleDeps (map atDefaultPrecedence rules)
+                let publicUrl = loopbackRegistryUrl (localhost publicPort)
+                    origin = originClient defaultLimits (untracedClient manager deadlines) publicUrl Nothing
+                view <- cargoManagedView adapter origin (localhost privatePort) privateReleases publicReleases
+                let deps =
+                        (serveDepsFor adapter (configuredPrivate faults privatePort) publicUrl NoMirrorWrite prepared (pure now))
+                            { pdMountBaseUrl = "http://ecluse.test/cargo"
+                            , pdMirrorState = Just view
+                            , pdEgressUrl = Right . loopbackRegistryUrl
+                            , pdMetadataCompression = compression
+                            }
+                    app = proxyApplication Cargo env deps
+                    request method path headers = cargoObservation method <$> requestAt method ("/cargo" <> path) Wai.defaultRequest{Wai.requestHeaders = headers} app
+                    metadata method = request method "/th/in/thing"
+                    artifact method headers version = request method (cargoArtifact version) headers
+                action
+                    ServingSession
+                        { requestMetadata = metadata
+                        , requestArtifact = artifact
+                        }
 
 cargoUpstream :: [ServingRelease] -> Wai.Application
 cargoUpstream releases request respond
@@ -311,7 +317,7 @@ cargoUpstream releases request respond
 cargoManagedView :: RegistryAdapter -> OriginClient -> Text -> [ServingRelease] -> [ServingRelease] -> IO MirrorView
 cargoManagedView adapter origin targetUrl private public = do
     record <- foldM copy Nothing copies
-    mirrorViewWith target (\_ _ -> pure (Right (maybe StateAbsent (StateLoaded (StateRevision target name "complete")) record)))
+    mirrorViewWith cargoStateFormat cargoMirrorDocuments target (\_ _ -> pure (Right (maybe StateAbsent (StateLoaded (StateRevision target name "complete")) record)))
   where
     target = stateTarget targetUrl
     name = mkPackageName Cargo Nothing "thing"
@@ -323,7 +329,7 @@ cargoManagedView adapter origin targetUrl private public = do
         doc <- maybe (fail "completed fixture has no admitted source version") pure (vrVersion result)
         source <- maybe (fail "completed fixture has no native source records") pure (vdRaw doc >>= snd cargoCached)
         inventory <- expectRight (checkedMirrorInventory name version doc (CargoMirrorRead source))
-        expected <- expectRight (extendProjectRecord defaultLimits target inventory previous)
+        expected <- expectRight (extendProjectRecord cargoStateFormat defaultLimits target inventory previous)
         let file :| _ = inventoryFiles inventory
         verified <- expectRight (verifyMirrorBytes file (releaseBytes release))
         Just <$> expectRight (retainVerifiedIdentity version verified expected)

@@ -17,14 +17,16 @@ import Ecluse.Core.Registry (
 import Ecluse.Core.Registry.Npm.Publish (publishRequest)
 import Ecluse.Core.Registry.Origin (OriginClient (ocToken), originBaseUrl)
 import Ecluse.Core.Registry.Publish (relayPublishRequest)
+import Ecluse.Core.Registry.Request (CredentialMapping, presentedRequest)
 
--- | Relay a client's npm publish document to the publication target and return its own response.
+-- | Relay a client's npm publish document to the publication target under @mapping@ and return its own response.
 relayPublishDocument ::
+    CredentialMapping ->
     OriginClient ->
     PackageName ->
     ByteString ->
     IO (Either FetchFault PublishRelayResponse)
-relayPublishDocument origin name document =
+relayPublishDocument mapping origin name document =
     relayPublishRequest
         origin
-        (publishRequest (originBaseUrl origin) (ocToken origin) name document)
+        (presentedRequest mapping (ocToken origin) (\anonymous -> publishRequest (originBaseUrl origin) anonymous name document))

@@ -20,7 +20,7 @@ import Ecluse.Core.Package (Artifact (artFilename), hashValue)
 import Ecluse.Core.Registry (FetchFault (FetchUrlUnformable), ParseError (parseErrorMessage), PublishError (..), PublishFault (..), isSuccessStatus)
 import Ecluse.Core.Registry.CachedDocument (pypiSimpleCached)
 import Ecluse.Core.Registry.Metadata (VersionDoc (vdRaw))
-import Ecluse.Core.Registry.Metadata.Fetch.Preparation (staticRead)
+import Ecluse.Core.Registry.Metadata.Fetch.Preparation (presentedRead, staticRead)
 import Ecluse.Core.Registry.MirrorUpload
 import Ecluse.Core.Registry.MirrorUpload.Internal (checkedMirrorUploadData)
 import Ecluse.Core.Registry.Publish (PublishCodec (..))
@@ -29,13 +29,13 @@ import Ecluse.Core.Registry.PyPI.Credential (pypiCredential)
 import Ecluse.Core.Registry.PyPI.Metadata (pypiChargeFactors, pypiRead)
 import Ecluse.Core.Registry.PyPI.Request (simpleIndexRequest)
 import Ecluse.Core.Registry.PyPI.UploadMetadata (PyPIUploadMetadata, parseUploadMetadata, uploadFields, uploadMetadataMemoryBytes)
-import Ecluse.Core.Registry.Request (attachCredential, parseRequestEither)
+import Ecluse.Core.Registry.Request (ServicePresentation, StoreOperation (StoreRead, StoreWrite), attachCredential, parseRequestEither, presentedMapping, presentedRequest, sendsCredentialUsername)
 import Ecluse.Core.Security.Limits (Limits (maxMetadataBytes))
 import Ecluse.Core.Server.Admission.Types (ChargeFactors (cfFullReadPermille))
 
 -- | Read native target inventories and prepare one checked multipart upload per distribution.
-pypiPublishCodec :: PublishCodec
-pypiPublishCodec =
+pypiPublishCodec :: ServicePresentation -> PublishCodec
+pypiPublishCodec presentation =
     PublishCodec
         { pcPrepareSource = \package version doc -> do
             source <- maybeToRight (PublishSourceUnavailable "PyPI snapshot has no paired source metadata") (vdRaw doc >>= snd pypiSimpleCached)
@@ -54,20 +54,24 @@ pypiPublishCodec =
                             checkedMirrorUploadData inventory file bytes metadata
         , pcMirrorCompanion = Nothing
         , pcNativeComplete = \_ _ _ -> False
-        , pcTargetRead = staticRead pypiRead
+        , pcTargetRead = presentedRead readAs (staticRead pypiRead)
         , pcTargetReadPermille = cfFullReadPermille pypiChargeFactors
-        , pcProbeRequest = simpleIndexRequest
+        , pcProbeRequest = \target credential name -> presentedRequest readAs credential (\anonymous -> simpleIndexRequest target anonymous name)
         , pcVersionListWalk = Nothing
         , pcPrepareTarget = \_ target -> pure (Right target)
-        , pcPublishRequest = \target credential _ -> publishRequest target credential
+        , pcPublishRequest = \target credential _ -> publishRequest presentation target credential
         , pcPublishOutcome = classifyPublish
         }
+  where
+    readAs = presentedMapping presentation StoreRead pypiCredential
 
--- | Post to the exact configured endpoint using the supplied credential pair and verified bytes.
-publishRequest :: Text -> Maybe ClientCredential -> MirrorUploadData PyPIUploadMetadata -> Either PublishFault Request
-publishRequest target credential upload = do
+{- | Post verified bytes to the exact configured endpoint, presenting the credential as the store
+declares for writes. A credential needs a username only where that presentation sends it.
+-}
+publishRequest :: ServicePresentation -> Text -> Maybe ClientCredential -> MirrorUploadData PyPIUploadMetadata -> Either PublishFault Request
+publishRequest presentation target credential upload = do
     for_ credential $ \presented ->
-        when (isNothing (credUsername presented)) $
+        when (sendsCredentialUsername presentation StoreWrite && isNothing (credUsername presented)) $
             Left (PublishSourceUnavailable "PyPI upload requires an explicit credential username")
     base <- first (PublishFetch . FetchUrlUnformable) (parseRequestEither target)
     let filename = artFilename (expectedArtifact (uploadFile upload))
@@ -79,7 +83,7 @@ publishRequest target credential upload = do
     when (T.any (`elem` ['\r', '\n', '"', '\\']) filename) (Left (PublishSourceUnavailable "unsafe multipart filename"))
     when (BS.isInfixOf boundary bytes || any (BS.isInfixOf boundary . encodeUtf8 . snd) fields) (Left (PublishSourceUnavailable "multipart boundary collides with upload content"))
     let body = foldMap (fieldPart boundary) fields <> filePart boundary filename bytes <> byteString ("--" <> boundary <> "--\r\n")
-    pure . attachCredential pypiCredential credential $
+    pure . attachCredential (presentedMapping presentation StoreWrite pypiCredential) credential $
         base
             { method = "POST"
             , requestHeaders = (hContentType, "multipart/form-data; boundary=" <> boundary) : requestHeaders base

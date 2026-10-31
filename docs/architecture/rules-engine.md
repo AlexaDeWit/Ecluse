@@ -141,11 +141,14 @@ pipeline applies verdicts across it. For the cross-upstream merge, see
   repointing them. The rule never promotes a higher prerelease over a chosen stable `latest`.
   Repointing downward is a deliberate downgrade, so a withheld release does not silently remain
   the default install.
-- **No survivors → 503, 502, 500, or 403.** If nothing survives, the status follows the most
+- **No survivors → 503, 502, 500, 404, or 403.** If nothing survives, the status follows the most
   recoverable cause. `503` (with `Retry-After`) when any rejection was transient or a needed
   upstream was unavailable. `502` when an upstream returned a document Écluse could not use.
-  `500` when an exclusion is a permanent inability and none is retryable. `403` when all exclusions are policy or integrity refusals. Never `404`: the package exists,
-  and Écluse withheld its versions. The HTTP status mapping belongs to the
+  `500` when an exclusion is a permanent inability and none is retryable. `404` on a listing when
+  all exclusions are policy or integrity refusals, with the reasons in the body and the logs. A
+  PyPI body carries only the help message, so on PyPI only the `denied` log lines carry them, with
+  the deciding rule and the reason class but not the refusal text. A native coordinate keeps `403`
+  there. `403` when nothing was excluded. The HTTP status mapping belongs to the
   [error model](web-layer.md#error-model).
 
 Because the filtered body differs from upstream's, the proxy computes its own `ETag` over it
@@ -162,10 +165,11 @@ The **default precedence ladder** climbs from most-passive to most-decisive:
 ```text
 AllowIfOlderThan (100) < AllowIfRemediatesCve (150) < AllowScope (200) <
 DenyIfCve = DenyIfEpss (225) < AllowByIdentity (250) <
-DenyIfDeprecated = DenyIfYanked = DenyIfKnownMalicious = DenyInstallTimeExecution (300) < DenyByIdentity (400)
+DenyIfDeprecated = DenyIfYanked = DenyIfKnownMalicious = DenyInstallTimeExecution =
+DenyExternalDependencies (300) < DenyByIdentity (400)
 ```
 
-`DenyIfKnownMalicious`, availability denies, `DenyInstallTimeExecution`, and `DenyByIdentity` default above every allow. The two
+`DenyIfKnownMalicious`, availability denies, `DenyInstallTimeExecution`, `DenyExternalDependencies`, and `DenyByIdentity` default above every allow. The two
 scored advisory denies share a rung **below** `AllowByIdentity` (225 against 250), so an operator's
 exact-identity allow overrides either. That is the explicit "I have decided this version must ship"
 escape hatch. Both still sit above the quarantine, the remediation lane, and a scope
@@ -174,11 +178,22 @@ raise a specific allow above a specific deny, or the reverse, with an explicit p
 
 The source-free [default policy](configuration.md#the-default-policy) has one shared rule: the pure
 `AllowIfOlderThan` quarantine (`min-age`).
-The npm mount also ships `deny-scripts` (`DenyInstallTimeExecution`) at admission only, so it
-refuses new public admission without deleting stored copies. Disable it with `enabled: false`
-under `mounts.npm.rules`, or admit a named package with an `AllowByIdentity` pin whose explicit
-precedence is above 300. When `advisories.url` is configured, two more shared defaults activate:
-`DenyIfKnownMalicious` and the `AllowIfRemediatesCve` fast lane. The remaining rules opt in by name.
+The npm mount also ships `deny-scripts` (`DenyInstallTimeExecution`) and
+`deny-external-dependencies` (`DenyExternalDependencies`) at admission only, so they refuse new
+public admission without deleting stored copies. The Cargo mount ships `deny-external-dependencies`
+the same way. Disable one with `enabled: false` under its mount's rules, or admit a named package
+with an `AllowByIdentity` pin whose explicit precedence is above 300. `DenyExternalDependencies`
+exists because no consumer fetch may leave Écluse: an npm git or URL dependency installs straight
+from its source, past the quarantine, the advisories and the mirror. Any scheme Écluse does not know
+to resolve through the registry or locally counts too, so a scheme a client adds later fails closed.
+It reads specs the packument already carries, so it adds no fetch. The PyPI and RubyGems adapters
+project no dependency source into rule evidence for admission, so they block the type at boot. The
+Cargo adapter projects one from each public index row: a normal or build dependency from a registry
+other than crates.io makes the version fetch from outside Écluse. crates.io refuses such crates at
+upload, so on Cargo the rule guards a `publicUpstream` other than crates.io. Cargo first-party
+publication refuses the same dependencies, with Écluse's own index also accepted.
+When `advisories.url` is configured, two more shared defaults activate: `DenyIfKnownMalicious` and
+the `AllowIfRemediatesCve` fast lane. The remaining rules opt in by name.
 
 ## CVE subsystem
 
@@ -555,8 +570,8 @@ decides a version the limited rule would have left undecided.
 
 When Écluse denies a request, because no allow rule matched or a deny rule fired:
 
-- The agnostic serve layer decides the HTTP status: 403 for policy denials. See
-  [Web layer → Error model](web-layer.md#error-model).
+- The agnostic serve layer decides the HTTP status: 403 for a denied artifact, and 404 for a
+  listing that admitted nothing. See [Web layer → Error model](web-layer.md#error-model).
 - The response body shape is the ecosystem's. The route contract supplies the typed response
   constructor and codec, so the agnostic pipeline holds no body shape of its own. For npm the
   codec ([`Ecluse.Core.Registry.Npm.Serve`](../../core/src/Ecluse/Core/Registry/Npm/Serve.hs))
@@ -566,7 +581,7 @@ When Écluse denies a request, because no allow rule matched or a deny rule fire
     "error": "BlockedByDefault: no allow rule matched (rejection entries: 42) Contact #platform-eng for assistance."
   }
   ```
-- npm metadata with no surviving version and a `403` groups typed causes by deciding rule or
+- npm metadata with no surviving version and a `404` groups typed causes by deciding rule or
   integrity category. Each group gives a short explanation and a count of rejection entries.
   Different source contributions can reject the same version, so counts are not unique versions.
   The summary discards the mapping from each version to its full reason. Existing audit records

@@ -63,6 +63,9 @@ renderReason = \case
     RunsOnInstall how -> "runs code on install: " <> how
     NothingRunsOnInstall -> "no install-time code execution"
     InstallCodeUndetermined -> "install-time code execution not yet determined"
+    FetchesOutside which -> "installs a dependency from outside the registry: " <> which
+    DependenciesThroughRegistry -> "every installable dependency resolves through the registry"
+    DependencySourcesUndetermined -> "dependency sources not yet determined"
     VersionYanked -> "version is yanked"
     VersionNotYanked -> "version is not yanked"
     VersionDeprecated -> "version is deprecated"
@@ -99,6 +102,7 @@ renderInability = \case
     PublishTimeUnread -> "the publish time is not available"
     InstallSignalUnread -> "the install-time execution signal is not available"
     AvailabilityUnread -> "the availability flag is not available"
+    DependencySourcesUnread -> "the dependency sources are not available"
     NoDatabaseLoaded -> "no advisory database loaded"
     -- The age, the maximum it passed, and when the push landed, so an operator can tell an
     -- update outage from a maximum set too short.
@@ -112,7 +116,6 @@ renderInability = \case
             <> ")"
     PushUndated -> "the object store reported no publication time for the serving advisory artifact"
     SourceBreakerOpen -> "the rule source circuit breaker is open"
-    InstallEvidenceFailed detail -> "install evidence could not be read: " <> detail
     EvaluationFailed -> "the rule could not be evaluated"
     RuleThrew thrown -> "the rule threw: " <> thrown
     AttemptTimedOut -> "the attempt timed out"

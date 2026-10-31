@@ -11,10 +11,11 @@ module Ecluse.Composition.Validate (
     vetBoot,
     vetBootWith,
     vetMirrorCapabilities,
+    vetMirrorCapabilitiesWith,
 
     -- * What it clears
     VettedMount (vmEcosystem, vmAdapter, vmMount, vmConfig),
-    VettedPublication (vpubTarget, vpubFirstParty, vpubStaticCredential, vpubMaxRequestBytes),
+    VettedPublication (vpubTarget, vpubFirstParty, vpubStaticCredential, vpubStaticPresentation, vpubMaxRequestBytes),
 ) where
 
 import Data.Map.Strict qualified as Map
@@ -28,6 +29,7 @@ import Ecluse.Composition.BootError (
         FirstPartyMissing,
         FirstPartyWithoutPrivateUpstream,
         MinProgressBytesNotPositive,
+        MirrorCompanionMismatch,
         MirrorStateRequired,
         MirrorTargetWithoutPublish,
         MissingAdapter,
@@ -53,16 +55,16 @@ import Ecluse.Config (
     DredgerSettings (drgChunkPause, drgQuotaOverrides),
     FirstParty,
     LimitsSettings (limMinProgressBytes, limProgressWindow),
-    MirrorEndpoint (meUploadUrl, meUsername),
+    MirrorEndpoint (meUsername),
     MirrorTarget (mtUrl),
     Mount,
     MountConfig (mntFirstParty, mntMaxRequestBytes, mntMirrorTarget, mntPrivateUpstream, mntPublicationTarget),
     PrivateEndpoint (preTarget),
-    PublicationEndpoint (peTarget, peToken, peUploadUrl, peUsername),
+    PublicationEndpoint (peTarget, peToken, peUsername),
     QuotaOverride (qoQuotas, qoScope, qoWeights),
     ServerSettings (srvAuthToken),
     StoreBackend,
-    StoreTag (TagCodeArtifact),
+    StoreTag,
     Target (tgtTag, tgtUrl),
     advisorySourced,
     meTarget,
@@ -70,18 +72,20 @@ import Ecluse.Config (
     mountPolicy,
     mountRegistries,
     regMirrorTarget,
-    storeTagName,
+    taggedKeyPath,
  )
+import Ecluse.Config.Target (storePresentation)
 import Ecluse.Core.Credential (ClientCredential (ClientCredential), Secret)
-import Ecluse.Core.Ecosystem (Ecosystem (Cargo))
+import Ecluse.Core.Ecosystem (Ecosystem)
 import Ecluse.Core.Registry.Adapter (RegistryAdapter, adapterFor, adapterPublish, adapterRuleBlocks)
 import Ecluse.Core.Registry.Adapter.Capability (
     AdapterPublish (publishIdentity, publishMirrorRequirements),
-    MirrorRequirements (mirrorStateRequirement, mirrorUploadEndpoint),
-    MirrorStateRequirement (DurableVersionState),
-    UploadEndpointRequirement (ExplicitUploadEndpoint),
+    MirrorRequirements (mirrorStateRequirement),
     UploadIdentityRequirement (NamedIdentity),
+    companionsAgree,
+    durableMirrorDocuments,
  )
+import Ecluse.Core.Registry.Request (ServicePresentation, StoreOperation (StoreWrite), nativePresentation, sendsCredentialUsername)
 import Ecluse.Core.Registry.Sweep.Types (minimumChunkPause)
 import Ecluse.Core.Rules.Types (
     AllowIfRemediatesCveParams (aircOnUnavailable),
@@ -127,12 +131,18 @@ data VettedPublication = VettedPublication
     { vpubTarget :: PublicationTarget
     , vpubFirstParty :: FirstParty
     , vpubStaticCredential :: Maybe ClientCredential
+    , vpubStaticPresentation :: ServicePresentation
+    -- ^ How the publication target's store asks for the static credential.
     , vpubMaxRequestBytes :: Maybe Int
     }
 
 -- | Require only capabilities this process uses. Store maintenance never opens mirror state or uploads packages.
 vetMirrorCapabilities :: BootRole -> AppConfig -> Vet ()
-vetMirrorCapabilities role app = decided $ case missing of
+vetMirrorCapabilities = vetMirrorCapabilitiesWith storePresentation
+
+-- | 'vetMirrorCapabilities' with each write target's store presentation drawn from one lookup.
+vetMirrorCapabilitiesWith :: (StoreTag -> Ecosystem -> ServicePresentation) -> BootRole -> AppConfig -> Vet ()
+vetMirrorCapabilitiesWith presentationOf role app = decided $ case missing of
     [] -> Right ()
     errors -> Left errors
   where
@@ -146,15 +156,13 @@ vetMirrorCapabilities role app = decided $ case missing of
             maybe [] (mirrorNeeds eco publish) (mntMirrorTarget mount)
                 <> maybe [] (publicationNeeds eco publish) (mntPublicationTarget mount)
     mirrorNeeds eco publish endpoint =
-        [MirrorStateRequired eco | mirrorStateRequirement requirements == DurableVersionState, isJust pipeline, isNothing (cfgMirrorState app)]
-            <> [required eco "mirrorTarget" (meTarget endpoint) "uploadUrl" | mirrorUploadEndpoint requirements == ExplicitUploadEndpoint, mirrorWrites, isNothing (meUploadUrl endpoint)]
-            <> [required eco "mirrorTarget" (meTarget endpoint) "username" | publishIdentity publish == NamedIdentity, mirrorWrites, tgtTag (meTarget endpoint) /= TagCodeArtifact, isNothing (meUsername endpoint)]
-      where
-        requirements = publishMirrorRequirements publish
+        [MirrorStateRequired eco | isJust (durableMirrorDocuments (mirrorStateRequirement (publishMirrorRequirements publish))), isJust pipeline, isNothing (cfgMirrorState app)]
+            <> [usernameRequired eco "mirrorTarget" (meTarget endpoint) | publishIdentity publish == NamedIdentity, mirrorWrites, uploadSendsUsername eco (meTarget endpoint), isNothing (meUsername endpoint)]
     publicationNeeds eco publish endpoint =
-        [required eco "publicationTarget" (peTarget endpoint) "uploadUrl" | eco == Cargo, clientWrites, isNothing (peUploadUrl endpoint)]
-            <> [required eco "publicationTarget" (peTarget endpoint) "username" | publishIdentity publish == NamedIdentity, clientWrites, isJust (peToken endpoint), tgtTag (peTarget endpoint) /= TagCodeArtifact, isNothing (peUsername endpoint)]
-    required eco endpoint target key = UploadConfigurationRequired eco (endpoint <> "." <> storeTagName (tgtTag target) <> "." <> key)
+        [usernameRequired eco "publicationTarget" (peTarget endpoint) | publishIdentity publish == NamedIdentity, clientWrites, isJust (peToken endpoint), uploadSendsUsername eco (peTarget endpoint), isNothing (peUsername endpoint)]
+    usernameRequired eco endpoint target = UploadConfigurationRequired eco (taggedKeyPath endpoint (tgtTag target) "username")
+    -- The same question the upload asks: a store that declares its write mechanism never sends a configured username.
+    uploadSendsUsername eco target = sendsCredentialUsername (presentationOf (tgtTag target) eco) StoreWrite
 
 -- | Accumulate every pure refusal and advisory for one role before constructing its plan.
 vetBoot :: Config -> Vet ValidatedPlan
@@ -189,7 +197,7 @@ vetBootWith resolveAdapter config =
             , vpSettings = app
             }
 
-    cleared target (firstParty, credential, requestBytes) = VettedPublication target firstParty credential requestBytes
+    cleared target (firstParty, credential, presentation, requestBytes) = VettedPublication target firstParty credential presentation requestBytes
 
 -- Every role dials upstreams, so every role refuses a floor the window and byte count cannot make.
 vetProgressFloor :: AppConfig -> Vet ProgressFloor
@@ -304,6 +312,7 @@ vetMount resolveAdapter (eco, (mount, mcfg)) =
     vetted
         <$ rule (const (Refuse MissingAdapter)) unservedEcosystem eco
         <* rule (const (Refuse MirrorTargetWithoutPublish)) (declaredWithoutPublish mirrors) eco
+        <* rule (const (Refuse MirrorCompanionMismatch)) (mismatchedCompanions mirrors) eco
         <* rule (const (Refuse PublicationTargetWithoutPublish)) (declaredWithoutPublish publishes) eco
         <* rule (const (Refuse FirstPartyWithoutPrivateUpstream)) firstPartyWithoutPrivateUpstream (eco, mcfg)
   where
@@ -322,13 +331,19 @@ vetMount resolveAdapter (eco, (mount, mcfg)) =
         guard (isNothing (adapterPublish adapter))
         pure e
 
+    mismatchedCompanions declared e = do
+        guard declared
+        publish <- resolveAdapter e >>= adapterPublish
+        guard (not (companionsAgree publish))
+        pure e
+
 firstPartyWithoutPrivateUpstream :: (Ecosystem, MountConfig) -> Maybe Ecosystem
 firstPartyWithoutPrivateUpstream (eco, mcfg) =
     eco <$ guard (isJust (mntFirstParty mcfg) && isNothing (mntPrivateUpstream mcfg))
 
 {- The two couplings a declared publication target carries: the first-party namespaces the
 guard enforces, and the inbound edge a static publish credential needs. -}
-vetPublishPolicy :: AppConfig -> Vet (Map Ecosystem (FirstParty, Maybe ClientCredential, Maybe Int))
+vetPublishPolicy :: AppConfig -> Vet (Map Ecosystem (FirstParty, Maybe ClientCredential, ServicePresentation, Maybe Int))
 vetPublishPolicy app =
     Map.fromList . catMaybes <$> traverse (vetPublication (srvAuthToken (cfgServer app))) publishingMounts
   where
@@ -338,20 +353,23 @@ vetPublishPolicy app =
         , isJust (mntPublicationTarget mcfg)
         ]
 
-vetPublication :: Maybe Secret -> (Ecosystem, MountConfig) -> Vet (Maybe (Ecosystem, (FirstParty, Maybe ClientCredential, Maybe Int)))
+vetPublication :: Maybe Secret -> (Ecosystem, MountConfig) -> Vet (Maybe (Ecosystem, (FirstParty, Maybe ClientCredential, ServicePresentation, Maybe Int)))
 vetPublication inboundToken subject@(eco, mcfg) =
     cleared
         <$ rule (const (Refuse FirstPartyMissing)) firstPartyMissing subject
         <* rule (const (Refuse (uncurry PublishStaticCredentialNeedsEdge))) (staticWithoutEdge inboundToken) subject
   where
-    cleared = mntFirstParty mcfg <&> \firstParty -> (eco, (firstParty, publicationCredential mcfg, mntMaxRequestBytes mcfg))
+    cleared = mntFirstParty mcfg <&> \firstParty -> (eco, (firstParty, publicationCredential mcfg, publicationPresentation eco mcfg, mntMaxRequestBytes mcfg))
 
 publicationCredential :: MountConfig -> Maybe ClientCredential
 publicationCredential mount = do
     endpoint <- mntPublicationTarget mount
     token <- peToken endpoint
-    let username = if tgtTag (peTarget endpoint) == TagCodeArtifact then Just "aws" else peUsername endpoint
-    pure (ClientCredential username token)
+    pure (ClientCredential (peUsername endpoint) token)
+
+-- The publication target's store decides how a static credential travels, as it does for the mirror worker's token.
+publicationPresentation :: Ecosystem -> MountConfig -> ServicePresentation
+publicationPresentation eco mcfg = maybe nativePresentation (\endpoint -> storePresentation (tgtTag (peTarget endpoint)) eco) (mntPublicationTarget mcfg)
 
 publicationToken :: MountConfig -> Maybe Secret
 publicationToken mcfg = peToken =<< mntPublicationTarget mcfg

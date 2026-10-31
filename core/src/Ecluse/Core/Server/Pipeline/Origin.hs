@@ -3,15 +3,23 @@
 -- SPDX-License-Identifier: MIT
 
 {- | Resolve caller-authorised private metadata and anonymous public metadata.
-Access refusals, absent packages and unread origins retain distinct outcomes.
+Access refusals, absent packages and unread origins retain distinct outcomes, and an unread
+origin keeps the cause that sets a private refusal's status.
 -}
 module Ecluse.Core.Server.Pipeline.Origin (
     -- * The per-origin outcome
     OriginResult (..),
     OriginMiss (..),
+    ReadFailure (..),
     ObservedReadBoundExceeded (..),
     originManifest,
     originMiss,
+
+    -- * Why a read failed
+    statusReadFailure,
+    fetchReadFailure,
+    metadataReadFailure,
+    readFailureRefusal,
 
     -- * Fetching the two origins
     fetchPrivateOriginObserved,
@@ -21,6 +29,7 @@ module Ecluse.Core.Server.Pipeline.Origin (
 
     -- * One origin's coordinates
     mountOrigin,
+    publicSource,
 ) where
 
 import Katip (Severity (DebugS), logFM, ls)
@@ -30,7 +39,7 @@ import UnliftIO.Exception (tryAny)
 import Ecluse.Core.Credential (ClientCredential)
 import Ecluse.Core.Fault (RetryAfter)
 import Ecluse.Core.Package (PackageName, renderPackageName)
-import Ecluse.Core.Registry (FetchFault (FetchCooldown))
+import Ecluse.Core.Registry (FetchFault (FetchBoundExceeded, FetchCooldown, FetchTransport, FetchUrlUnformable))
 import Ecluse.Core.Registry.Adapter.Capability (AdapterMetadata (metadataChargeFactors, metadataRead))
 import Ecluse.Core.Registry.Exchange.Types (ExchangeClient (ecDeadlines))
 import Ecluse.Core.Registry.Metadata (
@@ -70,6 +79,13 @@ import Ecluse.Core.Server.Context (
 import Ecluse.Core.Server.Metadata (MetadataReads, ecosystemMetadataReads, preparePublicVersion, privateMetadataClient, publicMetadataClient, withinRequestCap)
 import Ecluse.Core.Server.Pipeline.Diagnostics (logInvalidEntries, logMetadataFailure)
 import Ecluse.Core.Server.Pipeline.Shared (flightOf)
+import Ecluse.Core.Server.Response (
+    RejectReason (UpstreamInvalid),
+    Rejection (Rejection),
+    ServeDecision (Reject),
+    Transience (WillResolve),
+    rejectUnavailable,
+ )
 import Ecluse.Core.Version (Version)
 
 -- | A request-wide observed read limit, distinct from a transport failure.
@@ -80,17 +96,25 @@ instance Exception ObservedReadBoundExceeded
 
 -- | One origin's contribution, access refusal, identity mismatch, or absence.
 data OriginResult
-    = OriginBudgetExceeded LimitError
+    = -- | The request-wide observed read bound was crossed.
+      OriginBudgetExceeded LimitError
     | -- | A packument that decoded and whose self-reported name matched the request.
       OriginResolved Manifest
-    | -- | An explicit upstream access refusal, retaining its 401 or 403.
+    | {- | An explicit upstream access refusal, retaining its 401 or 403. A public one refuses a listing
+      with nothing admitted as an invalid reply, because the public read is anonymous.
+      -}
       OriginAuthorisationFailure Int
-    | -- | An invalid package identity, contributing a 502 when no valid origin remains.
+    | {- | An invalid package identity. A public one contributes a 502 when no valid origin remains,
+      and a private one refuses the request.
+      -}
       OriginNameMismatch
     | -- | The origin answered 404, so it holds no such package. It degrades to no contribution.
       OriginNotFound
-    | -- | The origin was not read: unreachable, faulting, or undecodable. It degrades to no contribution.
-      OriginUnresolved
+    | {- | The origin was not read, for this cause. A private one refuses the request. A public one
+      contributes nothing, and when no version survives its cause refuses the listing as a private
+      one would.
+      -}
+      OriginUnresolved ReadFailure
     | -- | Public reads are suspended until the authority cooldown expires.
       OriginCooling RetryAfter
     | -- | An unconfigured origin contributes neither metadata nor an availability failure.
@@ -101,8 +125,49 @@ data OriginMiss
     = -- | The origin holds no such package, or the mount configures no such origin.
       MissAbsent
     | -- | The origin was not read, so nothing yet says whether it holds the package.
-      MissUnresolved
+      MissUnresolved ReadFailure
     deriving stock (Eq, Show)
+
+-- | Why a read failed, which sets the status of a refusal it causes.
+data ReadFailure
+    = -- | @503@: a transport failure, a timeout, a @5xx@ or a @429@, with any delay the origin asked for.
+      ReadUnavailable (Maybe RetryAfter)
+    | -- | @502@: an unfollowed @3xx@, another unexpected status, a name mismatch, an undecodable document or a bound breach.
+      ReadInvalid
+    deriving stock (Eq, Show)
+
+-- | Classify an unsuccessful status that is neither a 404 nor an access refusal.
+statusReadFailure :: Int -> Maybe RetryAfter -> ReadFailure
+statusReadFailure code retry
+    | code == 429 || (code >= 500 && code < 600) = ReadUnavailable retry
+    | otherwise = ReadInvalid
+
+-- | The cause of a failed metadata read, or 'Nothing' for an access refusal or a settled absence.
+metadataReadFailure :: MetadataError -> Maybe ReadFailure
+metadataReadFailure = \case
+    MetadataAuthorisationFailure _ -> Nothing
+    MetadataAbsent -> Nothing
+    MetadataHttpFailure code retry -> Just (statusReadFailure code retry)
+    MetadataFetch fault -> Just (fetchReadFailure fault)
+    MetadataBoundExceeded _ -> Just ReadInvalid
+    MetadataUndecodable -> Just ReadInvalid
+    MetadataNameMismatch _ -> Just ReadInvalid
+
+{- | The refusal a failed read of the named upstream renders: @503@ under the given words with its
+delay, or @502@ naming that upstream for an invalid reply.
+-}
+readFailureRefusal :: Text -> Text -> ReadFailure -> ServeDecision
+readFailureRefusal upstream unavailable = \case
+    ReadUnavailable retry -> rejectUnavailable (WillResolve retry) unavailable
+    ReadInvalid -> Reject (Rejection UpstreamInvalid (upstream <> " returned an invalid or unusable reply"))
+
+-- | Classify a failed exchange. An unformable URL sent no request, and keeps the unavailable refusal.
+fetchReadFailure :: FetchFault -> ReadFailure
+fetchReadFailure = \case
+    FetchBoundExceeded _ -> ReadInvalid
+    FetchTransport _ -> ReadUnavailable Nothing
+    FetchCooldown retry -> ReadUnavailable (Just retry)
+    FetchUrlUnformable _ -> ReadUnavailable Nothing
 
 -- | The resolved manifest an origin contributed, if any.
 originManifest :: OriginResult -> Maybe Manifest
@@ -112,34 +177,35 @@ originManifest = \case
     OriginResolved manifest -> Just manifest
     OriginNameMismatch -> Nothing
     OriginNotFound -> Nothing
-    OriginUnresolved -> Nothing
+    OriginUnresolved _ -> Nothing
     OriginCooling _ -> Nothing
     OriginAbsent -> Nothing
 
--- | The miss an origin yielded, or 'Nothing' when it contributed a document or an explicit refusal.
+-- | The miss an origin yielded, or 'Nothing' when it contributed a document or an access refusal.
 originMiss :: OriginResult -> Maybe OriginMiss
 originMiss = \case
-    OriginBudgetExceeded _ -> Just MissUnresolved
+    OriginBudgetExceeded _ -> Just (MissUnresolved ReadInvalid)
     OriginAuthorisationFailure _ -> Nothing
     OriginResolved{} -> Nothing
-    OriginNameMismatch -> Nothing
+    OriginNameMismatch -> Just (MissUnresolved ReadInvalid)
     OriginNotFound -> Just MissAbsent
-    OriginUnresolved -> Just MissUnresolved
-    OriginCooling _ -> Just MissUnresolved
+    OriginUnresolved failure -> Just (MissUnresolved failure)
+    OriginCooling retry -> Just (MissUnresolved (ReadUnavailable (Just retry)))
     OriginAbsent -> Just MissAbsent
 
 originResultOf :: Either SomeException (Either MetadataError Manifest) -> OriginResult
 originResultOf = \case
     Left fault | Just (ObservedReadBoundExceeded bound) <- fromException fault -> OriginBudgetExceeded bound
-    Left _ -> OriginUnresolved
-    Right (Left (MetadataAuthorisationFailure code)) -> OriginAuthorisationFailure code
-    Right (Left (MetadataNameMismatch _)) -> OriginNameMismatch
-    Right (Left MetadataAbsent) -> OriginNotFound
-    Right (Left (MetadataHttpFailure _)) -> OriginUnresolved
-    Right (Left MetadataUndecodable) -> OriginUnresolved
-    Right (Left (MetadataBoundExceeded _)) -> OriginUnresolved
-    Right (Left (MetadataFetch (FetchCooldown retry))) -> OriginCooling retry
-    Right (Left (MetadataFetch _)) -> OriginUnresolved
+    Left _ -> OriginUnresolved (ReadUnavailable Nothing)
+    Right (Left err) -> case err of
+        MetadataAuthorisationFailure code -> OriginAuthorisationFailure code
+        MetadataNameMismatch _ -> OriginNameMismatch
+        MetadataAbsent -> OriginNotFound
+        MetadataFetch (FetchCooldown retry) -> OriginCooling retry
+        MetadataHttpFailure code retry -> OriginUnresolved (statusReadFailure code retry)
+        MetadataFetch fault -> OriginUnresolved (fetchReadFailure fault)
+        MetadataBoundExceeded _ -> OriginUnresolved ReadInvalid
+        MetadataUndecodable -> OriginUnresolved ReadInvalid
     Right (Right manifest) -> OriginResolved manifest
 
 -- | Read caller-authorised private metadata without caching and observe every incoming full-read chunk.
@@ -251,6 +317,7 @@ privateOrigin rt deps = perCallerOrigin (pdLimits deps) (srPrivateClient rt)
 publicOrigin :: ServeRuntime -> PackumentDeps -> OriginFor Public
 publicOrigin rt deps = controlPublicOrigin (srPublicControl rt) Nothing (anonymousOrigin (pdLimits deps) (srPublicClient rt) (pdPublicBase deps))
 
+-- | The public origin's cache source, keyed by its base URL.
 publicSource :: PackumentDeps -> Source
 publicSource deps = Source (registryUrlText (pdPublicBaseUrl deps))
 

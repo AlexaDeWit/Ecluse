@@ -3,7 +3,8 @@
 -- SPDX-License-Identifier: MIT
 
 {- | Serve caller-authorised private artifacts and policy-admitted public artifacts.
-The selected view controls fallback. GET and HEAD share admission.
+Only a settled private absence reaches the public leg, and never for a first-party name.
+GET and HEAD share admission.
 -}
 module Ecluse.Core.Server.Pipeline.Tarball (
     tarballAction,
@@ -11,7 +12,7 @@ module Ecluse.Core.Server.Pipeline.Tarball (
     headTarball,
 ) where
 
-import Network.HTTP.Types (Method, status401, status404, status500)
+import Network.HTTP.Types (Method, status401, status500)
 import Network.Wai (Request, ResponseReceived, requestHeaders)
 
 import Ecluse.Core.Credential (ClientCredential)
@@ -21,7 +22,6 @@ import Ecluse.Core.Server.Context (
     Handler,
     MountBinding (bindingPackumentDeps),
     PackumentDeps (..),
-    ReadSourceSelection (..),
     ResponseAction (RunPipeline),
     ServeRuntime (..),
     ctxMount,
@@ -29,17 +29,16 @@ import Ecluse.Core.Server.Context (
  )
 import Ecluse.Core.Server.Path (Filename)
 import Ecluse.Core.Server.Pipeline.Internal (recordDenials, serveDecisionClass)
-import Ecluse.Core.Server.Pipeline.Origin (OriginMiss)
 import Ecluse.Core.Server.Pipeline.Shared
 import Ecluse.Core.Server.Pipeline.Tarball.Private (
     PrivateLeg (PrivateAnswered, PrivateHandled, PrivateMissed),
     streamPrivateArtifact,
  )
 import Ecluse.Core.Server.Pipeline.Tarball.Public (servePublicArtifact)
-import Ecluse.Core.Server.Pipeline.Tarball.Refusal (artifactError, firstPartyMissRefusal)
+import Ecluse.Core.Server.Pipeline.Tarball.Refusal (artifactError, privateMissRefusal)
 import Ecluse.Core.Server.Pipeline.Tarball.Relay (ArtifactServe (ServeFull, ServeHead))
 import Ecluse.Core.Server.Pipeline.Tarball.Types (ArtifactRequest (..), TarballReplies (..))
-import Ecluse.Core.Server.Response (mkRefusal)
+import Ecluse.Core.Server.Response (ServeDecision, mkRefusal)
 import Ecluse.Core.Server.Route (isHead)
 import Ecluse.Core.Telemetry.Record (MetricsPort (..))
 import Ecluse.Core.Version (Version)
@@ -112,12 +111,9 @@ tarballWith mode replies name version file request respond = do
                 , arFile = file
                 , arRespond = respond
                 }
-    if not (edgeTokenMatches (pdInboundToken deps) token)
-        then liftIO (respond (tarballError replies status401 [] (mkRefusal Nothing unauthorisedMessage)))
-        else
-            if pdReadSourceSelection deps == ManagedMirrorAndPublic && pdFirstParty deps name
-                then liftIO (respond (tarballError replies status404 [] (mkRefusal (pdHelp deps) "first-party packages require the private registry view")))
-                else serveArtifactLegs ctx token
+    if edgeTokenMatches (pdInboundToken deps) token
+        then serveArtifactLegs ctx token
+        else liftIO (respond (tarballError replies status401 [] (mkRefusal Nothing unauthorisedMessage)))
 
 -- The private leg first, then the gated public leg on a miss.
 serveArtifactLegs :: ArtifactRequest response -> Maybe ClientCredential -> Handler ResponseReceived
@@ -127,16 +123,12 @@ serveArtifactLegs ctx token =
         PrivateAnswered decision received -> do
             liftIO (mpServeDecision (srMetrics (arRuntime ctx)) decision)
             pure received
-        PrivateMissed miss
-            | pdReadSourceSelection (arDeps ctx) == PrivateOnly || pdFirstParty (arDeps ctx) (arPackage ctx) -> refuseFirstParty ctx miss
-            | otherwise -> servePublicArtifact ctx
+        PrivateMissed miss -> maybe (servePublicArtifact ctx) (refuseMiss ctx) (privateMissRefusal (arDeps ctx) (arPackage ctx) miss)
 
--- A first-party name has one authority, so its private miss ends the request here rather than
--- falling through to the public leg.
-refuseFirstParty :: ArtifactRequest response -> OriginMiss -> Handler ResponseReceived
-refuseFirstParty ctx miss = do
+-- A private miss that ends the request here records its decision and denial before answering.
+refuseMiss :: ArtifactRequest response -> ServeDecision -> Handler ResponseReceived
+refuseMiss ctx decision = do
     let metrics = srMetrics (arRuntime ctx)
-        decision = firstPartyMissRefusal miss
     liftIO (mpServeDecision metrics (serveDecisionClass decision))
     liftIO (recordDenials metrics [decision])
     liftIO (arRespond ctx (artifactError (arReplies ctx) (arDeps ctx) decision))

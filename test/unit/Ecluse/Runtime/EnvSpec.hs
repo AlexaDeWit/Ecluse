@@ -28,7 +28,7 @@ import Ecluse.Test.Support (testMemoryMeter, testServeAdmission)
 resolved the way the composition root resolves it.
 -}
 npmTestConfig :: ServerConfig
-npmTestConfig = mkServerConfig (maybeToList (mountBindingFor Npm inertPackumentDeps Nothing Nothing))
+npmTestConfig = mkServerConfig (maybeToList (mountBindingFor Npm inertPackumentDeps Nothing))
 
 -- | The body's own fault, so the assertion names the exception the body raised.
 data BodyEscape = BodyEscape

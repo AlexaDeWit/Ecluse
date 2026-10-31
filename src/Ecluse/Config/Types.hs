@@ -13,6 +13,7 @@ module Ecluse.Config.Types (
     splitHttpScheme,
     StoreTag (..),
     storeTagName,
+    taggedKeyPath,
     Target (..),
     PrivateEndpoint (..),
     DeletionConsent (..),
@@ -61,6 +62,7 @@ module Ecluse.Config.Types (
     Config (..),
     ConfigError (..),
     renderConfigError,
+    shippedMountRules,
 ) where
 
 import Data.IP (IPRange)
@@ -78,15 +80,12 @@ import Ecluse.Config.Resolve (mountDocRef, mountKeyRef)
 import Ecluse.Config.Rule (PolicyError (SuppressUnknownRule), renderPolicyError)
 import Ecluse.Core.BuildIdentity (OperatorContact)
 import Ecluse.Core.Credential (Secret)
-import Ecluse.Core.Ecosystem (Ecosystem (Npm), ecosystemName)
+import Ecluse.Core.Ecosystem (Ecosystem (Cargo, Npm), ecosystemName)
 import Ecluse.Core.Osv.Provenance (SourcePathRecording)
 import Ecluse.Core.Osv.Publication (Percent)
-import Ecluse.Core.Package (Scope)
 import Ecluse.Core.Package.Integrity (MinIntegrity, MinTrustedIntegrity)
-import Ecluse.Core.Registry.Cargo.FirstParty (CargoFirstParty)
+import Ecluse.Core.Registry.FirstParty (FirstParty (..))
 import Ecluse.Core.Registry.Maintenance.Budget (QuotaDimension, RequestKind)
-import Ecluse.Core.Registry.PyPI.FirstParty (PyPIFirstParty)
-import Ecluse.Core.Registry.RubyGems.FirstParty (RubyGemsFirstParty)
 import Ecluse.Core.Rules.Types (PrecededRule)
 import Ecluse.Core.Security (hostPortAddress, refuseCredentialMaterial)
 import Ecluse.Core.Security.Egress (RegistryUrl)
@@ -153,6 +152,10 @@ storeTagName = \case
     TagCodeArtifact -> "codeArtifact"
     TagVerdaccio -> "verdaccio"
 
+-- | A key's path under an endpoint's tag, as refusals name it: @mirrorTarget.codeArtifact.uploadUrl@.
+taggedKeyPath :: Text -> StoreTag -> Text -> Text
+taggedKeyPath endpoint tag key = endpoint <> "." <> storeTagName tag <> "." <> key
+
 -- | An endpoint as a mount declares it: the tag naming its store, and the URL under that tag.
 data Target = Target
     { tgtTag :: StoreTag
@@ -181,9 +184,9 @@ data MirrorEndpoint = MirrorEndpoint
     { meUrl :: RegistryUrl
     , meWrite :: MirrorWrite
     , meUploadUrl :: Maybe RegistryUrl
-    -- ^ Explicit native upload endpoint when it differs from the read root.
+    -- ^ Where uploads go. The load requires it on a protocol with a separate upload endpoint and refuses it elsewhere.
     , meUsername :: Maybe Text
-    -- ^ Static Basic username. A managed backend supplies its own convention.
+    -- ^ The configured Basic username. A store that declares its write mechanism never sends it.
     }
     deriving stock (Eq, Show)
 
@@ -208,7 +211,7 @@ meTarget endpoint = Target (writeTag (meWrite endpoint)) (meUrl endpoint)
 data PublicationEndpoint = PublicationEndpoint
     { peTarget :: Target
     , peUploadUrl :: Maybe RegistryUrl
-    -- ^ Approved API base, separate from the read/index root.
+    -- ^ Where uploads go. The load requires it on a protocol with a separate upload endpoint and refuses it elsewhere.
     , peToken :: Maybe Secret
     , peUsername :: Maybe Text
     -- ^ Username paired with the configured publication token.
@@ -267,18 +270,6 @@ sbControl = \case
     BackendRegistry{} -> ControlNone
     BackendCodeArtifact _ store -> ControlCodeArtifact store
     BackendVerdaccio token consent -> ControlProtocol token consent
-
--- | The namespaces a mount's deployment owns, in its registry's naming shape. Every consumer of the privilege derives from this value.
-data FirstParty
-    = -- | The npm scopes the deployment owns, at least one.
-      FirstPartyNpmScopes (NonEmpty Scope)
-    | -- | The PyPI distributions and name prefixes the deployment owns, at least one.
-      FirstPartyPyPI (NonEmpty PyPIFirstParty)
-    | -- | The Cargo names and separator-delimited prefixes the deployment owns.
-      FirstPartyCargo (NonEmpty CargoFirstParty)
-    | -- | The exact RubyGems names and separator-delimited prefixes the deployment owns.
-      FirstPartyRubyGems (NonEmpty RubyGemsFirstParty)
-    deriving stock (Eq, Show)
 
 -- | A mount's refinements of the global @integrity@ group, under its own @integrity@ key. Each is 'Nothing' at the global setting.
 newtype MountIntegrity = MountIntegrity
@@ -554,7 +545,7 @@ data Config = Config
 data ConfigError
     = ParseError Text
     | PolicyErrors [PolicyError]
-    | -- | Shared rule errors that include suppression of the shipped npm mount default.
+    | -- | Shared rule errors that include suppression of a shipped npm mount default.
       SharedPolicyErrors [PolicyError]
     | -- | A mount is active but @server.publicUrl@ is unset. Deriving it from a spoofable @Host@ header would poison the shared cache.
       PublicUrlRequired
@@ -570,6 +561,8 @@ data ConfigError
       format, whose per-format endpoints are separate stores. Carries its key, then the format token.
       -}
       CodeArtifactRepositoryMissing Ecosystem Text Text
+    | -- | A write target sets @uploadUrl@, but the protocol derives its write address from @url@. Carries its key.
+      UploadUrlRefused Ecosystem Text
     deriving stock (Eq, Show)
 
 -- | Render a load refusal, including the mount remedy for a misplaced shared suppression.
@@ -605,13 +598,25 @@ renderConfigError (CodeArtifactRepositoryMissing eco path format) =
         <> " is not a CodeArtifact repository endpoint for this mount: its path must be /"
         <> format
         <> "/{repository}/"
+renderConfigError (UploadUrlRefused eco path) =
+    keyRef eco path
+        <> " is set, but "
+        <> ecosystemName eco
+        <> " derives its write address from url: remove uploadUrl and keep the registry address in url"
+
+-- | The rule names @config/default.yaml@ ships under mount rules, with the mounts that ship each. The shared layer defines none.
+shippedMountRules :: [(Text, NonEmpty Ecosystem)]
+shippedMountRules = [("deny-scripts", Npm :| []), ("deny-external-dependencies", Npm :| [Cargo])]
 
 renderSharedPolicyError :: PolicyError -> Text
-renderSharedPolicyError err@(SuppressUnknownRule "deny-scripts") =
-    renderPolicyError err
-        <> ". Disable the shipped npm default with enabled: false under "
-        <> keyRef Npm "rules"
-        <> " instead."
+renderSharedPolicyError err@(SuppressUnknownRule name)
+    | Just (_, mounts) <- find ((== name) . fst) shippedMountRules =
+        renderPolicyError err
+            <> ". Disable the shipped "
+            <> T.intercalate " or " (map ecosystemName (toList mounts))
+            <> " default with enabled: false under "
+            <> T.intercalate " or " (map (`keyRef` "rules") (toList mounts))
+            <> " instead."
 renderSharedPolicyError err = renderPolicyError err
 
 -- A mount-scoped key in both spellings, the form every refusal above names it in.

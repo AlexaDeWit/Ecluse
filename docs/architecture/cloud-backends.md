@@ -332,13 +332,29 @@ upstream is anonymous
 tag the mirror target declares picks the mint, see
 [Outbound registry credentials](configuration.md#outbound-registry-credentials).
 
-The backend binds the secret to its protocol convention. npm renders Bearer credentials. PyPI
-retains an explicit Basic username, with `aws` supplied by the CodeArtifact backend and generic
-usernames supplied by configuration. The codec invents no username.
-Cargo renders the secret directly in `Authorization`, without a Bearer prefix or Basic username.
-RubyGems separates Basic read credentials from raw publication API keys and optional typed OTP.
-A declared CodeArtifact service role supplies Basic username `aws` for reads and Bearer for writes.
-Caller credentials retain their native presentation. Hostname guessing cannot select a service credential scheme.
+Operators store a bare secret on every ecosystem, and the declared backend decides how it travels.
+Each ecosystem's credential mapping renders the protocol's own scheme. A store can instead declare
+an abstract mechanism for each ecosystem and for each read or write: Bearer, Basic over a username,
+or the raw key. The ecosystem's codec renders the declared mechanism on the mirror worker's target
+reads and writes, on a static publication token, and on the Dredger's store reads. CodeArtifact
+declares one row per ecosystem, following AWS's client configuration for each format. Registry and
+Verdaccio stores declare nothing, so the protocol's own scheme applies to them.
+
+| Ecosystem | Protocol's own scheme | CodeArtifact reads | CodeArtifact writes |
+|---|---|---|---|
+| npm | Bearer | Bearer | Bearer |
+| PyPI | Basic with an explicit username | Basic | Basic |
+| Cargo | The raw secret in `Authorization` | The raw secret | The raw secret |
+| RubyGems | Basic reads, the raw publication API key and an optional typed OTP | Basic | Bearer |
+
+The codec invents no username. Configuration supplies a generic store's username, and the
+CodeArtifact table carries `aws` in every Basic row. Configuration validation reads the same value,
+so a CodeArtifact target refuses any other username. Only the protocol's own scheme sends a
+configured username, so boot requires one only for a write that keeps that scheme. The PyPI upload
+applies the same rule, and boot never asks for a username the upload would not send. A new
+ecosystem adds one row to the CodeArtifact table, and composition names no ecosystem. Caller
+credentials keep their native presentation. Hostname guessing cannot select a service credential
+scheme.
 
 Each credential provider serialises its mints and keeps its own breaker. During healthy minting,
 expired callers wait for the current mint. After cooldown, one mint owns recovery. Other expired

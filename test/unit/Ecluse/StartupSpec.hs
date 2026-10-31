@@ -20,5 +20,5 @@ spec :: Spec
 spec =
     describe "runWith" $
         it "binds every mount through the caller's adapter resolver" $
-            withEnvVars (map fst publicGateEnv) publicGateEnv (captureBoot (runWith (\_ _ _ _ -> Nothing) (RunService ServeAndMirror)))
+            withEnvVars (map fst publicGateEnv) publicGateEnv (captureBoot (runWith (\_ _ _ -> Nothing) (RunService ServeAndMirror)))
                 `shouldReturn` (Left (ExitFailure 2), [renderBootError (MissingAdapter Npm)])

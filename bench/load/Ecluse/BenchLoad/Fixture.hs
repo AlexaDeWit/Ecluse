@@ -7,6 +7,7 @@ module Ecluse.BenchLoad.Fixture (
     withProxyOverStubs,
     withProxyConfigured,
     withProxyPortsConfigured,
+    withLoopbackStub,
     httpTarget,
     longCacheTtl,
     artifactBytes,
@@ -23,7 +24,7 @@ module Ecluse.BenchLoad.Fixture (
     rewriteLines,
     swapChecksumPreservingWidth,
     preflightDistinct,
-    probeBaseline,
+    probeLiveFetch,
 ) where
 
 import Control.Concurrent (threadDelay)
@@ -33,23 +34,28 @@ import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as LBS
 import Data.List qualified as List
 import Data.Map.Strict qualified as Map
+import Data.Streaming.Network (bindPortTCP, bindRandomPortTCP)
 import Data.Text qualified as T
 import Data.Time (UTCTime (UTCTime), fromGregorian)
+import GHC.IO.Exception (IOErrorType (UnsupportedOperation))
 import Network.HTTP.Client (defaultManagerSettings, newManager)
 import Network.HTTP.Client qualified as HTTP
 import Network.HTTP.Types (Header, Status, status200, status304, status404)
 import Network.HTTP.Types.Header (hETag, hIfNoneMatch)
+import Network.Socket (Socket, close, setCloseOnExecIfNeeded, withFdSocket)
 import Network.Wai (Application, responseLBS)
-import Network.Wai.Handler.Warp (testWithApplication)
-import UnliftIO (evaluate)
+import Network.Wai.Handler.Warp (Port, defaultSettings, defaultShouldDisplayException, runSettingsSocket)
+import System.IO.Error (ioeGetErrorType, isAlreadyInUseError)
+import UnliftIO (bracket, catch, evaluate, onException, throwIO, tryIO)
+import UnliftIO.Async (link, mapConcurrently_, withAsync)
+import UnliftIO.Concurrent (myThreadId, throwTo)
 
 import Ecluse.BenchLoad.CapturedArtifact (SelectedArtifact)
-import Ecluse.BenchLoad.Cargo.CopyState (withCopyState)
 import Ecluse.BenchLoad.Error (benchFail)
 import Ecluse.BenchLoad.Harness (Driver (DriveHttp), LoadKnobs (..), Target, proxied, urlLoad)
-import Ecluse.BenchLoad.Normalise (BaselineSource (InjectedFallback, MeasuredRtt))
-import Ecluse.BenchLoad.ProxyProcess (AdvisoryFeed (afObject), ProxyProcess, ProxySettings (..), mirrorStateBucket, proxyPort, proxySettings, withProxyProcess)
-import Ecluse.Core.Ecosystem (Ecosystem (Cargo, Npm, PyPI, RubyGems), ecosystemName)
+import Ecluse.BenchLoad.Normalise (LiveFetch (LiveFetch, NoLiveFetch))
+import Ecluse.BenchLoad.ProxyProcess (ProxyProcess, ProxySettings (..), proxyPort, proxySettings, withProxyProcess)
+import Ecluse.Core.Ecosystem (Ecosystem, ecosystemName)
 import Ecluse.Core.Package (PackageName, pkgEcosystem)
 import Ecluse.Test.Corpus (CorpusPackage (cpPackage, cpPath), cpName)
 import Ecluse.Test.Corpus qualified as Corpus
@@ -65,22 +71,15 @@ withProxyOverStubs ecosystem knobs ttl entries =
 withProxyConfigured :: Ecosystem -> LoadKnobs -> (Int -> IO (ProxySettings -> ProxySettings)) -> Application -> Application -> (Int -> [Text]) -> (ProxyProcess -> [Text] -> IO a) -> IO a
 withProxyConfigured ecosystem knobs configure = withProxyPortsConfigured ecosystem knobs (const configure)
 
--- | Configure a measured proxy after both registry ports are available.
+-- | Configure a measured proxy from the private and the public registry port, in that order, before it boots.
 withProxyPortsConfigured :: Ecosystem -> LoadKnobs -> (Int -> Int -> IO (ProxySettings -> ProxySettings)) -> Application -> Application -> (Int -> [Text]) -> (ProxyProcess -> [Text] -> IO a) -> IO a
 withProxyPortsConfigured ecosystem knobs configure privateApp publicApp mkMix body =
-    testWithApplication (pure privateApp) $ \privatePort ->
-        testWithApplication (pure publicApp) $ \publicPort -> do
+    withLoopbackStub privateApp $ \privatePort ->
+        withLoopbackStub publicApp $ \publicPort -> do
             adjust <- configure privatePort publicPort
-            let settings = adjust knobSettings
-            withNativeState (afObject <$> psAdvisories settings) privatePort publicPort $ \nativeState ->
-                withProxyProcess settings{psMirrorStatePort = psMirrorStatePort settings <|> nativeState} publicPort (Just privatePort) $ \proxy ->
-                    body proxy (mkMix (proxyPort proxy))
+            withProxyProcess (adjust knobSettings) publicPort (Just privatePort) $ \proxy ->
+                body proxy (mkMix (proxyPort proxy))
   where
-    withNativeState advisory privatePort publicPort use = case ecosystem of
-        Npm -> use Nothing
-        PyPI -> use Nothing
-        Cargo -> withCopyState (lkUpstreamLatencyMicros knobs) privatePort publicPort mirrorStateBucket advisory (use . Just)
-        RubyGems -> use Nothing
     knobSettings =
         (proxySettings ecosystem 60)
             { psServeMaxInFlight = lkServeMaxInFlight knobs
@@ -89,6 +88,33 @@ withProxyPortsConfigured ecosystem knobs configure privateApp publicApp mkMix bo
             , psAdvisories = lkAdvisories knobs
             , psTuning = lkProxyTuning knobs
             }
+
+{- | Serve a stub on one free port at 127.0.0.1 and, when the host has an IPv6 loopback, at ::1, since http-client
+dials the second address of a name such as @localhost@ 250 ms after the first. Application exceptions reach the caller.
+-}
+withLoopbackStub :: Application -> (Port -> IO a) -> IO a
+withLoopbackStub app use = do
+    caller <- myThreadId
+    let reported request respond =
+            app request respond `catch` \(failure :: SomeException) -> do
+                when (defaultShouldDisplayException failure) (throwTo caller failure)
+                throwIO failure
+    bracket loopbackListeners (traverse_ close . snd) $ \(port, listeners) -> do
+        -- The measured proxy is a child process, so it must not inherit a listener.
+        traverse_ (`withFdSocket` setCloseOnExecIfNeeded) listeners
+        withAsync (mapConcurrently_ (\listener -> runSettingsSocket defaultSettings listener reported) listeners) $ \server ->
+            link server >> use port
+
+-- One free port at 127.0.0.1, bound at ::1 as well unless the host has no IPv6 loopback.
+loopbackListeners :: IO (Port, [Socket])
+loopbackListeners = do
+    (port, ipv4) <- bindRandomPortTCP "127.0.0.1"
+    (tryIO (bindPortTCP port "::1") `onException` close ipv4) >>= \case
+        Right ipv6 -> pure (port, [ipv4, ipv6])
+        Left err
+            | ioeGetErrorType err == UnsupportedOperation -> pure (port, [ipv4])
+            | isAlreadyInUseError err -> close ipv4 >> loopbackListeners
+            | otherwise -> close ipv4 >> throwIO err
 
 -- | The target for a duration-driven load over the URL mix.
 httpTarget :: (Target -> IO a) -> ProxyProcess -> [Text] -> IO a
@@ -199,18 +225,16 @@ swapChecksumPreservingWidth label before after line = do
 preflightDistinct :: (Text -> IO ()) -> [Text] -> IO a -> IO a
 preflightDistinct check urls body = traverse_ check (ordNub urls) >> body
 
--- | Warm one native connection, then measure successful fetches or declare the configured fallback.
-probeBaseline :: Double -> Bool -> [Text] -> (Text -> IO (Maybe Double)) -> IO BaselineSource
-probeBaseline configured enabled names fetch =
+-- | Warm one native connection, then time each successful fetch. 'NoLiveFetch' when the probe is off or none succeeded.
+probeLiveFetch :: Bool -> [Text] -> (Text -> IO (Maybe Double)) -> IO LiveFetch
+probeLiveFetch enabled names fetch =
     case (enabled, names) of
         (True, warm : _) ->
             fetch warm >>= \case
-                Nothing -> pure fallback
+                Nothing -> pure NoLiveFetch
                 Just _ -> do
                     samples <- catMaybes <$> traverse fetch names
                     pure $ case nonEmpty samples of
-                        Nothing -> fallback
-                        Just values -> MeasuredRtt (fromIntegral (round (sum values / fromIntegral (length values)) :: Int)) (length values)
-        _ -> pure fallback
-  where
-    fallback = InjectedFallback configured
+                        Nothing -> NoLiveFetch
+                        Just values -> LiveFetch (fromIntegral (round (sum values / fromIntegral (length values)) :: Int)) (length values)
+        _ -> pure NoLiveFetch

@@ -4,7 +4,7 @@
 
 -- | Pure role-specific store vetting. Only a successful pass constructs a cleared backend.
 module Ecluse.Composition.Maintenance.Plan (
-    ClearedBackend (cbUrl, cbAlphabet, cbFetchManifest, cbArtifact, cbUsername, cbControl),
+    ClearedBackend (cbUrl, cbAlphabet, cbFetchManifest, cbUsername, cbControl),
     ClearedControl (..),
     ClearedProtocolStore (..),
     ResolveMaintenanceAdapter,
@@ -36,17 +36,16 @@ import Ecluse.Config (
     regMirrorTarget,
     sbControl,
     sbTag,
-    storeTagName,
+    taggedKeyPath,
  )
 import Ecluse.Config.Resolve (mountKeyRef)
-import Ecluse.Config.Target (resolvePrivateBackend)
+import Ecluse.Config.Target (resolvePrivateBackend, storePresentation)
 import Ecluse.Core.Credential (Secret)
 import Ecluse.Core.Ecosystem (Ecosystem)
 import Ecluse.Core.Fault (TransportCause (TransportProtocol), transportFault)
 import Ecluse.Core.Registry (FetchFault (FetchTransport))
-import Ecluse.Core.Registry.Adapter (RegistryAdapter, adapterArtifact, adapterMaintenance, adapterMetadata, adapterPublish)
+import Ecluse.Core.Registry.Adapter (RegistryAdapter, adapterMaintenance, adapterMetadata, adapterPublish)
 import Ecluse.Core.Registry.Adapter.Capability (
-    AdapterArtifact,
     AdapterMaintenance (maintenanceAlphabet, maintenanceListing, maintenanceVersionDelete),
     AdapterMetadata (metadataRead),
     AdapterPublish (publishCodec),
@@ -55,9 +54,10 @@ import Ecluse.Core.Registry.Adapter.Capability (
  )
 import Ecluse.Core.Registry.Maintenance.NameSpace (NameAlphabet, noNameAlphabet)
 import Ecluse.Core.Registry.Metadata (MetadataError (MetadataFetch))
-import Ecluse.Core.Registry.Metadata.Fetch.Preparation (prepareManifest)
+import Ecluse.Core.Registry.Metadata.Fetch.Preparation (PrepareRead, prepareManifest)
 import Ecluse.Core.Registry.Metadata.Fetch.Types (ManifestFetch)
-import Ecluse.Core.Registry.Publish (PublishCodec)
+import Ecluse.Core.Registry.Publish (PublishCodec (pcTargetRead))
+import Ecluse.Core.Registry.Request (ServicePresentation)
 import Ecluse.Core.Security.Egress (RegistryUrl)
 import Ecluse.Runtime.Maintenance.CodeArtifact.Decide (CodeArtifactStore)
 
@@ -67,10 +67,8 @@ data ClearedBackend = ClearedBackend
     -- ^ Where the store answers, which is both what a sweep reads and what it deletes from.
     , cbAlphabet :: NameAlphabet
     -- ^ The characters a full walk partitions this store's names by.
-    , cbArtifact :: Maybe AdapterArtifact
-    -- ^ The native artifact request builder for the exact authenticated target.
     , cbFetchManifest :: ManifestFetch
-    -- ^ The ecosystem's metadata read, directed at this store.
+    -- ^ The ecosystem's metadata read, directed at this store and presenting its declared credential mechanism.
     , cbUsername :: Maybe Text
     -- ^ The target's resolved credential username, paired with each refreshed secret.
     , cbControl :: ClearedControl
@@ -142,19 +140,20 @@ vetPrivateCaches resolveAdapter configured mounts = withRole $ \case
     resolve role eco endpoint = case tgtTag target of
         TagCodeArtifact -> do
             (backend, store) <- first (PrivateCacheUnavailable . show) (resolvePrivateBackend eco target)
-            pure (Just backend, clearedBackend (tgtUrl target) (Just "aws") adapter (ClearedCodeArtifactCache store))
+            pure (Just backend, clearedBackend (tgtUrl target) Nothing adapter presentation (ClearedCodeArtifactCache store))
         TagRegistry -> Left (PrivateCacheUnavailable "registry has no inventory control plane")
         TagVerdaccio -> do
             when (refusesWithoutConsent role && preConsent endpoint == DeletionWithheld) $
                 Left (PrivateCacheUnavailable (descriptor <> " is not set"))
             when (role == MirrorPruner && isNothing (preToken endpoint)) $
-                Left (PrivateCacheUnavailable (mountKeyRef eco "privateUpstream.verdaccio.token" <> " is not set"))
-            store <- protocolStoreFor adapter TagVerdaccio (preToken endpoint) (preConsent endpoint) descriptor
-            pure (fmap (`BackendVerdaccio` preConsent endpoint) (preToken endpoint), clearedBackend (tgtUrl target) Nothing adapter (ClearedProtocol store))
+                Left (PrivateCacheUnavailable (mountKeyRef eco (taggedKeyPath "privateUpstream" TagVerdaccio "token") <> " is not set"))
+            store <- protocolStoreFor adapter presentation TagVerdaccio (preToken endpoint) (preConsent endpoint) descriptor
+            pure (fmap (`BackendVerdaccio` preConsent endpoint) (preToken endpoint), clearedBackend (tgtUrl target) Nothing adapter presentation (ClearedProtocol store))
       where
         target = preTarget endpoint
+        presentation = storePresentation (tgtTag target) eco
         adapter = resolveAdapter eco
-        descriptor = mountKeyRef eco "privateUpstream.verdaccio.permitDeletion"
+        descriptor = mountKeyRef eco (taggedKeyPath "privateUpstream" TagVerdaccio "permitDeletion")
 
 -- A resolved entry that failed, named by the ecosystem that declared it.
 unmaintainedOf :: (Ecosystem, Either reason a) -> Maybe (Ecosystem, reason)
@@ -173,29 +172,33 @@ refusesWithoutConsent = \case
 
 -- The store a resolved backend lets the Dredger reach, or why this build reaches none.
 sweepableStore :: RegistryRole -> Maybe RegistryAdapter -> Ecosystem -> MirrorTarget -> Either StoreMaintenanceReason ClearedBackend
-sweepableStore role mAdapter eco target = clearedBackend (mtUrl target) (mtUsername target) mAdapter <$> control
+sweepableStore role mAdapter eco target = clearedBackend (mtUrl target) (mtUsername target) mAdapter presentation <$> control
   where
     backend = mtBackend target
+    presentation = storePresentation (sbTag backend) eco
     control = case sbControl backend of
         ControlCodeArtifact store -> Right (ClearedCodeArtifact store)
         ControlNone -> Left (NoControlPlane (sbTag backend))
         ControlProtocol token consent -> do
             when (consent == DeletionWithheld && refusesWithoutConsent role) (Left (DeletionNotPermitted (sbTag backend)))
-            ClearedProtocol <$> protocolStoreFor mAdapter (sbTag backend) (Just token) consent (consentDescriptor eco (sbTag backend))
+            ClearedProtocol <$> protocolStoreFor mAdapter presentation (sbTag backend) (Just token) consent (consentDescriptor eco (sbTag backend))
 
-clearedBackend :: RegistryUrl -> Maybe Text -> Maybe RegistryAdapter -> ClearedControl -> ClearedBackend
-clearedBackend url username adapter control =
+clearedBackend :: RegistryUrl -> Maybe Text -> Maybe RegistryAdapter -> ServicePresentation -> ClearedControl -> ClearedBackend
+clearedBackend url username adapter presentation control =
     ClearedBackend
         { cbUrl = url
         , cbAlphabet = maybe noNameAlphabet (maintenanceAlphabet . adapterMaintenance) adapter
-        , cbArtifact = adapterArtifact <$> adapter
-        , cbFetchManifest = maybe absentManifestRead (prepareManifest . metadataRead . adapterMetadata) adapter
+        , cbFetchManifest = maybe absentManifestRead (prepareManifest . storeRead presentation) adapter
         , cbUsername = username
         , cbControl = control
         }
 
-protocolStoreFor :: Maybe RegistryAdapter -> StoreTag -> Maybe Secret -> DeletionConsent -> Text -> Either StoreMaintenanceReason ClearedProtocolStore
-protocolStoreFor mAdapter tag token consent descriptor = do
+-- The adapter's metadata read, presenting the store's credential as the store declares. An adapter with no publish codec reads natively.
+storeRead :: ServicePresentation -> RegistryAdapter -> PrepareRead
+storeRead presentation adapter = maybe (metadataRead (adapterMetadata adapter)) (\publish -> pcTargetRead (publishCodec publish presentation)) (adapterPublish adapter)
+
+protocolStoreFor :: Maybe RegistryAdapter -> ServicePresentation -> StoreTag -> Maybe Secret -> DeletionConsent -> Text -> Either StoreMaintenanceReason ClearedProtocolStore
+protocolStoreFor mAdapter presentation tag token consent descriptor = do
     adapter <- maybeToRight NoProtocolMaintenance mAdapter
     listing <- maybeToRight NoProtocolMaintenance (maintenanceListing (adapterMaintenance adapter))
     delete <- maybeToRight NoProtocolMaintenance (maintenanceVersionDelete (adapterMaintenance adapter))
@@ -208,7 +211,7 @@ protocolStoreFor mAdapter tag token consent descriptor = do
             , cpsConsentKey = descriptor
             , cpsListing = listing
             , cpsDelete = delete
-            , cpsCodec = publishCodec publish
+            , cpsCodec = publishCodec publish presentation
             }
 
 -- The read a store cleared without an adapter would make, which no boot reaches.
@@ -223,7 +226,7 @@ absentAdapterDetail = "this build serves the mount's ecosystem no metadata read"
 consentDescriptor :: Ecosystem -> StoreTag -> Text
 consentDescriptor eco tag =
     "set "
-        <> mountKeyRef eco ("mirrorTarget." <> storeTagName tag <> ".permitDeletion")
+        <> mountKeyRef eco (taggedKeyPath "mirrorTarget" tag "permitDeletion")
         <> " to true: the Dredger deletes nothing from a store that does not carry it"
 
 -- | Match capacity declarations without case or trailing-slash differences.

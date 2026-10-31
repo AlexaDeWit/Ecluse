@@ -6,17 +6,19 @@
 module Main (main) where
 
 import Control.Exception qualified as Exception
+import Data.Text qualified as T
 import Data.Text.Encoding qualified as TE
 import Data.Text.Encoding.Error qualified as TEE
 import System.FilePath (takeFileName, (</>))
 
-import Ecluse.BenchLoad.Floors (loadFloors)
+import Ecluse.BenchLoad.Floors (decodeFloors, loadFloors, renderFloorsFile)
 import Ecluse.BenchLoad.Sweep (loadSweep, sweepJob)
 import Ecluse.BenchReport (ReportInput (ReportInput, riConsoleLog, riCsv), parseCsv, renderReport)
 import Ecluse.BenchReport.AgainstMain (Baseline (Baseline, NoBaseline), Missing (FileMissing), parseOrigin)
 import Ecluse.BenchReport.AgainstMain.Acceptance qualified as Acceptance
 import Ecluse.BenchReport.AgainstMain.Bench qualified as Bench
 import Ecluse.BenchReport.AgainstMain.Load qualified as Load
+import Ecluse.BenchReport.Calibration (calibrate, readRunsDirectory, renderCalibration)
 import Ecluse.BenchReport.PerformanceCommand qualified as Performance
 import Ecluse.BenchReport.PerformanceReceipt qualified as Receipt
 import Ecluse.BenchReport.Sweep qualified as Sweep
@@ -38,6 +40,8 @@ main =
         ["against-main", kind, baselineDir, reportPath]
             | Just compareWith <- comparison kind -> againstMain compareWith baselineDir reportPath
         "sweep" : name : job : directory : reportPaths -> againstAnchors (toText name) (toText job) directory reportPaths
+        ["floors", floorsFile, runsDir] -> writeFloors floorsFile runsDir Nothing
+        ["floors", floorsFile, runsDir, scenarios] -> writeFloors floorsFile runsDir (Just (filter (not . T.null) (map T.strip (T.splitOn "," (toText scenarios)))))
         _ ->
             die . toString . unlines $
                 [ "usage: bench-report <results.csv> [<console-log>]"
@@ -48,6 +52,7 @@ main =
                 , "       bench-report performance-audit <request.json> <receipt.json>"
                 , "       bench-report against-main (bench | acceptance | load) <baseline-dir> <report>"
                 , "       bench-report sweep <sweep> <job> <job-dir> <report> ..."
+                , "       bench-report floors <floors.json> <runs-dir> [<scenario>,...]"
                 ]
 
 run :: FilePath -> Maybe FilePath -> IO ()
@@ -96,6 +101,15 @@ againstAnchors name job directory reportPaths = do
     let compared = Sweep.compareJob (toText <$> (source <|> sha)) (Sweep.referenceFloors floors) sweep chosen reports
     Sweep.writeComparison directory compared
     publish (Sweep.renderComparison compared)
+
+-- Set each selected cell of the floors file from the three runs under the directory, and print what changed.
+writeFloors :: FilePath -> FilePath -> Maybe [Text] -> IO ()
+writeFloors floorsFile runsDir selection = do
+    floors <- either (die . toString) pure . decodeFloors =<< readFileLBS floorsFile
+    runs <- either (die . toString . unlines) pure =<< readRunsDirectory runsDir
+    updated <- either (die . toString . unlines) pure (calibrate floors runs selection)
+    writeFileText floorsFile (renderFloorsFile updated)
+    publish (renderCalibration floors updated)
 
 -- Lenient UTF-8, and a described failure instead of a throw, so an unreadable file becomes a note in the output.
 readTextFile :: FilePath -> IO (Either Text Text)

@@ -15,6 +15,7 @@ module Ecluse.Core.Registry.Cargo.Publish.Body (
 ) where
 
 import Data.Aeson (Value, encode, withObject, (.:), (.:?))
+import Data.Aeson.Key qualified as Key
 import Data.Aeson.Types (Parser, parseEither)
 import Data.Bits (shiftL, (.|.))
 import Data.ByteString qualified as BS
@@ -22,10 +23,11 @@ import Data.ByteString.Builder (byteString, lazyByteString, toLazyByteString, wo
 import Data.ByteString.Lazy qualified as LBS
 
 import Ecluse.Core.Registry (ParseError (..), parseRefusal)
-import Ecluse.Core.Registry.Cargo.Manifest (parseRustRelease)
+import Ecluse.Core.Registry.Cargo.Manifest (parseRustRelease, unstableDependencyFields, usesUnstableDependencyField)
 import Ecluse.Core.Registry.Cargo.Project (projectName)
 import Ecluse.Core.Registry.Cargo.Wire (cargoTreeCharge, decodeCargoRecord)
 import Ecluse.Core.Security.Limits (Limits (..))
+import Ecluse.Core.Text (joinAlternatives)
 import Ecluse.Core.Version.Cargo (parseCargo)
 
 -- | The decoded claims and archive remain paired with one fully consumed native body.
@@ -112,7 +114,9 @@ metadataIdentity = withObject "Cargo upload metadata" $ \fields -> do
 
 uploadDependency :: Value -> Parser ()
 uploadDependency = withObject "Cargo upload dependency" $ \fields -> do
-    fields .: "name" >>= nativeName
+    name <- fields .: "name"
+    nativeName name
+    when (usesUnstableDependencyField fields) (fail ("Cargo upload dependency '" <> toString name <> "' carries an unstable " <> toString unstableFieldNames <> " field"))
     void (fields .: "version_req" :: Parser Text)
     void (fields .: "features" :: Parser [Text])
     for_ ["optional", "default_features"] $ \key ->
@@ -124,6 +128,10 @@ uploadDependency = withObject "Cargo upload dependency" $ \fields -> do
     kind <- fields .:? "kind"
     for_ kind $ \value ->
         unless (value `elem` ["normal", "dev", "build" :: Text]) (fail "Cargo upload dependency kind is invalid")
+
+-- The shared field list as the refusal names it: "artifact, bindep_target, lib or public".
+unstableFieldNames :: Text
+unstableFieldNames = joinAlternatives (map Key.toText unstableDependencyFields)
 
 nativeName :: Text -> Parser ()
 nativeName = either (const (fail "Cargo upload name is invalid")) (const (pure ())) . projectName

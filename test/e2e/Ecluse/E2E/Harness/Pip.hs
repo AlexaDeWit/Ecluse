@@ -142,7 +142,9 @@ advertisedDigests field e2e project = do
     pure (digestedFiles field body)
 
 -- A refusal reaches the wire as a bare status, so its reason exists only in the proxy's own
--- JSONL. "no versions are available" means the index never resolved. A rule name means a denial.
+-- JSONL. An index that never resolved leaves the failed metadata read there, naming the upstream
+-- and its status or transport cause. A denial leaves "denied" lines naming the rule, at debug
+-- level only.
 indexRefusal :: Text -> Int -> Text -> Text
 indexRefusal project status logs =
     "the pypi mount answered "

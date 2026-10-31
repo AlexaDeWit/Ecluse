@@ -612,7 +612,6 @@ verdictsFor eco name advisories versions = map decide rules
     decide rule = case verdictSource rule of
         FromAdvisories _ verdict -> map (normaliseVerdictIds . verdict advisories) evidence
         FromEvidence verdict -> map (normaliseVerdictIds . verdict context) evidence
-        FromInstallEvidence verdict -> map (normaliseVerdictIds . verdict context) evidence
 
 corpusRecords :: Ecosystem -> IO [OsvAdvisory]
 corpusRecords eco = do

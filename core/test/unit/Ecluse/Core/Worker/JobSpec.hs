@@ -23,11 +23,10 @@ import Ecluse.Core.Osv.Types (UpperBound (LastAffected))
 import Ecluse.Core.Package (
     Artifact (artCoreMetadata, artFilename, artHashes),
     Availability (Deprecated, Yanked),
-    CodeExecSignal (CodeExecUnknown),
     CoreMetadata (MetadataDigests),
     Hash,
     HashAlg (Blake2b, SHA1, SHA256, SHA512, SRI),
-    PackageDetails (pkgArtifacts, pkgAvailability, pkgInstallCode, pkgPublishedAt),
+    PackageDetails (pkgArtifacts, pkgAvailability, pkgPublishedAt),
     PackageInfo (..),
     PackageName,
  )
@@ -53,10 +52,10 @@ import Ecluse.Core.Registry.Publish (
     MirrorPublish (mpProbeInventory),
     PublishPlan (ppLatest),
  )
+import Ecluse.Core.Registry.PyPI.Mirror (pypiStateFormat)
+import Ecluse.Core.Registry.Request (nativePresentation)
 import Ecluse.Core.Rules (prepare)
-import Ecluse.Core.Rules.Effectful (ReadFault (ReadFault))
-import Ecluse.Core.Rules.Install
-import Ecluse.Core.Rules.Types (Decision (Undecidable), DenyIfCveParams (DenyIfCveParams), FailureAlignment (FailDeny, FailNoDecision), Inability (EvaluationFailed, InstallSignalUnread, NoDatabaseLoaded, RuleThrew), Reason (RuleUnable), Rule (AllowIfOlderThan, DenyIfCve, DenyIfDeprecated, DenyIfKnownMalicious, DenyIfYanked, DenyInstallTimeExecution), Transience (WillResolve, WontResolve), ruleName)
+import Ecluse.Core.Rules.Types (Decision (Undecidable), DenyIfCveParams (DenyIfCveParams), FailureAlignment (FailDeny, FailNoDecision), Inability (NoDatabaseLoaded, RuleThrew), Reason (RuleUnable), Rule (AllowIfOlderThan, DenyIfCve, DenyIfDeprecated, DenyIfKnownMalicious, DenyIfYanked), Transience (WillResolve, WontResolve), ruleName)
 import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit, MirrorArtifactBodyLimit), LimitError (BodyTooLarge), defaultLimits, hostPortAddress)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Core.Version (Version, renderVersion)
@@ -64,7 +63,7 @@ import Ecluse.Core.Worker (
     JobOutcome (DeadLettered, Dropped, Retried, Succeeded),
     RetryLeg (AfterPublish, BeforePublish),
     WorkerPolicies,
-    WorkerPolicy (wpArtifact, wpArtifactHostHonoured, wpFirstParty, wpInstallEvidence, wpMirrorState, wpNow, wpPublish, wpRules),
+    WorkerPolicy (wpArtifact, wpArtifactHostHonoured, wpFirstParty, wpMirrorState, wpNow, wpPublish, wpRules),
     processJob,
  )
 import Ecluse.Core.Worker.Job (mirrorLatest, outcomeOfAdmission, outcomeOfFetchFault)
@@ -81,7 +80,7 @@ import Ecluse.Test.Registry.Npm (sourceVersionDoc)
 import Ecluse.Test.Registry.Publish (anonymousPublishAt)
 import Ecluse.Test.Rules (admissionOnly, admitRule, atDefaultPrecedence, cannotVetRule, constRule, denyRule, inertRuleDeps, servingRuleDeps)
 import Ecluse.Test.Snapshot (versionDocOf)
-import Ecluse.Test.Stub (allCaptured, capMethod, capPath, stubBaseUrl, stubLocalhostUrl, withRoutedStub, withStub)
+import Ecluse.Test.Stub (allCaptured, capMethod, capPath, stubBaseUrl, withRoutedStub, withStub)
 import Ecluse.Test.Support (TestContractEscape (TestContractEscape), decodeJsonOrFail, expectRight)
 import Ecluse.Worker.Support
 import Ecluse.Worker.Support.Managed
@@ -290,7 +289,7 @@ spec = do
                                 if already
                                     then msWriteProject original charge name revision record
                                     else do
-                                        _ <- recordExpectedInventory defaultLimits (const (pure ())) (wmsTarget binding) original competing >>= expectRight
+                                        _ <- recordExpectedInventory pypiStateFormat defaultLimits (const (pure ())) (wmsTarget binding) original competing >>= expectRight
                                         pure (Right StateConflict)
                             }
                     policy = (mfPolicy fixture){wpMirrorState = Just binding{wmsStore = store}}
@@ -355,7 +354,7 @@ spec = do
                 added <- managedInventory url False [1, 2, 3, 4]
                 let binding = mfBinding fixture
                 writeIORef (mfOnProbe fixture) $ \number -> when (number == 2) $ do
-                    _ <- recordExpectedInventory defaultLimits (const (pure ())) (wmsTarget binding) (wmsStore binding) added >>= expectRight
+                    _ <- recordExpectedInventory pypiStateFormat defaultLimits (const (pure ())) (wmsTarget binding) (wmsStore binding) added >>= expectRight
                     writeIORef (mfSource fixture) (VersionPresent (sourceDocument added) Nothing)
                 runManaged fixture `shouldReturn` Succeeded
                 readIORef (mfUploads fixture) `shouldReturn` map mirrorFilename [1, 2, 3, 4]
@@ -367,7 +366,7 @@ spec = do
                 added <- managedInventory url False [1, 2, 3, 4]
                 let binding = mfBinding fixture
                 writeIORef (mfOnProbe fixture) $ \number -> when (number == 2) $ do
-                    _ <- recordExpectedInventory defaultLimits (const (pure ())) (wmsTarget binding) (wmsStore binding) added >>= expectRight
+                    _ <- recordExpectedInventory pypiStateFormat defaultLimits (const (pure ())) (wmsTarget binding) (wmsStore binding) added >>= expectRight
                     writeIORef (mfTarget fixture) (toList (pkgArtifacts (inventoryDetails added)))
                 runManaged fixture `shouldReturn` Succeeded
                 readIORef (mfUploads fixture) `shouldReturn` map mirrorFilename [1, 2, 3]
@@ -636,37 +635,6 @@ spec = do
                     outcome <- runWM (sourceAt url runtime) (processJob job)
                     outcome `shouldSatisfy` isDropped
     describe "processJob: ingest-time policy re-evaluation" $ do
-        for_ [(WillResolve Nothing, isRetried), (WontResolve, isDropped)] $ \(transience, expected) ->
-            it ("preserves execution-evidence refusal at worker re-admission: " <> show transience) $
-                withStub status200 (toLazy tarballBytes) $ \upstream -> do
-                    calls <- newIORef (0 :: Int)
-                    rules <- prepare inertRuleDeps [atDefaultPrecedence DenyInstallTimeExecution, atDefaultPrecedence (AllowIfOlderThan 0)]
-                    let resolver name version =
-                            presentResolver name version <&> \case
-                                VersionPresent doc latest -> VersionPresent doc{vdDetails = (vdDetails doc){pkgInstallCode = CodeExecUnknown}} latest
-                                other -> other
-                        provider = InstallEvidenceProvider $ \evidenceContext -> do
-                            ieRole evidenceContext `shouldBe` InstallWorkerReadmission
-                            pure (\_ -> pure (Just (InstallEvidenceRead (modifyIORef' calls (+ 1) $> InstallReadFailed (ReadFault transience EvaluationFailed InstallSignalUnread)))))
-                        policies = Map.map (\policy -> policy{wpInstallEvidence = Just provider}) (npmPolicies resolver rules)
-                    withRuntimePolicies policies noopWorkerMetricsPort (Right ()) $ \runtime queue logRef -> do
-                        job <- enqueueAndReceive queue sampleMirrorJob
-                        runWM (sourceAt (stubLocalhostUrl upstream) runtime) (processJob job) >>= (`shouldSatisfy` expected)
-                        readIORef calls `shouldReturn` 1
-                        plDocuments <$> readIORef logRef `shouldReturn` []
-                        allCaptured upstream `shouldReturn` []
-
-        it "does not construct public execution evidence for a first-party worker job" $ do
-            built <- newIORef (0 :: Int)
-            rules <- prepare inertRuleDeps [atDefaultPrecedence DenyInstallTimeExecution]
-            let provider = InstallEvidenceProvider (\_ -> modifyIORef' built (+ 1) $> const (pure Nothing))
-                policies = Map.map (\policy -> policy{wpInstallEvidence = Just provider, wpFirstParty = const True}) (npmPolicies presentResolver rules)
-            withRuntimePolicies policies noopWorkerMetricsPort (Right ()) $ \runtime queue logRef -> do
-                job <- enqueueAndReceive queue sampleMirrorJob
-                runWM runtime (processJob job) >>= (`shouldSatisfy` isDropped)
-                readIORef built `shouldReturn` 0
-                plDocuments <$> readIORef logRef `shouldReturn` []
-
         for_ [("an npm", Npm, sampleMirrorJob), ("a PyPI", PyPI, pypiMirrorJob)] $ \(label, eco, jobAt) ->
             it ("drops " <> label <> " job newly MAL-denied before fetching or publishing") $ do
                 let deps = servingRuleDeps (DbEtag "mal-generation") (fakeCveLookup [("thing", AdvisoryRange "MAL-worker" Nothing (Just "1.0.0") (LastAffected "1.0.0") Nothing)])
@@ -1123,7 +1091,7 @@ admissionObject = fst npmCached (object ["marker" .= ("admission-time" :: Text)]
 -- The real npm codec over the shared transport against a stub mirror target, so the codec's own
 -- refusal is the one under test rather than a recording double's.
 codecPublishAt :: Deadlines -> Text -> IO MirrorPublish
-codecPublishAt deadlines = anonymousPublishAt deadlines npmPublishCodec . loopbackRegistryUrl
+codecPublishAt deadlines = anonymousPublishAt deadlines (npmPublishCodec nativePresentation) . loopbackRegistryUrl
 
 -- A resolver whose present verdict carries the given raw object beside the sample details.
 resolverCarrying :: CachedDoc -> PackageName -> Version -> IO VersionEvaluation

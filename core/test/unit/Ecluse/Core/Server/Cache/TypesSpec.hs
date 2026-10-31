@@ -13,7 +13,7 @@ import Test.Hspec.Hedgehog (hedgehog)
 
 import Ecluse.Core.Ecosystem (Ecosystem (..))
 import Ecluse.Core.Package (PackageName, mkPackageName, mkScope)
-import Ecluse.Core.Server.Cache.Types (CacheKey, Source (Source), assembledKey, cacheKeyIdentity, cacheKeyStore, fullKey, versionKey)
+import Ecluse.Core.Server.Cache.Types (CacheKey, Source (Source), assembledKey, cacheKeyIdentity, cacheKeyStore, directoryKey, fullKey, versionKey)
 import Ecluse.Core.Telemetry.Metrics (CacheStore (..))
 import Ecluse.Core.Version (Version, mkVersion, renderVersion)
 import Ecluse.Test.Package (npmVersion, pypiVersion, scopedNpm, unscopedNpm, unscopedPyPI)
@@ -78,6 +78,12 @@ pinnedKeys =
         , assembledKey (validatorFor "fingerprint")
         , AssembledStore
         , "66:\"44863b03e9909b7100e05b02526909a346fd7455183f6619e0fe6198c89981e0\""
+        )
+    ,
+        ( "a directory key"
+        , directoryKey (Source "https://index.rubygems.org") 134217728
+        , DirectoryStore
+        , "26:https://index.rubygems.org9:134217728"
         )
     ]
 
@@ -146,6 +152,7 @@ data Subject = Subject
     , subjectName :: Text
     , subjectVersion :: Text
     , subjectFingerprint :: ByteString
+    , subjectBound :: Int
     }
     deriving stock (Eq, Show)
 
@@ -154,6 +161,7 @@ keyOf subject = case subjectStore subject of
     FullStore -> fullKey (sourceOf subject) (nameOf subject)
     VersionStore -> versionKey (sourceOf subject) (nameOf subject) (versionOf subject)
     AssembledStore -> assembledKey (validatorFor (subjectFingerprint subject))
+    DirectoryStore -> directoryKey (sourceOf subject) (subjectBound subject)
 
 sourceOf :: Subject -> Source
 sourceOf = Source . subjectSource
@@ -165,7 +173,7 @@ versionOf :: Subject -> Version
 versionOf subject = mkVersion (subjectEcosystem subject) (subjectVersion subject)
 
 sampleSubject :: Subject
-sampleSubject = Subject FullStore "https://a.example" Npm Nothing "thing" "1.0.0" "fingerprint"
+sampleSubject = Subject FullStore "https://a.example" Npm Nothing "thing" "1.0.0" "fingerprint" 0
 
 -- Whether two subjects are one entry, by the equality of the domain values and never by a key.
 sameEntry :: Subject -> Subject -> Bool
@@ -174,6 +182,7 @@ sameEntry a b =
         FullStore -> samePackage
         VersionStore -> samePackage && renderVersion (versionOf a) == renderVersion (versionOf b)
         AssembledStore -> validatorFor (subjectFingerprint a) == validatorFor (subjectFingerprint b)
+        DirectoryStore -> sourceOf a == sourceOf b && subjectBound a == subjectBound b
   where
     samePackage = sourceOf a == sourceOf b && nameOf a == nameOf b
 
@@ -187,6 +196,7 @@ componentsApart a b =
         , alike subjectName
         , alike subjectVersion
         , alike subjectFingerprint
+        , alike subjectBound
         ]
   where
     alike :: (Eq component) => (Subject -> component) -> Bool
@@ -214,7 +224,7 @@ genInOtherStore :: Subject -> Gen Subject
 genInOtherStore subject = (\store -> subject{subjectStore = store}) <$> Gen.element (filter (/= subjectStore subject) Universe.universe)
 
 genSubject :: Gen Subject
-genSubject = Subject <$> genStore <*> genSource <*> genEcosystem <*> genScope <*> genName <*> genVersion <*> genFingerprint
+genSubject = Subject <$> genStore <*> genSource <*> genEcosystem <*> genScope <*> genName <*> genVersion <*> genFingerprint <*> genBound
 
 -- The subject with one component its store's key reads drawn again.
 genRedrawn :: Subject -> Gen Subject
@@ -223,6 +233,7 @@ genRedrawn subject =
         FullStore -> package
         VersionStore -> ((\version -> subject{subjectVersion = version}) <$> genVersion) : package
         AssembledStore -> [(\fingerprint -> subject{subjectFingerprint = fingerprint}) <$> genFingerprint]
+        DirectoryStore -> [(\source -> subject{subjectSource = source}) <$> genSource, (\bound -> subject{subjectBound = bound}) <$> genBound]
   where
     package =
         [ (\source -> subject{subjectSource = source}) <$> genSource
@@ -252,6 +263,9 @@ genVersion = Gen.element ["", "1", "1.0.0", "1\US2", "2"]
 
 genFingerprint :: Gen ByteString
 genFingerprint = Gen.element ["", "a", "b"]
+
+genBound :: Gen Int
+genBound = Gen.element [0, 1, 134217728]
 
 npmRegistry, pypiIndex :: Source
 npmRegistry = Source "https://registry.npmjs.org"

@@ -6,9 +6,6 @@
 module Ecluse.Core.Registry.Cargo.Archive (
     CargoArchiveMetadata,
     inspectCargoArchive,
-    cargoArchiveInventory,
-    cargoArchiveInflatedBytes,
-    cargoArchiveExecution,
     cargoPublicationMetadata,
     cargoPublicationAgreement,
     cargoUploadAgreement,
@@ -20,7 +17,6 @@ import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import Data.Text qualified as T
 import Data.Text.Encoding qualified as TE
-import Text.Show (showString, shows, showsPrec)
 import UnliftIO.Exception (evaluate)
 
 import Ecluse.Core.Package.Hash (sha256Hex)
@@ -28,26 +24,13 @@ import Ecluse.Core.Registry (ParseError (..), parseRefusal)
 import Ecluse.Core.Registry.Archive.Inflate (InflateFormat (GzipMembers), withInflatedChunks)
 import Ecluse.Core.Registry.Archive.Tar (TarMember (..), TarScan, scanTar, sourceReader, tarContents, tarMembers)
 import Ecluse.Core.Registry.CachedDocument (estimateValueBytes)
-import Ecluse.Core.Registry.Cargo.Manifest (CargoManifest, CargoPublishMetadata, checkPublicationIndex, checkUploadAgreement, decodeManifest, manifestExecution, manifestTextPaths, publicationMetadata, publishMetadataValue)
+import Ecluse.Core.Registry.Cargo.Archive.Internal (CargoArchiveMetadata (..))
+import Ecluse.Core.Registry.Cargo.Manifest (CargoPublishMetadata, checkPublicationIndex, checkUploadAgreement, decodeManifest, manifestTextPaths, publicationMetadata, publishMetadataValue)
 import Ecluse.Core.Registry.Cargo.Project (cargoArchiveStem)
 import Ecluse.Core.Registry.Cargo.Wire (cargoTreeCharge)
 import Ecluse.Core.Security.Limits (Limits (..))
 import Ecluse.Core.Server.Admission.Meter (newChargePair)
 import Ecluse.Core.Server.MemoryModel (saturatingCharge)
-
--- | The inspected source bytes, checked against the admitted SHA-256 when one exists.
-data CargoArchiveMetadata = CargoArchiveMetadata
-    { caManifest :: CargoManifest
-    , caInventory :: Set Text
-    , caSource :: ByteString
-    , caRoot :: Text
-    , caRetainedBytes :: Int
-    , caManifestWorkspace :: Int
-    , caInflatedBytes :: Int
-    }
-
-instance Show CargoArchiveMetadata where
-    showsPrec _ metadata = showString "CargoArchiveMetadata " . shows (caRoot metadata)
 
 {- | Charge extra workspace as an absolute total. The caller owns the compressed-byte charge.
 A first-party upload carries no checksum, so only an admitted SHA-256 is compared.
@@ -62,24 +45,12 @@ inspectCargoArchive limits charge name version checksum bytes = do
                 else do
                     let root = cargoArchiveStem name version
                     result <- archivePass limits charge root (Set.singleton "Cargo.toml") bytes
-                    case result >>= \(scan, inflated) -> (,inflated) <$> archiveFacts root scan of
+                    case result >>= archiveFacts root of
                         Left fault -> pure (Left fault)
-                        Right ((manifestBytes, inventory, retained), inflated) -> do
+                        Right (manifestBytes, inventory, retained) -> do
                             charge (retained + manifestMemory manifestBytes)
                             parsed <- evaluate (decodeManifest limits name version manifestBytes)
-                            pure $ (\manifest -> CargoArchiveMetadata manifest inventory bytes root (retained + manifestMemory manifestBytes) (manifestMemory manifestBytes) inflated) <$> parsed
-
--- | Only regular-file paths appear, relative to the admitted single archive root.
-cargoArchiveInventory :: CargoArchiveMetadata -> Set Text
-cargoArchiveInventory = caInventory
-
--- | Complete first-pass decoder output, including tar headers, padding and trailers.
-cargoArchiveInflatedBytes :: CargoArchiveMetadata -> Int
-cargoArchiveInflatedBytes = caInflatedBytes
-
--- | An unsupported declaration remains an error. Source declarations alone do not establish harmlessness.
-cargoArchiveExecution :: CargoArchiveMetadata -> Either ParseError Bool
-cargoArchiveExecution metadata = manifestExecution (caManifest metadata) (cargoArchiveInventory metadata)
+                            pure $ (\manifest -> CargoArchiveMetadata manifest inventory bytes root (retained + manifestMemory manifestBytes) (manifestMemory manifestBytes)) <$> parsed
 
 -- | Capture only the selected README and licence after the manifest pass, using the same verified compressed bytes.
 cargoPublicationMetadata :: Limits -> (Int -> IO ()) -> CargoArchiveMetadata -> IO (Either ParseError CargoPublishMetadata)
@@ -91,7 +62,7 @@ cargoPublicationMetadata limits charge metadata =
             result <- archivePass limits (charge . (+ retained)) (caRoot metadata) (Set.fromList paths) (caSource metadata)
             case result of
                 Left fault -> pure (Left fault)
-                Right (scan, _) -> finish (Map.mapKeys dropArchiveRoot (tarContents scan))
+                Right scan -> finish (Map.mapKeys dropArchiveRoot (tarContents scan))
   where
     retained = caRetainedBytes metadata
     finish content = do
@@ -135,18 +106,11 @@ archiveFacts root scan = do
 dropArchiveRoot :: Text -> Text
 dropArchiveRoot = T.drop 1 . snd . T.breakOn "/"
 
-archivePass :: Limits -> (Int -> IO ()) -> Text -> Set Text -> ByteString -> IO (Either ParseError (TarScan, Int))
+archivePass :: Limits -> (Int -> IO ()) -> Text -> Set Text -> ByteString -> IO (Either ParseError TarScan)
 archivePass limits charge root selected bytes = do
     (decoderCharge, retainedCharge) <- newChargePair charge
-    inflated <- newIORef (0 :: Integer)
-    result <- scanTar limits retainedCharge select $ \consume ->
-        withInflatedChunks (GzipMembers (maxArtifactCount limits)) decoderCharge bytes $ \pull ->
-            consume . sourceReader $ do
-                outcome <- pull
-                for_ outcome $ \chunk -> modifyIORef' inflated (+ toInteger (BS.length chunk))
-                pure outcome
-    count <- readIORef inflated
-    pure ((,fromInteger count) <$> result)
+    scanTar limits retainedCharge select $ \consume ->
+        withInflatedChunks (GzipMembers (maxArtifactCount limits)) decoderCharge bytes (consume . sourceReader)
   where
     select parts = case parts of
         actualRoot : relative | actualRoot == root -> Right (Set.member (T.intercalate "/" relative) selected)

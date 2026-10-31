@@ -58,12 +58,12 @@ uploadCoordinateSpec = describe "configured Cargo read and upload coordinates" $
     it "checks an upload coordinate loaded through the generic registry configuration" $
         refusalsFor
             MirrorWriter
-            (overrideEnv "ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET__REGISTRY__UPLOAD_URL" "https://pypi-private.example.test" (withPyPI publishingEnv))
-            `shouldReturn` [PublicationTargetOnMountEndpoint Npm PyPI "privateUpstream" "https://pypi-private.example.test"]
+            (overrideEnv "ECLUSE_MOUNTS__PYPI__PUBLICATION_TARGET__REGISTRY__UPLOAD_URL" "https://private.example.test" (pypiPublishingTo "https://pypi-publish.example.test" publishingEnv))
+            `shouldReturn` [PublicationTargetOnMountEndpoint PyPI Npm "privateUpstream" "https://private.example.test"]
 
     it "refuses loaded publication and mirror APIs on their own mount's public-upstream host" $ do
-        refusalsFor MirrorWriter (overrideEnv "ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET__REGISTRY__UPLOAD_URL" "https://public.example.test/api" publishingEnv)
-            `shouldReturn` [PublicationTargetOnPublicUpstream Npm Npm "https://public.example.test/api"]
+        refusalsFor MirrorWriter (overrideEnv "ECLUSE_MOUNTS__PYPI__PUBLICATION_TARGET__REGISTRY__UPLOAD_URL" "https://pypi-public.example.test/api" (pypiPublishingTo "https://pypi-publish.example.test" publishingEnv))
+            `shouldReturn` [PublicationTargetOnPublicUpstream PyPI PyPI "https://pypi-public.example.test/api"]
         refusalsFor MirrorWriter (overrideEnv "ECLUSE_MOUNTS__PYPI__MIRROR_TARGET__REGISTRY__UPLOAD_URL" "https://pypi.org/legacy/" pypiMirrorEnv)
             `shouldReturn` [MirrorTargetOnPublicUpstream PyPI PyPI "https://pypi.org/legacy/"]
 
@@ -217,8 +217,7 @@ otherMountSpec = describe "publicationTarget against another mount's endpoints" 
         -- Each mount relays a different publisher's credential, so one shared publication
         -- target crosses the two tenancies. Both mounts report it.
         let env =
-                overrideEnv "ECLUSE_MOUNTS__PYPI__PUBLICATION_TARGET__REGISTRY__URL" "https://shared-publish.example.test" $
-                    withPyPI (publishingTo "https://shared-publish.example.test")
+                pypiPublishingTo "https://shared-publish.example.test" (publishingTo "https://shared-publish.example.test")
         refusals <- refusalsFor MirrorWriter env
         refusals
             `shouldBe` [ PublicationTargetOnMountEndpoint Npm PyPI "publicationTarget" "https://shared-publish.example.test"
@@ -479,7 +478,8 @@ withPyPI env =
     overrideEnv "ECLUSE_MOUNTS__PYPI__PUBLIC_UPSTREAM__REGISTRY__URL" "https://pypi-public.example.test" $
         overrideEnv "ECLUSE_MOUNTS__PYPI__PRIVATE_UPSTREAM__REGISTRY__URL" "https://pypi-private.example.test" $
             overrideEnv "ECLUSE_MOUNTS__PYPI__MIRROR_TARGET__REGISTRY__URL" "https://pypi-mirror.example.test" $
-                overrideEnv "ECLUSE_MOUNTS__PYPI__MIRROR_TARGET__REGISTRY__TOKEN" "pypi-write-token" env
+                overrideEnv "ECLUSE_MOUNTS__PYPI__MIRROR_TARGET__REGISTRY__UPLOAD_URL" "https://pypi-mirror.example.test/legacy/" $
+                    overrideEnv "ECLUSE_MOUNTS__PYPI__MIRROR_TARGET__REGISTRY__TOKEN" "pypi-write-token" env
 
 mirrorAgainstPypiPrivate :: String -> String -> [(String, String)]
 mirrorAgainstPypiPrivate mirror private =
@@ -500,7 +500,8 @@ sharedRegistryText = toText sharedRegistry
 sharedRegistryUrl :: RegistryUrl
 sharedRegistryUrl = unsafeRegistryUrl sharedRegistryText
 
--- The PyPI neighbour publishing to the given target. The endpoint rules read no namespaces.
+-- The PyPI neighbour publishing to the given target, uploading below it. The endpoint rules read no namespaces.
 pypiPublishingTo :: String -> [(String, String)] -> [(String, String)]
 pypiPublishingTo target env =
-    overrideEnv "ECLUSE_MOUNTS__PYPI__PUBLICATION_TARGET__REGISTRY__URL" target (withPyPI env)
+    overrideEnv "ECLUSE_MOUNTS__PYPI__PUBLICATION_TARGET__REGISTRY__URL" target $
+        overrideEnv "ECLUSE_MOUNTS__PYPI__PUBLICATION_TARGET__REGISTRY__UPLOAD_URL" (target <> "/legacy/") (withPyPI env)

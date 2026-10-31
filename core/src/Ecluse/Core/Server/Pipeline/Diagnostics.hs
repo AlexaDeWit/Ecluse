@@ -5,20 +5,17 @@
 {- | Operator diagnostics for metadata failures, dropped entries, and integrity divergence.
 Access-refusal logs contain no upstream body, headers, or credential.
 
-The bad-upstream warnings carry 'pipelineInternalModule' as their @module@ filter key and the other
-payload-bearing lines carry 'pipelineModule', both held stable as values rather than source module
-paths, so an operator's saved filter keeps matching.
+The bad-upstream warnings carry 'pipelineInternalModule' as their @module@ filter key and every
+other line carries 'pipelineModule'.
 -}
 module Ecluse.Core.Server.Pipeline.Diagnostics (
     -- * Metadata-read failures
     logMetadataFailure,
-    logDecodeFailure,
-    logNameMismatch,
-    logUpstreamUnformable,
-    logUpstreamUnreachable,
+    logDirectoryFailure,
 
     -- * Dropped entries and divergence
     logInvalidEntries,
+    logDirectoryInvalidEntries,
     warnDivergences,
 ) where
 
@@ -60,45 +57,70 @@ import Ecluse.Core.Security (
     authorityLabel,
     bodyLimitBytes,
  )
-import Ecluse.Core.Server.Pipeline.Internal (pipelineInternalModule)
+import Ecluse.Core.Server.Pipeline.Internal (pipelineInternalModule, pipelineModule)
 import Ecluse.Core.Telemetry.Record (MetricsPort (..))
 
 -- | Log once per real fetch, inside the single-flight leader's request context.
 logMetadataFailure :: (KatipContext m) => PackageName -> Text -> MetadataError -> m ()
-logMetadataFailure name baseUrl = \case
-    MetadataAbsent -> logHttpFailure name baseUrl 404 "the upstream has no metadata for the requested package"
-    MetadataHttpFailure code -> logHttpFailure name baseUrl code "the upstream refused the metadata read"
-    MetadataAuthorisationFailure _ -> logFM WarningS "the upstream refused metadata access"
-    MetadataBoundExceeded err -> logBreach name err
-    MetadataUndecodable -> logDecodeFailure name
-    MetadataNameMismatch reported -> logNameMismatch name baseUrl reported
-    MetadataFetch (FetchBoundExceeded err) -> logBreach name err
-    MetadataFetch (FetchUrlUnformable urlErr) -> logUpstreamUnformable name baseUrl urlErr
-    MetadataFetch (FetchTransport fault) -> logUpstreamUnreachable name baseUrl fault
+logMetadataFailure = logFailureOf . PackageSubject
+
+-- | 'logMetadataFailure' for a registry-wide directory read. Its lines name no package.
+logDirectoryFailure :: (KatipContext m) => Text -> MetadataError -> m ()
+logDirectoryFailure = logFailureOf DirectorySubject
+
+-- What a read was for: one package's packument, or a registry-wide directory with no package to name.
+data Subject = PackageSubject PackageName | DirectorySubject
+
+subjectPayload :: Subject -> SimpleLogPayload
+subjectPayload = \case
+    PackageSubject name -> sl "package" (renderPackageName name)
+    DirectorySubject -> mempty
+
+-- What the read requested, and the document it decodes.
+requestedNoun, documentNoun :: Subject -> Text
+requestedNoun = \case
+    PackageSubject _ -> "package"
+    DirectorySubject -> "directory"
+documentNoun = \case
+    PackageSubject _ -> "packument"
+    DirectorySubject -> "directory"
+
+logFailureOf :: (KatipContext m) => Subject -> Text -> MetadataError -> m ()
+logFailureOf subject baseUrl = \case
+    MetadataAbsent -> logHttpFailure subject baseUrl 404 ("the upstream has no metadata for the requested " <> requestedNoun subject)
+    MetadataHttpFailure code _ -> logHttpFailure subject baseUrl code "the upstream refused the metadata read"
+    MetadataAuthorisationFailure code -> logHttpFailure subject baseUrl code "the upstream refused metadata access"
+    MetadataBoundExceeded err -> logBreach subject err
+    MetadataUndecodable -> warnDecodeFailure subject
+    MetadataNameMismatch reported -> warnNameMismatch subject baseUrl reported
+    MetadataFetch (FetchBoundExceeded err) -> logBreach subject err
+    MetadataFetch (FetchUrlUnformable urlErr) -> warnUnformable subject baseUrl urlErr
+    MetadataFetch (FetchTransport fault) -> warnUnreachable subject baseUrl fault
     MetadataFetch (FetchCooldown _) -> pass
 
-logHttpFailure :: (KatipContext m) => PackageName -> Text -> Int -> Text -> m ()
-logHttpFailure name baseUrl code message =
+-- A package 404 is a genuine absence. A directory 404 leaves discovery without its source, so it is a fault.
+logHttpFailure :: (KatipContext m) => Subject -> Text -> Int -> Text -> m ()
+logHttpFailure subject baseUrl code message =
     katipAddContext payload (logFM severity (ls message))
   where
     severity
-        | code == 404 = DebugS
+        | code == 404, PackageSubject _ <- subject = DebugS
         | isRetryableStatusCode code = ErrorS
         | otherwise = WarningS
     payload =
         sl "module" pipelineModule
-            <> sl "package" (renderPackageName name)
+            <> subjectPayload subject
             <> sl "upstream" (authorityLabel baseUrl)
             <> sl "status" code
 
-logBreach :: (KatipContext m) => PackageName -> LimitError -> m ()
-logBreach name err =
+logBreach :: (KatipContext m) => Subject -> LimitError -> m ()
+logBreach subject err =
     katipAddContext payload $
         logFM WarningS (ls message)
   where
     payload =
         sl "module" pipelineModule
-            <> sl "package" (renderPackageName name)
+            <> subjectPayload subject
             <> sl "bound" boundName
             <> sl "observed" observed
             <> sl "cap" cap
@@ -123,38 +145,32 @@ logBreach name err =
 
 -- The fields every bad-upstream warning carries, before the caller's own. The response-bound
 -- guards leave these conditions silent, so an operator would otherwise see nothing at all.
-warnUpstream :: (KatipContext m) => PackageName -> SimpleLogPayload -> Text -> m ()
-warnUpstream name extra message =
-    katipAddContext (prefix <> extra) $ logFM WarningS (ls message)
-  where
-    prefix = sl "module" pipelineInternalModule <> sl "package" (renderPackageName name)
+warnUpstream :: (KatipContext m) => Subject -> SimpleLogPayload -> Text -> m ()
+warnUpstream subject extra message =
+    katipAddContext (sl "module" pipelineInternalModule <> subjectPayload subject <> extra) $ logFM WarningS (ls message)
 
--- | Warn that an upstream body did not decode into a usable packument.
-logDecodeFailure :: (KatipContext m) => PackageName -> m ()
-logDecodeFailure name =
-    warnUpstream name mempty "refused an upstream metadata document: it did not decode into a usable packument"
+warnDecodeFailure :: (KatipContext m) => Subject -> m ()
+warnDecodeFailure subject =
+    warnUpstream subject mempty ("refused an upstream metadata document: it did not decode into a usable " <> documentNoun subject)
 
--- | Warn when an upstream declares a different package identity.
-logNameMismatch :: (KatipContext m) => PackageName -> Text -> Text -> m ()
-logNameMismatch requested origin reported =
+warnNameMismatch :: (KatipContext m) => Subject -> Text -> Text -> m ()
+warnNameMismatch subject origin reported =
     warnUpstream
-        requested
+        subject
         (sl "origin" (authorityLabel origin) <> sl "upstreamName" reported)
-        "dropped an upstream contribution: its packument self-reported a name for a different package"
+        "refused an upstream metadata document: its packument self-reported a name for a different package"
 
--- | Warn when a configured origin cannot form a request URL.
-logUpstreamUnformable :: (KatipContext m) => PackageName -> Text -> UrlFormationError -> m ()
-logUpstreamUnformable name origin urlErr =
+warnUnformable :: (KatipContext m) => Subject -> Text -> UrlFormationError -> m ()
+warnUnformable subject origin urlErr =
     warnUpstream
-        name
+        subject
         (sl "origin" (authorityLabel origin) <> sl "urlError" (renderUrlFormationError urlErr))
         "refused an upstream metadata fetch: the configured base URL could not be formed into a request"
 
--- | Report transport failure separately from decoding and configuration failures.
-logUpstreamUnreachable :: (KatipContext m) => PackageName -> Text -> TransportFault -> m ()
-logUpstreamUnreachable name origin fault =
+warnUnreachable :: (KatipContext m) => Subject -> Text -> TransportFault -> m ()
+warnUnreachable subject origin fault =
     warnUpstream
-        name
+        subject
         ( sl "origin" (authorityLabel origin)
             <> sl "transportCause" (show (tfCause fault) :: Text)
             <> sl "transportDetail" (tfDetail fault)
@@ -163,13 +179,20 @@ logUpstreamUnreachable name origin fault =
 
 -- | The malformed packument entries the projection dropped rather than failing the whole document.
 logInvalidEntries :: (KatipContext m) => PackageName -> Text -> [InvalidEntry] -> m ()
-logInvalidEntries name baseUrl entries =
+logInvalidEntries = logDroppedEntries . PackageSubject
+
+-- | The malformed rows a registry-wide directory dropped. The line names no package.
+logDirectoryInvalidEntries :: (KatipContext m) => Text -> [InvalidEntry] -> m ()
+logDirectoryInvalidEntries = logDroppedEntries DirectorySubject
+
+logDroppedEntries :: (KatipContext m) => Subject -> Text -> [InvalidEntry] -> m ()
+logDroppedEntries subject baseUrl entries =
     katipAddContext payload $
         logFM WarningS (ls message)
   where
     payload =
         sl "module" pipelineModule
-            <> sl "package" (renderPackageName name)
+            <> subjectPayload subject
             <> sl "upstream" (authorityLabel baseUrl)
             <> sl "droppedByKind" (dropCountsByKind entries)
             <> sl "droppedEntries" (map renderDroppedEntry (take maxRenderedDrops entries))
@@ -179,7 +202,7 @@ logInvalidEntries name baseUrl entries =
 
     message :: Text
     message =
-        "dropped " <> show entriesLen <> " malformed entr" <> plural <> " from an upstream packument (the rest is served)"
+        "dropped " <> show entriesLen <> " malformed entr" <> plural <> " from an upstream " <> documentNoun subject <> " (the rest is served)"
     plural = if entriesLen == 1 then "y" else "ies"
 
 renderDroppedEntry :: InvalidEntry -> Text
@@ -245,8 +268,3 @@ renderFingerprint fp = "{" <> T.intercalate ", " (map renderHash (integrityHashe
 
 renderHash :: (Text, Maybe HashAlg, Text) -> Text
 renderHash (file, alg, body) = file <> " " <> maybe "none" renderHashAlg alg <> ":" <> body
-
--- The @module@ filter key for this module's own lines, held stable as this value rather than
--- the source module path, so an operator's saved filter keeps matching.
-pipelineModule :: Text
-pipelineModule = "Ecluse.Server.Pipeline"

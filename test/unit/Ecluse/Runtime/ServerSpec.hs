@@ -45,7 +45,7 @@ import Ecluse.Core.Credential (mkSecret)
 import Ecluse.Core.Cve.Slot (swapIn)
 import Ecluse.Core.Cve.Types (DbEtag (DbEtag))
 import Ecluse.Core.Deadline (Deadlines)
-import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
+import Ecluse.Core.Ecosystem (Ecosystem (Cargo, Npm, PyPI, RubyGems), ecosystemName)
 import Ecluse.Core.Fault (TransportCause (TransportUnreachable), transportFault)
 import Ecluse.Core.Package (mkScope)
 import Ecluse.Core.Registry.Adapter.Capability (AdapterMetadata (metadataSerialise), AdapterPublish (publishRelay))
@@ -56,6 +56,7 @@ import Ecluse.Core.Registry.Npm.Publish qualified as NpmPublish
 import Ecluse.Core.Registry.Npm.Route (npmRouter)
 import Ecluse.Core.Registry.Npm.Route.Internal (npmNotFound)
 import Ecluse.Core.Registry.PyPI.Adapter (pypiAdapter)
+import Ecluse.Core.Registry.Request (nativePresentation)
 import Ecluse.Core.Registry.ServedDocument (RenderRefused (RenderRefused))
 import Ecluse.Core.Rules (prepare)
 import Ecluse.Core.Rules.Types (
@@ -101,7 +102,7 @@ import Ecluse.Runtime.Test.Support (newTestEnv, newTestEnvLogging)
 import Ecluse.Service (mountBindingFor)
 import Ecluse.Test.Cve (fakeCveDb)
 import Ecluse.Test.Deadline (withSweeper)
-import Ecluse.Test.Log (captureJsonLog, memoryLogEnv, newTestLogEnv)
+import Ecluse.Test.Log (captureJsonLog, memoryLogEnv, moduleOfLineWhere, newTestLogEnv, untaggedLines)
 import Ecluse.Test.Osv (mkDbWithWrongEpoch, mkMinimalValidDbWithMeta)
 import Ecluse.Test.Package (validSha256, validSha256Sri)
 import Ecluse.Test.Poll (awaitUntil, pollUntil)
@@ -110,7 +111,7 @@ import Ecluse.Test.Queue (newTestMemoryQueue)
 import Ecluse.Test.Registry.Npm (VersionSpec (vsIntegrity), packumentValue, publishedDaysAgo, versionSpec, versionValue)
 import Ecluse.Test.Registry.Npm.Publish (npmReleaseDocument)
 import Ecluse.Test.Rules (atDefaultPrecedence, inertRuleDeps)
-import Ecluse.Test.Server.Mount (inertDepsFor, inertPackumentDeps, npmServeDeps, pypiServeDeps)
+import Ecluse.Test.Server.Mount (inertDepsFor, inertPackumentDeps, npmServeDeps, pypiServeDeps, requiredAdapter)
 import Ecluse.Test.Stub (Captured (capHeaders, capPath), stubLocalhostUrl, withRoutedStub)
 import Ecluse.Test.Wai (bodyContainsAll, freePort, selfBaseUrlOf, servedVersions, status, withSweptApp)
 
@@ -132,11 +133,11 @@ publishMountAt prefix router publishDeps =
 
 -- One npm mount over closed-port upstreams and no publish target, resolved as the composition root resolves it.
 npmApp :: Deadlines -> IO Application
-npmApp deadlines = application (mkServerConfig (maybeToList (mountBindingFor Npm inertPackumentDeps Nothing Nothing))) <$> newTestEnv deadlines
+npmApp deadlines = application (mkServerConfig (maybeToList (mountBindingFor Npm inertPackumentDeps Nothing))) <$> newTestEnv deadlines
 
 -- One PyPI mount over closed-port upstreams and no publication target.
 pypiApp :: Deadlines -> IO Application
-pypiApp deadlines = application (mkServerConfig (maybeToList (mountBindingFor PyPI (inertDepsFor pypiAdapter) Nothing Nothing))) <$> newTestEnv deadlines
+pypiApp deadlines = application (mkServerConfig (maybeToList (mountBindingFor PyPI (inertDepsFor pypiAdapter) Nothing))) <$> newTestEnv deadlines
 
 -- | An unreachable target distinguishes a refused publish from one that reached the relay.
 npmMountApp :: Deadlines -> IO Application
@@ -154,6 +155,7 @@ basePublishDeps bodyBudget =
         , pubTargetUrl = loopbackRegistryUrl "http://127.0.0.1:1" -- an unconnectable port
         , pubAllowed = NpmPublish.npmPublishAllowed [mkScope "acme"]
         , pubStaticCredential = Nothing
+        , pubStaticPresentation = nativePresentation
         , pubMaxRequestBytes = maxPublishRequestBytes defaultLimits
         , pubInboundToken = Nothing
         , pubLimits = defaultLimits{maxPublishRequestBytes = 26214400}
@@ -248,6 +250,7 @@ spec = do
     partialAdvisorySpec
     startupAdvisorySpec
     refusedRenderSpec
+    requestLogContextSpec
     runWarpDrainWiringSpec
     listeningLineSpec
     raceServerAgainstLoopSpec
@@ -383,7 +386,7 @@ spec = do
                 -- the URL. It reaches the relay (502 to the unconnectable target), not a 403.
                 request methodPut "/npm/@acme/widget" [] (npmReleaseDocument widgetName widgetName widgetName) `shouldRespondWith` 502
 
-        withSweptApp (publishAppWith (\b -> (basePublishDeps b){pubAdapter = npmPublish{publishRelay = \_ _ _ -> throwIO (RelayContractEscape "simulated relay contract escape")}})) $
+        withSweptApp (publishAppWith (\b -> (basePublishDeps b){pubAdapter = npmPublish{publishRelay = \_ _ _ _ -> throwIO (RelayContractEscape "simulated relay contract escape")}})) $
             it "answers a relay contract escape with the route's declared 500 (not a torn session, not a 502)" $
                 -- The relay reports its failures as typed values, so a throw is an invariant break.
                 -- The perimeter answers it with the neutral 500 and the session survives.
@@ -566,7 +569,7 @@ pipelineFallbacks =
 escapingApp :: Deadlines -> IO Application
 escapingApp deadlines = application (mkServerConfig (map escaping mounts)) <$> newTestEnv deadlines
   where
-    mounts = catMaybes [mountBindingFor Npm inertPackumentDeps Nothing Nothing, mountBindingFor PyPI (inertDepsFor pypiAdapter) Nothing Nothing]
+    mounts = catMaybes [mountBindingFor Npm inertPackumentDeps Nothing, mountBindingFor PyPI (inertDepsFor pypiAdapter) Nothing]
     escaping binding = binding{bindingRouter = escapingBeforeCommit (bindingRouter binding)}
 
 -- Keep the route's contract and fallback, and replace its handler with one that escapes before it responds.
@@ -783,12 +786,35 @@ refusedRenderSpec = describe "a served document whose render the adapter refuses
 refusingRenderApp :: Deadlines -> Text -> LogEnv -> IO Application
 refusingRenderApp deadlines upstreamBase logEnv = do
     rules <- prepare inertRuleDeps [atDefaultPrecedence (AllowIfOlderThan 0)]
+    let deps = npmServeDeps Nothing (loopbackRegistryUrl upstreamBase) NoMirrorWrite rules (pure servedAt)
+    loggingMountApp deadlines logEnv Npm deps{pdMetadata = (pdMetadata deps){metadataSerialise = const (Left RenderRefused)}}
+
+-- One mount of the ecosystem over the given dependencies, logging to the given environment.
+loggingMountApp :: Deadlines -> LogEnv -> Ecosystem -> PackumentDeps -> IO Application
+loggingMountApp deadlines logEnv ecosystem deps = do
     queue <- newTestMemoryQueue
     manager <- newManager defaultManagerSettings
     env <- newTestEnvLogging deadlines logEnv queue (manager, manager) telemetryDisabled
-    let deps = npmServeDeps Nothing (loopbackRegistryUrl upstreamBase) NoMirrorWrite rules (pure servedAt)
-        refusing = deps{pdMetadata = (pdMetadata deps){metadataSerialise = const (Left RenderRefused)}}
-    pure (application (mkServerConfig (maybeToList (mountBindingFor Npm refusing Nothing Nothing))) env)
+    pure (application (mkServerConfig (maybeToList (mountBindingFor ecosystem deps Nothing))) env)
+
+requestLogContextSpec :: Spec
+requestLogContextSpec = describe "the request log context" $ do
+    for_ [(Npm, "/npm/leftpad"), (PyPI, "/pypi/simple/leftpad/"), (Cargo, "/cargo/le/ft/leftpad"), (RubyGems, "/rubygems/info/leftpad")] $ \(ecosystem, path) ->
+        it ("names the emitting module on every line of a " <> toString (ecosystemName ecosystem) <> " metadata request") $ do
+            adapter <- requiredAdapter ecosystem
+            (_, logged) <- captureJsonLog $ \logEnv -> withSweeper $ \deadlines -> do
+                app <- loggingMountApp deadlines logEnv ecosystem (inertDepsFor adapter)
+                requestPath app path
+            lines logged `shouldSatisfy` (not . null)
+            untaggedLines logged `shouldBe` []
+
+    it "keeps a log site's own module over the request's" $
+        withRoutedStub upstreamReply $ \stub -> do
+            (_, logged) <- captureJsonLog $ \logEnv -> withSweeper $ \deadlines -> do
+                app <- refusingRenderApp deadlines (stubLocalhostUrl stub) logEnv
+                requestPath app "/npm/leftpad"
+            moduleOfLineWhere ["data", "perimeterCause"] "RenderFault" logged `shouldBe` Just "Ecluse.Runtime.Server"
+            moduleOfLineWhere ["msg"] "serving packument request for leftpad" logged `shouldBe` Just "Ecluse.Server.Pipeline"
 
 -- | Bind both mounts to their advisory handles, with the named ecosystems initially loaded.
 advisoryApp :: Deadlines -> Text -> [PrecededRule] -> [Ecosystem] -> Bool -> IO (Application, Map.Map Ecosystem CveSyncHandle)
@@ -804,8 +830,8 @@ advisoryApp deadlines upstreamBase policy initiallyLoaded trusted = do
         private = if trusted then Just public else Nothing
         bindings =
             catMaybes
-                [ mountBindingFor Npm (npmServeDeps private public NoMirrorWrite npmRules (pure servedAt)) Nothing Nothing
-                , mountBindingFor PyPI (pypiServeDeps private public NoMirrorWrite pypiRules (pure servedAt)) Nothing Nothing
+                [ mountBindingFor Npm (npmServeDeps private public NoMirrorWrite npmRules (pure servedAt)) Nothing
+                , mountBindingFor PyPI (pypiServeDeps private public NoMirrorWrite pypiRules (pure servedAt)) Nothing
                 ]
         cfg = (mkServerConfig bindings){scCheckReady = cveSyncReadiness handles}
     pure (application cfg env, handles)

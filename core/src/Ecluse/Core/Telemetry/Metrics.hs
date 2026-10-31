@@ -119,7 +119,7 @@ instance Universe Decision where universe = universeGeneric
 {- | The bucketed class of a denial reason. Not the rule name or the message, which are
 high-cardinality and stay on the log line.
 -}
-data ReasonClass = ReasonPolicy | ReasonMissingIntegrity | ReasonUnavailable | ReasonLimit
+data ReasonClass = ReasonPolicy | ReasonMissingIntegrity | ReasonBelowIntegrityFloor | ReasonUnavailable | ReasonLimit
     deriving stock (Eq, Generic, Show)
 
 instance Universe ReasonClass where universe = universeGeneric
@@ -179,7 +179,7 @@ data CacheResult = Hit | Miss | Collapsed
 instance Universe CacheResult where universe = universeGeneric
 
 -- | The independently budgeted metadata stores. A cache key and a flight key carry this tag, so it decides which keys are equal.
-data CacheStore = FullStore | VersionStore | AssembledStore
+data CacheStore = FullStore | VersionStore | AssembledStore | DirectoryStore
     deriving stock (Eq, Generic, Ord, Show)
 
 instance Hashable CacheStore
@@ -383,6 +383,7 @@ labelValue = \case
     LReasonClass r -> case r of
         ReasonPolicy -> "policy"
         ReasonMissingIntegrity -> "missing_integrity"
+        ReasonBelowIntegrityFloor -> "below_integrity_floor"
         ReasonUnavailable -> "unavailable"
         ReasonLimit -> "limit"
     LRule name -> name
@@ -408,6 +409,7 @@ labelValue = \case
         FullStore -> "full"
         VersionStore -> "version"
         AssembledStore -> "assembled"
+        DirectoryStore -> "directory"
     LMirrorResult m -> case m of
         Published -> "published"
         Failed -> "failed"

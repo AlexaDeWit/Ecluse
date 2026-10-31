@@ -63,8 +63,8 @@ data CargoSweepStore = CargoSweepStore
     { cssPlane :: CargoSweepPlane
     , cssObserved :: ObservedNativeProxy
     , cssRepository :: Text
-    , cssReadUrl :: Text
-    , cssPublishUrl :: Text
+    , cssUrl :: Text
+    -- ^ The sparse root that serves reads and receives publication.
     }
 
 -- | Reuse the native registry and shared AWS fixture, with no cloud account or service secrets.
@@ -123,12 +123,11 @@ cacheReader registry request = do
             pure registry{registryFiles = combined}
         else pure registry
 
--- | Public replacement reads and private publication share one observed product listener.
+-- | Reads and publication share the product's one Cargo registry.
 withSweepProxy :: CargoSweepPlane -> [(Text, Text)] -> Maybe Text -> [String] -> (CargoSweepStore -> IO a) -> IO a
 withSweepProxy plane extra queue args action =
-    withObservedNativeProxy config (cspGlobal plane) $ \observed -> do
-        let base = e2eBaseUrl (observedProxy observed)
-        action (CargoSweepStore plane observed "mirror" (base <> "/cargo/") (base <> "/cargo/private/"))
+    withObservedNativeProxy config (cspGlobal plane) $ \observed ->
+        action (CargoSweepStore plane observed "mirror" (e2eBaseUrl (observedProxy observed) <> "/cargo/"))
   where
     config = defaultE2EConfig{ecExtraEnv = proxyRoleEnv <> extra, ecQueueUrl = queue, ecArgs = args}
 
@@ -138,7 +137,7 @@ cacheStore store = directStore store{cssRepository = "cache"}
 
 -- | Direct native publication uses the fixture listener at the same repository coordinate.
 directStore :: CargoSweepStore -> CargoSweepStore
-directStore store = store{cssReadUrl = base, cssPublishUrl = base}
+directStore store = store{cssUrl = base}
   where
     base = "http://127.0.0.1:" <> show (cafPort (cspControl (cssPlane store))) <> "/cargo/" <> cssRepository store <> "/"
 

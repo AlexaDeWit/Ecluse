@@ -2,7 +2,7 @@
 --
 -- SPDX-License-Identifier: MIT
 
--- | S3-compatible conditional object reads shared by the bench's durable-state fixtures.
+-- | S3-compatible conditional object reads for the worker fixtures' durable mirror state.
 module Ecluse.BenchLoad.ObjectStore (objectRevision, conditionalObjectRead) where
 
 import Data.List (lookup)
