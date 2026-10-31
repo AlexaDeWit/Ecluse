@@ -141,12 +141,13 @@ pipeline applies verdicts across it. For the cross-upstream merge, see
   repointing them. The rule never promotes a higher prerelease over a chosen stable `latest`.
   Repointing downward is a deliberate downgrade, so a withheld release does not silently remain
   the default install.
-- **No survivors → 503, 502, 500, or 403.** If nothing survives, the status follows the most
+- **No survivors → 503, 502, 500, 404, or 403.** If nothing survives, the status follows the most
   recoverable cause. `503` (with `Retry-After`) when any rejection was transient or a needed
   upstream was unavailable. `502` when an upstream returned a document Écluse could not use.
-  `500` when an exclusion is a permanent inability and none is retryable. `403` when all exclusions are policy or integrity refusals. Never `404`: the package exists,
-  and Écluse withheld its versions. The HTTP status mapping belongs to the
-  [error model](web-layer.md#error-model).
+  `500` when an exclusion is a permanent inability and none is retryable. `404` on a listing when
+  all exclusions are policy or integrity refusals, with the reasons in the body and the logs. A
+  native coordinate keeps `403` there. `403` when nothing was excluded. The HTTP status mapping
+  belongs to the [error model](web-layer.md#error-model).
 
 Because the filtered body differs from upstream's, the proxy computes its own `ETag` over it
 (see [Web layer](web-layer.md#web-layer)).
