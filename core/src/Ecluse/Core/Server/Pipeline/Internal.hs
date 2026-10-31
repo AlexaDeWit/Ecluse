@@ -66,7 +66,7 @@ import Ecluse.Core.Rules.Types (
     reasonAdvisories,
  )
 import Ecluse.Core.Server.Response (
-    PackumentStatus (PackumentBadGateway, PackumentForbidden, PackumentOk, PackumentServerError, PackumentUnavailable),
+    PackumentStatus (PackumentBadGateway, PackumentDenied, PackumentForbidden, PackumentOk, PackumentServerError, PackumentUnavailable),
     RejectReason (BelowIntegrityFloor, ByPolicy, MissingIntegrity, Unavailable, UpstreamInvalid),
     Rejection (Rejection),
     RuleName (RuleName),
@@ -130,7 +130,7 @@ admitByIntegrity floorSpec belowFloorRefusal missingRefusal info
         bucket (Left MeetsFloor) acc = acc
         bucket (Right _) acc = acc
 
--- | The bounded @ecluse.serve.decision@ value of a no-survivors packument: forbidden is a denial, the rest unavailable.
+-- | The bounded @ecluse.serve.decision@ value of a no-survivors packument: a refusal is a denial, the rest unavailable.
 packumentServeDecision :: [ServeDecision] -> Metric.Decision
 packumentServeDecision = statusServeDecision . packumentStatus
 
@@ -138,6 +138,7 @@ packumentServeDecision = statusServeDecision . packumentStatus
 statusServeDecision :: PackumentStatus -> Metric.Decision
 statusServeDecision = \case
     PackumentOk -> Metric.Admit
+    PackumentDenied -> Metric.Deny
     PackumentForbidden -> Metric.Deny
     PackumentUnavailable _ -> Metric.Unavailable
     PackumentBadGateway -> Metric.Unavailable

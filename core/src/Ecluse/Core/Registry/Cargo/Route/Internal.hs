@@ -164,8 +164,8 @@ indexContract =
     chooseContract (mediaContract status200 "Admitted native sparse records." (SchemaOpaque "text/plain")) $
         chooseContract (emptyContract status304 "The admitted records match the supplied validator.") $
             chooseContract (refusalContract status401 "Authentication is required.") $
-                chooseContract (refusalContract status403 "Access or admission was refused.") $
-                    chooseContract (refusalContract status404 "No package is available in this registry.") $
+                chooseContract (refusalContract status403 "Access was refused, or no version reached admission.") $
+                    chooseContract (refusalContract status404 "No package is available in this registry: no configured upstream has the name, or no version passed policy and admission.") $
                         chooseContract (refusalContract status406 "The requested encoding is unavailable.") $
                             chooseContract (refusalContract status500 "The registry could not decide.") $
                                 chooseContract

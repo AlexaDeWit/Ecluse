@@ -22,9 +22,6 @@ module Ecluse.Core.Server.Pipeline.Packument (
 
     -- * The refusal when no version survives (exported for its unit spec)
     noSurvivors,
-
-    -- * The answer for a name neither origin holds
-    unheldNameReply,
 ) where
 
 import Crypto.Hash (Digest, SHA256, hash)
@@ -125,7 +122,7 @@ import Ecluse.Core.Server.Pipeline.Packument.Representation
 import Ecluse.Core.Server.Pipeline.Shared
 import Ecluse.Core.Server.Response (
     HelpMessage,
-    PackumentStatus (PackumentBadGateway, PackumentForbidden, PackumentOk, PackumentServerError, PackumentUnavailable),
+    PackumentStatus (PackumentBadGateway, PackumentDenied, PackumentForbidden, PackumentOk, PackumentServerError, PackumentUnavailable),
     Refusal,
     RejectReason (ByPolicy, Unavailable, UpstreamInvalid),
     Rejection (Rejection),
@@ -146,14 +143,16 @@ import Ecluse.Core.Telemetry.Span (TracingPort, spanPackumentGate)
 
 -- | The route-owned ways the ecosystem-neutral packument pipeline may answer.
 data PackumentReplies response = PackumentReplies
-    { packumentForbiddenText :: [ServeDecision] -> Text
-    -- ^ Render only a no-survivor 403, after status selection.
+    { packumentDeniedText :: [ServeDecision] -> Text
+    -- ^ Render the refusals of a listing with no survivor and no outage, after status selection.
     , packumentOk :: ResponseHeaders -> LByteString -> response
     , packumentNotModified :: ResponseHeaders -> response
     , packumentUnauthorised :: ResponseHeaders -> Refusal -> response
     , packumentPrivateRefused :: Int -> ResponseHeaders -> Refusal -> response
     -- ^ Preserve or collapse the private origin status according to the native protocol.
     , packumentForbidden :: ResponseHeaders -> Refusal -> response
+    , packumentDenied :: ResponseHeaders -> Refusal -> response
+    -- ^ Answer a listing that admitted nothing because every exclusion was a policy or integrity refusal.
     , packumentNotFound :: ResponseHeaders -> Refusal -> response
     , packumentNotAcceptable :: ResponseHeaders -> Refusal -> response
     , packumentInternal :: ResponseHeaders -> Refusal -> response
@@ -173,12 +172,13 @@ data DocumentRejectionObserver response = DocumentRejectionObserver
 mapPackumentReplies :: (a -> b) -> PackumentReplies a -> PackumentReplies b
 mapPackumentReplies convert replies =
     PackumentReplies
-        { packumentForbiddenText = packumentForbiddenText replies
+        { packumentDeniedText = packumentDeniedText replies
         , packumentOk = \headers -> convert . packumentOk replies headers
         , packumentNotModified = convert . packumentNotModified replies
         , packumentUnauthorised = \headers -> convert . packumentUnauthorised replies headers
         , packumentPrivateRefused = \code headers -> convert . packumentPrivateRefused replies code headers
         , packumentForbidden = \headers -> convert . packumentForbidden replies headers
+        , packumentDenied = \headers -> convert . packumentDenied replies headers
         , packumentNotFound = \headers -> convert . packumentNotFound replies headers
         , packumentNotAcceptable = \headers -> convert . packumentNotAcceptable replies headers
         , packumentInternal = \headers -> convert . packumentInternal replies headers
@@ -262,7 +262,9 @@ packumentWith mode replies name request respond = do
   where
     refuse reply headers message = liftIO (respond (reply replies headers (mkRefusal Nothing message)))
 
--- | Observe source sizes and checked rejections, including admission with no surviving contribution.
+{- | Observe source sizes and checked rejections, including admission with no surviving contribution.
+A caller that supplies an absent answer receives it for a name both origins answered @404@ for.
+-}
 withObservedAdmittedDocument ::
     PackumentReplies response ->
     MemoryTicket ->
@@ -271,7 +273,7 @@ withObservedAdmittedDocument ::
     Maybe (DocumentRejectionObserver response) ->
     PackageName ->
     Request ->
-    response ->
+    Maybe response ->
     (CachedDoc -> Int -> Map Text Provenance -> Handler response) ->
     Handler response
 withObservedAdmittedDocument replies ticket observe checkDocument rejected name request absent consume = do
@@ -282,7 +284,7 @@ withObservedAdmittedDocument replies ticket observe checkDocument rejected name 
     if edgeTokenMatches (pdInboundToken deps) clientToken
         then do
             serving <- newServing PackumentFull replies name request ticket admitted
-            serveAdmittedPackument serving{psvAbsent = Just absent, psvInputBytes = observe, psvDocumentBytes = checkDocument, psvRejectionObserver = rejected} clientToken
+            serveAdmittedPackument serving{psvAbsent = absent, psvInputBytes = observe, psvDocumentBytes = checkDocument, psvRejectionObserver = rejected} clientToken
         else refuse packumentUnauthorised unauthorisedMessage
   where
     admitted serving sources plan = do
@@ -391,17 +393,11 @@ serveMergedPackument serving evalCtx record privResult pubResult
     | OriginBudgetExceeded fault <- privResult = budgetRefused fault
     | Just (MissUnresolved failure) <- originMiss privResult = privateUnresolved serving evalCtx privResult failure
     | OriginBudgetExceeded fault <- pubResult = budgetRefused fault
-    | Just absent <- psvAbsent serving
-    , isNothing record
-    , not (pdFirstParty (psvDeps serving) (psvName serving))
+    | not (pdFirstParty deps name)
     , settledAbsence privResult
-    , settledAbsence pubResult =
-        pure absent
-    | isNothing record
-    , not (pdFirstParty deps name)
-    , OriginNotFound <- privResult
-    , OriginNotFound <- pubResult =
-        liftIO (unheldNameReply (servingMetrics serving) (psvReplies serving) (pdHelp deps))
+    , settledAbsence pubResult
+    , Just answer <- unheldAnswer =
+        answer
     | otherwise = withCheckedSourceDocuments serving (catMaybes [originManifest privResult, originManifest pubResult]) $ case views of
         Left _ -> mirrorUnavailable serving
         Right (unmanagedManifest, managedManifest, pending) -> do
@@ -441,6 +437,13 @@ serveMergedPackument serving evalCtx record privResult pubResult
     settledAbsence OriginAbsent = True
     settledAbsence OriginNotFound = True
     settledAbsence _ = False
+    -- A listing answers 404 unless a recorded version survives in the mirror. A coordinate lookup takes
+    -- its own answer, and a recorded name keeps its managed path there.
+    unheldAnswer = case psvAbsent serving of
+        Nothing | noRecordedCopy -> Just (liftIO (unheldNameReply (servingMetrics serving) (psvReplies serving) deps))
+        Just absent | isNothing record -> Just (pure absent)
+        _ -> Nothing
+    noRecordedCopy = either (const False) (\(_, managed, _) -> isNothing managed) views
     deps = psvDeps serving
     name = psvName serving
     rt = psvRuntime serving
@@ -657,27 +660,34 @@ noServeableVersions serving etag verdicts decisions = do
 noSurvivors :: PackumentReplies response -> Maybe HelpMessage -> PackumentStatus -> [ServeDecision] -> response
 noSurvivors replies help status decisions = case status of
     PackumentOk -> packumentInternal replies [] body
+    PackumentDenied -> packumentDenied replies [] body
     PackumentForbidden -> packumentForbidden replies [] body
     PackumentUnavailable retry -> packumentUnavailable replies (retryAfterHeaders retry) body
     PackumentBadGateway -> packumentBadGateway replies [] body
     PackumentServerError -> packumentInternal replies [] body
   where
     message = case status of
-        PackumentForbidden -> packumentForbiddenText replies decisions
+        PackumentDenied -> packumentDeniedText replies decisions
+        PackumentForbidden -> packumentDeniedText replies decisions
         _ -> detailedRejections decisions
 
     !body = mkRefusal help message
 
 collectDecisions :: OriginResult -> OriginResult -> [ServeDecision] -> [ServeDecision]
-collectDecisions privResult pubResult publicExclusions =
-    privateDecision privResult <> publicDecision pubResult <> publicExclusions
+collectDecisions privResult pubResult exclusions =
+    privateLeg <> publicDecision pubResult <> exclusions
+  where
+    -- A private 404 beside a public document the gate refused in full is settled, so the refusals decide.
+    privateLeg = case (privResult, pubResult) of
+        (OriginNotFound, OriginResolved _) | packumentStatus exclusions == PackumentDenied -> []
+        _ -> privateDecision privResult
 
 privateDecision :: OriginResult -> [ServeDecision]
 privateDecision = \case
     OriginBudgetExceeded _ -> [upstreamInvalidDecision]
     OriginAuthorisationFailure _ -> []
     OriginResolved _ -> []
-    -- Unless the public origin also answered 404, a private 404 with no public survivor keeps the outage refusal.
+    -- Unless the public origin settles the name, a private 404 with no public survivor keeps the outage refusal.
     OriginNotFound -> [neededUpstreamUnavailable Nothing]
     OriginUnresolved failure -> [readFailureRefusal neededUpstreamUnavailableMessage failure]
     OriginCooling retry -> [upstreamCooling retry]
@@ -706,14 +716,16 @@ neededUpstreamUnavailableMessage = "a needed upstream was unavailable"
 upstreamInvalidDecision :: ServeDecision
 upstreamInvalidDecision = Reject (Rejection UpstreamInvalid "an upstream returned a packument for a different package")
 
--- | Answer @404@ for a name both origins answered @404@ for, recorded as the artifact path records a missing version.
-unheldNameReply :: MetricsPort -> PackumentReplies response -> Maybe HelpMessage -> IO response
-unheldNameReply metrics replies help = do
+-- Answer 404 for a name no configured origin holds, recorded as the artifact path records a missing version.
+unheldNameReply :: MetricsPort -> PackumentReplies response -> PackumentDeps -> IO response
+unheldNameReply metrics replies deps = do
     mpServeDecision metrics (serveDecisionClass decision)
     recordDenials metrics [decision]
-    pure (packumentNotFound replies [] (mkRefusal help message))
+    pure (packumentNotFound replies [] (mkRefusal (pdHelp deps) message))
   where
-    message = "neither the private nor the public upstream has the requested package"
+    message
+        | isJust (pdPrivateBaseUrl deps) = "neither the private nor the public upstream has the requested package"
+        | otherwise = "the public upstream does not have the requested package"
     decision = rejectUnavailable WontResolve message
 
 -- A private origin that was not read refuses every name, so no public namesake stands in for a

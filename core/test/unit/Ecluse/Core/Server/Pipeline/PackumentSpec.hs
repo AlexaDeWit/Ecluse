@@ -63,9 +63,10 @@ import Ecluse.Core.Server.Pipeline.Packument (
  )
 import Ecluse.Core.Server.Response (
     PackumentStatus (..),
-    RejectReason (Unavailable, UpstreamInvalid),
+    RejectReason (ByPolicy, Unavailable, UpstreamInvalid),
     Rejection (Rejection),
     RetryAfter (RetryAfter),
+    RuleName (RuleName),
     ServeDecision (Reject),
     Transience (WillResolve),
     mkHelpMessage,
@@ -316,7 +317,7 @@ noSurvivorsSpec = describe "the refusal for a listing no version survived" $ do
             `shouldThrow` (== Evaluated)
 
     it "finishes grouped rejection text before an ignoring reply constructor returns" $
-        evaluate (noSurvivors namedReplies{packumentForbiddenText = summarisedRejections} Nothing PackumentForbidden (Reject (Rejection UpstreamInvalid "detail") : impureThrow Evaluated))
+        evaluate (noSurvivors namedReplies{packumentDeniedText = summarisedRejections} Nothing PackumentDenied (Reject (Rejection UpstreamInvalid "detail") : impureThrow Evaluated))
             `shouldThrow` (== Evaluated)
 
     for_ [(PackumentOk, 500), (PackumentUnavailable Nothing, 503), (PackumentBadGateway, 502), (PackumentServerError, 500)] $ \(status, code) ->
@@ -324,6 +325,12 @@ noSurvivorsSpec = describe "the refusal for a listing no version survived" $ do
             let response = responseToWai npmPackumentContract (noSurvivors npmPackumentReplies (Just (mkHelpMessage "Help.")) status [Reject (Rejection UpstreamInvalid "full upstream detail")])
             statusOf response `shouldBe` code
             responseBytes response `shouldReturn` encode (object ["error" .= ("full upstream detail Help." :: Text)])
+
+    it "answers a listing that admitted nothing 404 under the npm error contract, naming the refusals" $ do
+        let denied = Reject (Rejection (ByPolicy (RuleName "BlockedByDefault") []) "thing@1.0.0 was denied (no rule allowed it)")
+            response = responseToWai npmPackumentContract (noSurvivors npmPackumentReplies (Just (mkHelpMessage "Help.")) PackumentDenied [denied])
+        statusOf response `shouldBe` 404
+        responseBytes response `shouldReturn` encode (object ["error" .= ("BlockedByDefault: no allow rule matched (rejection entries: 1) Help." :: Text)])
 
     it "keeps private-access refusal text outside the grouped metadata response" $ do
         let response = responseToWai npmPackumentContract (packumentForbidden npmPackumentReplies [] (mkRefusal (Just (mkHelpMessage "Help.")) "private access was refused"))
@@ -397,12 +404,13 @@ firstPartyMissSpec = describe "a first-party name whose private origin yielded n
 namedReplies :: PackumentReplies Text
 namedReplies =
     PackumentReplies
-        { packumentForbiddenText = detailedRejections
+        { packumentDeniedText = detailedRejections
         , packumentOk = \_ _ -> "ok"
         , packumentNotModified = const "not-modified"
         , packumentUnauthorised = \_ _ -> "unauthorised"
         , packumentPrivateRefused = \_ _ _ -> "private-refused"
         , packumentForbidden = \_ _ -> "forbidden"
+        , packumentDenied = \_ _ -> "denied"
         , packumentNotFound = \_ _ -> "not-found"
         , packumentNotAcceptable = \_ _ -> "not-acceptable"
         , packumentInternal = \_ _ -> "internal"

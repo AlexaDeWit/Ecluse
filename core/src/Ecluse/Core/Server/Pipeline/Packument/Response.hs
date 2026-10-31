@@ -43,20 +43,21 @@ type MetadataResponse refusal =
             )
         )
 
--- | Keep native denial wording and refusal bodies within the shared response order.
+-- | Keep native denial wording and refusal bodies within the shared response order. A listing that admitted nothing answers 404.
 metadataReplies ::
     ([ServeDecision] -> Text) ->
     (Refusal -> refusal) ->
     PackumentReplies (MetadataResponse refusal)
-metadataReplies forbiddenText refusalBody =
+metadataReplies deniedText refusalBody =
     PackumentReplies
-        { packumentForbiddenText = forbiddenText
+        { packumentDeniedText = deniedText
         , packumentOk = \headers body -> FirstResponse (responseValue headers body)
         , packumentNotModified = \headers -> SecondResponse (FirstResponse (responseValue headers ()))
         , packumentUnauthorised = \headers message -> SecondResponse (SecondResponse (FirstResponse (refusalValue headers message)))
         , packumentPrivateRefused = const forbiddenReply
         , packumentForbidden = forbiddenReply
-        , packumentNotFound = \headers message -> SecondResponse (SecondResponse (SecondResponse (SecondResponse (FirstResponse (refusalValue headers message)))))
+        , packumentDenied = notFoundReply
+        , packumentNotFound = notFoundReply
         , packumentNotAcceptable = \headers message -> SecondResponse (SecondResponse (SecondResponse (SecondResponse (SecondResponse (FirstResponse (refusalValue headers message))))))
         , packumentInternal = \headers message -> SecondResponse (SecondResponse (SecondResponse (SecondResponse (SecondResponse (SecondResponse (FirstResponse (refusalValue headers message)))))))
         , packumentBadGateway = \headers message -> SecondResponse (SecondResponse (SecondResponse (SecondResponse (SecondResponse (SecondResponse (SecondResponse (FirstResponse (refusalValue headers message))))))))
@@ -64,6 +65,7 @@ metadataReplies forbiddenText refusalBody =
         }
   where
     forbiddenReply headers message = SecondResponse (SecondResponse (SecondResponse (FirstResponse (refusalValue headers message))))
+    notFoundReply headers message = SecondResponse (SecondResponse (SecondResponse (SecondResponse (FirstResponse (refusalValue headers message)))))
     refusalValue headers message = responseValue headers (refusalBody message)
 
 -- | Answer a private origin's 401 with @replies@' 401 and every other private refusal with its 403.
