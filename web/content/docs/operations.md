@@ -151,7 +151,7 @@ the format to `console` for local development instead. Each JSON line carries th
 | `message` | The message text. | |
 | `service`, `env`, `version` | The resolved identity. | |
 | `dd` | `trace_id` and `span_id`. | Present only while a span is in scope. |
-| `data` | The emitting call's own fields. | |
+| `data` | The emitting call's own fields. | Every line a request logs names its emitting module in `module`. |
 | `katip` | The `katip` emitter fields. | These include the emitting process's hostname (`katip.host`), so a collector's own host attribution governs the line's `host`. |
 
 Four of those names matter to Datadog specifically: `timestamp`, `status`, `message`, and
@@ -473,7 +473,7 @@ This count excludes registry traffic from other applications.
 Metadata reads, public RubyGems `/versions` directory reads included, record HTTP refusals on
 `ecluse.upstream.fetch.errors` with cause `upstream_status`, including `404`. A malformed
 successful response records `decode` instead, and a response past its bound records `other`.
-Explicit `401` and `403` refusals retain `other` and their existing warning log.
+Explicit `401` and `403` refusals retain `other` and log at `WARN`.
 Metadata `408`, `429`, and server errors log at `ERROR`. A genuine `404` absence logs at `DEBUG`.
 A RubyGems `/versions` `404` is a fault rather than an absence and logs at `WARN`, as do other
 non-success statuses. These logs carry the status and upstream authority, without the upstream
