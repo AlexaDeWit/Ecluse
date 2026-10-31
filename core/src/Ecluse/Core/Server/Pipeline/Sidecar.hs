@@ -245,6 +245,8 @@ publicSelectionCovered ctx expected ticket = do
                 then pure (selectRequest ctx UntrustedOrigin (pdMinIntegrity deps) publicHost Nothing readVersion)
                 else pure Unavailable
         Right (Left (MetadataFetch (FetchCooldown retry))) -> pure (Cooling retry)
+        -- A public index for another project is an unusable reply, never the absence of a recorded version.
+        Right (Left (MetadataNameMismatch _)) | isJust expected -> pure Unavailable
         Right (Right _) | missSettles -> pure (Missing MissAbsent)
         Right (Left err) | missSettles -> pure (Missing (publicMetadataMiss err))
         _ -> pure Unavailable

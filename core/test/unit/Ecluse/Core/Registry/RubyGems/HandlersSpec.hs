@@ -490,7 +490,8 @@ spec = do
                     let rejected = filter ((== Just "denied") . lineMessage) (T.lines logged)
                     length rejected `shouldBe` count
                     readIORef tags `shouldReturn` 2
-                    denials `shouldReturn` replicate count (if missingDatabase then (Nothing, Metric.ReasonUnavailable) else (Just "BlockedByDefault", Metric.ReasonPolicy))
+                    -- An absent coordinate records the denial an absent Cargo or PyPI artifact records.
+                    denials `shouldReturn` (replicate count (if missingDatabase then (Nothing, Metric.ReasonUnavailable) else (Just "BlockedByDefault", Metric.ReasonPolicy)) <> [(Nothing, Metric.ReasonUnavailable) | expected == status404])
                     for_ rejected $ \line -> do
                         line `shouldSatisfy` T.isInfixOf "\"package\":\"acme-1\""
                         line `shouldSatisfy` T.isInfixOf "\"version\":\"2.0\""

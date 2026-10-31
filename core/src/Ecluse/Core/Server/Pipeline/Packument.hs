@@ -22,6 +22,9 @@ module Ecluse.Core.Server.Pipeline.Packument (
 
     -- * The refusal when no version survives (exported for its unit spec)
     noSurvivors,
+
+    -- * The 404 for a name no upstream lists a version of
+    notFoundReply,
 ) where
 
 import Crypto.Hash (Digest, SHA256, hash)
@@ -98,7 +101,7 @@ import Ecluse.Core.Server.Encoding (
 import Ecluse.Core.Server.Fault (RenderEscape (RenderEscape))
 import Ecluse.Core.Server.MetadataGzip (GzipBody (gzipLength), gzipLazyBody, gzipMetadata)
 import Ecluse.Core.Server.MirrorView (mirrorProjectViews, mirrorViewDocuments, publicMirrorCoverage, validateMirrorProject)
-import Ecluse.Core.Server.Pipeline.Diagnostics (warnDivergences)
+import Ecluse.Core.Server.Pipeline.Diagnostics (logRefusedEntries, warnDivergences)
 import Ecluse.Core.Server.Pipeline.Internal (
     VersionVerdict (..),
     admitByIntegrity,
@@ -411,7 +414,7 @@ serveMergedPackument serving evalCtx record privResult pubResult
                 publicManifest = (\manifest -> manifest{manifestInfo = withoutTrustedReleases trustedVersions (manifestInfo manifest)}) <$> originManifest pubResult
             public <- liftIO (gatePublic (observeVersionRejection <$> psvRejectionObserver serving) (srTracing rt) (servingMetrics serving) deps name evalCtx trustedVersions (Map.keysSet pending) publicManifest)
             let sources = privateSources <> maybeToList (paContribution public)
-                required = Map.withoutKeys pending (paBlockedPending public)
+                required = Map.withoutKeys pending (paBlockedPending public <> goneFromBoth pending)
                 covered = Map.null required || maybe False (publicMirrorCoverage required . srcInfo) (paContribution public)
             if not covered || fmap (infoVersions . manifestInfo) managedManifest /= fmap (infoVersions . srcInfo) managed
                 then mirrorUnavailableWithRetry serving (case pubResult of OriginCooling retry -> Just retry; _ -> Nothing)
@@ -434,7 +437,7 @@ serveMergedPackument serving evalCtx record privResult pubResult
                             | otherwise ->
                                 let refused = privateExclusions <> managedExclusions <> paVerdicts public
                                  in case collectDecisions privResult pubResult (map vvDecision refused) of
-                                        [] -> notFound "no upstream lists a version of the requested package"
+                                        [] -> unlisted refused
                                         decisions -> noServeableVersions serving (ctxAdvisoryEtag evalCtx) refused decisions
   where
     budgetRefused fault =
@@ -447,6 +450,19 @@ serveMergedPackument serving evalCtx record privResult pubResult
     unheldAnswer
         | noRecordedCopy = Just (notFound (unheldMessage deps))
         | otherwise = Nothing
+    -- With no other cause, documents that dropped every version entry refuse the listing and log why on every
+    -- request, as the metadata cache logs a drop only when it reads. Documents that list no version leave a 404.
+    unlisted refused = case [(upstream, url, manifest) | (upstream, url, result) <- origins, Just manifest <- [originManifest result], droppedEveryEntry manifest] of
+        [] -> notFound "no upstream lists a version of the requested package"
+        dropped -> do
+            for_ dropped $ \(_, url, manifest) -> logRefusedEntries name url (infoInvalidEntries (manifestInfo manifest))
+            noServeableVersions serving (ctxAdvisoryEtag evalCtx) refused [malformedEntries [upstream | (upstream, _, _) <- dropped]]
+    origins = [("the private upstream", maybe "" registryUrlText (pdPrivateBaseUrl deps), privResult), ("the public upstream", registryUrlText (pdPublicBaseUrl deps), pubResult)]
+    -- Beside a private 404, a coordinate lookup releases the recorded versions the public document lacks too, so
+    -- their artifacts answer 404 as on Cargo and PyPI. A listing keeps them.
+    goneFromBoth pending = case originManifest pubResult of
+        Just manifest | isJust (psvAbsent serving), settledAbsence privResult -> Map.keysSet (Map.withoutKeys pending (Map.keysSet (infoVersions (manifestInfo manifest))))
+        _ -> Set.empty
     noRecordedCopy = either (const False) (\(_, managed, _) -> isNothing managed) views
     deps = psvDeps serving
     name = psvName serving
@@ -674,11 +690,9 @@ noSurvivors replies help status decisions = case status of
 
     !body = mkRefusal help message
 
--- With nothing else to name, the cause is the malformed entries the documents dropped, if any.
 collectDecisions :: OriginResult -> OriginResult -> [ServeDecision] -> [ServeDecision]
-collectDecisions privResult pubResult exclusions = case privateLeg <> publicDecision pubResult <> exclusions of
-    [] -> malformedEntries privResult pubResult
-    decisions -> decisions
+collectDecisions privResult pubResult exclusions =
+    privateLeg <> publicDecision pubResult <> exclusions
   where
     -- A private 404 leaves the listing to the public origin. A public document the gate refused in full or
     -- that lists no version settles it, and a failed public read refuses it by its own cause.
@@ -688,13 +702,10 @@ collectDecisions privResult pubResult exclusions = case privateLeg <> publicDeci
         (OriginNotFound, _) | publicReadFailed pubResult -> []
         _ -> privateDecision privResult
 
--- A listing whose documents dropped every version entry they listed, naming the upstreams that sent them.
-malformedEntries :: OriginResult -> OriginResult -> [ServeDecision]
-malformedEntries privResult pubResult = case [upstream | (upstream, result) <- origins, maybe False droppedEveryEntry (originManifest result)] of
-    [] -> []
-    upstreams -> [Reject (Rejection UpstreamInvalid ("every version entry from " <> mconcat (intersperse " and " upstreams) <> " was malformed or unusable"))]
-  where
-    origins = [("the private upstream", privResult), ("the public upstream", pubResult)]
+-- The refusal of a listing whose documents dropped every version entry they listed, naming the upstreams that sent them.
+malformedEntries :: [Text] -> ServeDecision
+malformedEntries upstreams =
+    Reject (Rejection UpstreamInvalid ("every version entry from " <> mconcat (intersperse " and " upstreams) <> " was malformed or unusable"))
 
 -- Whether a document listed version entries and dropped every one. A dropped tag, time or listing entry is no version.
 droppedEveryEntry :: Manifest -> Bool
@@ -756,7 +767,7 @@ neededUpstreamUnavailableMessage = "a needed upstream was unavailable"
 upstreamInvalidDecision :: ServeDecision
 upstreamInvalidDecision = Reject (Rejection UpstreamInvalid "an upstream returned a packument for a different package")
 
--- Answer 404 with this cause, recorded as the artifact path records a missing version.
+-- | Answer 404 with this cause, recorded as the artifact path records a missing version.
 notFoundReply :: MetricsPort -> PackumentReplies response -> Maybe HelpMessage -> Text -> IO response
 notFoundReply metrics replies help message = do
     mpServeDecision metrics (serveDecisionClass decision)

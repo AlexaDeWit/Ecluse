@@ -42,7 +42,7 @@ import Ecluse.Core.Server.MirrorView (readMirrorCompanion, validateMirrorProject
 import Ecluse.Core.Server.Path (Filename, unFilename)
 import Ecluse.Core.Server.Pipeline.Internal (VersionVerdict (VersionVerdict), logDenials, recordDenials, statusServeDecision)
 import Ecluse.Core.Server.Pipeline.Origin (ObservedReadBoundExceeded (ObservedReadBoundExceeded), ReadFailure (ReadInvalid, ReadUnavailable), fetchReadFailure, statusReadFailure)
-import Ecluse.Core.Server.Pipeline.Packument (DocumentRejectionObserver (..), PackumentReplies (..), answerMetadataBytes, mapPackumentReplies, noSurvivors, withObservedAdmittedDocument)
+import Ecluse.Core.Server.Pipeline.Packument (DocumentRejectionObserver (..), PackumentReplies (..), answerMetadataBytes, mapPackumentReplies, noSurvivors, notFoundReply, withObservedAdmittedDocument)
 import Ecluse.Core.Server.Pipeline.Shared (forwardedCredential, retryAfterHeaders, withListingAdmission, withMetadataAdmission)
 import Ecluse.Core.Server.Pipeline.Tarball (headTarball, serveTarball)
 import Ecluse.Core.Server.Pipeline.Tarball.Types (TarballReplies)
@@ -106,7 +106,7 @@ resolveCoordinate ticket observe request file = do
         [] -> case matches of
             [selected] -> pure (Right selected)
             [] -> case denied of
-                Nothing -> pure (Left (packumentNotFound rubyReplies [] (mkRefusal Nothing "the native coordinate is absent")))
+                Nothing -> Left <$> absentCoordinate
                 Just (Left refusal) -> pure (Left refusal)
                 Just (Right rejection) -> Left <$> coordinateRefusal deps rejection
             _ -> pure (Left (rubyBadRequest "the native coordinate names more than one admitted artifact"))
@@ -151,6 +151,12 @@ resolveCoordinate ticket observe request file = do
                             case refusal of
                                 Just current -> continueRejected current next
                                 Nothing -> next denied names
+
+-- A coordinate no upstream lists answers 404, recorded as an absent Cargo or PyPI artifact is.
+absentCoordinate :: Handler RubyResponse
+absentCoordinate = do
+    rt <- asks ctxRuntime
+    liftIO (notFoundReply (srMetrics rt) rubyReplies Nothing "the native coordinate is absent")
 
 terminalRejection :: Rejection -> Bool
 terminalRejection rejection = case rejectionReason rejection of

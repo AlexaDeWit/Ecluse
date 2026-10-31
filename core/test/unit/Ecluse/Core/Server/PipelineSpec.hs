@@ -1233,6 +1233,14 @@ absentNameSpec = do
                             traverse (\method -> captureRouted rt binding method (snd listing)) [methodGet, methodHead]
                 map (\response -> (statusCode (responseStatus response), lookup hRetryAfter (responseHeaders response))) responses
                     `shouldBe` replicate 2 (503, Just "120")
+    for_ [entry | entry@(RubyGems, _, _, _, _) <- absentNameRoutes] $ \(ecosystem, router, credential, _, artifacts) ->
+        for_ artifacts $ \(route, path) ->
+            it ("rubygems " <> route <> " records an unavailable decision and its denial for GET and HEAD when neither origin holds the gem") $ do
+                (recording, decisions) <- recordingMetricsPort
+                (metrics, denials) <- recordingDenials recording
+                void (withAbsentPrivate ecosystem router credential status404 metrics $ \rt binding -> traverse (\method -> captureRouted rt binding method path) [methodGet, methodHead])
+                decisions `shouldReturn` [Unavailable, Unavailable]
+                denials `shouldReturn` replicate 2 (Nothing, Metric.ReasonUnavailable)
     describe "a public reply Écluse cannot use beside a private 404, through ecosystem routes" $
         invalidPublicReplyRoutes (Just (const notFoundOrigin))
     it "answers the npm packument 502 for GET and HEAD beside a private 404 when the public document names another package" $
@@ -1404,14 +1412,34 @@ leftpadDocument body ecosystem request respond
         Cargo -> ("/le/ft/leftpad", "text/plain")
         RubyGems -> ("/info/leftpad", "text/plain")
 
--- A listing whose every upstream version row is malformed answers 502 with that cause, wherever the rows
--- sit. A valid version the gate denies beside a malformed one keeps the policy 404.
+-- A listing whose every upstream version row is malformed answers 502 and logs that cause on every request,
+-- wherever the rows sit. Versions the gate denies beside malformed rows keep the policy 404.
 malformedListingSpec :: Spec
 malformedListingSpec = describe "a listing whose every upstream version row is malformed" $ do
     placedListingAnswers placements 502 [Npm, Cargo, RubyGems] "was malformed or unusable"
     it "keeps the npm packument 404 when the gate denies the valid version beside a malformed one" $ do
         denyAll <- prepare inertRuleDeps []
         listingOver notFoundOrigin (publicAppOver ["1.0.0", "2.0.0"] "1.0.0" withoutDistAt2) (\deps -> deps{pdRules = denyAll}) 404 Nothing Deny
+    it "keeps the npm packument 404 when every private entry is malformed and the gate denies every public version" $ do
+        denyAll <- prepare inertRuleDeps []
+        listingOver (malformedDocument Npm) upstreamApp (\deps -> deps{pdRules = denyAll}) 404 Nothing Deny
+    it "logs why it refused the npm packument for a request that joined another's public read" $ do
+        completed <- timeout 5_000_000 $ withSweeper $ \deadlines -> do
+            started <- newEmptyMVar
+            release <- newEmptyMVar
+            joined <- newEmptyMVar
+            let metrics = noopMetricsPort{mpCacheRequest = \outcome -> when (outcome == Metric.Collapsed) (putMVar joined ())}
+                upstream req respond = putMVar started () >> takeMVar release >> malformedDocument Npm req respond
+            rt <- testServeRuntime deadlines metrics
+            testWithApplication (pure upstream) $ \publicPort -> do
+                deps <- depsFor publicPort
+                let serve logEnv = captureServeWithLog logEnv npmPackumentContract rt (mountWith deps) (servePackument npmPackumentReplies leftpadName defaultRequest)
+                ((responses, ()), logged) <-
+                    captureJsonLog $ \logEnv ->
+                        concurrently (mapConcurrently (const (serve logEnv)) [1, 2 :: Int]) (takeMVar started >> takeMVar joined >> putMVar release ())
+                map (statusCode . responseStatus) responses `shouldBe` [502, 502]
+                length [line | line <- lines logged, maybe False ("the listing is refused" `T.isInfixOf`) (lineMessage line)] `shouldBe` 2
+        completed `shouldBe` Just ()
   where
     placements =
         [ ("the rows public and no private origin", Nothing, malformedDocument)

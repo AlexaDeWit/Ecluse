@@ -15,6 +15,7 @@ module Ecluse.Core.Server.Pipeline.Diagnostics (
 
     -- * Dropped entries and divergence
     logInvalidEntries,
+    logRefusedEntries,
     logDirectoryInvalidEntries,
     warnDivergences,
 ) where
@@ -179,14 +180,18 @@ warnUnreachable subject origin fault =
 
 -- | The malformed packument entries the projection dropped rather than failing the whole document.
 logInvalidEntries :: (KatipContext m) => PackageName -> Text -> [InvalidEntry] -> m ()
-logInvalidEntries = logDroppedEntries . PackageSubject
+logInvalidEntries = logDroppedEntries "the rest is served" . PackageSubject
+
+-- | The malformed entries of a packument that kept no version, logged with the listing it refused.
+logRefusedEntries :: (KatipContext m) => PackageName -> Text -> [InvalidEntry] -> m ()
+logRefusedEntries = logDroppedEntries "no version remains, so the listing is refused" . PackageSubject
 
 -- | The malformed rows a registry-wide directory dropped. The line names no package.
 logDirectoryInvalidEntries :: (KatipContext m) => Text -> [InvalidEntry] -> m ()
-logDirectoryInvalidEntries = logDroppedEntries DirectorySubject
+logDirectoryInvalidEntries = logDroppedEntries "the rest is served" DirectorySubject
 
-logDroppedEntries :: (KatipContext m) => Subject -> Text -> [InvalidEntry] -> m ()
-logDroppedEntries subject baseUrl entries =
+logDroppedEntries :: (KatipContext m) => Text -> Subject -> Text -> [InvalidEntry] -> m ()
+logDroppedEntries outcome subject baseUrl entries =
     katipAddContext payload $
         logFM WarningS (ls message)
   where
@@ -202,7 +207,7 @@ logDroppedEntries subject baseUrl entries =
 
     message :: Text
     message =
-        "dropped " <> show entriesLen <> " malformed entr" <> plural <> " from an upstream " <> documentNoun subject <> " (the rest is served)"
+        "dropped " <> show entriesLen <> " malformed entr" <> plural <> " from an upstream " <> documentNoun subject <> " (" <> outcome <> ")"
     plural = if entriesLen == 1 then "y" else "ies"
 
 renderDroppedEntry :: InvalidEntry -> Text

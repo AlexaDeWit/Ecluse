@@ -383,6 +383,33 @@ pypiReads = describe "managed PyPI mirror reads" $ do
             withManagedProxy view False (withoutFiles (native status200 [1, 2])) (native publicStatus []) $
                 recordedPathAnswers expected artifactPath
 
+    it (caseLabel "integration/mirror-view/native-030" "answers a recorded distribution and its companion 404 when the public project lacks the version beside a private 404") $ do
+        view <- recordedDemoView
+        withManagedProxy view False (native status404 []) (projectVersions sourceEnvelope ["2.0"]) $ \app ->
+            for_ [artifactPath, artifactPath <> ".metadata"] $ \path -> recordedPathAnswers status404 path app
+
+    for_ [("covered", native status200 [1, 2], status200), ("uncovered", native status200 [1], status503)] $ \(identifier, public, expected) ->
+        it (caseLabel ("integration/mirror-view/native-033/" <> identifier) "serves public bytes for a recorded file the private archive lost only under mirror coverage") $ do
+            view <- recordedDemoView
+            rules <- prepare inertRuleDeps [atDefaultPrecedence (AllowByIdentity "demo")]
+            queue <- newTestMemoryQueue
+            withManagedProxyOver (queue, \deps -> deps{pdRules = rules}) view False (withoutFiles (native status200 [1, 2])) public $ \app -> do
+                recordedPathAnswers expected artifactPath app
+                response <- getPath artifactPath app
+                (simpleBody response == "wheel") `shouldBe` (expected == status200)
+
+    it (caseLabel "integration/mirror-view/native-034" "keeps a recorded distribution and its companion unavailable when the public index names another project") $ do
+        view <- recordedDemoView
+        withManagedProxy view False (native status404 []) otherProjectIndex $ \app ->
+            for_ [artifactPath, artifactPath <> ".metadata"] $ \path -> recordedPathAnswers status503 path app
+  where
+    recordedDemoView = do
+        inventory <- mirrorSample [1, 2] False "https://public.test/" "source"
+        record <- expectRight (extendProjectRecord pypiStateFormat defaultLimits target inventory Nothing)
+        testView (pure (Right (StateLoaded revision record)))
+    otherProjectIndex _ respond =
+        respond (responseLBS status200 [("Content-Type", "application/vnd.pypi.simple.v1+json")] (encode (object ["meta" .= object ["api-version" .= ("1.0" :: Text)], "name" .= ("other" :: Text), "files" .= ([] :: [Value])])))
+
 newFilePaths :: [ByteString]
 newFilePaths = [path, path <> ".metadata"]
   where
@@ -415,6 +442,11 @@ cargoReads = describe "managed Cargo mirror reads" $ do
             adapter <- requiredAdapter Cargo
             withMountProxy Cargo adapter (\deps -> deps{pdEgressUrl = Right . loopbackRegistryUrl}) view (crateIndex (map original ["1.9.0", "1.10.0", "1.9.1"])) public $
                 recordedPathAnswers expected archivePath
+    it (caseLabel "integration/mirror-view/native-031" "answers a recorded archive 404 when the public crate lacks the version beside a private 404") $ do
+        view <- recordedCrateView
+        adapter <- requiredAdapter Cargo
+        withMountProxy Cargo adapter (\deps -> deps{pdEgressUrl = Right . loopbackRegistryUrl}) view crateDiscovery (crateIndex [original "2.0.0"]) $
+            recordedPathAnswers status404 archivePath
   where
     archivePath = "/cargo/crates/thing/1.9.0/thing-1.9.0.crate"
     name = mkPackageName Cargo Nothing "thing"
@@ -457,6 +489,15 @@ rubyGemsReads = describe "managed RubyGems mirror reads" $ do
             withMountProxy RubyGems adapter id view (native status404 []) public $ \app ->
                 for_ ["/rubygems/gems/ecluse-fixture-platform-1.0.0.gem", "/rubygems/quick/Marshal.4.8/ecluse-fixture-platform-1.0.0.gemspec.rz"] $ \path ->
                     recordedPathAnswers expected path app
+    it (caseLabel "integration/mirror-view/native-032" "answers a recorded gem's archive and compact specification 404 when the public gem lacks the version beside a private 404") $ do
+        view <- recordedGemView
+        adapter <- requiredAdapter RubyGems
+        let laterOnly request respond = case pathInfo request of
+                ["info", "ecluse-fixture-platform"] -> respond (responseLBS status200 [] ("---\n2.0.0 |checksum:" <> encodeUtf8 (T.replicate 64 "a") <> "\n"))
+                _ -> respond (responseLBS status404 [] "")
+        withMountProxy RubyGems adapter id view (native status404 []) laterOnly $ \app ->
+            for_ ["/rubygems/gems/ecluse-fixture-platform-1.0.0.gem", "/rubygems/quick/Marshal.4.8/ecluse-fixture-platform-1.0.0.gemspec.rz"] $ \path ->
+                recordedPathAnswers status404 path app
   where
     unpositioned row = row{rowPosition = 0}
     recordedGemView = do

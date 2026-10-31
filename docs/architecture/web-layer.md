@@ -358,7 +358,9 @@ wins:
   or a public reply Écluse cannot use, a `401` or `403` included, beside a private `404`, beside a
   private document that admits nothing, or with no private upstream. A listing whose every version
   entry from the upstreams was malformed, such as a Cargo or RubyGems row with no checksum, answers
-  `502` too. Its cause is in the body, and the dropped entries are in the warning log.
+  `502` too. Its cause is in the body on npm, Cargo and RubyGems. A PyPI body carries only the
+  operator's help message, so the cause is in the warning log, which names each dropped entry on
+  every such request.
 - Otherwise `500` if none is retryable but an exclusion is a permanent inability.
 - Otherwise `404` if every exclusion is a policy or integrity refusal. The body names the
   refusals on npm, Cargo and RubyGems. A PyPI body carries only the operator's help message, so
