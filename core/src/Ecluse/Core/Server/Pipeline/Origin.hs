@@ -109,8 +109,8 @@ data OriginResult
     | -- | The origin answered 404, so it holds no such package. It degrades to no contribution.
       OriginNotFound
     | {- | The origin was not read, for this cause. A private one refuses the request. A public one
-      contributes nothing, unless it was unavailable on a mount with no private origin, where it
-      refuses the listing.
+      contributes nothing, unless the mount has no private origin, where its cause refuses the
+      listing as a private one would.
       -}
       OriginUnresolved ReadFailure
     | -- | Public reads are suspended until the authority cooldown expires.
@@ -151,11 +151,13 @@ metadataReadFailure = \case
     MetadataUndecodable -> Just ReadInvalid
     MetadataNameMismatch _ -> Just ReadInvalid
 
--- | The refusal a failed private read renders: @503@ under these words with its delay, or @502@ for an invalid reply.
-readFailureRefusal :: Text -> ReadFailure -> ServeDecision
-readFailureRefusal unavailable = \case
+{- | The refusal a failed read of the named upstream renders: @503@ under the given words with its
+delay, or @502@ naming that upstream for an invalid reply.
+-}
+readFailureRefusal :: Text -> Text -> ReadFailure -> ServeDecision
+readFailureRefusal upstream unavailable = \case
     ReadUnavailable retry -> rejectUnavailable (WillResolve retry) unavailable
-    ReadInvalid -> Reject (Rejection UpstreamInvalid "the private upstream returned an invalid or unusable reply")
+    ReadInvalid -> Reject (Rejection UpstreamInvalid (upstream <> " returned an invalid or unusable reply"))
 
 -- | Classify a failed exchange. An unformable URL sent no request, and keeps the unavailable refusal.
 fetchReadFailure :: FetchFault -> ReadFailure

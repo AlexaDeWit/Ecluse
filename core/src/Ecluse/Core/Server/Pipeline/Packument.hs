@@ -681,9 +681,9 @@ collectDecisions privResult pubResult exclusions =
     privateLeg = case (privResult, pubResult) of
         (OriginNotFound, OriginResolved _) | packumentStatus exclusions == PackumentDenied -> []
         _ -> privateDecision privResult
-    -- With no private origin the public one is the only source, so its outage refuses as a private one does.
+    -- With no private origin the public one is the only source, so its failed read refuses as a private one does.
     publicLeg = case (privResult, pubResult) of
-        (OriginAbsent, OriginUnresolved (ReadUnavailable retry)) -> [neededUpstreamUnavailable retry]
+        (OriginAbsent, OriginUnresolved failure) -> [readFailureRefusal "the public upstream" neededUpstreamUnavailableMessage failure]
         _ -> publicDecision pubResult
 
 privateDecision :: OriginResult -> [ServeDecision]
@@ -693,7 +693,7 @@ privateDecision = \case
     OriginResolved _ -> []
     -- Unless the public origin settles the name, a private 404 with no public survivor keeps the outage refusal.
     OriginNotFound -> [neededUpstreamUnavailable Nothing]
-    OriginUnresolved failure -> [readFailureRefusal neededUpstreamUnavailableMessage failure]
+    OriginUnresolved failure -> [readFailureRefusal "the private upstream" neededUpstreamUnavailableMessage failure]
     OriginCooling retry -> [upstreamCooling retry]
     OriginNameMismatch -> [upstreamInvalidDecision]
     -- An unconfigured private leg (a serve-only pure gate) is not an outage:

@@ -109,7 +109,7 @@ privateReadRefusal deps name failure
     | pdFirstParty deps name = case failure of
         ReadUnavailable retry -> firstPartyUnresolved retry
         ReadInvalid -> firstPartyInvalid
-    | otherwise = readFailureRefusal upstreamUnavailableMessage failure
+    | otherwise = readFailureRefusal "the private upstream" upstreamUnavailableMessage failure
 
 {- A first-party artifact the private upstream does not hold. No public artifact may stand in for
 it, and 'artifactOutcomeStatus' renders it @404@. -}

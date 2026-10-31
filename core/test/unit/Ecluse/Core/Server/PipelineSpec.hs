@@ -52,6 +52,7 @@ import Ecluse.Core.Rules (PreparedRule, RuleDeps (rdSourceReporter), prepare)
 import Ecluse.Core.Rules.Outage (OutageState (Healthy), SourceHealth (SourceAnswered), SourceReporter (noteAdmission, reportSource), sourceReporter, tvarOutageStore)
 import Ecluse.Core.Rules.Types (PrecededRule, Rule (AllowIfOlderThan))
 import Ecluse.Core.Rules.Types qualified as Rules
+import Ecluse.Core.Security (Limits (maxMetadataBytes), defaultLimits)
 import Ecluse.Core.Security.Egress (RegistryUrl, registryUrlText)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Core.Server.Admission (newServeAdmission, newServeAdmissionTuned, withOverflow, withServeAdmission)
@@ -1236,16 +1237,21 @@ withAbsentPrivate ecosystem router credential publicStatus metrics action =
 
 -- A mount of the ecosystem, with the given private origin or none, whose public origin answers the given status.
 withAbsentPublic :: Ecosystem -> MountRouter -> CredentialMapping -> Maybe Int -> Status -> MetricsPort -> (ServeRuntime -> MountBinding -> IO a) -> IO a
-withAbsentPublic ecosystem router credential privatePort publicStatus metrics action =
-    testWithApplication (pure (\_ respond -> respond (responseLBS publicStatus [] ""))) $ \publicPort -> withSweeper $ \deadlines -> do
+withAbsentPublic ecosystem router credential privatePort publicStatus =
+    withPublicReply ecosystem router credential privatePort (responseLBS publicStatus [] "") id
+
+-- A mount of the ecosystem, with the given private origin or none and the given change, whose public origin gives one fixed reply.
+withPublicReply :: Ecosystem -> MountRouter -> CredentialMapping -> Maybe Int -> Response -> (PackumentDeps -> PackumentDeps) -> MetricsPort -> (ServeRuntime -> MountBinding -> IO a) -> IO a
+withPublicReply ecosystem router credential privatePort reply change metrics action =
+    testWithApplication (pure (\_ respond -> respond reply)) $ \publicPort -> withSweeper $ \deadlines -> do
         rt <- testServeRuntime deadlines metrics
         adapter <- requiredAdapter ecosystem
         let origin port = loopbackRegistryUrl ("http://localhost:" <> show port)
             deps = (serveDepsFor adapter (origin <$> privatePort) (origin publicPort) NoMirrorWrite [] (pure fixedNow)){pdMountBaseUrl = "http://proxy.test"}
-        action rt (mountUnder credential deps){bindingRouter = router}
+        action rt (mountUnder credential (change deps)){bindingRouter = router}
 
 -- With no private origin the public one decides alone, on every ecosystem: its 404 settles the name, and
--- its outage answers 503 with the cause, as a private outage does.
+-- a failed read refuses as a private one does, 503 when it was unavailable and 502 for a reply Écluse cannot use.
 unconfiguredPrivateSpec :: Spec
 unconfiguredPrivateSpec = do
     describe "a name the public origin answers 404 for on a mount with no private origin, through ecosystem routes" $ do
@@ -1264,6 +1270,26 @@ unconfiguredPrivateSpec = do
                 body <- withAbsentPublic ecosystem router credential Nothing status503 noopMetricsPort $ \rt binding ->
                     captureRouted rt binding methodGet path >>= responseBytes
                 LBS.toStrict body `shouldSatisfy` BS.isInfixOf "a needed upstream was unavailable"
+    describe "a public reply Écluse cannot use on a mount with no private origin, through ecosystem routes" $
+        for_ invalidPublicReplies $ \(cause, reply, change, budgeted) ->
+            for_ absentNameRoutes $ \(ecosystem, router, credential, (route, path), _) -> do
+                let named = toString (ecosystemName ecosystem) <> " " <> route
+                    withReply = withPublicReply ecosystem router credential Nothing reply change
+                    publicLegDecides = ecosystem `notElem` budgeted
+                    recorded = if publicLegDecides then ", recording an unavailable decision and its denial" else ""
+                it (named <> " answers 502 for GET and HEAD after " <> cause <> recorded) $ do
+                    (recording, decisions) <- recordingMetricsPort
+                    (metrics, denials) <- recordingDenials recording
+                    responses <- withReply metrics $ \rt binding -> traverse (\method -> captureRouted rt binding method path) [methodGet, methodHead]
+                    map (statusCode . responseStatus) responses `shouldBe` [502, 502]
+                    when publicLegDecides $ do
+                        decisions `shouldReturn` [Unavailable, Unavailable]
+                        denials `shouldReturn` replicate 2 (Nothing, Metric.ReasonUnavailable)
+                -- A PyPI refusal body carries only the configured help message.
+                when (publicLegDecides && ecosystem /= PyPI) $
+                    it (named <> " names the public upstream in its body after " <> cause) $ do
+                        body <- withReply noopMetricsPort $ \rt binding -> captureRouted rt binding methodGet path >>= responseBytes
+                        LBS.toStrict body `shouldSatisfy` BS.isInfixOf "the public upstream returned an invalid or unusable reply"
   where
     -- Every route answers this status for GET and HEAD, and the listing records an unavailable decision and its denial.
     publicOnlyRoutes :: Status -> Int -> Spec
@@ -1283,6 +1309,18 @@ unconfiguredPrivateSpec = do
                 void (captured metrics (snd listing))
                 decisions `shouldReturn` [Unavailable, Unavailable]
                 denials `shouldReturn` replicate 2 (Nothing, Metric.ReasonUnavailable)
+
+{- Public replies Écluse cannot use, each with the mount change that makes it one, and the ecosystems
+whose request-wide read budget refuses it with its own 502 before the public leg decides. RubyGems
+reads /info under a budget the size of the document bound.
+-}
+invalidPublicReplies :: [(String, Response, PackumentDeps -> PackumentDeps, [Ecosystem])]
+invalidPublicReplies =
+    [ ("an unfollowed redirect", responseLBS status302 [(hLocation, "http://elsewhere.test/leftpad")] "", id, [])
+    , ("an unexpected status", responseLBS status400 [] "", id, [])
+    , ("an undecodable document", responseLBS status200 [] "\255 not a registry document", id, [])
+    , ("a document past its bound", responseLBS status200 [] (LBS.replicate 64 0x7b), \deps -> deps{pdLimits = defaultLimits{maxMetadataBytes = 8}}, [RubyGems])
+    ]
 
 -- A public listing the gate denies in full answers 404 beside a private 404 or with no private origin. The artifact keeps its 403.
 deniedListingSpec :: Spec

@@ -354,7 +354,8 @@ wins:
 - `503` if any rejection was transient, or a needed upstream was unavailable.
 - Otherwise `502` if a responding upstream returned an invalid response: a packument whose
   self-reported name is for a different package (see
-  [name validation](registry-model.md#the-route-name-is-the-served-names-validation-authority)).
+  [name validation](registry-model.md#the-route-name-is-the-served-names-validation-authority)),
+  or, on a mount with no private upstream, any public reply Écluse cannot use.
 - Otherwise `500` if none is retryable but an exclusion is a permanent inability.
 - Otherwise `404` if every exclusion is a policy or integrity refusal. The body names the
   refusals, and the serve decision and denial metrics record a denial. A private `404` beside
