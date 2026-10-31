@@ -17,7 +17,7 @@ import Ecluse.Core.Registry.PyPI.Document (simpleFiles)
 import Ecluse.Core.Registry.PyPI.Metadata (projectPyPIStream)
 import Ecluse.Core.Registry.PyPI.Reader (fileUniqueFields, pypiWalk)
 import Ecluse.Core.Registry.PyPI.Streaming (PyPIRead (..))
-import Ecluse.Core.Registry.PyPI.StreamingProjection (collectField, emptyProjection, keepsFile)
+import Ecluse.Core.Registry.PyPI.StreamingProjection (claimsEnvelope, collectField, emptyProjection, keepsFile)
 import Ecluse.Core.Security (Limits (maxVersionCount), defaultLimits)
 import Ecluse.Test.Contract.Catalogue (caseLabel)
 import Ecluse.Test.Contract.Retention (boundedRetention)
@@ -61,7 +61,7 @@ thing = unscopedPyPI "thing"
 
 heldFor :: PyPIRead -> Limits -> (Int -> ByteString) -> Int -> IO Integer
 heldFor mode limits body count =
-    heldDuring (pypiWalk 64 mode (collectField limits) keepsFile (testTable fileUniqueFields) (emptyProjection thing)) (body count)
+    heldDuring (pypiWalk 64 mode (collectField limits) keepsFile claimsEnvelope (testTable fileUniqueFields) (emptyProjection thing)) (body count)
 
 -- Files arrays that each hold one file of the release. Only the first claims the key.
 repeatedArrays :: Int -> ByteString

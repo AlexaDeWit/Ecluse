@@ -26,7 +26,7 @@ import Ecluse.Core.Registry.PyPI.Metadata (projectPyPIPacked, projectPyPIStream)
 import Ecluse.Core.Registry.PyPI.Project (fcVersionKey, fileCoordinate)
 import Ecluse.Core.Registry.PyPI.Reader (fileUniqueFields, pypiWalk)
 import Ecluse.Core.Registry.PyPI.Streaming (PyPIField (EnvelopeField, EnvelopeItem, FileField), PyPIRead (..))
-import Ecluse.Core.Registry.PyPI.StreamingProjection (PyPIProjection, collectField, emptyProjection, keepsFile)
+import Ecluse.Core.Registry.PyPI.StreamingProjection (PyPIProjection, claimsEnvelope, collectField, emptyProjection, keepsFile)
 import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), LimitError (BodyTooLarge, TooManyVersions), Limits (..), defaultLimits)
 import Ecluse.Core.Version (canonicalPep440, renderVersion)
 import Ecluse.Test.Package (unscopedPyPI)
@@ -60,7 +60,7 @@ spec = describe "pypiWalk" $ do
         let items = "0,0,0"
             body = "{\"meta\":{\"api-version\":\"1.1\",\"tracks\":[" <> items <> "],\"tracks\":[" <> items <> ",0]},\"name\":\"thing\",\"alternate-locations\":[],\"alternate-locations\":[" <> items <> "],\"meta\":{\"tracks\":[" <> items <> "]},\"files\":[]}"
             envelopes key events = [value | EnvelopeField named value <- events, named == key]
-        streamed <- expectRight (walkJsonChunks (MetadataBodyLimit (BS.length body)) (pypiWalk 64 FullRead (\seen field -> Right (field : seen)) (const False) (testTable fileUniqueFields) []) [body])
+        streamed <- expectRight (walkJsonChunks (MetadataBodyLimit (BS.length body)) (pypiWalk 64 FullRead (\seen field -> Right (field : seen)) (const False) (\seen key -> not (null (envelopes key seen))) (testTable fileUniqueFields) []) [body])
         events <- reverse <$> expectRight (streamValue streamed)
         envelopes "alternate-locations" events `shouldBe` [toJSON ([] :: [Int])]
         envelopes "meta" events `shouldBe` [object ["api-version" .= ("1.1" :: Text), "tracks" .= ([0, 0, 0] :: [Int])]]
@@ -245,7 +245,7 @@ data Reading = Reading Int PyPIRead (Maybe Int) Bool
 
 walked :: Reading -> BodyLimit -> [ByteString] -> Outcome
 walked reading@(Reading depth mode _ production) bound =
-    emitted . walkJsonChunks bound (pypiWalk depth mode (collect reading) keeps (testTable fileUniqueFields) start)
+    emitted . walkJsonChunks bound (pypiWalk depth mode (collect reading) keeps (claimsEnvelope . fst) (testTable fileUniqueFields) start)
   where
     keeps (projection, _) = not production || keepsFile projection
 
@@ -256,12 +256,14 @@ reference reading@(Reading depth mode _ _) bound = emitted . parseJsonChunks bou
 start :: (PyPIProjection, [PyPIField])
 start = (emptyProjection thing, [])
 
--- The reference takes an envelope array whole, so the walk's events for its items stay out of the comparison.
+-- The reference takes an envelope array whole, and reads a repeat the walk drops, so the walk's events
+-- for an array's items and both reads' repeats stay out of the comparison.
 collect :: Reading -> (PyPIProjection, [PyPIField]) -> PyPIField -> Either LimitError (PyPIProjection, [PyPIField])
 collect (Reading _ _ cap _) (projection, events) field = do
     projected <- collectField defaultLimits projection field
     case (field, cap) of
         (EnvelopeItem _, _) -> Right (projected, events)
+        (EnvelopeField key _, _) | claimsEnvelope projection key -> Right (projected, events)
         (_, Just most) | length events >= most -> Left (TooManyVersions (length events) most)
         _ -> Right (projected, field : events)
 

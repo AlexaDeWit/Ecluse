@@ -42,7 +42,7 @@ import Ecluse.Core.Registry.PyPI.FileWriter (FileWriter, fileWriter)
 import Ecluse.Core.Registry.PyPI.Reader (fileUniqueFields, pypiFullWalk, pypiWalk)
 import Ecluse.Core.Registry.PyPI.Request (pypiArtifactHosts, simpleIndexRequestUnder)
 import Ecluse.Core.Registry.PyPI.Streaming (PyPIRead (..))
-import Ecluse.Core.Registry.PyPI.StreamingProjection (PyPIProjection, collectField, emptyProjection, finishPackedProjection, finishProjection, keepsFile, packedFileStep, retainedEntries)
+import Ecluse.Core.Registry.PyPI.StreamingProjection (PyPIProjection, claimsEnvelope, collectField, emptyProjection, finishPackedProjection, finishProjection, keepsFile, packedFileStep, retainedEntries)
 import Ecluse.Core.Security (AllowedHostPorts, Limits, ecosystemArtifactAuthorities, maxNestingDepth)
 import Ecluse.Core.Server.Admission.Types (ChargeFactors (..))
 import Ecluse.Core.Version (Version, renderVersion)
@@ -80,7 +80,7 @@ readPyPIIndex limits name mode bound table = readJsonWalk bound (pypiIndexWalk l
 
 -- | The production Simple-index walk over a caller's intern table.
 pypiIndexWalk :: Limits -> PackageName -> PyPIRead -> InternTable -> Cursor -> Step PyPIProjection
-pypiIndexWalk limits name mode table = pypiWalk (maxNestingDepth limits) mode (collectField limits) keepsFile table (emptyProjection name)
+pypiIndexWalk limits name mode table = pypiWalk (maxNestingDepth limits) mode (collectField limits) keepsFile claimsEnvelope table (emptyProjection name)
 
 -- | The packed read returns its final table beside the typed projection and supported files.
 type PyPIFullRead = Walked PyPIProjection
@@ -94,7 +94,7 @@ readPyPIFull pay limits name bound table readChunk = do
 -- | Full reads use the supplied table and writer without materialising file trees, publishing the entries retained.
 pypiPackedWalk :: PrimVar st Int -> Writer st -> FileWriter st -> Limits -> PackageName -> InternTable -> Cursor -> ST st (Steps (ST st) PyPIFullRead)
 pypiPackedWalk entries writer build limits name table =
-    pypiFullWalk build (maxNestingDepth limits) step keepsFile fileStep table (emptyProjection name)
+    pypiFullWalk build (maxNestingDepth limits) step keepsFile claimsEnvelope fileStep table (emptyProjection name)
   where
     counted = countingEntries entries retainedEntries
     step acc field next = counted next (collectField limits acc field)
