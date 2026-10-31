@@ -26,6 +26,7 @@ module Ecluse.Core.Registry.Request (
     ServicePresentation,
     nativePresentation,
     declaredPresentation,
+    declaredUsername,
     presentedMapping,
     presentedRequest,
 
@@ -181,13 +182,20 @@ declaredPresentation mechanism = ServicePresentation (Just (mechanism StoreRead)
 @Authorization@, or the ecosystem's mapping unchanged. Recovery stays the ecosystem's own.
 -}
 presentedMapping :: ServicePresentation -> StoreOperation -> CredentialMapping -> CredentialMapping
-presentedMapping (ServicePresentation onRead onWrite) operation native = case declared of
+presentedMapping presentation operation native = case declaredMechanism presentation operation of
     Nothing -> native
     Just mechanism -> native{credentialHeader = hAuthorization, credentialRender = renderAuthMechanism mechanism}
-  where
-    declared = case operation of
-        StoreRead -> onRead
-        StoreWrite -> onWrite
+
+-- | The username a store's declared Basic mechanism presents on one operation. 'Nothing' where it declares none.
+declaredUsername :: ServicePresentation -> StoreOperation -> Maybe Text
+declaredUsername presentation operation = case declaredMechanism presentation operation of
+    Just (AuthBasic username) -> Just username
+    _ -> Nothing
+
+declaredMechanism :: ServicePresentation -> StoreOperation -> Maybe AuthMechanism
+declaredMechanism (ServicePresentation onRead onWrite) = \case
+    StoreRead -> onRead
+    StoreWrite -> onWrite
 
 {- | Form a request anonymously, then attach the credential under @mapping@. The builder must use its
 credential only to attach it, as every native request builder here does.
