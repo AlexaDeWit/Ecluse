@@ -118,6 +118,8 @@ data BootError
       AdvisoryDenyWithoutStore Ecosystem (NonEmpty Text)
     | -- | An active mount carries a rule its adapter blocks, with the declared reason.
       RuleBlockedOnMount Ecosystem RuleType Text
+    | -- | A rule's revocation reach needs upstream availability updates the Dredger does not read.
+      RuleRevocationUnsupported Ecosystem RuleType
     | -- | An advisory store with no mount leaves @ecluse pilot@ no ecosystem to compile for.
       PilotWithoutEcosystem
     | -- | The progress window is zero or negative. Carries the configured seconds.
@@ -168,6 +170,16 @@ renderBootErrors = T.unlines . map renderBootError
 renderBootError :: BootError -> Text
 renderBootError = \case
     PolicyBootError err -> renderPolicyError err
+    RuleRevocationUnsupported eco ty ->
+        "mount \""
+            <> ecosystemName eco
+            <> "\" carries the rule "
+            <> renderWire ty
+            <> " at revocation, which is unsupported. It evaluates the metadata flags available at admission. Dredger does not refresh later upstream yank or deprecation changes, so accepting this reach would mislead operators. Set appliesTo: [admission] on this rule under "
+            <> mountDocRef eco "rules"
+            <> " ("
+            <> mountKeyRef eco "rules"
+            <> ")."
     RuleBlockedOnMount eco ty reason ->
         "mount \""
             <> ecosystemName eco

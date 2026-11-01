@@ -31,6 +31,7 @@ import Ecluse.Composition.BootError (
         PublicationTargetWithoutPublish,
         PublishStaticCredentialNeedsEdge,
         RuleBlockedOnMount,
+        RuleRevocationUnsupported,
         StoreMaintenanceUnavailable,
         StoreTagConflict,
         UploadConfigurationRequired
@@ -100,7 +101,7 @@ import Ecluse.Core.Registry.PyPI.Credential (pypiCredential)
 import Ecluse.Core.Registry.Request (StoreOperation (StoreWrite), attachCredential, presentedMapping)
 import Ecluse.Core.Registry.RubyGems.Mirror (rubyMirrorCompanion)
 import Ecluse.Core.Registry.Sweep.Types (minimumChunkPause)
-import Ecluse.Core.Rules.Types (PrecededRule (prRule), RuleType (AllowScopeType, DenyExternalDependenciesType, DenyIfYankedType, DenyInstallTimeExecutionType), ruleName)
+import Ecluse.Core.Rules.Types (PrecededRule (prRule), RuleType (AllowScopeType, DenyExternalDependenciesType, DenyIfDeprecatedType, DenyIfYankedType, DenyInstallTimeExecutionType), ruleName)
 import Ecluse.Core.Security (mkProgressFloor, serveCapSeconds)
 import Ecluse.Core.Security.Egress (registryUrlText)
 import Ecluse.Test.Credential (basicReadsBearerWrites)
@@ -113,6 +114,7 @@ spec = do
     publicationCapabilitiesSpec
     cargoPublicationCapabilitiesSpec
     ruleBlocksSpec
+    availabilityReachSpec
     cargoRuleBlocksSpec
     cargoMaintenanceCapabilitiesSpec
     clearedSpec
@@ -260,6 +262,40 @@ cargoPublicationCapabilitiesSpec = describe "Cargo publication API by boot role"
                ]
     tokenEnv = overrideEnv (publicationKey <> "TOKEN") "publisher-token" publicationEnv
 
+availabilityReachSpec :: Spec
+availabilityReachSpec = describe "availability rules require admission-only reach" $
+    for_ [MirrorWriter, MirrorPruner, MirrorPreviewer] $ \role -> describe (show role) $
+        for_ [(Npm, "NPM", "DenyIfDeprecated", DenyIfDeprecatedType), (PyPI, "PYPI", "DenyIfYanked", DenyIfYankedType), (Cargo, "CARGO", "DenyIfYanked", DenyIfYankedType)] $ \(eco, key, ty, ruleTy) -> describe ty $ do
+            let env = overrideEnv ("ECLUSE_MOUNTS__" <> key <> "__ENABLED") "true" (overrideEnv "ECLUSE_MOUNTS__NPM__ENABLED" "false" publicGateEnv)
+                mountKey = "ECLUSE_MOUNTS__" <> key <> "__RULES"
+                declaration reach = "{\"availability\":{\"type\":\"" <> ty <> "\"" <> reach <> "}}"
+                admission = ",\"appliesTo\":[\"admission\"]"
+                refusal = RuleRevocationUnsupported eco ruleTy
+            for_ ["ECLUSE_RULES", mountKey] $ \rulesKey -> do
+                for_ ["", ",\"appliesTo\":[\"admission\",\"revocation\"]"] $ \reach ->
+                    it ("refuses revocation from " <> rulesKey <> " with reach " <> reach) $
+                        refusalsFor role (overrideEnv rulesKey (declaration reach) env) `shouldReturn` [refusal]
+                it ("accepts explicit admission-only reach from " <> rulesKey) $
+                    refusalsFor role (overrideEnv rulesKey (declaration admission) env) `shouldReturn` []
+            it "accepts a mount patch that narrows shared reach" $
+                refusalsFor role (overrideEnv mountKey "{\"availability\":{\"appliesTo\":[\"admission\"]}}" (overrideEnv "ECLUSE_RULES" (declaration "") env)) `shouldReturn` []
+            it "removes a disabled shared availability rule from the resolved policy" $ do
+                plan <- expectVetted role (overrideEnv mountKey "{\"availability\":{\"enabled\":false}}" (overrideEnv "ECLUSE_RULES" (declaration "") env))
+                map (ruleName . prRule) (concatMap (mountPolicy . vmMount) (vpMounts plan)) `shouldNotContain` [toText ty]
+            it "refuses a mount patch that widens shared admission-only reach" $
+                refusalsFor role (overrideEnv mountKey "{\"availability\":{\"appliesTo\":[\"admission\",\"revocation\"]}}" (overrideEnv "ECLUSE_RULES" (declaration admission) env)) `shouldReturn` [refusal]
+            it "ignores a disabled rule" $ do
+                let shared = overrideEnv "ECLUSE_RULES" (declaration "") env
+                refusalsFor role (overrideEnv mountKey "{\"availability\":{\"enabled\":false}}" shared) `shouldReturn` []
+            it "ignores an inactive mount's declaration" $
+                refusalsFor role (overrideEnv mountKey (declaration "") (overrideEnv ("ECLUSE_MOUNTS__" <> key <> "__ENABLED") "false" (overrideEnv "ECLUSE_MOUNTS__RUBYGEMS__ENABLED" "true" publicGateEnv))) `shouldReturn` []
+            it "refuses even below an overriding identity allow" $
+                refusalsFor role (overrideEnv mountKey "{\"pin\":{\"type\":\"AllowByIdentity\",\"identity\":\"fixture\",\"precedence\":999},\"availability\":{\"precedence\":1}}" (overrideEnv "ECLUSE_RULES" (declaration "") env)) `shouldReturn` [refusal]
+            it "accumulates duplicate availability rules beside an independent refusal" $ do
+                let duplicate = "{\"other\":{\"type\":\"" <> ty <> "\"}}"
+                errors <- refusalsFor role (overrideEnv "ECLUSE_LIMITS__MIN_PROGRESS_BYTES" "0" (overrideEnv mountKey duplicate (overrideEnv "ECLUSE_RULES" (declaration "") env)))
+                errors `shouldMatchList` [MinProgressBytesNotPositive 0, refusal, refusal]
+
 cargoRuleBlocksSpec :: Spec
 cargoRuleBlocksSpec = describe "resolved Cargo rule blocks" $
     for_ [MirrorWriter, MirrorPruner, MirrorPreviewer] $ \role -> describe (show role) $ do
@@ -278,7 +314,7 @@ cargoRuleBlocksSpec = describe "resolved Cargo rule blocks" $
             errors <- refusalsFor role (overrideEnv "ECLUSE_MOUNTS__CARGO__RULES" "{\"alias-scope\":{\"type\":\"AllowScope\",\"scope\":\"acme\",\"precedence\":1},\"alias-deprecated\":{\"type\":\"DenyIfDeprecated\",\"precedence\":1,\"appliesTo\":[\"admission\"]},\"alias-install\":{\"type\":\"DenyInstallTimeExecution\",\"precedence\":1,\"appliesTo\":[\"admission\"]},\"pin\":{\"type\":\"AllowByIdentity\",\"identity\":\"fixture@1.0.0\",\"precedence\":999}}" cargoGateEnv)
             errors `shouldMatchList` [cargoScopeRefusal, cargoDeprecationRefusal, cargoInstallRefusal]
         it "accumulates duplicate Cargo blocks and an independent advisory refusal" $ do
-            let shared = "{\"scope-a\":{\"type\":\"AllowScope\",\"scope\":\"acme\"},\"scope-b\":{\"type\":\"AllowScope\",\"scope\":\"acme\"},\"deprecated\":{\"type\":\"DenyIfDeprecated\"}}"
+            let shared = "{\"scope-a\":{\"type\":\"AllowScope\",\"scope\":\"acme\"},\"scope-b\":{\"type\":\"AllowScope\",\"scope\":\"acme\"},\"deprecated\":{\"type\":\"DenyIfDeprecated\",\"appliesTo\":[\"admission\"]}}"
                 cve = "{\"cve\":{\"type\":\"DenyIfCve\",\"minCvss\":8}}"
             errors <- refusalsFor role (overrideEnv "ECLUSE_MOUNTS__CARGO__RULES" cve (overrideEnv "ECLUSE_RULES" shared cargoGateEnv))
             errors `shouldMatchList` [cargoScopeRefusal, cargoScopeRefusal, cargoDeprecationRefusal, AdvisoryDenyWithoutStore Cargo ("DenyIfCve" :| [])]
@@ -303,10 +339,10 @@ cargoRuleBlocksSpec = describe "resolved Cargo rule blocks" $
             map vmEcosystem (vpMounts plan) `shouldBe` [Npm]
   where
     scopeRule = "{\"scope\":{\"type\":\"AllowScope\",\"scope\":\"acme\"}}"
-    deprecatedRule = "{\"deprecated\":{\"type\":\"DenyIfDeprecated\"}}"
+    deprecatedRule = "{\"deprecated\":{\"type\":\"DenyIfDeprecated\",\"appliesTo\":[\"admission\"]}}"
     installRule = "{\"install\":{\"type\":\"DenyInstallTimeExecution\"}}"
     dependencyRule = "{\"dependency\":{\"type\":\"DenyExternalDependencies\"}}"
-    bothRules = "{\"scope\":{\"type\":\"AllowScope\",\"scope\":\"acme\"},\"deprecated\":{\"type\":\"DenyIfDeprecated\"}}"
+    bothRules = "{\"scope\":{\"type\":\"AllowScope\",\"scope\":\"acme\"},\"deprecated\":{\"type\":\"DenyIfDeprecated\",\"appliesTo\":[\"admission\"]}}"
 
 cargoMaintenanceCapabilitiesSpec :: Spec
 cargoMaintenanceCapabilitiesSpec = describe "Cargo maintenance capabilities" $ do
@@ -414,8 +450,8 @@ ruleBlocksSpec = describe "vetBoot -- ecosystem rule blocks" $ do
     -- npm supports the deprecation deny, so only the Ruby mount refuses it.
     rubyBeside = overrideEnv "ECLUSE_MOUNTS__RUBYGEMS__ENABLED" "true" publicGateEnv
     installRule = "{\"custom-code\":{\"type\":\"DenyInstallTimeExecution\"}}"
-    deprecatedRule = "{\"custom-deprecated\":{\"type\":\"DenyIfDeprecated\"}}"
-    yankedRule = "{\"custom-yanked\":{\"type\":\"DenyIfYanked\"}}"
+    deprecatedRule = "{\"custom-deprecated\":{\"type\":\"DenyIfDeprecated\",\"appliesTo\":[\"admission\"]}}"
+    yankedRule = "{\"custom-yanked\":{\"type\":\"DenyIfYanked\",\"appliesTo\":[\"admission\"]}}"
     scopeRule = "{\"custom-scope\":{\"type\":\"AllowScope\",\"scope\":\"acme\"}}"
     installBlock = RuleBlockedOnMount PyPI DenyInstallTimeExecutionType "Most PyPI releases offer a source distribution, which runs its own build on install, so this rule would deny nearly every release."
     scopeBlock = RuleBlockedOnMount PyPI AllowScopeType "A PyPI project name has no scope, so this rule can never match one."

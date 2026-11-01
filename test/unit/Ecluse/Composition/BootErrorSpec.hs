@@ -32,7 +32,7 @@ import Ecluse.Core.Registry.Maintenance.Upstream (
     UndecidabilityReason (ChainBoundExceeded, NetworkFailure, NoMechanism),
     UnsafeReason (ConfigurationEvidence, InsufficientPermissions),
  )
-import Ecluse.Core.Rules.Types (RuleType (AllowScopeType, DenyIfYankedType, DenyInstallTimeExecutionType))
+import Ecluse.Core.Rules.Types (RuleType (AllowScopeType, DenyIfDeprecatedType, DenyIfYankedType, DenyInstallTimeExecutionType))
 import Ecluse.Runtime.Aws.Fault (AwsFault (AwsUndecodable), AwsParty (AwsServiceNamed), AwsRequestFailed (AwsRequestFailed))
 import Ecluse.Runtime.Test.Aws (deliverRefreshFailure, holdsNoPlantedSecret, refreshFailures)
 import Ecluse.Test.Package (unsafeRegistryUrl)
@@ -59,6 +59,18 @@ spec = do
 
 ruleBlockRenderSpec :: Spec
 ruleBlockRenderSpec = describe "blocked-rule remedies" $ do
+    for_ [(Npm, "npm", "NPM", DenyIfDeprecatedType, "DenyIfDeprecated"), (PyPI, "pypi", "PYPI", DenyIfYankedType, "DenyIfYanked"), (Cargo, "cargo", "CARGO", DenyIfYankedType, "DenyIfYanked")] $ \(eco, mount, envName, ty, name) ->
+        it ("explains unsupported revocation and its remedy on " <> toString mount) $
+            renderBootError (RuleRevocationUnsupported eco ty)
+                `shouldBe` "mount \""
+                    <> mount
+                    <> "\" carries the rule "
+                    <> name
+                    <> " at revocation, which is unsupported. It evaluates the metadata flags available at admission. Dredger does not refresh later upstream yank or deprecation changes, so accepting this reach would mislead operators. Set appliesTo: [admission] on this rule under mounts."
+                    <> mount
+                    <> ".rules (ECLUSE_MOUNTS__"
+                    <> envName
+                    <> "__RULES)."
     let entries =
             [ (DenyInstallTimeExecutionType, "DenyInstallTimeExecution", "Most PyPI releases offer a source distribution, which runs its own build on install, so this rule would deny nearly every release.")
             , (AllowScopeType, "AllowScope", "A PyPI project name has no scope, so this rule can never match one.")
