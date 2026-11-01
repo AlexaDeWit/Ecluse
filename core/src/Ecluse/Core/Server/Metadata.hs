@@ -28,7 +28,7 @@ import Data.Map.Strict qualified as Map
 
 import Ecluse.Core.Deadline (Deadlines)
 import Ecluse.Core.Ecosystem (Ecosystem (PyPI))
-import Ecluse.Core.Package (InvalidEntry, PackageDetails, PackageInfo (infoInvalidEntries, infoName, infoVersions), PackageName, pkgEcosystem)
+import Ecluse.Core.Package (PackageDetails, PackageInfo (infoInvalidEntries, infoName, infoVersions), PackageName, pkgEcosystem)
 import Ecluse.Core.Registry (FetchFault (FetchBoundExceeded, FetchCooldown, FetchTransport, FetchUrlUnformable))
 import Ecluse.Core.Registry.Exchange (withinServeCap)
 import Ecluse.Core.Registry.Metadata (
@@ -73,7 +73,7 @@ type role MetadataReads nominal
 newMetadataReads ::
     MetricsPort ->
     (PackageName -> MetadataError -> IO ()) ->
-    (PackageName -> [InvalidEntry] -> IO ()) ->
+    (PackageName -> PackageInfo -> IO ()) ->
     (PackageName -> IO ()) ->
     (OriginClient -> PackageName -> IO (Either MetadataError Manifest)) ->
     (OriginClient -> PackageName -> Version -> IO (Either MetadataError VersionRead)) ->
@@ -100,7 +100,7 @@ ecosystemMetadataReads ::
     TracingPort ->
     MetricsPort ->
     (PackageName -> MetadataError -> IO ()) ->
-    (PackageName -> [InvalidEntry] -> IO ()) ->
+    (PackageName -> PackageInfo -> IO ()) ->
     (PackageName -> IO ()) ->
     OriginFor posture ->
     MetadataReads posture
@@ -144,7 +144,7 @@ data ClientWiring = ClientWiring
     , cwFetch :: PackageName -> IO (Either MetadataError Manifest)
     , cwFetchVersion :: PackageName -> Version -> IO (Either MetadataError VersionRead)
     , cwLogFailure :: PackageName -> MetadataError -> IO ()
-    , cwLogInvalid :: PackageName -> [InvalidEntry] -> IO ()
+    , cwLogInvalid :: PackageName -> PackageInfo -> IO ()
     , cwLogFetch :: PackageName -> IO ()
     }
 
@@ -168,9 +168,9 @@ manifestLeader wiring name = do
 
 entryOfManifest :: ClientWiring -> PackageName -> Manifest -> IO CacheEntry
 entryOfManifest wiring name manifest = do
-    let invalid = infoInvalidEntries (manifestInfo manifest)
-    unless (null invalid) (cwLogInvalid wiring name invalid)
-    pure (CacheEntry (manifestInfo manifest) (manifestRaw manifest) (manifestBodyBytes manifest) (manifestRetainedEntries manifest) (manifestDigest manifest))
+    let info = manifestInfo manifest
+    unless (null (infoInvalidEntries info)) (cwLogInvalid wiring name info)
+    pure (CacheEntry info (manifestRaw manifest) (manifestBodyBytes manifest) (manifestRetainedEntries manifest) (manifestDigest manifest))
 
 resolveSelectedVersion :: ClientWiring -> PackageName -> Version -> IO (Either MetadataError VersionRead)
 resolveSelectedVersion wiring name version = case cwCaching wiring of

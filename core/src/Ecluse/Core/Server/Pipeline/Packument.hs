@@ -22,6 +22,9 @@ module Ecluse.Core.Server.Pipeline.Packument (
 
     -- * The refusal when no version survives (exported for its unit spec)
     noSurvivors,
+
+    -- * The 404 for a name no upstream lists a version of
+    notFoundReply,
 ) where
 
 import Crypto.Hash (Digest, SHA256, hash)
@@ -41,6 +44,8 @@ import Ecluse.Core.Mirror.Documents (MirrorDocuments)
 import Ecluse.Core.Mirror.State (ProjectMirrorRecord, StateRevision)
 import Ecluse.Core.Package (
     Artifact (artHashes),
+    InvalidEntry (invalidKind),
+    InvalidEntryKind (..),
     PackageDetails (pkgArtifacts),
     PackageInfo (infoInvalidEntries, infoVersions),
     PackageName,
@@ -96,7 +101,7 @@ import Ecluse.Core.Server.Encoding (
 import Ecluse.Core.Server.Fault (RenderEscape (RenderEscape))
 import Ecluse.Core.Server.MetadataGzip (GzipBody (gzipLength), gzipLazyBody, gzipMetadata)
 import Ecluse.Core.Server.MirrorView (mirrorProjectViews, mirrorViewDocuments, publicMirrorCoverage, validateMirrorProject)
-import Ecluse.Core.Server.Pipeline.Diagnostics (warnDivergences)
+import Ecluse.Core.Server.Pipeline.Diagnostics (logVersionlessRefusal, warnDivergences)
 import Ecluse.Core.Server.Pipeline.Internal (
     VersionVerdict (..),
     admitByIntegrity,
@@ -166,6 +171,8 @@ data DocumentRejectionObserver response = DocumentRejectionObserver
     -- ^ Keep the original gate context with each checked version or file exclusion.
     , onCheckedNoSurvivorAdmission :: IO response
     -- ^ Resolve a checked public inventory after settled private absence and no surviving contribution.
+    , coordinateVersions :: Set Text
+    -- ^ The versions the coordinate names under this name. Mirror coverage is checked for these alone.
     }
 
 -- | Change only response construction while retaining shared admission and refusal decisions.
@@ -409,12 +416,18 @@ serveMergedPackument serving evalCtx record privResult pubResult
                 publicManifest = (\manifest -> manifest{manifestInfo = withoutTrustedReleases trustedVersions (manifestInfo manifest)}) <$> originManifest pubResult
             public <- liftIO (gatePublic (observeVersionRejection <$> psvRejectionObserver serving) (srTracing rt) (servingMetrics serving) deps name evalCtx trustedVersions (Map.keysSet pending) publicManifest)
             let sources = privateSources <> maybeToList (paContribution public)
-                required = Map.withoutKeys pending (paBlockedPending public)
+                -- A coordinate lookup checks mirror coverage for the versions it names alone, as Cargo and PyPI do.
+                named = coordinateVersions <$> psvRejectionObserver serving
+                requested = maybe pending (Map.restrictKeys pending) named
+                gone = goneFromBoth requested
+                required = Map.withoutKeys requested (paBlockedPending public <> gone)
                 covered = Map.null required || maybe False (publicMirrorCoverage required . srcInfo) (paContribution public)
             if not covered || fmap (infoVersions . manifestInfo) managedManifest /= fmap (infoVersions . srcInfo) managed
                 then mirrorUnavailableWithRetry serving (case pubResult of OriginCooling retry -> Just retry; _ -> Nothing)
                 else case originMiss privResult of
                     Just MissAbsent | pdFirstParty deps name -> firstPartyMissed serving MissAbsent
+                    -- Every version the coordinate names is recorded and gone from both upstreams, whatever else the public lists.
+                    _ | Just versions <- named, not (Set.null versions), versions `Set.isSubsetOf` gone -> notFound "no upstream lists the requested version"
                     _ -> case packumentPlan sources trustedVersions (paDeniedEvidence public) of
                         Just plan -> do
                             liftIO $ do
@@ -431,19 +444,33 @@ serveMergedPackument serving evalCtx record privResult pubResult
                                 liftIO (paReportRejections public >> onCheckedNoSurvivorAdmission observer)
                             | otherwise ->
                                 let refused = privateExclusions <> managedExclusions <> paVerdicts public
-                                 in noServeableVersions serving (ctxAdvisoryEtag evalCtx) refused $
-                                        collectDecisions privResult pubResult (map vvDecision refused)
+                                 in case collectDecisions privResult pubResult (map vvDecision refused) of
+                                        [] -> unlisted refused
+                                        decisions -> noServeableVersions serving (ctxAdvisoryEtag evalCtx) refused decisions
   where
-    budgetRefused fault = pure (packumentBadGateway (psvReplies serving) [] (mkRefusal (pdHelp deps) ("the cumulative metadata input exceeded its bound: " <> show fault)))
+    budgetRefused fault =
+        noServeableVersions serving (ctxAdvisoryEtag evalCtx) [] [Reject (Rejection UpstreamInvalid ("the cumulative metadata input exceeded its bound: " <> show fault))]
     settledAbsence OriginAbsent = True
     settledAbsence OriginNotFound = True
     settledAbsence _ = False
-    -- A listing answers 404 unless a recorded version survives in the mirror. A coordinate lookup takes
-    -- its own answer, and a recorded name keeps its managed path there.
-    unheldAnswer = case psvAbsent serving of
-        Nothing | noRecordedCopy -> Just (liftIO (unheldNameReply (servingMetrics serving) (psvReplies serving) deps))
-        Just absent | isNothing record -> Just (pure absent)
-        _ -> Nothing
+    -- A listing answers 404 with this cause, and a coordinate lookup takes its own answer.
+    notFound message = maybe (liftIO (notFoundReply (servingMetrics serving) (psvReplies serving) (pdHelp deps) message)) pure (psvAbsent serving)
+    unheldAnswer
+        | noRecordedCopy = Just (notFound (unheldMessage deps))
+        | otherwise = Nothing
+    -- With no other cause, documents that dropped every version entry refuse the request, each named in one line beside
+    -- its read's log of the entries. Documents that list no version leave a 404.
+    unlisted refused = case [(upstream, url, manifest) | (upstream, url, result) <- origins, Just manifest <- [originManifest result], droppedEveryEntry manifest] of
+        [] -> notFound "no upstream lists a version of the requested package"
+        dropped -> do
+            for_ dropped $ \(upstream, url, manifest) -> logVersionlessRefusal name upstream url (length (infoInvalidEntries (manifestInfo manifest)))
+            noServeableVersions serving (ctxAdvisoryEtag evalCtx) refused [malformedEntries [upstream | (upstream, _, _) <- dropped]]
+    origins = [("the private upstream", maybe "" registryUrlText (pdPrivateBaseUrl deps), privResult), ("the public upstream", registryUrlText (pdPublicBaseUrl deps), pubResult)]
+    -- Beside a private 404, a coordinate lookup releases the recorded versions the public document lacks too, so
+    -- their artifacts answer 404 as on Cargo and PyPI. A listing keeps them.
+    goneFromBoth pending = case originManifest pubResult of
+        Just manifest | isJust (psvAbsent serving), settledAbsence privResult -> Map.keysSet (Map.withoutKeys pending (Map.keysSet (infoVersions (manifestInfo manifest))))
+        _ -> Set.empty
     noRecordedCopy = either (const False) (\(_, managed, _) -> isNothing managed) views
     deps = psvDeps serving
     name = psvName serving
@@ -552,7 +579,8 @@ packumentPlan sources trustedVersions deniedEvidence = do
 serveResolved :: PackumentServing response -> [Contribution] -> MergePlan -> Handler response
 serveResolved serving sources plan = do
     warnDivergences (servingMetrics serving) (psvName serving) plan
-    liftIO (mpServeDecision (servingMetrics serving) Metric.Admit)
+    -- A coordinate lookup records its decision once it serves or misses its coordinate.
+    when (isNothing (psvAbsent serving)) $ liftIO (mpServeDecision (servingMetrics serving) Metric.Admit)
     psvResolved serving serving sources plan
 
 answerPackumentConditional :: PackumentServing response -> [Contribution] -> MergePlan -> Handler response
@@ -675,12 +703,30 @@ collectDecisions :: OriginResult -> OriginResult -> [ServeDecision] -> [ServeDec
 collectDecisions privResult pubResult exclusions =
     privateLeg <> publicDecision pubResult <> exclusions
   where
-    -- A private 404 leaves the listing to the public origin. A public document the gate refused in
-    -- full settles it, and a failed public read refuses it by its own cause.
+    -- A private 404 leaves the listing to the public origin. A public document the gate refused in full or
+    -- that lists no version settles it, and a failed public read refuses it by its own cause.
     privateLeg = case (privResult, pubResult) of
         (OriginNotFound, OriginResolved _) | packumentStatus exclusions == PackumentDenied -> []
+        (OriginNotFound, OriginResolved manifest) | Map.null (infoVersions (manifestInfo manifest)) -> []
         (OriginNotFound, _) | publicReadFailed pubResult -> []
         _ -> privateDecision privResult
+
+-- The refusal of a listing whose documents dropped every version entry they listed, naming the upstreams that sent them.
+malformedEntries :: [Text] -> ServeDecision
+malformedEntries upstreams =
+    Reject (Rejection UpstreamInvalid ("every version entry from " <> mconcat (intersperse " and " upstreams) <> " was malformed or unusable"))
+
+-- Whether a document listed version entries and dropped every one. A dropped tag, time or listing entry is no version.
+droppedEveryEntry :: Manifest -> Bool
+droppedEveryEntry manifest = Map.null (infoVersions info) && any (dropsVersion . invalidKind) (infoInvalidEntries info)
+  where
+    info = manifestInfo manifest
+    dropsVersion = \case
+        InvalidVersionManifest -> True
+        InvalidIndexFile -> True
+        InvalidDistTag -> False
+        InvalidPublishTime -> False
+        InvalidVersionListing -> False
 
 privateDecision :: OriginResult -> [ServeDecision]
 privateDecision = \case
@@ -730,17 +776,20 @@ neededUpstreamUnavailableMessage = "a needed upstream was unavailable"
 upstreamInvalidDecision :: ServeDecision
 upstreamInvalidDecision = Reject (Rejection UpstreamInvalid "an upstream returned a packument for a different package")
 
--- Answer 404 for a name no configured origin holds, recorded as the artifact path records a missing version.
-unheldNameReply :: MetricsPort -> PackumentReplies response -> PackumentDeps -> IO response
-unheldNameReply metrics replies deps = do
+-- | Answer 404 with this cause, recorded as the artifact path records a missing version.
+notFoundReply :: MetricsPort -> PackumentReplies response -> Maybe HelpMessage -> Text -> IO response
+notFoundReply metrics replies help message = do
     mpServeDecision metrics (serveDecisionClass decision)
     recordDenials metrics [decision]
-    pure (packumentNotFound replies [] (mkRefusal (pdHelp deps) message))
+    pure (packumentNotFound replies [] (mkRefusal help message))
   where
-    message
-        | isJust (pdPrivateBaseUrl deps) = "neither the private nor the public upstream has the requested package"
-        | otherwise = "the public upstream does not have the requested package"
     decision = rejectUnavailable WontResolve message
+
+-- Why a name no configured origin holds is absent, naming only the configured origins.
+unheldMessage :: PackumentDeps -> Text
+unheldMessage deps
+    | isJust (pdPrivateBaseUrl deps) = "neither the private nor the public upstream has the requested package"
+    | otherwise = "the public upstream does not have the requested package"
 
 -- A private origin that was not read refuses every name, so no public namesake stands in for a
 -- private package. Its cause alone sets the status, whatever the public leg did.

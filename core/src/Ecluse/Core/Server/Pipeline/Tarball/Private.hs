@@ -5,10 +5,13 @@
 
 {- | Read private archives under the caller's credential.
 Access refusals and failed reads stop fallback. Managed mirror copies require retained
-completion proof.
+completion proof, and a recorded version the private origin cannot serve falls back to public
+coverage.
 -}
 module Ecluse.Core.Server.Pipeline.Tarball.Private (
     PrivateLeg (..),
+    RecordedCopy (..),
+    recordedCopy,
     streamPrivateArtifact,
     privateMetadataMiss,
     privateReadFailure,
@@ -29,7 +32,7 @@ import Ecluse.Core.Package (
 import Ecluse.Core.Registry.Adapter.Capability (AdapterArtifact (artifactByFile, artifactByUrl, artifactPrivateAddressing), PrivateArtifactAddressing (..))
 import Ecluse.Core.Registry.Metadata (
     MetadataClient (fetchVersionMetadata),
-    MetadataError (MetadataAuthorisationFailure),
+    MetadataError (MetadataAbsent, MetadataAuthorisationFailure),
     VersionDoc (vdDetails),
     VersionRead (vrVersion),
  )
@@ -85,6 +88,20 @@ data PrivateLeg received
     | PrivateMissed OriginMiss
     | PrivateHandled received
 
+-- | What the private origin answered for a recorded version it cannot serve whole.
+data RecordedCopy
+    = -- | A @404@ for the name or the stored artifact: a public miss settles the version.
+      RecordedCopyGone
+    | -- | The name without a complete copy: the version waits for public coverage.
+      RecordedCopyIncomplete
+    deriving stock (Eq, Show)
+
+-- | Only a private @404@ for the name leaves no copy of a recorded version the read could not restore.
+recordedCopy :: Either SomeException (Either MetadataError VersionRead) -> RecordedCopy
+recordedCopy = \case
+    Right (Left MetadataAbsent) -> RecordedCopyGone
+    _ -> RecordedCopyIncomplete
+
 -- | Read the private origin, committing a response or reporting the miss that ends the leg.
 streamPrivateArtifact ::
     ArtifactRequest response ->
@@ -101,27 +118,30 @@ streamPrivateArtifact ctx token = do
         -- The admission shed already counted its decision.
         PrivateShed headers -> PrivateHandled <$> liftIO (respond (tarballError replies shedStatus headers (mkRefusal Nothing shedMessage)))
         PrivateUnavailable -> PrivateAnswered Metric.Unavailable <$> liftIO (unavailable Nothing)
-        PrivateIncomplete expected -> PrivateHandled <$> servePublicArtifactWithCoverage (covered expected) ctx
+        PrivateIncomplete copy expected -> publicFallback copy expected
         PrivateRefused code -> PrivateAnswered Metric.Deny <$> liftIO (refuse code)
         PrivateMissing miss -> pure (PrivateMissed miss)
         PrivateRequest managed req ->
-            liftIO $
-                relayUpstreamResult (arMode ctx) (srPrivateClient (arRuntime ctx)) (progressFloor (pdLimits (arDeps ctx))) (shaped req) acceptPrivateArtifact relayUnjudged privateResponder >>= \case
-                    UpstreamRelayed (_, (decision, received)) -> pure (PrivateAnswered decision received)
-                    UpstreamRejected status retry
-                        | status == status404 -> if managed then PrivateAnswered Metric.Unavailable <$> unavailable Nothing else pure (PrivateMissed MissAbsent)
-                        | otherwise -> failed managed (statusReadFailure (statusCode status) retry)
-                    UpstreamTransportFailure -> failed managed (ReadUnavailable Nothing)
-                    UpstreamCooling retry -> failed managed (ReadUnavailable (Just retry))
+            liftIO (relayUpstreamResult (arMode ctx) (srPrivateClient (arRuntime ctx)) (progressFloor (pdLimits (arDeps ctx))) (shaped req) acceptPrivateArtifact relayUnjudged privateResponder) >>= \case
+                UpstreamRelayed (_, (decision, received)) -> pure (PrivateAnswered decision received)
+                UpstreamRejected status retry
+                    | status == status404 -> maybe (pure (PrivateMissed MissAbsent)) (publicFallback RecordedCopyGone) managed
+                    | otherwise -> liftIO (failed managed (statusReadFailure (statusCode status) retry))
+                UpstreamTransportFailure -> liftIO (failed managed (ReadUnavailable Nothing))
+                UpstreamCooling retry -> liftIO (failed managed (ReadUnavailable (Just retry)))
     replies = arReplies ctx
     respond = arRespond ctx
 
     -- A managed copy keeps the mirror view's refusal while the registry is unavailable.
     failed managed = \case
-        ReadUnavailable retry | managed -> PrivateAnswered Metric.Unavailable <$> unavailable retry
+        ReadUnavailable retry | isJust managed -> PrivateAnswered Metric.Unavailable <$> unavailable retry
         failure -> pure (PrivateMissed (MissUnresolved failure))
 
-    covered expected = maybe False $ \details -> publicMirrorCoverage (Map.singleton (renderVersion (arVersion ctx)) expected) (PackageInfo (arPackage ctx) (Map.singleton (renderVersion (arVersion ctx)) details) Map.empty [])
+    publicFallback copy expected = PrivateHandled <$> servePublicArtifactWithCoverage (covered copy expected) ctx
+    -- A public miss covers a recorded version only once its private copy is gone.
+    covered copy expected = \case
+        Nothing -> copy == RecordedCopyGone
+        Just details -> publicMirrorCoverage (Map.singleton (renderVersion (arVersion ctx)) expected) (PackageInfo (arPackage ctx) (Map.singleton (renderVersion (arVersion ctx)) details) Map.empty [])
     shaped request = withValidators (arValidators ctx) (withMethod (arMode ctx) request)
     unavailable retry = respond (tarballError replies status503 (retryAfterHeaders retry) (mkRefusal (pdHelp (arDeps ctx)) "managed mirror view is unavailable"))
     refuse code = respond (tarballPrivateRefused replies code [] (privateAuthorisationRefusal (pdHelp (arDeps ctx))))
@@ -137,12 +157,12 @@ privateMetadataAdmissionRequired ctx =
     deps = arDeps ctx
 
 data PrivateArtifact
-    = PrivateRequest Bool HTTP.Request
+    = PrivateRequest (Maybe MirrorVersion) HTTP.Request
     | PrivateRefused Int
     | PrivateMissing OriginMiss
     | PrivateUnavailable
     | PrivateShed ResponseHeaders
-    | PrivateIncomplete MirrorVersion
+    | PrivateIncomplete RecordedCopy MirrorVersion
 
 privateArtifactRequest :: Maybe MemoryTicket -> ArtifactRequest response -> Maybe ClientCredential -> Handler PrivateArtifact
 privateArtifactRequest ticket ctx token
@@ -162,7 +182,7 @@ privateArtifactRequest ticket ctx token
     indexed privateBase = byIndexedLocation ticket ctx token privateBase privateHostPort
 
     byConventionalPath privateBase =
-        either (const (PrivateMissing MissAbsent)) (PrivateRequest False) $
+        either (const (PrivateMissing MissAbsent)) (PrivateRequest Nothing) $
             artifactByFile (pdArtifact deps) (mountOrigin deps (srPrivateClient (arRuntime ctx)) privateBase token) (arPackage ctx) (unFilename (arFile ctx))
 
 byIndexedLocation :: Maybe MemoryTicket -> ArtifactRequest response -> Maybe ClientCredential -> BaseRequest -> Maybe HostPort -> Handler PrivateArtifact
@@ -180,9 +200,9 @@ byIndexedLocation ticket ctx token privateBase privateHostPort = do
                         Right (Just (_, record)) -> case recordVersion (arVersion ctx) record of
                             Nothing -> pure (ordinary resolved)
                             Just expected -> case mirrorVersionView (mirrorViewDocuments mirror) (arVersion ctx) record (either (const Nothing) (either (const Nothing) vrVersion) resolved) of
-                                Left _ -> pure (PrivateIncomplete expected)
+                                Left _ -> pure (PrivateIncomplete (recordedCopy resolved) expected)
                                 Right _ | Map.notMember (unFilename (arFile ctx)) (versionFiles expected) -> pure (PrivateMissing MissAbsent)
-                                Right restored -> pure (maybe PrivateUnavailable (PrivateRequest True) (restored >>= requestForDetails . vdDetails))
+                                Right restored -> pure (maybe PrivateUnavailable (PrivateRequest (Just expected)) (restored >>= requestForDetails . vdDetails))
             _ -> pure (ordinary resolved)
   where
     deps = arDeps ctx
@@ -190,7 +210,7 @@ byIndexedLocation ticket ctx token privateBase privateHostPort = do
     ordinary = \case
         Left _ -> PrivateMissing (MissUnresolved (ReadUnavailable Nothing))
         Right (Left err) -> privateMetadataFailure err
-        Right (Right versionRead) -> maybe (PrivateMissing MissAbsent) (PrivateRequest False) (vrVersion versionRead >>= requestForDetails . vdDetails)
+        Right (Right versionRead) -> maybe (PrivateMissing MissAbsent) (PrivateRequest Nothing) (vrVersion versionRead >>= requestForDetails . vdDetails)
 
     requestForDetails details = do
         artifact <- find ((== unFilename (arFile ctx)) . artFilename) (pkgArtifacts details)

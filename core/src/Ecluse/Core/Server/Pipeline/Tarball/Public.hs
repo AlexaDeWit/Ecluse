@@ -101,7 +101,9 @@ import Ecluse.Core.Version (renderVersion)
 servePublicArtifact :: ArtifactRequest response -> Handler ResponseReceived
 servePublicArtifact = servePublicArtifactWithCoverage (const True)
 
--- | A managed fallback must cover the whole expected version before its requested file is admitted.
+{- | A managed fallback must cover the whole expected version before its requested file is admitted.
+The predicate on 'Nothing' says whether a public miss settles the version.
+-}
 servePublicArtifactWithCoverage :: (Maybe PackageDetails -> Bool) -> ArtifactRequest response -> Handler ResponseReceived
 servePublicArtifactWithCoverage covered ctx = do
     advisoryEtag <- liftIO (pdAdvisoryEtag (arDeps ctx))

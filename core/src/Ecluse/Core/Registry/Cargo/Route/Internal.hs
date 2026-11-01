@@ -164,12 +164,12 @@ indexContract =
     chooseContract (mediaContract status200 "Admitted native sparse records." (SchemaOpaque "text/plain")) $
         chooseContract (emptyContract status304 "The admitted records match the supplied validator.") $
             chooseContract (refusalContract status401 "Authentication is required.") $
-                chooseContract (refusalContract status403 "Access was refused, or no version reached admission.") $
-                    chooseContract (refusalContract status404 "No package is available in this registry: no configured upstream has the name, or no version passed policy and admission.") $
+                chooseContract (refusalContract status403 "Access was refused.") $
+                    chooseContract (refusalContract status404 "No package is available in this registry: no configured upstream has the name or lists a version of it, or no version passed policy and admission.") $
                         chooseContract (refusalContract status406 "The requested encoding is unavailable.") $
                             chooseContract (refusalContract status500 "The registry could not decide.") $
                                 chooseContract
-                                    (refusalContract status502 "An origin reply was invalid or unusable, such as a different identity.")
+                                    (refusalContract status502 "An origin reply was invalid or unusable, such as a different identity or an index file whose every row is malformed.")
                                     (refusalContract status503 "The registry is temporarily unavailable.")
 
 refusalContract :: Status -> Text -> ResponseContract (ResponseValue (Maybe LByteString))

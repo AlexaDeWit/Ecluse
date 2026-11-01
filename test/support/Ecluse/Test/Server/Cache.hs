@@ -7,6 +7,7 @@ module Ecluse.Test.Server.Cache (
     -- * Cache configuration fixtures
     defaultCacheConfig,
     newMetadataCache,
+    newRetainingMetadataCache,
     localCacheProvider,
     externalBackend,
     externalOperations,
@@ -24,6 +25,7 @@ module Ecluse.Test.Server.Cache (
 import Crypto.Hash (SHA256 (SHA256), hashWith)
 import Data.Aeson (Value (Null), encode, object, toJSON, (.=))
 import Data.ByteString.Lazy qualified as BSL
+import Data.Map.Strict qualified as Map
 import Data.Time (NominalDiffTime)
 
 import Ecluse.Core.Package (PackageDetails (pkgArtifacts), PackageInfo (infoVersions), PackageName, artEntryKey, renderPackageName)
@@ -34,7 +36,7 @@ import Ecluse.Core.Registry.RubyGems.Document (GemDocument (..), GemRow (grSourc
 import Ecluse.Core.Server.Cache (CacheConfig (..), CacheEntry (..), MetadataCache, Source, StoreBudget (..), newMetadataCacheWithProvider, resolveMetadata, resolveVersion)
 import Ecluse.Core.Server.Cache.Backend (BackendStorage (ExternalStorage, LocalStorage), Recency, RetentionBackend, RetentionOperations (..), retentionBackend)
 import Ecluse.Core.Server.Cache.Backend.Local (newLocalPool, newPooledRetention)
-import Ecluse.Core.Server.Cache.Provider (CacheProvider, localCacheProviderWithPool)
+import Ecluse.Core.Server.Cache.Provider (CacheProvider, cacheProvider, localCacheProviderWithPool)
 import Ecluse.Core.Server.Cache.Store (SingleFlight, newSingleFlightWithBackend)
 import Ecluse.Core.Server.Cache.Types (CacheKey, assembledKey)
 import Ecluse.Core.Server.Cache.VersionWeight (weighEntryKey)
@@ -47,6 +49,13 @@ import Ecluse.Test.Registry.PyPI.Metadata (simpleValue)
 -- | Isolate a fixture's cache from other stores while preserving the configured local bounds.
 newMetadataCache :: CacheConfig -> IO MetadataCache
 newMetadataCache config = localCacheProvider config >>= newMetadataCacheWithProvider
+
+-- | A cache whose only retained store is an external full-document double that keeps every write in memory.
+newRetainingMetadataCache :: IO MetadataCache
+newRetainingMetadataCache = do
+    values <- newIORef Map.empty
+    let full = externalOperations (\_ key -> Map.lookup key <$> readIORef values) (\key value -> atomicModifyIORef' values (\stored -> (Map.insert key value stored, ())))
+    newMetadataCacheWithProvider (cacheProvider (ExternalStorage 100000) Nothing (Just full) Nothing Nothing)
 
 -- | Give a fixture its own pool for selected versions and assembled responses.
 localCacheProvider :: CacheConfig -> IO CacheProvider

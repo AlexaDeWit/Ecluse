@@ -15,12 +15,15 @@ module Ecluse.Core.Server.Pipeline.Diagnostics (
 
     -- * Dropped entries and divergence
     logInvalidEntries,
+    logPackumentDrops,
+    logVersionlessRefusal,
     logDirectoryInvalidEntries,
     warnDivergences,
 ) where
 
 import Data.Aeson (Value)
 import Data.Aeson.Text (encodeToLazyText)
+import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Data.Text.Lazy qualified as TL
 import Katip (KatipContext, Severity (DebugS, ErrorS, WarningS), SimpleLogPayload, katipAddContext, logFM, ls, sl)
@@ -31,6 +34,7 @@ import Ecluse.Core.Fault.Http (isRetryableStatusCode)
 import Ecluse.Core.Package (
     HashAlg,
     InvalidEntry (invalidKey, invalidKind, invalidReason, invalidValue),
+    PackageInfo (infoInvalidEntries, infoVersions),
     PackageName,
     dropCountsByKind,
     renderHashAlg,
@@ -179,14 +183,26 @@ warnUnreachable subject origin fault =
 
 -- | The malformed packument entries the projection dropped rather than failing the whole document.
 logInvalidEntries :: (KatipContext m) => PackageName -> Text -> [InvalidEntry] -> m ()
-logInvalidEntries = logDroppedEntries . PackageSubject
+logInvalidEntries = logDroppedEntries "the rest is served" . PackageSubject
+
+-- | The entries one packument read dropped, naming a document that kept no version as such.
+logPackumentDrops :: (KatipContext m) => PackageName -> Text -> PackageInfo -> m ()
+logPackumentDrops name baseUrl info
+    | Map.null (infoVersions info) = logDroppedEntries "none of its versions remain" (PackageSubject name) baseUrl (infoInvalidEntries info)
+    | otherwise = logInvalidEntries name baseUrl (infoInvalidEntries info)
+
+-- | A request refused because this upstream's packument kept no version. Its read logged the dropped entries.
+logVersionlessRefusal :: (KatipContext m) => PackageName -> Text -> Text -> Int -> m ()
+logVersionlessRefusal name upstream baseUrl dropped =
+    katipAddContext (sl "module" pipelineModule <> subjectPayload (PackageSubject name) <> sl "upstream" (authorityLabel baseUrl) <> sl "dropped" dropped) $
+        logFM WarningS (ls ("refused the request: " <> upstream <> "'s packument kept no version after dropping " <> malformedCount dropped))
 
 -- | The malformed rows a registry-wide directory dropped. The line names no package.
 logDirectoryInvalidEntries :: (KatipContext m) => Text -> [InvalidEntry] -> m ()
-logDirectoryInvalidEntries = logDroppedEntries DirectorySubject
+logDirectoryInvalidEntries = logDroppedEntries "the rest is served" DirectorySubject
 
-logDroppedEntries :: (KatipContext m) => Subject -> Text -> [InvalidEntry] -> m ()
-logDroppedEntries subject baseUrl entries =
+logDroppedEntries :: (KatipContext m) => Text -> Subject -> Text -> [InvalidEntry] -> m ()
+logDroppedEntries outcome subject baseUrl entries =
     katipAddContext payload $
         logFM WarningS (ls message)
   where
@@ -196,14 +212,10 @@ logDroppedEntries subject baseUrl entries =
             <> sl "upstream" (authorityLabel baseUrl)
             <> sl "droppedByKind" (dropCountsByKind entries)
             <> sl "droppedEntries" (map renderDroppedEntry (take maxRenderedDrops entries))
+    message = "dropped " <> malformedCount (length entries) <> " from an upstream " <> documentNoun subject <> " (" <> outcome <> ")"
 
-    entriesLen :: Int
-    entriesLen = length entries
-
-    message :: Text
-    message =
-        "dropped " <> show entriesLen <> " malformed entr" <> plural <> " from an upstream " <> documentNoun subject <> " (the rest is served)"
-    plural = if entriesLen == 1 then "y" else "ies"
+malformedCount :: Int -> Text
+malformedCount count = show count <> " malformed entr" <> if count == 1 then "y" else "ies"
 
 renderDroppedEntry :: InvalidEntry -> Text
 renderDroppedEntry e =

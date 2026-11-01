@@ -5,7 +5,7 @@
 -- | Client responses and metrics through core handlers and ecosystem routes.
 module Ecluse.Core.Server.PipelineSpec (spec) where
 
-import Data.Aeson (Value (Bool, Object, String), eitherDecode, eitherDecodeStrict, encode, object, (.=))
+import Data.Aeson (Value (Bool, Null, Object, String), eitherDecode, eitherDecodeStrict, encode, object, (.=))
 import Data.Aeson.Key qualified as Key
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.ByteString qualified as BS
@@ -105,7 +105,7 @@ import Ecluse.Test.Registry.Npm (VersionSpec (..), packumentValue, versionSpec, 
 import Ecluse.Test.Registry.Public (PublicFixture (..), newPublicFixture)
 import Ecluse.Test.Registry.PyPI (simpleFile, simpleIndex, withFileKeys)
 import Ecluse.Test.Rules (admittedBy, atDefaultPrecedence, atPrecedence, blockedBy, evalRules, inertRuleDeps, isUndecidable, servingRuleDeps)
-import Ecluse.Test.Server.Cache (cachedMetadata, cachedVersion)
+import Ecluse.Test.Server.Cache (cachedMetadata, cachedVersion, newRetainingMetadataCache)
 import Ecluse.Test.Server.Handler (MissingFixtureResponse (MissingFixtureResponse), captureServe, captureServeWithLog, responseBytes, testServeRuntime, testServeRuntimeWith)
 import Ecluse.Test.Server.Mount (npmServeDeps, pypiServeDeps, requiredAdapter, serveDepsFor, withPrivateBaseUrl)
 import Ecluse.Test.Sweep (RecordedSweep (recPorts, recTargetResults), recordingPorts, testMount, testPacing, withPrivateCache)
@@ -136,6 +136,8 @@ spec = describe "Ecluse.Core.Server.Pipeline (core handlers over a ServeRuntime)
     absentNameSpec
     unconfiguredPrivateSpec
     privateAdmitsNothingSpec
+    malformedListingSpec
+    emptyListingSpec
     deniedListingSpec
     integrityDenialLogSpec
 
@@ -1231,6 +1233,14 @@ absentNameSpec = do
                             traverse (\method -> captureRouted rt binding method (snd listing)) [methodGet, methodHead]
                 map (\response -> (statusCode (responseStatus response), lookup hRetryAfter (responseHeaders response))) responses
                     `shouldBe` replicate 2 (503, Just "120")
+    for_ [entry | entry@(RubyGems, _, _, _, _) <- absentNameRoutes] $ \(ecosystem, router, credential, _, artifacts) ->
+        for_ artifacts $ \(route, path) ->
+            it ("rubygems " <> route <> " records an unavailable decision and its denial for GET and HEAD when neither origin holds the gem") $ do
+                (recording, decisions) <- recordingMetricsPort
+                (metrics, denials) <- recordingDenials recording
+                void (withAbsentPrivate ecosystem router credential status404 metrics $ \rt binding -> traverse (\method -> captureRouted rt binding method path) [methodGet, methodHead])
+                decisions `shouldReturn` [Unavailable, Unavailable]
+                denials `shouldReturn` replicate 2 (Nothing, Metric.ReasonUnavailable)
     describe "a public reply Écluse cannot use beside a private 404, through ecosystem routes" $
         invalidPublicReplyRoutes (Just (const notFoundOrigin))
     it "answers the npm packument 502 for GET and HEAD beside a private 404 when the public document names another package" $
@@ -1268,8 +1278,12 @@ withAbsentPublic ecosystem router credential privatePort publicStatus =
 
 -- A mount of the ecosystem, with the given private origin or none and the given change, whose public origin gives one fixed reply.
 withPublicReply :: Ecosystem -> MountRouter -> CredentialMapping -> Maybe Int -> Response -> (PackumentDeps -> PackumentDeps) -> MetricsPort -> (ServeRuntime -> MountBinding -> IO a) -> IO a
-withPublicReply ecosystem router credential privatePort reply change metrics action =
-    testWithApplication (pure (\_ respond -> respond reply)) $ \publicPort -> withSweeper $ \deadlines -> do
+withPublicReply ecosystem router credential privatePort reply = withPublicOrigin ecosystem router credential privatePort (\_ respond -> respond reply)
+
+-- A mount of the ecosystem, with the given private origin or none and the given change, over this public origin.
+withPublicOrigin :: Ecosystem -> MountRouter -> CredentialMapping -> Maybe Int -> Application -> (PackumentDeps -> PackumentDeps) -> MetricsPort -> (ServeRuntime -> MountBinding -> IO a) -> IO a
+withPublicOrigin ecosystem router credential privatePort public change metrics action =
+    testWithApplication (pure public) $ \publicPort -> withSweeper $ \deadlines -> do
         rt <- testServeRuntime deadlines metrics
         adapter <- requiredAdapter ecosystem
         let origin port = loopbackRegistryUrl ("http://localhost:" <> show port)
@@ -1318,10 +1332,8 @@ unconfiguredPrivateSpec = do
                 decisions `shouldReturn` [Unavailable, Unavailable]
                 denials `shouldReturn` replicate 2 (Nothing, Metric.ReasonUnavailable)
 
-{- Each listing route's answer to every public reply Écluse cannot use, for GET and HEAD, beside this
-ecosystem's private origin or none: 502, an unavailable decision and its denial, and a body that names
-the public upstream.
--}
+-- Every listing route answers each public reply Écluse cannot use with 502, an unavailable decision and its
+-- denial, and, unless the read budget refused first, a body naming the public upstream.
 invalidPublicReplyRoutes :: Maybe (Ecosystem -> Application) -> Spec
 invalidPublicReplyRoutes privateOrigin =
     for_ invalidPublicReplies $ \(cause, reply, change, budgeted) ->
@@ -1330,27 +1342,21 @@ invalidPublicReplyRoutes privateOrigin =
                 withReply metrics action =
                     withPrivateOrigin (($ ecosystem) <$> privateOrigin) $ \privatePort ->
                         withPublicReply ecosystem router credential privatePort reply change metrics action
-                publicLegDecides = ecosystem `notElem` budgeted
-                recorded = if publicLegDecides then ", recording an unavailable decision and its denial" else ""
-            it (named <> " answers 502 for GET and HEAD after " <> cause <> recorded) $ do
+            it (named <> " answers 502 for GET and HEAD after " <> cause <> ", recording an unavailable decision and its denial") $ do
                 (recording, decisions) <- recordingMetricsPort
                 (metrics, denials) <- recordingDenials recording
                 responses <- withReply metrics $ \rt binding -> traverse (\method -> captureRouted rt binding method path) [methodGet, methodHead]
                 map (statusCode . responseStatus) responses `shouldBe` [502, 502]
-                when publicLegDecides $ do
-                    decisions `shouldReturn` [Unavailable, Unavailable]
-                    denials `shouldReturn` replicate 2 (Nothing, Metric.ReasonUnavailable)
+                decisions `shouldReturn` [Unavailable, Unavailable]
+                denials `shouldReturn` replicate 2 (Nothing, Metric.ReasonUnavailable)
             -- A PyPI refusal body carries only the configured help message.
-            when (publicLegDecides && ecosystem /= PyPI) $
+            when (ecosystem `notElem` budgeted && ecosystem /= PyPI) $
                 it (named <> " names the public upstream in its body after " <> cause) $ do
                     body <- withReply noopMetricsPort $ \rt binding -> captureRouted rt binding methodGet path >>= responseBytes
                     LBS.toStrict body `shouldSatisfy` BS.isInfixOf "the public upstream returned an invalid or unusable reply"
 
-{- Public replies Écluse cannot use, each with the mount change that makes it one, and the ecosystems
-whose request-wide read budget refuses it with its own 502 before the public leg decides. RubyGems
-reads /info under a budget the size of the document bound. The bound leaves room for an empty private
-document.
--}
+-- Public replies Écluse cannot use, with the mount change that makes each one, and the ecosystems whose read
+-- budget refuses it first in its own words: RubyGems /info, budgeted at one document bound beside an empty private one.
 invalidPublicReplies :: [(String, Response, PackumentDeps -> PackumentDeps, [Ecosystem])]
 invalidPublicReplies =
     [ ("an unfollowed redirect", responseLBS status302 [(hLocation, "http://elsewhere.test/leftpad")] "", id, [])
@@ -1366,7 +1372,7 @@ invalidPublicReplies =
 privateAdmitsNothingSpec :: Spec
 privateAdmitsNothingSpec = do
     describe "an npm packument whose private document admits nothing" $
-        for_ [("every version below the trusted floor", belowFloorApp), ("no version", emptyPrivateDocument Npm)] $ \(label, privateApp) -> do
+        for_ [("every version below the trusted floor", belowFloorApp), ("no version", emptyDocument Npm)] $ \(label, privateApp) -> do
             for_ [("is unavailable", status503, 503), ("answers HTTP 400", status400, 502), ("answers HTTP 401", status401, 502), ("answers HTTP 403", status403, 502)] $ \(failure, publicStatus, expected) ->
                 it ("answers " <> show expected <> " for GET and HEAD when the private document has " <> label <> " and the public origin " <> failure) $
                     listingOver privateApp (\_ respond -> respond (responseLBS publicStatus [] "")) id expected Nothing Unavailable
@@ -1374,21 +1380,130 @@ privateAdmitsNothingSpec = do
                 denyAll <- prepare inertRuleDeps []
                 listingOver privateApp upstreamApp (\deps -> deps{pdRules = denyAll}) 404 Nothing Deny
     describe "a public reply Écluse cannot use beside a private document that admits nothing, through ecosystem routes" $
-        invalidPublicReplyRoutes (Just emptyPrivateDocument)
+        invalidPublicReplyRoutes (Just emptyDocument)
 
--- Each ecosystem's private document for leftpad that names no version, Cargo's discovery, and 404 for any other path.
-emptyPrivateDocument :: Ecosystem -> Application
-emptyPrivateDocument ecosystem request respond
-    | rawPathInfo request == path = respond (responseLBS status200 [(hContentType, contentType)] body)
+-- Each ecosystem's leftpad document that names no version.
+emptyDocument :: Ecosystem -> Application
+emptyDocument = leftpadDocument $ \case
+    Npm -> encode (object ["name" .= ("leftpad" :: Text), "dist-tags" .= object [], "versions" .= object []])
+    PyPI -> encode (simpleIndex "leftpad" [])
+    Cargo -> ""
+    RubyGems -> "---\n"
+
+-- Each ecosystem's leftpad document whose only version row is malformed, so the read drops it.
+malformedDocument :: Ecosystem -> Application
+malformedDocument = leftpadDocument $ \case
+    Npm -> encode (packumentValue "leftpad" "1.0.0" [("1.0.0", object ["name" .= ("leftpad" :: Text), "version" .= ("1.0.0" :: Text)])] [] [])
+    PyPI -> encode (simpleIndex "leftpad" [object ["filename" .= ("leftpad-1.0.0.tar.gz" :: Text)]])
+    Cargo -> "{\"name\":\"leftpad\",\"vers\":\"1.0.0\",\"deps\":[],\"cksum\":\"\",\"features\":{},\"yanked\":false}\n"
+    RubyGems -> "---\n1.0.0 |checksum:invalid\n"
+
+-- Each ecosystem's leftpad document with this body, Cargo's discovery, and 404 for any other path.
+leftpadDocument :: (Ecosystem -> LByteString) -> Ecosystem -> Application
+leftpadDocument body ecosystem request respond
+    | rawPathInfo request == path = respond (responseLBS status200 [(hContentType, contentType)] (body ecosystem))
     | ecosystem == Cargo && rawPathInfo request == "/config.json" =
         respond (responseLBS status200 [(hContentType, "application/json")] (LBS.fromStrict (Cargo.cargoViewDiscovery (selfBaseUrl request) Nothing False)))
     | otherwise = respond (responseLBS status404 [] "")
   where
-    (path, contentType, body) = case ecosystem of
-        Npm -> ("/leftpad", "application/json", encode (object ["name" .= ("leftpad" :: Text), "dist-tags" .= object [], "versions" .= object []]))
-        PyPI -> ("/simple/leftpad/", "application/vnd.pypi.simple.v1+json", encode (simpleIndex "leftpad" []))
-        Cargo -> ("/le/ft/leftpad", "text/plain", "")
-        RubyGems -> ("/info/leftpad", "text/plain", "---\n")
+    (path, contentType) = case ecosystem of
+        Npm -> ("/leftpad", "application/json")
+        PyPI -> ("/simple/leftpad/", "application/vnd.pypi.simple.v1+json")
+        Cargo -> ("/le/ft/leftpad", "text/plain")
+        RubyGems -> ("/info/leftpad", "text/plain")
+
+-- A listing whose every upstream version row is malformed answers 502 wherever the rows sit, and versions the gate
+-- denies beside malformed rows keep the policy 404. A read logs the dropped entries, and a refused request names its cause.
+malformedListingSpec :: Spec
+malformedListingSpec = do
+    describe "a listing whose every upstream version row is malformed" $ do
+        placedListingAnswers placements 502 [Npm, Cargo, RubyGems] "was malformed or unusable"
+        it "keeps the npm packument 404 when the gate denies the valid version beside a malformed one" $ do
+            denyAll <- prepare inertRuleDeps []
+            listingOver notFoundOrigin (publicAppOver ["1.0.0", "2.0.0"] "1.0.0" withoutDistAt2) (\deps -> deps{pdRules = denyAll}) 404 Nothing Deny
+        it "keeps the npm packument 404 when every private entry is malformed and the gate denies every public version" $ do
+            denyAll <- prepare inertRuleDeps []
+            listingOver (malformedDocument Npm) upstreamApp (\deps -> deps{pdRules = denyAll}) 404 Nothing Deny
+        it "logs the dropped npm entries once for the shared read and the refusal for each request, including one that joined it" $ do
+            completed <- timeout 5_000_000 $ withSweeper $ \deadlines -> do
+                started <- newEmptyMVar
+                release <- newEmptyMVar
+                joined <- newEmptyMVar
+                let metrics = noopMetricsPort{mpCacheRequest = \outcome -> when (outcome == Metric.Collapsed) (putMVar joined ())}
+                    upstream req respond = putMVar started () >> takeMVar release >> malformedDocument Npm req respond
+                rt <- testServeRuntime deadlines metrics
+                testWithApplication (pure upstream) $ \publicPort -> do
+                    deps <- depsFor publicPort
+                    let serve logEnv = captureServeWithLog logEnv npmPackumentContract rt (mountWith deps) (servePackument npmPackumentReplies leftpadName defaultRequest)
+                    ((responses, ()), logged) <-
+                        captureJsonLog $ \logEnv ->
+                            concurrently (mapConcurrently (const (serve logEnv)) [1, 2 :: Int]) (takeMVar started >> takeMVar joined >> putMVar release ())
+                    map (statusCode . responseStatus) responses `shouldBe` [502, 502]
+                    droppedLines logged `shouldBe` [versionlessLine]
+                    refusalLines logged `shouldBe` replicate 2 "refused the request: the public upstream's packument kept no version after dropping 1 malformed entry"
+            completed `shouldBe` Just ()
+    -- The second request finds the public document retained, but a private read is never cached.
+    describe "a packument whose every version entry is malformed beside served versions from the other upstream" $
+        for_ [("private", malformedDocument Npm, upstreamApp, 2), ("public", upstreamApp, malformedDocument Npm, 1)] $ \(side, privateApp, publicApp, readCount) ->
+            it ("logs the " <> side <> " document's dropped entries once for each read, naming no refusal") $
+                withSweeper $ \deadlines -> do
+                    cache <- newRetainingMetadataCache
+                    rt <- (\runtime -> runtime{srMetadataCache = cache}) <$> testServeRuntime deadlines noopMetricsPort
+                    testWithApplication (pure publicApp) $ \publicPort -> testWithApplication (pure privateApp) $ \privatePort -> do
+                        base <- depsFor publicPort
+                        let deps = withPrivateBaseUrl (Just (loopbackRegistryUrl ("http://localhost:" <> show privatePort))) base
+                            serve logEnv = captureServeWithLog logEnv npmPackumentContract rt (mountWith deps) (servePackument npmPackumentReplies leftpadName defaultRequest)
+                        (responses, logged) <- captureJsonLog $ \logEnv -> replicateM 2 (serve logEnv)
+                        map (statusCode . responseStatus) responses `shouldBe` [200, 200]
+                        droppedLines logged `shouldBe` replicate readCount versionlessLine
+                        refusalLines logged `shouldBe` []
+  where
+    placements =
+        [ ("the rows public and no private origin", Nothing, malformedDocument)
+        , ("the rows public beside a private 404", Just (const notFoundOrigin), malformedDocument)
+        , ("the rows private beside a public 404", Just malformedDocument, const notFoundOrigin)
+        ]
+    withoutDistAt2 entry = if vsVersion entry == "2.0.0" then entry{vsExtraPairs = ["dist" .= Null]} else entry
+    droppedLines logged = [message | line <- lines logged, "droppedByKind" `T.isInfixOf` line, Just message <- [lineMessage line]]
+    refusalLines logged = [message | Just message <- map lineMessage (lines logged), "refused the request" `T.isPrefixOf` message]
+    versionlessLine = "dropped 1 malformed entry from an upstream packument (none of its versions remain)"
+
+-- A listing whose upstream documents name the package but list no version answers 404, as an unheld name does.
+-- A Cargo index 404 has no body. A public outage beside an empty private document keeps its cause (privateAdmitsNothingSpec).
+emptyListingSpec :: Spec
+emptyListingSpec =
+    describe "a listing whose upstream documents list no version" $
+        placedListingAnswers
+            [ ("an empty public document and no private origin", Nothing, emptyDocument)
+            , ("an empty public document beside a private 404", Just (const notFoundOrigin), emptyDocument)
+            , ("an empty private document beside a public 404", Just emptyDocument, const notFoundOrigin)
+            , ("empty private and public documents", Just emptyDocument, emptyDocument)
+            ]
+            404
+            [Npm, RubyGems]
+            "no upstream lists a version"
+
+-- Each listing route over each placement of documents answers GET and HEAD with this status, recording an
+-- unavailable decision and its denial, and on these ecosystems a body naming this cause. A PyPI body carries only the help message.
+placedListingAnswers :: [(String, Maybe (Ecosystem -> Application), Ecosystem -> Application)] -> Int -> [Ecosystem] -> ByteString -> Spec
+placedListingAnswers placements expected named cause =
+    for_ absentNameRoutes $ \(ecosystem, router, credential, (route, path), _) ->
+        for_ placements $ \(label, private, public) -> do
+            let routed = toString (ecosystemName ecosystem) <> " " <> route
+                withDocuments metrics action =
+                    withPrivateOrigin (($ ecosystem) <$> private) $ \privatePort ->
+                        withPublicOrigin ecosystem router credential privatePort (public ecosystem) id metrics action
+            it (routed <> " answers " <> show expected <> " for GET and HEAD with " <> label <> ", recording an unavailable decision and its denial") $ do
+                (recording, decisions) <- recordingMetricsPort
+                (metrics, denials) <- recordingDenials recording
+                responses <- withDocuments metrics $ \rt binding -> traverse (\method -> captureRouted rt binding method path) [methodGet, methodHead]
+                map (statusCode . responseStatus) responses `shouldBe` [expected, expected]
+                decisions `shouldReturn` [Unavailable, Unavailable]
+                denials `shouldReturn` replicate 2 (Nothing, Metric.ReasonUnavailable)
+            when (ecosystem `elem` named) $
+                it (routed <> " names its cause in its body with " <> label) $ do
+                    body <- withDocuments noopMetricsPort $ \rt binding -> captureRouted rt binding methodGet path >>= responseBytes
+                    LBS.toStrict body `shouldSatisfy` BS.isInfixOf cause
 
 -- A public listing the gate denies in full answers 404 beside a private 404 or with no private origin. The artifact keeps its 403.
 deniedListingSpec :: Spec

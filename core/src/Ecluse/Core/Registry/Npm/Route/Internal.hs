@@ -302,15 +302,15 @@ npmPackumentContract =
             ( chooseContract
                 (jsonContract status401 "Edge authentication failed." npmErrorCodec)
                 ( chooseContract
-                    (jsonContract status403 "Private access was refused, or no version reached policy and admission." npmErrorCodec)
+                    (jsonContract status403 "Private access was refused." npmErrorCodec)
                     ( chooseContract
-                        (jsonContract status404 "A name no configured upstream has, a first-party name the private upstream does not have, which is never fetched from the public upstream, or a package with no version that passed policy and admission, whose refusals the `error` field names." npmErrorCodec)
+                        (jsonContract status404 "A name no configured upstream has, a first-party name the private upstream does not have, which is never fetched from the public upstream, a package whose upstreams list no version, or a package with no version that passed policy and admission, whose refusals the `error` field names." npmErrorCodec)
                         ( chooseContract
                             (jsonContract status406 "The request's `Accept-Encoding` excludes both gzip and identity coding." npmErrorCodec)
                             ( chooseContract
                                 (jsonContract status500 "A permanent or internal inability to decide." npmErrorCodec)
                                 ( chooseContract
-                                    (jsonContract status502 "An upstream reply was invalid or unusable, such as a packument for a different package." npmErrorCodec)
+                                    (jsonContract status502 "An upstream reply was invalid or unusable, such as a packument for a different package or one whose every version entry is malformed." npmErrorCodec)
                                     (jsonContract status503 "A transient upstream or advisory condition; retry (see `Retry-After`)." npmErrorCodec)
                                 )
                             )

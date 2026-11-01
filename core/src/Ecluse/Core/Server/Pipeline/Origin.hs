@@ -78,7 +78,7 @@ import Ecluse.Core.Server.Context (
     pdPublicBaseUrl,
  )
 import Ecluse.Core.Server.Metadata (MetadataReads, ecosystemMetadataReads, preparePublicVersion, privateMetadataClient, publicMetadataClient, withinRequestCap)
-import Ecluse.Core.Server.Pipeline.Diagnostics (logInvalidEntries, logMetadataFailure)
+import Ecluse.Core.Server.Pipeline.Diagnostics (logMetadataFailure, logPackumentDrops)
 import Ecluse.Core.Server.Pipeline.Shared (flightOf)
 import Ecluse.Core.Server.Response (
     RejectReason (UpstreamInvalid),
@@ -257,7 +257,7 @@ withMetadataClient rt deps settle origin k =
                 (srTracing rt)
                 (srMetrics rt)
                 (\nm err -> runInIO (logMetadataFailure nm baseUrl err))
-                (\nm entries -> runInIO (logInvalidEntries nm baseUrl entries))
+                (\nm info -> runInIO (logPackumentDrops nm baseUrl info))
                 (\nm -> runInIO (logFM DebugS (ls ("fetching packument from origin for " <> renderPackageName nm))))
                 origin
   where

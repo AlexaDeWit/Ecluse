@@ -36,7 +36,7 @@ import Ecluse.Core.Server.MirrorView (mirrorVersionView, mirrorViewDocuments, pu
 import Ecluse.Core.Server.Path (Filename, unFilename)
 import Ecluse.Core.Server.Pipeline.Origin (OriginMiss (..), ReadFailure (ReadUnavailable), statusReadFailure, withPrivateMetadataClient, withPublicMetadata)
 import Ecluse.Core.Server.Pipeline.Shared
-import Ecluse.Core.Server.Pipeline.Tarball.Private (privateMetadataMiss, privateReadFailure)
+import Ecluse.Core.Server.Pipeline.Tarball.Private (RecordedCopy (RecordedCopyGone), privateMetadataMiss, privateReadFailure, recordedCopy)
 import Ecluse.Core.Server.Pipeline.Tarball.Refusal (artifactError, privateMissRefusal, privateReadRefusal, upstreamUnavailable, versionAbsent)
 import Ecluse.Core.Server.Pipeline.Tarball.Relay (ArtifactServe (..), acceptPrivateArtifact, privateArtifactResponder, relayPublicResult, relayUnjudged, relayUpstreamResult, withMethod, withValidators)
 import Ecluse.Core.Server.Pipeline.Tarball.Types (ArtifactRequest (..), TarballReplies (..), relayResponder)
@@ -65,7 +65,7 @@ serveSidecar mode replies name version file request respond = do
         else liftIO (respond (tarballError replies status401 [] (mkRefusal Nothing unauthorisedMessage)))
 
 -- A recorded private file owns its companion absence after the complete mirror proof.
-data Selection = Selected HTTP.Request | Retained ByteString | Incomplete MirrorVersion | NewPublicFile | Unavailable | Cooling RetryAfter | Refused | Missing OriginMiss | CompanionAbsent
+data Selection = Selected HTTP.Request | Retained ByteString | Incomplete RecordedCopy MirrorVersion | NewPublicFile | Unavailable | Cooling RetryAfter | Refused | Missing OriginMiss | CompanionAbsent
 
 admittedRead :: ArtifactRequest response -> (MemoryTicket -> Handler Selection) -> (Selection -> Handler ResponseReceived) -> Handler ResponseReceived
 admittedRead ctx readSelection answer =
@@ -94,7 +94,7 @@ privateSelection ctx token ticket = case pdPrivateBase deps of
                             Right (Just (_, record)) -> case recordVersion (arVersion ctx) record of
                                 Nothing -> pure (ordinary result)
                                 Just expected -> case mirrorVersionView (mirrorViewDocuments mirror) (arVersion ctx) record (either (const Nothing) (either (const Nothing) vrVersion) result) of
-                                    Left _ -> pure (Incomplete expected)
+                                    Left _ -> pure (Incomplete (recordedCopy result) expected)
                                     Right _ | Map.notMember (unFilename (arFile ctx)) (versionFiles expected) -> pure NewPublicFile
                                     Right restored -> case restored >>= selectSidecar (pdMinTrustedIntegrity deps) (tarballHostHonoured TrustedOrigin deps privateHost . hostPortAddress . artUrl) (unFilename (arFile ctx)) . vdDetails of
                                         Nothing -> pure CompanionAbsent
@@ -162,7 +162,7 @@ servePrivate ctx = \case
     Retained bytes -> serveRetained ctx bytes
     Unavailable -> answerError ctx upstreamUnavailable
     Cooling retry -> answerError ctx (upstreamCooling retry)
-    Incomplete expected -> admittedRead ctx (publicSelectionCovered ctx (Just expected)) (servePublic ctx)
+    Incomplete copy expected -> admittedRead ctx (publicSelectionCovered ctx (Just (copy, expected))) (servePublic ctx)
     NewPublicFile -> admittedRead ctx (publicSelectionCovered ctx Nothing) (servePublic ctx)
     CompanionAbsent -> answerError ctx versionAbsent
     Refused -> refusePrivate ctx
@@ -188,7 +188,7 @@ servePublic ctx = \case
     Retained _ -> answerError ctx upstreamUnavailable
     Unavailable -> answerError ctx upstreamUnavailable
     Cooling retry -> answerError ctx (upstreamCooling retry)
-    Incomplete _ -> answerError ctx upstreamUnavailable
+    Incomplete _ _ -> answerError ctx upstreamUnavailable
     NewPublicFile -> answerError ctx upstreamUnavailable
     CompanionAbsent -> answerError ctx versionAbsent
     Refused -> answerError ctx upstreamUnavailable
@@ -235,19 +235,23 @@ serveRetained ctx bytes = liftIO $ arRespond ctx $ case evaluateETag (arValidato
     etag = mkStrongETag (hash bytes :: Digest SHA256)
     headers fresh = [etagHeader fresh, (hContentLength, show (BS.length bytes))]
 
-publicSelectionCovered :: ArtifactRequest response -> Maybe MirrorVersion -> MemoryTicket -> Handler Selection
+publicSelectionCovered :: ArtifactRequest response -> Maybe (RecordedCopy, MirrorVersion) -> MemoryTicket -> Handler Selection
 publicSelectionCovered ctx expected ticket = do
     result <- tryAny (withPublicMetadata (arRuntime ctx) deps ticket (arPackage ctx) (arVersion ctx) liftIO)
     case result of
         Right (Right readVersion) | Just doc <- vrVersion readVersion -> do
             let info = PackageInfo (arPackage ctx) (Map.singleton (renderVersion (arVersion ctx)) (vdDetails doc)) Map.empty []
-            if maybe True (\mirror -> publicMirrorCoverage (Map.singleton (renderVersion (arVersion ctx)) mirror) info) expected
+            if maybe True (\(_, mirror) -> publicMirrorCoverage (Map.singleton (renderVersion (arVersion ctx)) mirror) info) expected
                 then pure (selectRequest ctx UntrustedOrigin (pdMinIntegrity deps) publicHost Nothing readVersion)
                 else pure Unavailable
         Right (Left (MetadataFetch (FetchCooldown retry))) -> pure (Cooling retry)
-        Right (Right _) | isNothing expected -> pure (Missing MissAbsent)
-        Right (Left err) | isNothing expected -> pure (Missing (publicMetadataMiss err))
+        -- A public index for another project is an unusable reply, never the absence of a recorded version.
+        Right (Left (MetadataNameMismatch _)) | isJust expected -> pure Unavailable
+        Right (Right _) | missSettles -> pure (Missing MissAbsent)
+        Right (Left err) | missSettles -> pure (Missing (publicMetadataMiss err))
         _ -> pure Unavailable
   where
     deps = arDeps ctx
+    -- A public miss settles a new file, or a recorded version whose private copy is gone.
+    missSettles = maybe True ((== RecordedCopyGone) . fst) expected
     publicHost = thgPublicHostPort (pdTarballHostGate deps)
