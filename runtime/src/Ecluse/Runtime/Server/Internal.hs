@@ -329,8 +329,8 @@ listeningPrefix listener = listener <> " listening on port "
 onExceptionResponse :: Response
 onExceptionResponse = jsonResponse status500 "{\"error\":\"internal server error\"}"
 
-{- On @SIGTERM@ or @SIGINT@, close the listening socket: @warp@ refuses new connections and marks
-in-flight responses @Connection: close@. 'CatchOnce' leaves the second signal to the runtime.
+{- On @SIGTERM@ or @SIGINT@, close the listening socket: @warp@ refuses new connections and closes each
+connection after its current response. 'CatchOnce' leaves each signal's second delivery to the runtime.
 -}
 installShutdownHandler :: IO () -> IO ()
 installShutdownHandler closeSocket =

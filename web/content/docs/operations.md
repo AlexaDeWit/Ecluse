@@ -113,21 +113,23 @@ same way, Mirror, Pilot, and the Dredger included:
 
 1. Écluse closes its listening socket, so every new connection is refused. That includes the health
    probes: `/readyz` and `/livez` fail by refusal, not by a `503`.
-2. A response still in flight carries `Connection: close`, so a keep-alive client reconnects to
-   another instance.
+2. A response that starts after the socket closes carries `Connection: close`, and each connection
+   closes once its current response ends, so a keep-alive client reconnects to another instance.
 3. In-flight requests and artifact streams can finish within the drain window. Remaining transfers
    can stop when the timeout expires.
 
 `ECLUSE_SERVER__SHUTDOWN_DRAIN_TIMEOUT` bounds the drain at 30 seconds by default. **Set the
 platform's termination grace period above it**, so the orchestrator does not `SIGKILL` mid-drain.
-On Kubernetes that is `terminationGracePeriodSeconds`. A second `SIGINT` or `SIGTERM` hard-stops
-the process wherever it runs: the shutdown handler fires once, and the runtime default takes the
-next signal. `Ctrl+D` forces the same immediate halt, and that path is armed only when standard
+On Kubernetes that is `terminationGracePeriodSeconds`. A second signal of the same kind (`SIGTERM`
+after `SIGTERM`, or `SIGINT` after `SIGINT`) hard-stops the process wherever it runs: each signal's
+handler fires once, and the runtime default takes its next delivery. `Ctrl+D` forces the same immediate halt, and that path is armed only when standard
 input is a TTY.
 
 Kubernetes removes a terminating pod from its Service endpoints at about the time `SIGTERM`
 arrives, and load balancers learn of the removal later. A client routed to the pod in that gap has
-its connection refused. A `preStop` sleep holds the signal back until routing catches up. Set
+its connection refused. A `preStop` sleep holds the signal back until routing catches up. The image ships no shell or
+`sleep` binary, so use the built-in sleep action (`lifecycle.preStop.sleep.seconds`, Kubernetes
+1.30 and later) rather than an `exec` hook. Set
 `terminationGracePeriodSeconds` above the sleep and the drain timeout together.
 
 ## Exit codes
