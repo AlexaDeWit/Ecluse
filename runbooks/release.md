@@ -44,7 +44,7 @@ first.
 ## 2. Cut and push the tag
 
 ```bash
-env -u IN_NIX_SHELL nix develop --command task init-release VERSION=v0.3.3
+env -u IN_NIX_SHELL nix develop --command task init-release VERSION=v0.4.0
 ```
 
 It refuses unless the version matches `ecluse.cabal`, the working tree is clean, `HEAD` is
