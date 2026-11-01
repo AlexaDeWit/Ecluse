@@ -23,7 +23,7 @@ import UnliftIO.Concurrent (threadDelay)
 import Ecluse (run)
 import Ecluse.Boot (BootAborted (..), BootEnv (beLogEnv), alongsideSweeper, applySecretFileIndirection, applyServerSettings, logBootInfo, orExit, probeServerConfig, readConfigDocument, withBootEnv, withDeadlineSweeper)
 import Ecluse.Composition.BootError (
-    BootError (AwsEndpointMalformed, FirstPartyWithoutPrivateUpstream, MirrorRoleWithoutMirroring, PrivateUpstreamOnPublicUpstream, RuleBlockedOnMount, SplitRoleNeedsDurableQueue),
+    BootError (AwsEndpointMalformed, FirstPartyWithoutPrivateUpstream, MirrorRoleWithoutMirroring, PrivateUpstreamOnPublicUpstream, RuleBlockedOnMount, RuleRevocationUnsupported, SplitRoleNeedsDurableQueue),
     renderBootError,
  )
 import Ecluse.Composition.Support (captureBoot, cargoDeprecationRefusal, cargoGateEnv, cargoInstallRefusal, cargoScopeRefusal, collapsedMirrorRefusal, collapsingMirrorTarget, expectAppConfig, malformedAwsEndpoint, noMaintenanceBackend, overrideEnv, privateInventoryRefusal, privateUpstreamUrl, publicGateEnv, reportLines, rubyDependencyRefusal, rubyYankRefusal, withRubyInstallBlock, withoutMirrorTargetToken, withoutMirrorTargetUrl, withoutQueueUrl)
@@ -31,7 +31,7 @@ import Ecluse.Composition.Types (BootRole (BootWithoutPipeline))
 import Ecluse.Config (AppConfig (cfgServer), Config (configApp), ServerSettings (srvAuthToken), loadConfig)
 import Ecluse.Core.Credential (Secret, mkSecret, unSecret)
 import Ecluse.Core.Deadline qualified as Deadline
-import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
+import Ecluse.Core.Ecosystem (Ecosystem (Cargo, Npm, PyPI))
 import Ecluse.Core.Rules.Types (RuleType (AllowScopeType, DenyExternalDependenciesType, DenyIfDeprecatedType, DenyIfYankedType, DenyInstallTimeExecutionType))
 import Ecluse.Core.Server.Readiness (Readiness (Latched), alwaysReady)
 import Ecluse.Core.Worker (Liveness (Liveness), alwaysLive)
@@ -74,8 +74,12 @@ awsRunEnv =
 spec :: Spec
 spec = sequential $ do
     describe "blocked rules at both entry points" $ do
+        for_ [(Npm, "ECLUSE_MOUNTS__NPM__RULES", publicGateEnv, "DenyIfDeprecated", DenyIfDeprecatedType), (PyPI, "ECLUSE_MOUNTS__PYPI__RULES", overrideEnv "ECLUSE_MOUNTS__PYPI__ENABLED" "true" publicGateEnv, "DenyIfYanked", DenyIfYankedType), (Cargo, "ECLUSE_MOUNTS__CARGO__RULES", cargoGateEnv, "DenyIfYanked", DenyIfYankedType)] $ \(eco, key, env, ty, ruleTy) ->
+            for_ ["", ",\"appliesTo\":[\"admission\",\"revocation\"]"] $ \reach ->
+                it ("refuses " <> ty <> " at revocation on " <> show eco <> " with reach " <> reach) $
+                    refusesWithBlockLine (overrideEnv key (customRule ty reach) env) (RuleRevocationUnsupported eco ruleTy)
         let bothMounts = overrideEnv "ECLUSE_MOUNTS__PYPI__ENABLED" "true" publicGateEnv
-        for_ [(PyPI, "DenyInstallTimeExecution", "", DenyInstallTimeExecutionType, "Most PyPI releases offer a source distribution, which runs its own build on install, so this rule would deny nearly every release."), (PyPI, "AllowScope", ",\"scope\":\"acme\"", AllowScopeType, "A PyPI project name has no scope, so this rule can never match one."), (Npm, "DenyIfYanked", "", DenyIfYankedType, "npm reports no yank flag. Removed releases disappear from its metadata."), (PyPI, "DenyIfDeprecated", "", DenyIfDeprecatedType, "The PyPI adapter supplies no deprecation flag."), (PyPI, "DenyExternalDependencies", "", DenyExternalDependenciesType, "The PyPI adapter does not read where a release's dependencies install from.")] $ \(eco, name, parameters, ty, reason) ->
+        for_ [(PyPI, "DenyInstallTimeExecution", "", DenyInstallTimeExecutionType, "Most PyPI releases offer a source distribution, which runs its own build on install, so this rule would deny nearly every release."), (PyPI, "AllowScope", ",\"scope\":\"acme\"", AllowScopeType, "A PyPI project name has no scope, so this rule can never match one."), (Npm, "DenyIfYanked", ",\"appliesTo\":[\"admission\"]", DenyIfYankedType, "npm reports no yank flag. Removed releases disappear from its metadata."), (PyPI, "DenyIfDeprecated", ",\"appliesTo\":[\"admission\"]", DenyIfDeprecatedType, "The PyPI adapter supplies no deprecation flag."), (PyPI, "DenyExternalDependencies", "", DenyExternalDependenciesType, "The PyPI adapter does not read where a release's dependencies install from.")] $ \(eco, name, parameters, ty, reason) ->
             it ("refuses " <> name <> " with the same block line") $
                 refusesWithBlockLine (overrideEnv "ECLUSE_RULES" (customRule name parameters) bothMounts) (RuleBlockedOnMount eco ty reason)
         it "boots and checks each availability rule on its supported mount" $ do
@@ -119,14 +123,14 @@ spec = sequential $ do
         it "boots and checks Cargo after same-key suppression of both blocked types" $ do
             let env =
                     overrideEnv "ECLUSE_MOUNTS__CARGO__RULES" "{\"scope\":{\"enabled\":false},\"deprecated\":{\"enabled\":false}}" $
-                        overrideEnv "ECLUSE_RULES" "{\"scope\":{\"type\":\"AllowScope\",\"scope\":\"acme\"},\"deprecated\":{\"type\":\"DenyIfDeprecated\"}}" cargoGateEnv
+                        overrideEnv "ECLUSE_RULES" "{\"scope\":{\"type\":\"AllowScope\",\"scope\":\"acme\"},\"deprecated\":{\"type\":\"DenyIfDeprecated\",\"appliesTo\":[\"admission\"]}}" cargoGateEnv
             checkConfig env `shouldReturn` Left ExitSuccess
             serves ["proxy"] env
         it "boots and checks npm when the Cargo mount carrying blocked rules is disabled" $ do
             let env =
                     overrideEnv "ECLUSE_MOUNTS__NPM__ENABLED" "true" $
                         overrideEnv "ECLUSE_MOUNTS__CARGO__ENABLED" "false" $
-                            overrideEnv "ECLUSE_RULES" "{\"scope\":{\"type\":\"AllowScope\",\"scope\":\"acme\"},\"deprecated\":{\"type\":\"DenyIfDeprecated\"}}" cargoGateEnv
+                            overrideEnv "ECLUSE_RULES" "{\"scope\":{\"type\":\"AllowScope\",\"scope\":\"acme\"},\"deprecated\":{\"type\":\"DenyIfDeprecated\",\"appliesTo\":[\"admission\"]}}" cargoGateEnv
             checkConfig env `shouldReturn` Left ExitSuccess
             serves ["proxy"] env
 

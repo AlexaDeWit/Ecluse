@@ -548,6 +548,10 @@ place. The gate and the mirror worker evaluate the whole list. The composition r
 Dredger the rules that apply at revocation, and the engine itself takes no phase. That placement is
 why a serve path cannot drop a deny by naming the wrong phase.
 
+`DenyIfYanked` and `DenyIfDeprecated` require explicit admission-only reach.
+Stored metadata does not track later public availability changes, so revocation needs a distinct evidence composition mechanism.
+Boot refuses that reach until the [upstream revocation feature](https://github.com/AlexaDeWit/Ecluse/issues/1943) supplies it.
+
 The design question is whether the Dredger can then delete a version the gate admits. It cannot, on
 the same evidence, and two load refusals are what hold that:
 

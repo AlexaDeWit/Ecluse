@@ -38,6 +38,7 @@ import Ecluse.Composition.BootError (
         PublicationTargetWithoutPublish,
         PublishStaticCredentialNeedsEdge,
         RuleBlockedOnMount,
+        RuleRevocationUnsupported,
         UploadConfigurationRequired
     ),
  )
@@ -90,8 +91,10 @@ import Ecluse.Core.Registry.Sweep.Types (minimumChunkPause)
 import Ecluse.Core.Rules.Types (
     AllowIfRemediatesCveParams (aircOnUnavailable),
     FailureAlignment (FailNoDecision),
-    PrecededRule (prRule),
+    PrecededRule (prRule, ruleReach),
     Rule (AllowIfRemediatesCve),
+    RuleReach (AdmissionAndRevocation),
+    RuleType (DenyIfDeprecatedType, DenyIfYankedType),
     ruleType,
  )
 import Ecluse.Core.Security (
@@ -250,13 +253,16 @@ vetRuleBlocks :: ResolveMaintenanceAdapter -> Config -> Vet ()
 vetRuleBlocks resolveAdapter config = traverse_ vetMountRules (activeMounts config)
   where
     vetMountRules (eco, (mount, _)) =
-        traverse_ (rule (const (Refuse (uncurry (RuleBlockedOnMount eco)))) blocked) (mountPolicy mount)
+        traverse_ (rule (const (Refuse id)) blocked) (mountPolicy mount)
       where
         blocked preceded = do
             adapter <- resolveAdapter eco
             let ty = ruleType (prRule preceded)
-            reason <- Map.lookup ty (adapterRuleBlocks adapter)
-            pure (ty, reason)
+            case Map.lookup ty (adapterRuleBlocks adapter) of
+                Just reason -> Just (RuleBlockedOnMount eco ty reason)
+                Nothing ->
+                    RuleRevocationUnsupported eco ty
+                        <$ guard (ruleReach preceded == AdmissionAndRevocation && ty `elem` [DenyIfDeprecatedType, DenyIfYankedType])
 
 {- A declared capacity that matches no store paces nothing. It advises rather than refuses,
 because an endpoint renamed under a running Dredger would otherwise stop the role outright. -}

@@ -502,6 +502,8 @@ mounts:
       # Restate appliesTo: [admission, revocation] here to include Dredger deletion.
       # Optional deprecation deny, disabled unless added. No parameters. Default precedence: 300.
       # It also refuses deprecated whole packages and release lines. Empty notices are not deprecations.
+      # Requires appliesTo: [admission]. Revocation reach refuses boot because stored metadata
+      # does not track later public deprecation changes. The rule checks flags at admission only.
       # deny-deprecated:
       #   type: DenyIfDeprecated
       #   appliesTo: [admission]
@@ -549,7 +551,8 @@ mounts:
         url: https://pypi.org
     # Optional yank deny, disabled unless added. No parameters. Default precedence: 300.
     # A release is yanked only when every file is yanked. Mixed releases remain admitted.
-    # Admission-only keeps previously mirrored versions retrievable. No separate yank key exists.
+    # Requires appliesTo: [admission]. Revocation reach refuses boot because stored metadata
+    # does not track later public yanks. The rule checks flags at admission only. No separate yank key exists.
     # rules:
     #   deny-yanked:
     #     type: DenyIfYanked
@@ -628,6 +631,8 @@ mounts:
 # passes over the rule. The load refuses an empty list, an empty value, an empty string,
 # `[revocation]` alone, an unknown word, and `[admission]` on an allow. `enabled: false`
 # switches a rule off at both.
+# DenyIfYanked and DenyIfDeprecated require explicit [admission]. Their default reach and
+# any explicit revocation reach refuse boot because Dredger cannot refresh upstream flags.
 rules:
   # Active when advisories.url is configured, before operator patches.
   # Both phases, precedence 300. An identity allow needs precedence above 300.

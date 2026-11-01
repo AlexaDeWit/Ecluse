@@ -400,8 +400,9 @@ Both read typed flags. Refusals state the flag without quoting an upstream notic
 An empty npm `deprecated` string clears deprecation. A PyPI release with mixed yanked and available
 files remains admitted as a whole unless another rule refuses it.
 
-Limit either deny to admission to refuse new public admission and queued mirror writes while keeping
-previously mirrored versions retrievable through trusted private reads:
+Both rules require explicit `appliesTo: [admission]` to refuse new public admission and queued mirror writes.
+Boot and `check-config` refuse either rule when `appliesTo` is omitted or includes `revocation`.
+Previously mirrored versions remain retrievable through trusted private reads:
 
 ```yaml
 mounts:
@@ -422,9 +423,11 @@ can refuse all versions that a dependency range selects, not only isolated withd
 The yank rule is the PyPI yank setting. There is no separate configuration key.
 PyPI mirroring copies every supported wheel and source distribution admitted for a version.
 
-Without `appliesTo`, either deny also applies at revocation. The Dredger reads the store's own
-metadata, so a later public yank or deprecation does not update the stored flag by itself.
-An admission-only rule never authorises deletion. Other revocation rules can still condemn the copy.
+These rules check the flags available in the metadata read at admission time.
+They do not track later upstream changes for stored copies. Dredger reads the store's own metadata,
+so accepting these rules at revocation would mislead operators about the protection they provide.
+Use the [identity revocation procedure](@/docs/operations.md#revoking-a-mirrored-version-internal-yank)
+to remove an existing copy. Other revocation rules can still condemn it.
 These flags do not detect a malicious release removed from registry metadata.
 `DenyIfKnownMalicious` reads advisory evidence independently of these flags. A publisher
 deprecates or yanks a first-party release at the publication target. Écluse answers
@@ -609,6 +612,9 @@ on a rule names its phases:
 |---|---|---|
 | Not set, or `[admission, revocation]` | The gate, the mirror worker, and the Dredger | Refuses new versions, and the Dredger removes stored copies |
 | `[admission]` | The gate and the mirror worker | Refuses new versions. Stored copies stay, and your private stores keep serving them |
+
+`DenyIfYanked` and `DenyIfDeprecated` require explicit `[admission]`.
+Boot refuses their default reach and any explicit revocation reach, as the [rule policy](#rule-policy) explains.
 
 Limit a deny to admission to refuse new public admission and mirror writes while retaining
 access to stored copies. New and existing clients can still install those trusted copies.

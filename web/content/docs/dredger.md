@@ -49,7 +49,7 @@ The Dredger takes no ingress. It exposes only `/livez` and `/readyz` on `ECLUSE_
 ## What one cycle does
 
 A stored version can become denied after an advisory update, an operator identity deny,
-a rule change, or a change to stored metadata such as a deprecation or yank flag.
+a rule change, or a change to stored metadata that a supported revocation rule reads.
 
 The **default cycle** selects advisory-covered and identity-denied names. Other changes can
 require a full walk to discover versions outside that candidate set.
@@ -215,6 +215,9 @@ alone when the store serves no metadata, because the rule that needs the metadat
 rules it evaluates. The boot log lists each mount's rules in order with the phases each applies at, so read
 it to see which rules the Dredger evaluates.
 
+`DenyIfYanked` and `DenyIfDeprecated` require admission-only reach.
+See their [configuration limits](@/docs/configuration.md#rule-policy) before relying on them for stored copies.
+
 The first-party belt shields every version under a namespace your `firstParty` key names, and the
 Dredger never even reads their metadata.
 
@@ -287,7 +290,7 @@ deliberately and restart it.
 ## The full walk
 
 A full walk checks names outside the default advisory and identity candidate set. Use it after
-a rule change, or to discover stored deprecation and yank changes that no candidate points to.
+a rule change that affects packages no candidate points to.
 Enable it with `fullWalk: true`.
 
 While it is on, the walk **replaces** the default cycle rather than running beside it, because a
