@@ -279,14 +279,15 @@ availabilityReachSpec = describe "availability rules require admission-only reac
                     refusalsFor role (overrideEnv rulesKey (declaration admission) env) `shouldReturn` []
             it "accepts a mount patch that narrows shared reach" $
                 refusalsFor role (overrideEnv mountKey "{\"availability\":{\"appliesTo\":[\"admission\"]}}" (overrideEnv "ECLUSE_RULES" (declaration "") env)) `shouldReturn` []
-            it "accepts replacement of the shared availability rule" $
-                refusalsFor role (overrideEnv mountKey "{\"availability\":{\"type\":\"AllowByIdentity\",\"identity\":\"fixture\"}}" (overrideEnv "ECLUSE_RULES" (declaration "") env)) `shouldReturn` []
+            it "removes a disabled shared availability rule from the resolved policy" $ do
+                plan <- expectVetted role (overrideEnv mountKey "{\"availability\":{\"enabled\":false}}" (overrideEnv "ECLUSE_RULES" (declaration "") env))
+                map (ruleName . prRule) (concatMap (mountPolicy . vmMount) (vpMounts plan)) `shouldNotContain` [toText ty]
             it "refuses a mount patch that widens shared admission-only reach" $
                 refusalsFor role (overrideEnv mountKey "{\"availability\":{\"appliesTo\":[\"admission\",\"revocation\"]}}" (overrideEnv "ECLUSE_RULES" (declaration admission) env)) `shouldReturn` [refusal]
             it "ignores a disabled rule and refuses it when re-enabled" $ do
                 let shared = overrideEnv "ECLUSE_RULES" (declaration "") env
                 refusalsFor role (overrideEnv mountKey "{\"availability\":{\"enabled\":false}}" shared) `shouldReturn` []
-                refusalsFor role (overrideEnv mountKey "{\"availability\":{\"enabled\":true}}" (overrideEnv "ECLUSE_RULES" (declaration ",\"enabled\":false") env)) `shouldReturn` [refusal]
+                refusalsFor role (overrideEnv mountKey (declaration ",\"enabled\":true") shared) `shouldReturn` [refusal]
             it "ignores an inactive mount's declaration" $
                 refusalsFor role (overrideEnv mountKey (declaration "") (overrideEnv ("ECLUSE_MOUNTS__" <> key <> "__ENABLED") "false" (overrideEnv "ECLUSE_MOUNTS__RUBYGEMS__ENABLED" "true" publicGateEnv))) `shouldReturn` []
             it "refuses even below an overriding identity allow" $
