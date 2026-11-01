@@ -5,7 +5,7 @@
 # The push is the point of no return: the Tag Integrity ruleset blocks tag deletion and
 # update for everyone. See runbooks/release.md step 2.
 #
-# Usage: scripts/init-release.sh v0.3.3
+# Usage: scripts/init-release.sh v0.4.0
 #        DRY_RUN=1 runs every guardrail, then stops before creating or pushing.
 set -euo pipefail
 
@@ -29,7 +29,7 @@ cleanup_tag() {
 }
 trap cleanup_tag EXIT
 
-[ -n "$version" ] || die "pass a version, for example: task init-release VERSION=v0.3.3"
+[ -n "$version" ] || die "pass a version, for example: task init-release VERSION=v0.4.0"
 release_version_parse "$version" ||
   die "'$version' is not X.Y.Z or X.Y.Z-rc.N (a leading 'v' is optional)"
 tag="$release_tag"

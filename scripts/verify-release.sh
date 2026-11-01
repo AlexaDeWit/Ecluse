@@ -5,7 +5,7 @@
 # architectures, the seven release assets, and the provenance. The SBOM attestations
 # need a platform digest and stay manual. See runbooks/release.md step 5.
 #
-# Usage: scripts/verify-release.sh v0.3.3
+# Usage: scripts/verify-release.sh v0.4.0
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -19,7 +19,7 @@ die() {
   exit 1
 }
 
-[ -n "$version" ] || die "pass a version, for example: task verify-release VERSION=v0.3.3"
+[ -n "$version" ] || die "pass a version, for example: task verify-release VERSION=v0.4.0"
 release_version_parse "$version" ||
   die "'$version' is not X.Y.Z or X.Y.Z-rc.N (a leading 'v' is optional)"
 tag="$release_tag"

@@ -22,7 +22,7 @@ docker run --rm --name ecluse-trial \
   -p 127.0.0.1:8080:8080 \
   -e ECLUSE_MOUNTS__NPM__ENABLED=true \
   -e ECLUSE_SERVER__PUBLIC_URL=http://127.0.0.1:8080 \
-  ghcr.io/alexadewit/ecluse:0.3.3 proxy
+  ghcr.io/alexadewit/ecluse:0.4.0 proxy
 ```
 
 Leave this terminal open. The proxy listens only on your machine. It does not write to a package registry.

@@ -38,7 +38,7 @@ A derived image lets you deploy the same configuration with every role. Copy the
 **Dockerfile**
 
 ```dockerfile
-FROM ghcr.io/alexadewit/ecluse:0.3.3
+FROM ghcr.io/alexadewit/ecluse:0.4.0
 ENV LANG=C.UTF-8
 COPY --chown=65532:65532 config.yaml /etc/ecluse/config.yaml
 ```
@@ -89,7 +89,7 @@ Run the same image with the same environment and mounted secrets, using `check-c
 ```bash
 docker run --rm \
   -e ECLUSE_SERVER__PUBLIC_URL=https://packages.example.com \
-  your-registry/ecluse-configured:0.3.3 check-config
+  your-registry/ecluse-configured:0.4.0 check-config
 ```
 
 Review enabled mounts, rule order, advisory requirements, and warnings for the role you intend to run.
