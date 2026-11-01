@@ -141,10 +141,11 @@ Its independent Aeson readers inspect native wire version and artifact digest fi
 
 ### Full package-store subjects
 
-Verdaccio npm, CodeArtifact npm, CodeArtifact PyPI and CodeArtifact Cargo each run the same ten cases through `fullPackageStoreContract`.
+Verdaccio npm and CodeArtifact npm, PyPI, Cargo and RubyGems each run the same ten cases through `fullPackageStoreContract`.
 Each ID below has the prefix `package-store/<subject>/`.
-The subjects are `verdaccio`, `codeartifact`, `codeartifact-pypi` and `codeartifact-cargo`.
+The subjects are `verdaccio`, `codeartifact`, `codeartifact-pypi`, `codeartifact-cargo` and `codeartifact-rubygems`.
 The CodeArtifact profiles run in the `backend-conformance` CI job and use the `codeartifact` backend identity.
+The CodeArtifact entrypoints name all four subjects apart from the catalogue, so a missing ecosystem profile fails the run.
 The six family names come from an independent completion definition, so removing a family
 from the provider catalogue cannot make its absence pass.
 
@@ -160,6 +161,9 @@ from the provider catalogue cannot make its absence pass.
 All profiles use production handles through deterministic service boundaries.
 The PyPI profile uploads two wheels and one source distribution per version, with distinct consumer metadata.
 Its native fixture decodes submitted multipart fields and retains actual uploaded bytes.
+The RubyGems profile publishes two genuine gems whose runtime dependency requirements differ.
+Its native fixture reads each uploaded archive's tar members, checks their SHA-256 entries and takes the version from the gem metadata.
+It requires CodeArtifact's Basic `aws` pair on reads and its Bearer token on publication.
 Independent format constants check the CodeArtifact requests.
 Fresh handles retain only the remote fixture state.
 The CodeArtifact result does not claim live AWS operations.

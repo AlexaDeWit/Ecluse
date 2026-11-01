@@ -219,7 +219,7 @@ obligations =
         "cargo/native-safety"
         Supported
         ["read", "mirror", "maintenance", "advisories"]
-        (map ("cargo/dredger-native-safety/" <>) ["deletion-cap", "unsafe-upstream", "native-yank-not-deletion"])
+        (map ("cargo/dredger-native-safety/" <>) ["deletion-cap", "unsafe-upstream", "native-yank-not-deletion", "authorisation"])
     , Obligation
         "rubygems/installation"
         "rubygems/read"

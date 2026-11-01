@@ -5,7 +5,7 @@
 -- | Fixed codeartifact adapter conformance, with deterministic collaborators.
 module Main (main) where
 
-import Ecluse.Runtime.Test.PackageStore (codeArtifactCargoDriver, codeArtifactCatalogue, codeArtifactDriver, codeArtifactPyPIDriver, codeArtifactSuiteGroups, validateCodeArtifact)
+import Ecluse.Runtime.Test.PackageStore (codeArtifactCargoDriver, codeArtifactCatalogue, codeArtifactDriver, codeArtifactPyPIDriver, codeArtifactRubyGemsDriver, codeArtifactSuiteGroups, validateCodeArtifact)
 import Ecluse.Test.Contract.PackageStore (fullPackageStoreContract)
 import Ecluse.Test.Contract.Runner (contractMain)
 
@@ -13,4 +13,4 @@ import Ecluse.Test.Contract.Runner (contractMain)
 main :: IO ()
 main = do
     validateCodeArtifact
-    contractMain codeArtifactCatalogue "package-store-codeartifact" (codeArtifactSuiteGroups (fullPackageStoreContract codeArtifactDriver <> fullPackageStoreContract codeArtifactPyPIDriver <> fullPackageStoreContract codeArtifactCargoDriver)) (const (pure Nothing))
+    contractMain codeArtifactCatalogue "package-store-codeartifact" (codeArtifactSuiteGroups (fullPackageStoreContract codeArtifactDriver <> fullPackageStoreContract codeArtifactPyPIDriver <> fullPackageStoreContract codeArtifactCargoDriver <> fullPackageStoreContract codeArtifactRubyGemsDriver)) (const (pure Nothing))

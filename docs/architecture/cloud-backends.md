@@ -271,7 +271,7 @@ The driver supplies production handles, deterministic service boundaries, fixtur
 The contract owns the common client-visible guarantees and the required family list.
 Different stores may use different completion mechanisms under those guarantees.
 
-Current full-contract profiles are Verdaccio npm and CodeArtifact npm, PyPI, and Cargo.
+Current full-contract profiles are Verdaccio npm and CodeArtifact npm, PyPI, Cargo, and RubyGems.
 CodeArtifact runs the native formats in one fixed backend job with separate case identities.
 The generic `registry` tag lacks maintenance operations and does not claim full package-store completion.
 CodeArtifact uses the production adapter with deterministic control-plane doubles.

@@ -15,14 +15,13 @@ import Network.HTTP.Types (Header, Status, status200, status400, status401, stat
 import Network.Wai.Parse (FileInfo (fileContent, fileName))
 
 import Ecluse.Core.Credential (ClientCredential (..), mkSecret)
-import Ecluse.Core.Package (Artifact (..), HashAlg (SHA256), PackageDetails (pkgArtifacts), PackageInfo (infoVersions), PackageName, hashAlg, hashValue)
+import Ecluse.Core.Package (PackageDetails (pkgArtifacts), PackageInfo (infoVersions), PackageName)
 import Ecluse.Core.Registry.CachedDocument (pypiSimpleCached)
 import Ecluse.Core.Registry.Maintenance (StoreMaintenance, StoreManifestRead, storeFaultOfMetadata)
 import Ecluse.Core.Registry.Metadata (MetadataError (MetadataAbsent), VersionDoc (..), VersionRead (vrVersion))
 import Ecluse.Core.Registry.Metadata.Fetch (fetchManifest, fetchVersion)
-import Ecluse.Core.Registry.MirrorUpload (expectedArtifact, inventoryFiles, verifyMirrorBytes)
 import Ecluse.Core.Registry.Origin (OriginClient (..), ocBaseUrl, originClient)
-import Ecluse.Core.Registry.Publish (MirrorPublish (..), MirrorTransport (..), PublishPlan (..), newMirrorPublish, pmvInventory, pmvPrepareUpload, publishPrepared)
+import Ecluse.Core.Registry.Publish (MirrorPublish (..), MirrorTransport (..), newMirrorPublish)
 import Ecluse.Core.Registry.PyPI.Document (simpleFiles)
 import Ecluse.Core.Registry.PyPI.Metadata (pypiMirrorRead)
 import Ecluse.Core.Registry.PyPI.Publish (pypiPublishCodec)
@@ -90,7 +89,7 @@ readRelease origin version = case canonicalReleaseVersion version of
             Right found -> case vrVersion found of
                 Nothing -> pure (Right Nothing)
                 Just document -> do
-                    artifacts <- traverse (readArtifact origin) (pkgArtifacts (vdDetails document))
+                    artifacts <- traverse (readStoreArtifact artifactRequestByUrl origin) (pkgArtifacts (vdDetails document))
                     pure $ do
                         files <- sequence artifacts
                         raw <- maybeToRight "production read lost PyPI metadata" (vdRaw document >>= snd pypiSimpleCached)
@@ -102,27 +101,10 @@ readRelease origin version = case canonicalReleaseVersion version of
         _ -> Left "production read lost a consumer metadata field"
     metadataOf _ = Left "production read returned a non-object file"
 
-readArtifact :: OriginClient -> Artifact -> IO (Either Text PackageStoreArtifact)
-readArtifact origin artifact = do
-    response <- fetchStoreArtifact (MirrorArtifactBodyLimit 32768) origin (artifactRequestByUrl (ocToken origin) (artUrl artifact))
-    pure $ do
-        bytes <- response
-        digest <- maybeToRight "stored artifact has no SHA-256 digest" (hashValue <$> find ((== SHA256) . hashAlg) (artHashes artifact))
-        unless (hexSha256Of bytes == digest) (Left "stored artifact bytes disagree with its digest")
-        pure (PackageStoreArtifact (artFilename artifact) bytes digest)
-
 writeRelease :: MirrorPublish -> PackageStoreRelease -> IO (Either Text ())
 writeRelease publisher release = case prepare of
     Left fault -> pure (Left fault)
-    Right (version, prepared) -> fmap (void . sequence) $ forM (inventoryFiles (pmvInventory prepared)) $ \file ->
-        case find ((== artFilename (expectedArtifact file)) . psaFilename) (psrArtifacts release) of
-            Nothing -> pure (Left "prepared upload names an absent source file")
-            Just artifact -> case first show (verifyMirrorBytes file (psaBytes artifact)) of
-                Left fault -> pure (Left fault)
-                Right bytes ->
-                    pmvPrepareUpload prepared (const (pure ())) file bytes >>= \case
-                        Left fault -> pure (Left (show fault))
-                        Right upload -> first show <$> publishPrepared upload (PublishPlan version)
+    Right (version, prepared) -> uploadFiles version prepared release
   where
     prepare = do
         version <- canonicalReleaseVersion (psrVersion release)

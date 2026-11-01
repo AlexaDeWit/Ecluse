@@ -13,7 +13,7 @@ module Ecluse.E2E.Cargo.DredgerE2ESpec (
 import Data.ByteString.Lazy qualified as LBS
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
-import System.Exit (ExitCode (ExitSuccess))
+import System.Exit (ExitCode (ExitFailure, ExitSuccess))
 import Test.Hspec
 
 import Ecluse.Core.Ecosystem (Ecosystem (Cargo))
@@ -28,6 +28,7 @@ import Ecluse.E2E.Harness.CargoDredger.Client (cargoSweepClientOps)
 import Ecluse.E2E.Harness.CargoRegistry (awaitCargoRegistry)
 import Ecluse.E2E.Harness.Client (shouldSucceed)
 import Ecluse.E2E.Harness.CodeArtifact (codeArtifactDeleteRequests, creditCodeArtifactDeletes, withCodeArtifactDeleteAudit)
+import Ecluse.E2E.Harness.CodeArtifact.Roles (refusedAwsIdentity, refusedIdentityReports)
 import Ecluse.E2E.Harness.Docker (RoleRun (..), awaitContainerLog, containerLogs, runRoleOnce, sharedMirrorQueue, withDataPlane, withMirrorRole)
 import Ecluse.E2E.Harness.Lifecycle (timedFixtureWith)
 import Ecluse.E2E.Harness.NativeEdge (observedProxy)
@@ -78,19 +79,18 @@ cargoDredgerFixture :: ConcreteFixture FamilyMetadata
 cargoDredgerFixture =
     ConcreteFixture
         { withFixture = withDataPlane (Topology [Cargo] False True)
-        , fixtureMetadata =
-            FamilyMetadata
-                "cargo/dredger"
-                "cargo/maintenance"
-                ["read", "mirror", "maintenance", "advisories"]
-                ["docker", "image", "openssl", "cargo", "rustc"]
-                ["proxy", "nginx", "codeartifact-fixture", "ministack"]
-                ["docker-daemon-exclusive", "group-mutable-state", "serial-cases"]
+        , fixtureMetadata = FamilyMetadata "cargo/dredger" "cargo/maintenance" capabilities prerequisites resources isolation
         }
 
 -- | The profile names the deterministic CodeArtifact protocol fixture, never a cloud account.
 cargoDredgerProfile :: Profile
-cargoDredgerProfile = Profile "cargo/maintenance" ["cargo"] ["codeartifact-fixture", "sqs", "s3"] ["read", "mirror", "maintenance", "advisories"]
+cargoDredgerProfile = Profile "cargo/maintenance" ["cargo"] ["codeartifact-fixture", "sqs", "s3"] capabilities
+
+capabilities, prerequisites, resources, isolation :: [Text]
+capabilities = ["read", "mirror", "maintenance", "advisories"]
+prerequisites = ["docker", "image", "openssl", "cargo", "rustc"]
+resources = ["proxy", "nginx", "codeartifact-fixture", "ministack"]
+isolation = ["docker-daemon-exclusive", "group-mutable-state", "serial-cases"]
 
 withIdentity :: ((Native.CargoSweepPlane, Native.CargoSweepStore, Native.CargoSweepStore) -> IO ()) -> GlobalDataPlane -> IO ()
 withIdentity action global = Native.withCargoSweepPlane global $ \plane ->
@@ -272,11 +272,11 @@ safetyGroup =
         , groupProfileId = "cargo/maintenance"
         , groupTier = E2E
         , groupPartition = "cargo"
-        , groupCases = [Case ("cargo/dredger-native-safety/" <> suffix) ["cargo/dredger-native-safety"] | suffix <- ["deletion-cap", "unsafe-upstream", "native-yank-not-deletion"]]
-        , groupCapabilities = ["read", "mirror", "maintenance", "advisories"]
-        , groupPrerequisites = ["docker", "image", "openssl", "cargo", "rustc"]
-        , groupResources = ["proxy", "nginx", "codeartifact-fixture", "ministack"]
-        , groupIsolation = ["docker-daemon-exclusive", "group-mutable-state", "serial-cases"]
+        , groupCases = [Case ("cargo/dredger-native-safety/" <> suffix) ["cargo/dredger-native-safety"] | suffix <- ["deletion-cap", "unsafe-upstream", "native-yank-not-deletion", "authorisation"]]
+        , groupCapabilities = capabilities
+        , groupPrerequisites = prerequisites
+        , groupResources = resources
+        , groupIsolation = isolation
         }
 
 safetyCases :: PhaseRecorder -> Spec
@@ -314,6 +314,16 @@ safetyCases recorder = aroundAll acquire $ do
         (fst <$> Native.storeArtifactBytes mirror name version) `shouldReturn` 404
         made <- drop (length requests) <$> codeArtifactDeleteRequests (Native.cspControl plane)
         made `shouldBe` [("POST", "v1/package/versions/delete")]
+    it (caseLabel "cargo/dredger-native-safety/authorisation" "reports CodeArtifact refusing the Dredger's identity and changes neither store") $ \(plane, mirror, cache) -> do
+        let name = packageName keptPackage
+        initialState <- (,) <$> Native.storeInventory mirror <*> Native.storeInventory cache
+        Map.lookup name (fst initialState) `shouldBe` Just [packageVersion keptPackage]
+        requests <- codeArtifactDeleteRequests (Native.cspControl plane)
+        run <- runNativeSweep plane refusedAwsIdentity Apply (IdentityPolicy [name])
+        sweepExit run `shouldBe` ExitFailure 2
+        for_ (refusedIdentityReports Cargo) $ \report -> sweepOutput run `shouldSatisfy` T.isInfixOf report
+        ((,) <$> Native.storeInventory mirror <*> Native.storeInventory cache) `shouldReturn` initialState
+        codeArtifactDeleteRequests (Native.cspControl plane) `shouldReturn` requests
   where
     acquire action = timedFixture recorder (withFixture cargoDredgerFixture) (timedFixtureWith recorder withIdentity action)
 
