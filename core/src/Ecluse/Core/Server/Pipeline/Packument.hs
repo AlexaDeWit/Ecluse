@@ -101,7 +101,7 @@ import Ecluse.Core.Server.Encoding (
 import Ecluse.Core.Server.Fault (RenderEscape (RenderEscape))
 import Ecluse.Core.Server.MetadataGzip (GzipBody (gzipLength), gzipLazyBody, gzipMetadata)
 import Ecluse.Core.Server.MirrorView (mirrorProjectViews, mirrorViewDocuments, publicMirrorCoverage, validateMirrorProject)
-import Ecluse.Core.Server.Pipeline.Diagnostics (logVersionlessEntries, warnDivergences)
+import Ecluse.Core.Server.Pipeline.Diagnostics (logVersionlessRefusal, warnDivergences)
 import Ecluse.Core.Server.Pipeline.Internal (
     VersionVerdict (..),
     admitByIntegrity,
@@ -352,7 +352,6 @@ serveAdmittedPackument serving clientToken = do
                         pure (private, checked)
                     )
                     (readPublic serving)
-            logVersionlessDocuments serving private public
             case private of
                 OriginAuthorisationFailure code -> privateAccessRefused serving code
                 _ -> case checked of
@@ -360,19 +359,9 @@ serveAdmittedPackument serving clientToken = do
                     Right record -> serveMergedPackument serving evalCtx ((mirrorViewDocuments mirror,) <$> record) private public
         _ -> do
             (private, public) <- resolveOrigins serving clientToken
-            logVersionlessDocuments serving private public
             case private of
                 OriginAuthorisationFailure code -> privateAccessRefused serving code
                 _ -> serveMergedPackument serving evalCtx Nothing private public
-  where
-    deps = psvDeps serving
-
--- The read logs a document's dropped entries only while it keeps a version, so one that kept none is logged per request.
-logVersionlessDocuments :: PackumentServing response -> OriginResult -> OriginResult -> Handler ()
-logVersionlessDocuments serving private public =
-    for_ [(maybe "" registryUrlText (pdPrivateBaseUrl deps), private), (registryUrlText (pdPublicBaseUrl deps), public)] $ \(url, result) ->
-        for_ (manifestInfo <$> originManifest result) $ \info ->
-            when (Map.null (infoVersions info) && not (null (infoInvalidEntries info))) (logVersionlessEntries (psvName serving) url (infoInvalidEntries info))
   where
     deps = psvDeps serving
 
@@ -469,10 +458,14 @@ serveMergedPackument serving evalCtx record privResult pubResult
     unheldAnswer
         | noRecordedCopy = Just (notFound (unheldMessage deps))
         | otherwise = Nothing
-    -- With no other cause, documents that dropped every version entry refuse the listing. Documents that list no version leave a 404.
-    unlisted refused = case [upstream | (upstream, result) <- [("the private upstream", privResult), ("the public upstream", pubResult)], maybe False droppedEveryEntry (originManifest result)] of
+    -- With no other cause, documents that dropped every version entry refuse the request, each named in one line beside
+    -- its read's log of the entries. Documents that list no version leave a 404.
+    unlisted refused = case [(upstream, url, manifest) | (upstream, url, result) <- origins, Just manifest <- [originManifest result], droppedEveryEntry manifest] of
         [] -> notFound "no upstream lists a version of the requested package"
-        dropped -> noServeableVersions serving (ctxAdvisoryEtag evalCtx) refused [malformedEntries dropped]
+        dropped -> do
+            for_ dropped $ \(upstream, url, manifest) -> logVersionlessRefusal name upstream url (length (infoInvalidEntries (manifestInfo manifest)))
+            noServeableVersions serving (ctxAdvisoryEtag evalCtx) refused [malformedEntries [upstream | (upstream, _, _) <- dropped]]
+    origins = [("the private upstream", maybe "" registryUrlText (pdPrivateBaseUrl deps), privResult), ("the public upstream", registryUrlText (pdPublicBaseUrl deps), pubResult)]
     -- Beside a private 404, a coordinate lookup releases the recorded versions the public document lacks too, so
     -- their artifacts answer 404 as on Cargo and PyPI. A listing keeps them.
     goneFromBoth pending = case originManifest pubResult of
@@ -586,7 +579,7 @@ packumentPlan sources trustedVersions deniedEvidence = do
 serveResolved :: PackumentServing response -> [Contribution] -> MergePlan -> Handler response
 serveResolved serving sources plan = do
     warnDivergences (servingMetrics serving) (psvName serving) plan
-    -- A coordinate lookup records its decision once it finds or misses its coordinate.
+    -- A coordinate lookup records its decision once it serves or misses its coordinate.
     when (isNothing (psvAbsent serving)) $ liftIO (mpServeDecision (servingMetrics serving) Metric.Admit)
     psvResolved serving serving sources plan
 

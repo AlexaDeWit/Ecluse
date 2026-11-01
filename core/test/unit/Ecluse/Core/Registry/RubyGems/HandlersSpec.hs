@@ -37,9 +37,7 @@ import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Core.Server.Admission (newServeAdmissionTuned)
 import Ecluse.Core.Server.Admission.Meter (MeterSettings (..), meterSnapshot, newMemoryMeter)
 import Ecluse.Core.Server.Admission.Types (ChargeFactors (ChargeFactors), MeterSnapshot (snChargedBytes))
-import Ecluse.Core.Server.Cache (Source (Source), newMetadataCacheWithProvider)
-import Ecluse.Core.Server.Cache.Backend (BackendStorage (ExternalStorage))
-import Ecluse.Core.Server.Cache.Provider (cacheProvider)
+import Ecluse.Core.Server.Cache (Source (Source))
 import Ecluse.Core.Server.Context (MountBinding (..), PackumentDeps (..), RequestCtx (RequestCtx), ResponseAction (..), RouteAction (RouteAction), ServeRuntime (srMemoryMeter, srMetadataCache, srMetrics, srTracing), pdPublicBaseUrl, runHandler)
 import Ecluse.Core.Server.Contract (responseToWai)
 import Ecluse.Core.Server.Encoding (MetadataCompression (GzipWhenAccepted))
@@ -53,7 +51,7 @@ import Ecluse.Test.Log (captureJsonLog, lineMessage, newTestLogEnv)
 import Ecluse.Test.Port (noopMetricsPort, passthroughTracingPort, recordingDenials, recordingMetricsPort)
 import Ecluse.Test.Registry.RubyGems.Fixtures (RubyRelease (..), loadRubyReleasesFrom, rubyRelease)
 import Ecluse.Test.Rules (atDefaultPrecedence, inertRuleDeps)
-import Ecluse.Test.Server.Cache (cachedMetadata, externalOperations)
+import Ecluse.Test.Server.Cache (cachedMetadata, newRetainingMetadataCache)
 import Ecluse.Test.Server.Handler (testServeRuntimeWith)
 import Ecluse.Test.Server.Mount (serveDepsFor, withPrivateBaseUrl)
 import Ecluse.Test.Support (expectRight)
@@ -217,6 +215,29 @@ spec = do
                     response <- capture runtime binding "GET" "/quick/Marshal.4.8/acme-1-1.0.gemspec.rz" []
                     simpleStatus response `shouldBe` expected
                     readIORef hits >>= (`shouldSatisfy` elem ["private", "quick", "Marshal.4.8", "acme-1-1.0.gemspec.rz"])
+
+    describe "coordinate serve decisions" $ do
+        let sources =
+                [ ("private", \use -> withNative (\runtime binding _ -> use runtime binding), "ecluse-fixture-root-1.0.0")
+                , ("public", \use -> withCoordinateSources PublicCandidateSource (\runtime binding _ _ -> use runtime binding), "acme-1-1.0")
+                ]
+        for_ sources $ \(origin, withSource, stem) ->
+            for_ ["GET", "HEAD"] $ \method ->
+                for_ ["/gems/" <> stem <> ".gem", "/quick/Marshal.4.8/" <> stem <> ".gemspec.rz"] $ \path ->
+                    it ("records one admit for a served " <> origin <> " coordinate for " <> show (method, path)) $
+                        withSource $ \runtime binding -> do
+                            (metrics, decisions) <- recordingMetricsPort
+                            response <- capture runtime{srMetrics = metrics} binding method path []
+                            simpleStatus response `shouldBe` status200
+                            decisions `shouldReturn` [Metric.Admit]
+        for_ [(status401, status403, Metric.Deny), (status503, status503, Metric.Unavailable)] $ \(archive, expected, decision) ->
+            for_ ["GET", "HEAD"] $ \method ->
+                it ("records only the artifact relay's decision for a gem archive it refuses for " <> show (archive, method)) $
+                    withNativeArchive archive $ \runtime binding _ -> do
+                        (metrics, decisions) <- recordingMetricsPort
+                        response <- capture runtime{srMetrics = metrics} binding method "/gems/ecluse-fixture-root-1.0.0.gem" []
+                        simpleStatus response `shouldBe` expected
+                        decisions `shouldReturn` [decision]
 
     describe "public directory faults" $ do
         for_ [status500, status503] $ \outage ->
@@ -551,13 +572,15 @@ spec = do
                         response <- capture runtime binding method path []
                         simpleStatus response `shouldBe` status502
                         sort <$> readIORef hits `shouldReturn` coordinatePrivateMetadataReads
-                it ("logs the dropped public rows once when the only public row is malformed beside a private 404 for " <> show (method, path)) $
-                    withCoordinateSources InvalidInventoryCandidateSource $ \runtime binding _ _ -> do
-                        (response, logged) <- captureJsonLog (\logEnv -> captureWithLog logEnv runtime binding method path [])
-                        simpleStatus response `shouldBe` status502
-                        let dropped = mapMaybe lineMessage (filter (T.isInfixOf "droppedByKind") (T.lines logged))
-                        length dropped `shouldBe` 1
-                        for_ dropped (`shouldSatisfy` T.isSuffixOf "(none of its versions remain)")
+                it ("logs the dropped public rows on their read and the refusal on each request when the only public row is malformed beside a private 404 for " <> show (method, path)) $
+                    withCoordinateSources InvalidInventoryCandidateSource $ \original binding _ _ -> do
+                        cache <- newRetainingMetadataCache
+                        let runtime = original{srMetadataCache = cache}
+                        (responses, logged) <- captureJsonLog (\logEnv -> replicateM 2 (captureWithLog logEnv runtime binding method path []))
+                        map simpleStatus responses `shouldBe` [status502, status502]
+                        let messagesWhere matches = mapMaybe lineMessage (filter matches (T.lines logged))
+                        messagesWhere (T.isInfixOf "droppedByKind") `shouldBe` ["dropped 2 malformed entries from an upstream packument (none of its versions remain)"]
+                        messagesWhere (T.isInfixOf "refused the request") `shouldBe` replicate 2 "refused the request: the public upstream's packument kept no version after dropping 2 malformed entries"
                 for_ [(status401, status403), (status403, status403), (status502, status503), (status503, status503)] $ \(upstream, expected) ->
                     it ("preserves the actual private refusal beside an all-denied public source for " <> show (upstream, method, path)) $
                         withCoordinateSources (PublicDeniedPrivateCandidateSource upstream) $ \runtime binding hits _ -> do
@@ -922,9 +945,7 @@ warmCoordinateCache uncached binding hits = warmPublicDocuments uncached binding
 
 warmPublicDocuments :: ServeRuntime -> MountBinding -> IORef [[Text]] -> [(Text, Status)] -> IO ServeRuntime
 warmPublicDocuments uncached binding hits documents = do
-    values <- newIORef Map.empty
-    let full = externalOperations (\_ key -> Map.lookup key <$> readIORef values) (\key value -> atomicModifyIORef' values (\stored -> (Map.insert key value stored, ())))
-    cache <- newMetadataCacheWithProvider (cacheProvider (ExternalStorage 100000) Nothing (Just full) Nothing Nothing)
+    cache <- newRetainingMetadataCache
     let runtime = uncached{srMetadataCache = cache}
         source = Source (registryUrlText (pdPublicBaseUrl (bindingPackumentDeps binding)))
         listing name = capture runtime binding "GET" ("/info/" <> encodeUtf8 name) []

@@ -105,7 +105,7 @@ import Ecluse.Test.Registry.Npm (VersionSpec (..), packumentValue, versionSpec, 
 import Ecluse.Test.Registry.Public (PublicFixture (..), newPublicFixture)
 import Ecluse.Test.Registry.PyPI (simpleFile, simpleIndex, withFileKeys)
 import Ecluse.Test.Rules (admittedBy, atDefaultPrecedence, atPrecedence, blockedBy, evalRules, inertRuleDeps, isUndecidable, servingRuleDeps)
-import Ecluse.Test.Server.Cache (cachedMetadata, cachedVersion)
+import Ecluse.Test.Server.Cache (cachedMetadata, cachedVersion, newRetainingMetadataCache)
 import Ecluse.Test.Server.Handler (MissingFixtureResponse (MissingFixtureResponse), captureServe, captureServeWithLog, responseBytes, testServeRuntime, testServeRuntimeWith)
 import Ecluse.Test.Server.Mount (npmServeDeps, pypiServeDeps, requiredAdapter, serveDepsFor, withPrivateBaseUrl)
 import Ecluse.Test.Sweep (RecordedSweep (recPorts, recTargetResults), recordingPorts, testMount, testPacing, withPrivateCache)
@@ -1413,7 +1413,7 @@ leftpadDocument body ecosystem request respond
         RubyGems -> ("/info/leftpad", "text/plain")
 
 -- A listing whose every upstream version row is malformed answers 502 wherever the rows sit, and versions the gate
--- denies beside malformed rows keep the policy 404. A document that kept no version logs its drops once per request.
+-- denies beside malformed rows keep the policy 404. A read logs the dropped entries, and a refused request names its cause.
 malformedListingSpec :: Spec
 malformedListingSpec = do
     describe "a listing whose every upstream version row is malformed" $ do
@@ -1424,7 +1424,7 @@ malformedListingSpec = do
         it "keeps the npm packument 404 when every private entry is malformed and the gate denies every public version" $ do
             denyAll <- prepare inertRuleDeps []
             listingOver (malformedDocument Npm) upstreamApp (\deps -> deps{pdRules = denyAll}) 404 Nothing Deny
-        it "logs the dropped npm entries once for each request, including one that joined another's public read" $ do
+        it "logs the dropped npm entries once for the shared read and the refusal for each request, including one that joined it" $ do
             completed <- timeout 5_000_000 $ withSweeper $ \deadlines -> do
                 started <- newEmptyMVar
                 release <- newEmptyMVar
@@ -1439,18 +1439,24 @@ malformedListingSpec = do
                         captureJsonLog $ \logEnv ->
                             concurrently (mapConcurrently (const (serve logEnv)) [1, 2 :: Int]) (takeMVar started >> takeMVar joined >> putMVar release ())
                     map (statusCode . responseStatus) responses `shouldBe` [502, 502]
-                    droppedLines logged `shouldBe` replicate 2 versionlessLine
-            completed `shouldBe` Just ()
-    describe "a private packument whose every version entry is malformed beside served public versions" $
-        it "logs its dropped entries once, naming no refusal" $
-            withSweeper $ \deadlines -> do
-                rt <- testServeRuntime deadlines noopMetricsPort
-                testWithApplication (pure upstreamApp) $ \publicPort -> testWithApplication (pure (malformedDocument Npm)) $ \privatePort -> do
-                    base <- depsFor publicPort
-                    let deps = withPrivateBaseUrl (Just (loopbackRegistryUrl ("http://localhost:" <> show privatePort))) base
-                    (response, logged) <- captureJsonLog $ \logEnv -> captureServeWithLog logEnv npmPackumentContract rt (mountWith deps) (servePackument npmPackumentReplies leftpadName defaultRequest)
-                    statusCode (responseStatus response) `shouldBe` 200
                     droppedLines logged `shouldBe` [versionlessLine]
+                    refusalLines logged `shouldBe` replicate 2 "refused the request: the public upstream's packument kept no version after dropping 1 malformed entry"
+            completed `shouldBe` Just ()
+    -- The second request finds the public document retained, but a private read is never cached.
+    describe "a packument whose every version entry is malformed beside served versions from the other upstream" $
+        for_ [("private", malformedDocument Npm, upstreamApp, 2), ("public", upstreamApp, malformedDocument Npm, 1)] $ \(side, privateApp, publicApp, readCount) ->
+            it ("logs the " <> side <> " document's dropped entries once for each read, naming no refusal") $
+                withSweeper $ \deadlines -> do
+                    cache <- newRetainingMetadataCache
+                    rt <- (\runtime -> runtime{srMetadataCache = cache}) <$> testServeRuntime deadlines noopMetricsPort
+                    testWithApplication (pure publicApp) $ \publicPort -> testWithApplication (pure privateApp) $ \privatePort -> do
+                        base <- depsFor publicPort
+                        let deps = withPrivateBaseUrl (Just (loopbackRegistryUrl ("http://localhost:" <> show privatePort))) base
+                            serve logEnv = captureServeWithLog logEnv npmPackumentContract rt (mountWith deps) (servePackument npmPackumentReplies leftpadName defaultRequest)
+                        (responses, logged) <- captureJsonLog $ \logEnv -> replicateM 2 (serve logEnv)
+                        map (statusCode . responseStatus) responses `shouldBe` [200, 200]
+                        droppedLines logged `shouldBe` replicate readCount versionlessLine
+                        refusalLines logged `shouldBe` []
   where
     placements =
         [ ("the rows public and no private origin", Nothing, malformedDocument)
@@ -1459,6 +1465,7 @@ malformedListingSpec = do
         ]
     withoutDistAt2 entry = if vsVersion entry == "2.0.0" then entry{vsExtraPairs = ["dist" .= Null]} else entry
     droppedLines logged = [message | line <- lines logged, "droppedByKind" `T.isInfixOf` line, Just message <- [lineMessage line]]
+    refusalLines logged = [message | Just message <- map lineMessage (lines logged), "refused the request" `T.isPrefixOf` message]
     versionlessLine = "dropped 1 malformed entry from an upstream packument (none of its versions remain)"
 
 -- A listing whose upstream documents name the package but list no version answers 404, as an unheld name does.

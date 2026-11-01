@@ -24,7 +24,6 @@ import Ecluse.Core.Package (
     Availability (Available),
     CodeExecSignal (NoCodeOnInstall),
     DependencySources (RegistryDependencies),
-    InvalidEntry,
     PackageDetails (..),
     PackageInfo (..),
     PackageName,
@@ -494,7 +493,7 @@ source = Source "https://public.example"
 noLog :: PackageName -> MetadataError -> IO ()
 noLog _ _ = pure ()
 
-noInvalidLog :: PackageName -> [InvalidEntry] -> IO ()
+noInvalidLog :: PackageName -> PackageInfo -> IO ()
 noInvalidLog _ _ = pure ()
 
 noFetchLog :: PackageName -> IO ()

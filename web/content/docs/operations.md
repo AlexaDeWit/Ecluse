@@ -239,8 +239,9 @@ Typical `warn` lines record:
 - A mirror job left to redeliver.
 - A store call Écluse is retrying.
 - A malformed advisory entry Écluse dropped, or an advisory date it had to ignore.
-- A malformed metadata entry or public RubyGems directory row Écluse dropped while serving the rest.
+- A malformed metadata entry or public RubyGems directory row Écluse dropped, once for each upstream read.
   The line counts the drops by kind in `droppedByKind`, for example `version-listing` for a directory row.
+  A request refused because an upstream document kept no version logs one more line naming that upstream.
 - An EPSS feed that failed for an ecosystem with no active rule requiring EPSS enrichment. The line starts
   `EPSS enrichment unavailable`, and Pilot publishes that ecosystem's artifact without scores.
   An EPSS outage repeats it on every compile.

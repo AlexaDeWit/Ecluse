@@ -107,10 +107,7 @@ resolveCoordinate ticket observe request file = do
   where
     collect deps observer checkDocument candidates spent matches owned denied = \case
         [] -> case matches of
-            [selected] -> do
-                rt <- asks ctxRuntime
-                liftIO (mpServeDecision (srMetrics rt) Metric.Admit)
-                pure (Right selected)
+            [selected] -> pure (Right selected)
             [] -> case denied of
                 Nothing -> Left <$> absentCoordinate owned
                 Just (Left refusal) -> pure (Left refusal)
@@ -198,6 +195,8 @@ fetchCompact :: MemoryTicket -> (Int -> IO ()) -> Request -> (GemRow, Provenance
 fetchCompact ticket observe request (row, provenance) = do
     mount <- asks ctxMount
     rt <- asks ctxRuntime
+    -- The artifact relay records a gem archive's decision. A compact specification records its coordinate's admission here.
+    liftIO (mpServeDecision (srMetrics rt) Metric.Admit)
     let deps = bindingPackumentDeps mount
         coordinate = grCoordinate row
         limits = pdLimits deps
