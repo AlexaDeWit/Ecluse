@@ -168,8 +168,10 @@ manifestLeader wiring name = do
 
 entryOfManifest :: ClientWiring -> PackageName -> Manifest -> IO CacheEntry
 entryOfManifest wiring name manifest = do
-    let invalid = infoInvalidEntries (manifestInfo manifest)
-    unless (null invalid) (cwLogInvalid wiring name invalid)
+    let info = manifestInfo manifest
+        invalid = infoInvalidEntries info
+    -- The packument pipeline logs a document that kept no version on each request instead.
+    unless (null invalid || Map.null (infoVersions info)) (cwLogInvalid wiring name invalid)
     pure (CacheEntry (manifestInfo manifest) (manifestRaw manifest) (manifestBodyBytes manifest) (manifestRetainedEntries manifest) (manifestDigest manifest))
 
 resolveSelectedVersion :: ClientWiring -> PackageName -> Version -> IO (Either MetadataError VersionRead)

@@ -404,12 +404,20 @@ spec = do
                         observed `shouldSatisfy` elem ["public", "info", "acme-1"]
                         observed `shouldSatisfy` notElem ["public", "info", "acme"]
         for_ ["GET", "HEAD"] $ \method ->
-            for_ ["/gems/acme-1.0.gem", "/quick/Marshal.4.8/acme-1.0.gemspec.rz"] $ \path ->
+            for_ ["/gems/acme-1.0.gem", "/quick/Marshal.4.8/acme-1.0.gemspec.rz"] $ \path -> do
                 it ("keeps actual owned absence as a 404 for " <> show method <> " " <> show path) $
                     withAmbiguousNative status404 $ \runtime binding hits _ -> do
                         response <- capture runtime binding method path []
                         simpleStatus response `shouldBe` status404
                         readIORef hits `shouldReturn` [["private", "info", "acme"]]
+                it ("records the first-party decision and denial once for an absent owned coordinate for " <> show method <> " " <> show path) $
+                    withAmbiguousNative status404 $ \runtime binding _ _ -> do
+                        (recording, decisions) <- recordingMetricsPort
+                        (metrics, denials) <- recordingDenials recording
+                        response <- capture runtime{srMetrics = metrics} binding method path []
+                        simpleStatus response `shouldBe` status404
+                        decisions `shouldReturn` [Metric.Deny]
+                        denials `shouldReturn` [(Just "first-party", Metric.ReasonPolicy)]
         for_ [(status401, status403), (status403, status403), (status502, status503), (status503, status503)] $ \(upstream, expected) ->
             for_ ["GET", "HEAD"] $ \method ->
                 for_ ["/gems/acme-1-1.0.gem", "/quick/Marshal.4.8/acme-1-1.0.gemspec.rz"] $ \path ->
@@ -462,13 +470,21 @@ spec = do
                         observed `shouldSatisfy` all (\parts -> take 1 parts == ["public"])
                         observed `shouldSatisfy` notElem ["public", "gems", "acme-1-2.0.gem"]
                         observed `shouldSatisfy` notElem ["public", "quick", "Marshal.4.8", "acme-1-2.0.gemspec.rz"]
-            for_ ["/gems/acme-1-2.0-java.gem", "/quick/Marshal.4.8/acme-1-2.0-java.gemspec.rz", "/gems/acme-1-3.0.gem", "/quick/Marshal.4.8/acme-1-3.0.gemspec.rz"] $ \path ->
+            for_ ["/gems/acme-1-2.0-java.gem", "/quick/Marshal.4.8/acme-1-2.0-java.gemspec.rz", "/gems/acme-1-3.0.gem", "/quick/Marshal.4.8/acme-1-3.0.gemspec.rz"] $ \path -> do
                 it ("keeps an absent native coordinate absent beside a denied version for " <> show (method, path)) $
                     withCoordinateSources PublicMixedCandidateSource $ \runtime binding hits _ -> do
                         response <- capture runtime binding method path []
                         simpleStatus response `shouldBe` status404
                         observed <- readIORef hits
                         observed `shouldSatisfy` all (\parts -> take 2 parts == ["public", "info"])
+                it ("records one unavailable decision and its denial for a coordinate its admitted document lacks for " <> show (method, path)) $
+                    withCoordinateSources PublicMixedCandidateSource $ \runtime binding _ _ -> do
+                        (recording, decisions) <- recordingMetricsPort
+                        (metrics, denials) <- recordingDenials recording
+                        response <- capture runtime{srMetrics = metrics} binding method path []
+                        simpleStatus response `shouldBe` status404
+                        decisions `shouldReturn` [Metric.Unavailable]
+                        denials `shouldReturn` [(Nothing, Metric.ReasonUnavailable)]
 
         let loggedCases =
                 [("public", PublicMixedCandidateSource, "GET", "/quick/Marshal.4.8/acme-1-2.0.gemspec.rz", status403, 1, False), ("public", PublicMixedCandidateSource, "GET", "/quick/Marshal.4.8/acme-1-1.0.gemspec.rz", status200, 0, False)]
@@ -535,6 +551,13 @@ spec = do
                         response <- capture runtime binding method path []
                         simpleStatus response `shouldBe` status502
                         sort <$> readIORef hits `shouldReturn` coordinatePrivateMetadataReads
+                it ("logs the dropped public rows once when the only public row is malformed beside a private 404 for " <> show (method, path)) $
+                    withCoordinateSources InvalidInventoryCandidateSource $ \runtime binding _ _ -> do
+                        (response, logged) <- captureJsonLog (\logEnv -> captureWithLog logEnv runtime binding method path [])
+                        simpleStatus response `shouldBe` status502
+                        let dropped = mapMaybe lineMessage (filter (T.isInfixOf "droppedByKind") (T.lines logged))
+                        length dropped `shouldBe` 1
+                        for_ dropped (`shouldSatisfy` T.isSuffixOf "(none of its versions remain)")
                 for_ [(status401, status403), (status403, status403), (status502, status503), (status503, status503)] $ \(upstream, expected) ->
                     it ("preserves the actual private refusal beside an all-denied public source for " <> show (upstream, method, path)) $
                         withCoordinateSources (PublicDeniedPrivateCandidateSource upstream) $ \runtime binding hits _ -> do

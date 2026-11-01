@@ -7,6 +7,7 @@ module Ecluse.Core.Server.MirrorViewIntegrationSpec (spec) where
 
 import Data.Aeson (Object, Value (Array, Object, String), eitherDecode, encode, object, (.=))
 import Data.Aeson.KeyMap qualified as KeyMap
+import Data.ByteString qualified as BS
 import Data.List (dropWhileEnd, lookup)
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
@@ -46,11 +47,12 @@ import Ecluse.Runtime.Server (application, mkServerConfig)
 import Ecluse.Server.Pipeline.TestSupport (getPath, getPathWith, newTestEnvWithQueue, requestAt, withUpstreams)
 import Ecluse.Service (mountBindingFor)
 import Ecluse.Test.Contract.Catalogue (caseLabel)
-import Ecluse.Test.Mirror.RubyGems (RubyStateProbeFixture (..), rubyStateProbeFixture)
+import Ecluse.Test.Mirror.RubyGems (RubyStateProbeFixture (..), makeRubyStateProbeFixture, rubyStateProbeFixture)
 import Ecluse.Test.Mirror.State
 import Ecluse.Test.Queue (newTestMemoryQueue)
 import Ecluse.Test.Registry.Cargo.Fixtures qualified as Cargo
 import Ecluse.Test.Registry.Cargo.Reference qualified as Reference
+import Ecluse.Test.Registry.RubyGems.Fixtures (RubyRelease (..), loadRubyReleasesFrom, rubyRelease)
 import Ecluse.Test.Registry.RubyGems.Reference (RubyInfoRow (rowPosition), referenceInfo)
 import Ecluse.Test.Rules (atDefaultPrecedence, inertRuleDeps, packageRule, revocation)
 import Ecluse.Test.Server.Mount (requiredAdapter, serveDepsFor, withMirrorPlan)
@@ -492,16 +494,53 @@ rubyGemsReads = describe "managed RubyGems mirror reads" $ do
     it (caseLabel "integration/mirror-view/native-032" "answers a recorded gem's archive and compact specification 404 when the public gem lacks the version beside a private 404") $ do
         view <- recordedGemView
         adapter <- requiredAdapter RubyGems
-        let laterOnly request respond = case pathInfo request of
-                ["info", "ecluse-fixture-platform"] -> respond (responseLBS status200 [] ("---\n2.0.0 |checksum:" <> encodeUtf8 (T.replicate 64 "a") <> "\n"))
-                _ -> respond (responseLBS status404 [] "")
-        withMountProxy RubyGems adapter id view (native status404 []) laterOnly $ \app ->
-            for_ ["/rubygems/gems/ecluse-fixture-platform-1.0.0.gem", "/rubygems/quick/Marshal.4.8/ecluse-fixture-platform-1.0.0.gemspec.rz"] $ \path ->
+        withMountProxy RubyGems adapter id view (native status404 []) (gemInfo laterOnlyInfo) $ \app ->
+            for_ platformCoordinates $ \path ->
+                recordedPathAnswers status404 path app
+    for_ [("other-checksum", \release -> T.replace (releaseChecksum release) (T.replicate 64 "b")), ("missing-platform", \_ -> T.unlines . filter (not . T.isPrefixOf "1.0.0-java ") . T.lines)] $ \(identifier, change) ->
+        it (caseLabel ("integration/mirror-view/native-035/" <> identifier) "keeps a recorded gem unavailable on every path when the public gem does not cover the record beside a private 404") $ do
+            view <- recordedGemView
+            release <- fixtureRelease "ecluse-fixture-platform" "1.0.0"
+            original <- readFileBS "test/fixtures/rubygems/info/ecluse-fixture-platform"
+            rules <- allowing "ecluse-fixture-platform"
+            adapter <- requiredAdapter RubyGems
+            withMountProxy RubyGems adapter rules view (native status404 []) (gemOrigin (encodeUtf8 (change release (decodeUtf8 original))) [release]) $ \app ->
+                for_ (platformCoordinates <> ["/rubygems/info/ecluse-fixture-platform"]) $ \path ->
+                    recordedPathAnswers status503 path app
+    it (caseLabel "integration/mirror-view/native-036" "keeps a recorded gem's /info unavailable when the public gem lacks the version beside a private 404") $ do
+        view <- recordedGemView
+        rules <- allowing "ecluse-fixture-platform"
+        adapter <- requiredAdapter RubyGems
+        withMountProxy RubyGems adapter rules view (native status404 []) (gemInfo laterOnlyInfo) $
+            recordedPathAnswers status503 "/rubygems/info/ecluse-fixture-platform"
+    for_ [("gone", False, status404), ("covered", True, status200)] $ \(identifier, listed, expected) ->
+        it (caseLabel ("integration/mirror-view/native-037/" <> identifier) "checks mirror coverage for the requested gem version only beside a private 404") $ do
+            view <- recordedView =<< makeRubyStateProbeFixture "test/fixtures/rubygems" "ecluse-fixture-leaf"
+            requested <- fixtureRelease "ecluse-fixture-leaf" "1.0.0"
+            uncovered <- fixtureRelease "ecluse-fixture-leaf" "2.0.0"
+            -- 2.1.0.pre.1 is gone from the public gem, and its 2.0.0 carries another checksum.
+            let info = "---\n" <> unlines ([releaseInfoRow requested | listed] <> [T.replace (releaseChecksum uncovered) (T.replicate 64 "b") (releaseInfoRow uncovered)])
+            rules <- allowing "ecluse-fixture-leaf"
+            adapter <- requiredAdapter RubyGems
+            withMountProxy RubyGems adapter rules view (native status404 []) (gemOrigin (encodeUtf8 info) [requested]) $ \app ->
+                for_ [("/rubygems/gems/ecluse-fixture-leaf-1.0.0.gem", releaseArchive requested), ("/rubygems/quick/Marshal.4.8/ecluse-fixture-leaf-1.0.0.gemspec.rz", releaseCompact requested)] $ \(path, bytes) -> do
+                    recordedPathAnswers expected path app
+                    response <- getPath path app
+                    (simpleBody response == toLazy bytes) `shouldBe` listed
+    it (caseLabel "integration/mirror-view/native-038" "answers a recorded gem's archive and compact specification 404 beside a public gem that dropped a row and whose other version the gate denies") $ do
+        view <- recordedGemView
+        adapter <- requiredAdapter RubyGems
+        withMountProxy RubyGems adapter id view (native status404 []) (gemInfo (laterOnlyInfo <> "2.1.0 |checksum:invalid\n")) $ \app ->
+            for_ platformCoordinates $ \path ->
                 recordedPathAnswers status404 path app
   where
     unpositioned row = row{rowPosition = 0}
-    recordedGemView = do
-        fixture <- rubyStateProbeFixture
+    platformCoordinates = ["/rubygems/gems/ecluse-fixture-platform-1.0.0.gem", "/rubygems/quick/Marshal.4.8/ecluse-fixture-platform-1.0.0.gemspec.rz"]
+    laterOnlyInfo = "---\n2.0.0 |checksum:" <> encodeUtf8 (T.replicate 64 "a") <> "\n"
+    allowing name = (\rules deps -> deps{pdRules = rules}) <$> prepare inertRuleDeps [atDefaultPrecedence (AllowByIdentity name)]
+    fixtureRelease name version = loadRubyReleasesFrom "test/fixtures/rubygems" >>= \releases -> rubyRelease releases name version "ruby"
+    recordedGemView = recordedView =<< rubyStateProbeFixture
+    recordedView fixture = do
         let gemTarget = rubyStateTarget fixture
             name = rubyStatePackage fixture
         record <- chargedDecodeProjectRecord rubyGemsStateFormat (const pass) defaultLimits gemTarget name (rubyStateEncodedRecord fixture) >>= expectRight
@@ -579,9 +618,18 @@ crateDiscovery request respond = case rawPathInfo request of
     _ -> respond (responseLBS status404 [] "")
 
 gemInfo :: ByteString -> Application
-gemInfo bytes request respond = case pathInfo request of
+gemInfo bytes = gemOrigin bytes []
+
+-- A gem origin with these /info bytes that also serves these releases' archives and compact specifications.
+gemOrigin :: ByteString -> [RubyRelease] -> Application
+gemOrigin bytes releases request respond = case pathInfo request of
     ["info", _] -> respond (responseLBS status200 [] (toLazy bytes))
+    ["gems", file] | Just release <- find ((== file) . releaseFilename) releases -> served (releaseArchive release)
+    ["quick", "Marshal.4.8", file] | Just release <- find ((== file) . compactName) releases -> served (releaseCompact release)
     _ -> respond (responseLBS status404 [] "")
+  where
+    served bytes' = respond (responseLBS status200 [("Content-Length", show (BS.length bytes'))] (toLazy bytes'))
+    compactName release = fromMaybe (releaseFilename release) (T.stripSuffix ".gem" (releaseFilename release)) <> ".gemspec.rz"
 
 unavailable :: Application
 unavailable _ respond = respond (responseLBS status503 [] "public origin unavailable")

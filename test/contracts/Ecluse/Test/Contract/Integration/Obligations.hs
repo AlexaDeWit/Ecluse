@@ -221,6 +221,12 @@ integrationObligations =
         , "integration/mirror-view/native-033/covered"
         , "integration/mirror-view/native-033/uncovered"
         , "integration/mirror-view/native-034"
+        , "integration/mirror-view/native-035/other-checksum"
+        , "integration/mirror-view/native-035/missing-platform"
+        , "integration/mirror-view/native-036"
+        , "integration/mirror-view/native-037/gone"
+        , "integration/mirror-view/native-037/covered"
+        , "integration/mirror-view/native-038"
         ]
     , required
         "integration/egress"

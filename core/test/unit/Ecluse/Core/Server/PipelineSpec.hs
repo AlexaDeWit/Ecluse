@@ -1412,34 +1412,45 @@ leftpadDocument body ecosystem request respond
         Cargo -> ("/le/ft/leftpad", "text/plain")
         RubyGems -> ("/info/leftpad", "text/plain")
 
--- A listing whose every upstream version row is malformed answers 502 and logs that cause on every request,
--- wherever the rows sit. Versions the gate denies beside malformed rows keep the policy 404.
+-- A listing whose every upstream version row is malformed answers 502 wherever the rows sit, and versions the gate
+-- denies beside malformed rows keep the policy 404. A document that kept no version logs its drops once per request.
 malformedListingSpec :: Spec
-malformedListingSpec = describe "a listing whose every upstream version row is malformed" $ do
-    placedListingAnswers placements 502 [Npm, Cargo, RubyGems] "was malformed or unusable"
-    it "keeps the npm packument 404 when the gate denies the valid version beside a malformed one" $ do
-        denyAll <- prepare inertRuleDeps []
-        listingOver notFoundOrigin (publicAppOver ["1.0.0", "2.0.0"] "1.0.0" withoutDistAt2) (\deps -> deps{pdRules = denyAll}) 404 Nothing Deny
-    it "keeps the npm packument 404 when every private entry is malformed and the gate denies every public version" $ do
-        denyAll <- prepare inertRuleDeps []
-        listingOver (malformedDocument Npm) upstreamApp (\deps -> deps{pdRules = denyAll}) 404 Nothing Deny
-    it "logs why it refused the npm packument for a request that joined another's public read" $ do
-        completed <- timeout 5_000_000 $ withSweeper $ \deadlines -> do
-            started <- newEmptyMVar
-            release <- newEmptyMVar
-            joined <- newEmptyMVar
-            let metrics = noopMetricsPort{mpCacheRequest = \outcome -> when (outcome == Metric.Collapsed) (putMVar joined ())}
-                upstream req respond = putMVar started () >> takeMVar release >> malformedDocument Npm req respond
-            rt <- testServeRuntime deadlines metrics
-            testWithApplication (pure upstream) $ \publicPort -> do
-                deps <- depsFor publicPort
-                let serve logEnv = captureServeWithLog logEnv npmPackumentContract rt (mountWith deps) (servePackument npmPackumentReplies leftpadName defaultRequest)
-                ((responses, ()), logged) <-
-                    captureJsonLog $ \logEnv ->
-                        concurrently (mapConcurrently (const (serve logEnv)) [1, 2 :: Int]) (takeMVar started >> takeMVar joined >> putMVar release ())
-                map (statusCode . responseStatus) responses `shouldBe` [502, 502]
-                length [line | line <- lines logged, maybe False ("the listing is refused" `T.isInfixOf`) (lineMessage line)] `shouldBe` 2
-        completed `shouldBe` Just ()
+malformedListingSpec = do
+    describe "a listing whose every upstream version row is malformed" $ do
+        placedListingAnswers placements 502 [Npm, Cargo, RubyGems] "was malformed or unusable"
+        it "keeps the npm packument 404 when the gate denies the valid version beside a malformed one" $ do
+            denyAll <- prepare inertRuleDeps []
+            listingOver notFoundOrigin (publicAppOver ["1.0.0", "2.0.0"] "1.0.0" withoutDistAt2) (\deps -> deps{pdRules = denyAll}) 404 Nothing Deny
+        it "keeps the npm packument 404 when every private entry is malformed and the gate denies every public version" $ do
+            denyAll <- prepare inertRuleDeps []
+            listingOver (malformedDocument Npm) upstreamApp (\deps -> deps{pdRules = denyAll}) 404 Nothing Deny
+        it "logs the dropped npm entries once for each request, including one that joined another's public read" $ do
+            completed <- timeout 5_000_000 $ withSweeper $ \deadlines -> do
+                started <- newEmptyMVar
+                release <- newEmptyMVar
+                joined <- newEmptyMVar
+                let metrics = noopMetricsPort{mpCacheRequest = \outcome -> when (outcome == Metric.Collapsed) (putMVar joined ())}
+                    upstream req respond = putMVar started () >> takeMVar release >> malformedDocument Npm req respond
+                rt <- testServeRuntime deadlines metrics
+                testWithApplication (pure upstream) $ \publicPort -> do
+                    deps <- depsFor publicPort
+                    let serve logEnv = captureServeWithLog logEnv npmPackumentContract rt (mountWith deps) (servePackument npmPackumentReplies leftpadName defaultRequest)
+                    ((responses, ()), logged) <-
+                        captureJsonLog $ \logEnv ->
+                            concurrently (mapConcurrently (const (serve logEnv)) [1, 2 :: Int]) (takeMVar started >> takeMVar joined >> putMVar release ())
+                    map (statusCode . responseStatus) responses `shouldBe` [502, 502]
+                    droppedLines logged `shouldBe` replicate 2 versionlessLine
+            completed `shouldBe` Just ()
+    describe "a private packument whose every version entry is malformed beside served public versions" $
+        it "logs its dropped entries once, naming no refusal" $
+            withSweeper $ \deadlines -> do
+                rt <- testServeRuntime deadlines noopMetricsPort
+                testWithApplication (pure upstreamApp) $ \publicPort -> testWithApplication (pure (malformedDocument Npm)) $ \privatePort -> do
+                    base <- depsFor publicPort
+                    let deps = withPrivateBaseUrl (Just (loopbackRegistryUrl ("http://localhost:" <> show privatePort))) base
+                    (response, logged) <- captureJsonLog $ \logEnv -> captureServeWithLog logEnv npmPackumentContract rt (mountWith deps) (servePackument npmPackumentReplies leftpadName defaultRequest)
+                    statusCode (responseStatus response) `shouldBe` 200
+                    droppedLines logged `shouldBe` [versionlessLine]
   where
     placements =
         [ ("the rows public and no private origin", Nothing, malformedDocument)
@@ -1447,6 +1458,8 @@ malformedListingSpec = describe "a listing whose every upstream version row is m
         , ("the rows private beside a public 404", Just malformedDocument, const notFoundOrigin)
         ]
     withoutDistAt2 entry = if vsVersion entry == "2.0.0" then entry{vsExtraPairs = ["dist" .= Null]} else entry
+    droppedLines logged = [message | line <- lines logged, "droppedByKind" `T.isInfixOf` line, Just message <- [lineMessage line]]
+    versionlessLine = "dropped 1 malformed entry from an upstream packument (none of its versions remain)"
 
 -- A listing whose upstream documents name the package but list no version answers 404, as an unheld name does.
 -- A Cargo index 404 has no body. A public outage beside an empty private document keeps its cause (privateAdmitsNothingSpec).

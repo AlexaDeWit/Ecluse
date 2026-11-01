@@ -15,7 +15,7 @@ module Ecluse.Core.Server.Pipeline.Diagnostics (
 
     -- * Dropped entries and divergence
     logInvalidEntries,
-    logRefusedEntries,
+    logVersionlessEntries,
     logDirectoryInvalidEntries,
     warnDivergences,
 ) where
@@ -182,9 +182,9 @@ warnUnreachable subject origin fault =
 logInvalidEntries :: (KatipContext m) => PackageName -> Text -> [InvalidEntry] -> m ()
 logInvalidEntries = logDroppedEntries "the rest is served" . PackageSubject
 
--- | The malformed entries of a packument that kept no version, logged with the listing it refused.
-logRefusedEntries :: (KatipContext m) => PackageName -> Text -> [InvalidEntry] -> m ()
-logRefusedEntries = logDroppedEntries "no version remains, so the listing is refused" . PackageSubject
+-- | The malformed entries of a packument that kept no version, logged by each request that reads it.
+logVersionlessEntries :: (KatipContext m) => PackageName -> Text -> [InvalidEntry] -> m ()
+logVersionlessEntries = logDroppedEntries "none of its versions remain" . PackageSubject
 
 -- | The malformed rows a registry-wide directory dropped. The line names no package.
 logDirectoryInvalidEntries :: (KatipContext m) => Text -> [InvalidEntry] -> m ()

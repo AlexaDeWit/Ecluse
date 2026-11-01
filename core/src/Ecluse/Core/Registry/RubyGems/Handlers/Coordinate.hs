@@ -47,6 +47,7 @@ import Ecluse.Core.Server.Pipeline.Shared (forwardedCredential, retryAfterHeader
 import Ecluse.Core.Server.Pipeline.Tarball (headTarball, serveTarball)
 import Ecluse.Core.Server.Pipeline.Tarball.Types (TarballReplies)
 import Ecluse.Core.Server.Response (RejectReason (..), Rejection (rejectionReason), ServeDecision (Reject), mkRefusal, packumentStatus)
+import Ecluse.Core.Telemetry.Metrics qualified as Metric
 import Ecluse.Core.Telemetry.Record (MetricsPort (mpServeDecision))
 import Ecluse.Core.Telemetry.Upstream (PublicReadKind (Companion))
 import Ecluse.Core.Version (renderVersion)
@@ -86,6 +87,8 @@ serveCompactSpec file request respond =
 
 data CandidateRead a
     = CandidateAbsent
+    | -- An owned name the private upstream lacks. The pipeline recorded its first-party refusal.
+      CandidateOwnedAbsent
     | CandidateDenied RubyResponse
     | CandidateRefused RubyResponse
     | CandidateRejected CoordinateRejection
@@ -100,13 +103,16 @@ resolveCoordinate ticket observe request file = do
         Left _ -> pure (Left (rubyBadRequest "the native coordinate is invalid or ambiguous"))
         Right candidates -> do
             checkDocument <- liftIO (newNativeDocumentBudget (maxMetadataBytes (pdLimits deps)) (CandidateRefused (rubyBadRequest "the coordinate lookup exceeds its cumulative metadata bound")))
-            collect deps observe checkDocument candidates 0 [] Nothing (Set.toAscList (Set.fromList (map coordinateName candidates)))
+            collect deps observe checkDocument candidates 0 [] False Nothing (Set.toAscList (Set.fromList (map coordinateName candidates)))
   where
-    collect deps observer checkDocument candidates spent matches denied = \case
+    collect deps observer checkDocument candidates spent matches owned denied = \case
         [] -> case matches of
-            [selected] -> pure (Right selected)
+            [selected] -> do
+                rt <- asks ctxRuntime
+                liftIO (mpServeDecision (srMetrics rt) Metric.Admit)
+                pure (Right selected)
             [] -> case denied of
-                Nothing -> Left <$> absentCoordinate
+                Nothing -> Left <$> absentCoordinate owned
                 Just (Left refusal) -> pure (Left refusal)
                 Just (Right rejection) -> Left <$> coordinateRefusal deps rejection
             _ -> pure (Left (rubyBadRequest "the native coordinate names more than one admitted artifact"))
@@ -115,7 +121,7 @@ resolveCoordinate ticket observe request file = do
             let candidateDenied headers refusal = CandidateDenied (packumentForbidden rubyReplies headers refusal)
                 replies =
                     (mapPackumentReplies CandidateRefused rubyReplies)
-                        { packumentNotFound = \_ _ -> CandidateAbsent
+                        { packumentNotFound = \_ _ -> CandidateOwnedAbsent
                         , packumentDenied = candidateDenied
                         , packumentForbidden = candidateDenied
                         }
@@ -128,6 +134,7 @@ resolveCoordinate ticket observe request file = do
                     DocumentRejectionObserver
                         { observeVersionRejection = recordRejected
                         , onCheckedNoSurvivorAdmission = maybe CandidateAbsent CandidateRejected <$> readIORef rejected
+                        , coordinateVersions = Set.fromList [renderVersion (coordinateVersion candidate) | candidate <- candidates, coordinateName candidate == name]
                         }
                 continueRejected current@(CoordinateRejection _ _ _ rejection) next
                     | terminalRejection rejection = Left <$> coordinateRefusal deps current
@@ -137,26 +144,32 @@ resolveCoordinate ticket observe request file = do
                 pure (CandidateAdmitted (cached, sourceBytes, origins))
             case result of
                 CandidateRefused refusal -> pure (Left refusal)
-                CandidateAbsent -> collect deps observer checkDocument candidates spent matches denied names
-                CandidateDenied refusal -> collect deps observer checkDocument candidates spent matches (denied <|> Just (Left refusal)) names
-                CandidateRejected current -> continueRejected current (collect deps observer checkDocument candidates spent matches)
+                CandidateAbsent -> collect deps observer checkDocument candidates spent matches owned denied names
+                CandidateOwnedAbsent -> collect deps observer checkDocument candidates spent matches True denied names
+                CandidateDenied refusal -> collect deps observer checkDocument candidates spent matches owned (denied <|> Just (Left refusal)) names
+                CandidateRejected current -> continueRejected current (collect deps observer checkDocument candidates spent matches owned)
                 CandidateAdmitted (cached, sourceBytes, origins)
                     | spent + toInteger sourceBytes > toInteger (maxMetadataBytes (pdLimits deps)) -> pure (Left (rubyBadRequest "the coordinate lookup exceeds its cumulative metadata bound"))
                     | otherwise -> case snd rubyGemsCached cached of
                         Nothing -> pure (Left (packumentInternal rubyReplies [] (mkRefusal Nothing "the admitted coordinate source is not RubyGems metadata")))
                         Just document -> do
                             let found = [(row, origin) | row <- gemRows document, grCoordinate row `elem` candidates, coordinateFilename (grCoordinate row) == file, Just origin <- [Map.lookup (renderVersion (coordinateVersion (grCoordinate row))) origins]]
-                                next = collect deps observer checkDocument candidates (spent + toInteger sourceBytes) (matches <> found)
+                                next = collect deps observer checkDocument candidates (spent + toInteger sourceBytes) (matches <> found) owned
                             refusal <- if null found then liftIO (readIORef rejected) else pure Nothing
                             case refusal of
                                 Just current -> continueRejected current next
                                 Nothing -> next denied names
 
--- A coordinate no upstream lists answers 404, recorded as an absent Cargo or PyPI artifact is.
-absentCoordinate :: Handler RubyResponse
-absentCoordinate = do
-    rt <- asks ctxRuntime
-    liftIO (notFoundReply (srMetrics rt) rubyReplies Nothing "the native coordinate is absent")
+-- A coordinate no upstream lists answers 404, recorded once as an absent Cargo or PyPI artifact is. An owned
+-- name's private miss has recorded its refusal already.
+absentCoordinate :: Bool -> Handler RubyResponse
+absentCoordinate owned
+    | owned = pure (packumentNotFound rubyReplies [] (mkRefusal Nothing message))
+    | otherwise = do
+        rt <- asks ctxRuntime
+        liftIO (notFoundReply (srMetrics rt) rubyReplies Nothing message)
+  where
+    message = "the native coordinate is absent"
 
 terminalRejection :: Rejection -> Bool
 terminalRejection rejection = case rejectionReason rejection of

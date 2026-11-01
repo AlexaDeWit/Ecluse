@@ -101,7 +101,7 @@ import Ecluse.Core.Server.Encoding (
 import Ecluse.Core.Server.Fault (RenderEscape (RenderEscape))
 import Ecluse.Core.Server.MetadataGzip (GzipBody (gzipLength), gzipLazyBody, gzipMetadata)
 import Ecluse.Core.Server.MirrorView (mirrorProjectViews, mirrorViewDocuments, publicMirrorCoverage, validateMirrorProject)
-import Ecluse.Core.Server.Pipeline.Diagnostics (logRefusedEntries, warnDivergences)
+import Ecluse.Core.Server.Pipeline.Diagnostics (logVersionlessEntries, warnDivergences)
 import Ecluse.Core.Server.Pipeline.Internal (
     VersionVerdict (..),
     admitByIntegrity,
@@ -171,6 +171,8 @@ data DocumentRejectionObserver response = DocumentRejectionObserver
     -- ^ Keep the original gate context with each checked version or file exclusion.
     , onCheckedNoSurvivorAdmission :: IO response
     -- ^ Resolve a checked public inventory after settled private absence and no surviving contribution.
+    , coordinateVersions :: Set Text
+    -- ^ The versions the coordinate names under this name. Mirror coverage is checked for these alone.
     }
 
 -- | Change only response construction while retaining shared admission and refusal decisions.
@@ -350,6 +352,7 @@ serveAdmittedPackument serving clientToken = do
                         pure (private, checked)
                     )
                     (readPublic serving)
+            logVersionlessDocuments serving private public
             case private of
                 OriginAuthorisationFailure code -> privateAccessRefused serving code
                 _ -> case checked of
@@ -357,9 +360,19 @@ serveAdmittedPackument serving clientToken = do
                     Right record -> serveMergedPackument serving evalCtx ((mirrorViewDocuments mirror,) <$> record) private public
         _ -> do
             (private, public) <- resolveOrigins serving clientToken
+            logVersionlessDocuments serving private public
             case private of
                 OriginAuthorisationFailure code -> privateAccessRefused serving code
                 _ -> serveMergedPackument serving evalCtx Nothing private public
+  where
+    deps = psvDeps serving
+
+-- The read logs a document's dropped entries only while it keeps a version, so one that kept none is logged per request.
+logVersionlessDocuments :: PackumentServing response -> OriginResult -> OriginResult -> Handler ()
+logVersionlessDocuments serving private public =
+    for_ [(maybe "" registryUrlText (pdPrivateBaseUrl deps), private), (registryUrlText (pdPublicBaseUrl deps), public)] $ \(url, result) ->
+        for_ (manifestInfo <$> originManifest result) $ \info ->
+            when (Map.null (infoVersions info) && not (null (infoInvalidEntries info))) (logVersionlessEntries (psvName serving) url (infoInvalidEntries info))
   where
     deps = psvDeps serving
 
@@ -414,12 +427,18 @@ serveMergedPackument serving evalCtx record privResult pubResult
                 publicManifest = (\manifest -> manifest{manifestInfo = withoutTrustedReleases trustedVersions (manifestInfo manifest)}) <$> originManifest pubResult
             public <- liftIO (gatePublic (observeVersionRejection <$> psvRejectionObserver serving) (srTracing rt) (servingMetrics serving) deps name evalCtx trustedVersions (Map.keysSet pending) publicManifest)
             let sources = privateSources <> maybeToList (paContribution public)
-                required = Map.withoutKeys pending (paBlockedPending public <> goneFromBoth pending)
+                -- A coordinate lookup checks mirror coverage for the versions it names alone, as Cargo and PyPI do.
+                named = coordinateVersions <$> psvRejectionObserver serving
+                requested = maybe pending (Map.restrictKeys pending) named
+                gone = goneFromBoth requested
+                required = Map.withoutKeys requested (paBlockedPending public <> gone)
                 covered = Map.null required || maybe False (publicMirrorCoverage required . srcInfo) (paContribution public)
             if not covered || fmap (infoVersions . manifestInfo) managedManifest /= fmap (infoVersions . srcInfo) managed
                 then mirrorUnavailableWithRetry serving (case pubResult of OriginCooling retry -> Just retry; _ -> Nothing)
                 else case originMiss privResult of
                     Just MissAbsent | pdFirstParty deps name -> firstPartyMissed serving MissAbsent
+                    -- Every version the coordinate names is recorded and gone from both upstreams, whatever else the public lists.
+                    _ | Just versions <- named, not (Set.null versions), versions `Set.isSubsetOf` gone -> notFound "no upstream lists the requested version"
                     _ -> case packumentPlan sources trustedVersions (paDeniedEvidence public) of
                         Just plan -> do
                             liftIO $ do
@@ -450,14 +469,10 @@ serveMergedPackument serving evalCtx record privResult pubResult
     unheldAnswer
         | noRecordedCopy = Just (notFound (unheldMessage deps))
         | otherwise = Nothing
-    -- With no other cause, documents that dropped every version entry refuse the listing and log why on every
-    -- request, as the metadata cache logs a drop only when it reads. Documents that list no version leave a 404.
-    unlisted refused = case [(upstream, url, manifest) | (upstream, url, result) <- origins, Just manifest <- [originManifest result], droppedEveryEntry manifest] of
+    -- With no other cause, documents that dropped every version entry refuse the listing. Documents that list no version leave a 404.
+    unlisted refused = case [upstream | (upstream, result) <- [("the private upstream", privResult), ("the public upstream", pubResult)], maybe False droppedEveryEntry (originManifest result)] of
         [] -> notFound "no upstream lists a version of the requested package"
-        dropped -> do
-            for_ dropped $ \(_, url, manifest) -> logRefusedEntries name url (infoInvalidEntries (manifestInfo manifest))
-            noServeableVersions serving (ctxAdvisoryEtag evalCtx) refused [malformedEntries [upstream | (upstream, _, _) <- dropped]]
-    origins = [("the private upstream", maybe "" registryUrlText (pdPrivateBaseUrl deps), privResult), ("the public upstream", registryUrlText (pdPublicBaseUrl deps), pubResult)]
+        dropped -> noServeableVersions serving (ctxAdvisoryEtag evalCtx) refused [malformedEntries dropped]
     -- Beside a private 404, a coordinate lookup releases the recorded versions the public document lacks too, so
     -- their artifacts answer 404 as on Cargo and PyPI. A listing keeps them.
     goneFromBoth pending = case originManifest pubResult of
@@ -571,7 +586,8 @@ packumentPlan sources trustedVersions deniedEvidence = do
 serveResolved :: PackumentServing response -> [Contribution] -> MergePlan -> Handler response
 serveResolved serving sources plan = do
     warnDivergences (servingMetrics serving) (psvName serving) plan
-    liftIO (mpServeDecision (servingMetrics serving) Metric.Admit)
+    -- A coordinate lookup records its decision once it finds or misses its coordinate.
+    when (isNothing (psvAbsent serving)) $ liftIO (mpServeDecision (servingMetrics serving) Metric.Admit)
     psvResolved serving serving sources plan
 
 answerPackumentConditional :: PackumentServing response -> [Contribution] -> MergePlan -> Handler response
