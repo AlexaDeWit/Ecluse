@@ -27,7 +27,7 @@ both:
 | Endpoint | What it reports | When it answers `503` |
 |---|---|---|
 | `GET /livez` | Process liveness: `200` while the process is healthy. | The process is not healthy, or its mirror worker's consume loop stalled. |
-| `GET /readyz` | Whether the role can accept its work. | Startup, drain, a pending first advisory sync, or a latched Dredger cap halt. |
+| `GET /readyz` | Whether the role can accept its work. | Startup, a pending first advisory sync, or a latched Dredger cap halt. |
 
 On a process that runs no mirror worker, liveness is the listener alone. The readiness advisory gate
 lifts once any mount whose rules deny on the advisory database completes its first sync, and a mount
@@ -63,7 +63,7 @@ keyed by ecosystem, and each
 value is `ready` or `awaiting the advisory database that ecluse pilot publishes`. A missing PyPI
 database therefore leaves a healthy npm mount routable, and the body names PyPI as the mount still
 waiting. A latched Dredger reports
-`halted` instead, and a draining instance reports `draining`. Readiness does not itself block direct
+`halted` instead. Readiness does not itself block direct
 requests: a request that needs advisory data its mount does not have is refused by that mount's own
 `onUnavailable` policy. A rule that admits without reading the database admits only when no
 advisory rule ranked above it refuses first. A configured source puts the MAL default above every
@@ -108,19 +108,27 @@ inside a part gets `400` too. Mirror, Pilot, and Dredger expose their health pro
 
 ## Graceful shutdown and pod drain
 
-On `SIGTERM`/`SIGINT` Écluse drains in-flight work rather than dropping it. `GET /readyz` flips
-to `503`, which is the signal a load balancer or mesh watches to stop routing new traffic here,
-while `GET /livez` stays `200`, so an orchestrator does not kill a still-draining instance early.
-Every response then carries `Connection: close`, and a keep-alive pool reconnects to a ready
-instance. In-flight requests and artifact streams can finish within the drain window.
-Remaining transfers can stop when the timeout expires.
+On `SIGTERM`/`SIGINT` Écluse drains in-flight work rather than dropping it. Every role drains the
+same way, Mirror, Pilot, and the Dredger included:
+
+1. Écluse closes its listening socket, so every new connection is refused. That includes the health
+   probes: `/readyz` and `/livez` fail by refusal, not by a `503`.
+2. A response still in flight carries `Connection: close`, so a keep-alive client reconnects to
+   another instance.
+3. In-flight requests and artifact streams can finish within the drain window. Remaining transfers
+   can stop when the timeout expires.
 
 `ECLUSE_SERVER__SHUTDOWN_DRAIN_TIMEOUT` bounds the drain at 30 seconds by default. **Set the
 platform's termination grace period above it**, so the orchestrator does not `SIGKILL` mid-drain.
 On Kubernetes that is `terminationGracePeriodSeconds`. A second `SIGINT` or `SIGTERM` hard-stops
-the process wherever it runs: the drain handler fires once, and the runtime default takes the next
-signal. `Ctrl+D` forces the same immediate halt, and that path is armed only when standard input is
-a TTY.
+the process wherever it runs: the shutdown handler fires once, and the runtime default takes the
+next signal. `Ctrl+D` forces the same immediate halt, and that path is armed only when standard
+input is a TTY.
+
+Kubernetes removes a terminating pod from its Service endpoints at about the time `SIGTERM`
+arrives, and load balancers learn of the removal later. A client routed to the pod in that gap has
+its connection refused. A `preStop` sleep holds the signal back until routing catches up. Set
+`terminationGracePeriodSeconds` above the sleep and the drain timeout together.
 
 ## Exit codes
 

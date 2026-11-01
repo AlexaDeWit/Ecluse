@@ -28,11 +28,6 @@ module Ecluse.Runtime.Server (
     probeOnlyApplication,
 
     -- * Graceful shutdown
-    DrainSignal,
-    newDrainSignal,
-    neverDraining,
-    beginDrain,
-    isDraining,
     ShutdownDrainTimeout (..),
     defaultShutdownDrainTimeout,
 
@@ -46,20 +41,15 @@ module Ecluse.Runtime.Server (
 ) where
 
 import Ecluse.Runtime.Server.Internal (
-    DrainSignal,
     InteractiveHalt (..),
     MountBinding (..),
     ServerConfig (..),
     ShutdownDrainTimeout (..),
     application,
-    beginDrain,
     defaultInteractiveHalt,
     defaultShutdownDrainTimeout,
-    isDraining,
     listeningPrefix,
     mkServerConfig,
-    neverDraining,
-    newDrainSignal,
     probeApplication,
     probeOnlyApplication,
     proxyListener,

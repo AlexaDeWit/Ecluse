@@ -17,7 +17,7 @@ import Database.SQLite.Simple (execute_, withConnection)
 import Katip (LogEnv, SimpleLogPayload, closeScribes, runKatipContextT)
 import Network.HTTP.Client (HttpException, defaultManagerSettings, httpNoBody, newManager, parseRequest)
 import Network.HTTP.Client qualified as HttpClient
-import Network.HTTP.Types (Header, Method, Status, hConnection, hContentType, methodDelete, methodGet, methodHead, methodPost, methodPut, status200, status404, status500, statusCode)
+import Network.HTTP.Types (Header, Method, Status, hContentType, methodDelete, methodGet, methodHead, methodPost, methodPut, status200, status404, status500, statusCode)
 import Network.Wai (
     Application,
     Response,
@@ -79,21 +79,16 @@ import Ecluse.Cve.Sync (CveSyncHandle (csClock, csEnv, csReady), cveRuleDepsFor,
 import Ecluse.Runtime.Cve.Sync.Internal (CveFetch (..), OsvDbFetchFault (OsvDbTransport), SyncEnv (..), SyncHooks (..), SyncSchedule (..), runCveSync)
 import Ecluse.Runtime.Env (envWorkerHeartbeat, recordPoll)
 import Ecluse.Runtime.Server.Internal (
-    DrainSignal,
     MountBinding (..),
     ServerConfig (..),
     ShutdownDrainTimeout (..),
     application,
-    beginDrain,
-    isDraining,
     listeningPrefix,
     mkServerConfig,
-    newDrainSignal,
     perimeterGuard,
     probeOnlyApplication,
     proxyListener,
     raceServerAgainstLoop,
-    runWarp,
     serveBound,
  )
 import Ecluse.Runtime.Telemetry (telemetryDisabled)
@@ -102,7 +97,7 @@ import Ecluse.Runtime.Test.Support (newTestEnv, newTestEnvLogging)
 import Ecluse.Service (mountBindingFor)
 import Ecluse.Test.Cve (fakeCveDb)
 import Ecluse.Test.Deadline (withSweeper)
-import Ecluse.Test.Log (captureJsonLog, memoryLogEnv, moduleOfLineWhere, newTestLogEnv, untaggedLines)
+import Ecluse.Test.Log (captureJsonLog, memoryLogEnv, moduleOfLineWhere, untaggedLines)
 import Ecluse.Test.Osv (mkDbWithWrongEpoch, mkMinimalValidDbWithMeta)
 import Ecluse.Test.Package (validSha256, validSha256Sri)
 import Ecluse.Test.Poll (awaitUntil, pollUntil)
@@ -204,19 +199,6 @@ deadProbeOnlyApp deadlines = probeOnlyApplication deadlines ((mkServerConfig [])
 notLive :: Liveness
 notLive = Liveness{liveHealthy = False, liveLastPoll = Nothing}
 
--- An npm mount whose 'DrainSignal' is __already raised__, as mid-shutdown, with no socket bound.
-drainingApp :: Deadlines -> IO Application
-drainingApp deadlines = do
-    drain <- raisedDrain
-    application (mkServerConfig [mountAt ("npm" :| []) npmRouter]){scDrain = drain} <$> newTestEnv deadlines
-
--- | A live 'DrainSignal' raised into the draining state.
-raisedDrain :: IO DrainSignal
-raisedDrain = do
-    drain <- newDrainSignal
-    beginDrain drain
-    pure drain
-
 -- An npm mount whose readiness is the Dredger's halt latch, which @\/readyz@ renders with no @mounts@ object.
 latchedApp :: Deadlines -> IO Application
 latchedApp deadlines =
@@ -235,13 +217,6 @@ stalledWorkerApp deadlines = do
     let cfg = (mkServerConfig [mountAt ("npm" :| []) npmRouter]){scCheckLive = heartbeatLivenessNow (envWorkerHeartbeat env)}
     pure (application cfg env)
 
--- Passes only without a @Connection@ header, which @hspec-wai@'s '<:>' cannot assert.
-matchNoConnectionHeader :: MatchHeader
-matchNoConnectionHeader = MatchHeader $ \headers _body ->
-    if any ((== hConnection) . fst) headers
-        then Just "expected no Connection header, but one was present"
-        else Nothing
-
 spec :: Spec
 spec = do
     perimeterGuardSpec
@@ -251,7 +226,6 @@ spec = do
     startupAdvisorySpec
     refusedRenderSpec
     requestLogContextSpec
-    runWarpDrainWiringSpec
     listeningLineSpec
     raceServerAgainstLoopSpec
     uncodedRoutesSpec
@@ -275,30 +249,8 @@ spec = do
                 -- past the threshold flips /livez to 503 even while the front door still serves.
                 get "/livez" `shouldRespondWith` 503
 
-            it "keeps /readyz at 200 (readiness ignores worker staleness; it is not draining)" $
-                -- Readiness gates only on the drain signal, so a stalled worker fails /livez and
-                -- never /readyz.
+            it "keeps /readyz at 200 (readiness ignores worker staleness)" $
                 get "/readyz" `shouldRespondWith` 200
-
-    describe "graceful shutdown -- readiness flip while draining" $
-        withSweptApp drainingApp $ do
-            it "fails /readyz with 503 (the LB stops routing new traffic here)" $
-                get "/readyz" `shouldRespondWith` 503
-
-            it "keeps /livez at 200 (a draining instance is alive, not unhealthy)" $
-                get "/livez" `shouldRespondWith` 200
-
-    describe "graceful shutdown -- going-away header" $ do
-        withSweptApp drainingApp $
-            it "stamps Connection: close on a response while draining" $
-                -- A keep-alive pool (a client's, or a mesh's) must not reuse a socket
-                -- on a closing instance. The header is what tells it to close.
-                get "/npm/-/ping"
-                    `shouldRespondWith` 200{matchHeaders = ["Connection" <:> "close"]}
-
-        withSweptApp npmMountApp $
-            it "adds no Connection header when not draining" $
-                get "/npm/-/ping" `shouldRespondWith` 200{matchHeaders = [matchNoConnectionHeader]}
 
     describe "meta-routes under a mount" $
         withSweptApp npmMountApp $ do
@@ -577,29 +529,6 @@ escapingBeforeCommit :: MountRouter -> MountRouter
 escapingBeforeCommit router method headers segments = case router method headers segments of
     RouteAction contract (RunPipeline fallback _) -> RouteAction contract (RunPipeline fallback (\_ _ -> throwIO (RelayContractEscape "escaped before commit")))
     action -> action
-
--- The application builder raises it on receipt of its config, so 'runWarp' unwinds before binding a socket.
-data AbortLaunch = AbortLaunch
-    deriving stock (Eq, Show)
-
-instance Exception AbortLaunch
-
--- | Exercise the live drain signal allocated by runWarp instead of an injected fixture signal.
-runWarpDrainWiringSpec :: Spec
-runWarpDrainWiringSpec = describe "runWarp -- graceful-drain wiring (issue #841)" $
-    it "hands the application builder the live drain, not the inert neverDraining" $ do
-        captured <- newEmptyMVar
-        -- The scDrain from mkServerConfig is neverDraining, so an app closed over that inert
-        -- signal would never see a drain. Abort before warp binds a socket.
-        let getApp cfg = putMVar captured (scDrain cfg) >> throwIO AbortLaunch
-        logEnv <- newTestLogEnv
-        runWarp logEnv "probe" (mkServerConfig []) getApp `shouldThrow` (== AbortLaunch)
-        drain <- takeMVar captured
-        -- A live, lowered signal: raising it is observable. neverDraining's raise is a
-        -- no-op, so an inert signal would stay False where this one flips True.
-        isDraining drain `shouldReturn` False
-        beginDrain drain
-        isDraining drain `shouldReturn` True
 
 -- Pin the line 'runWarp' logs once bound, through 'serveBound', which installs no process-wide signal handlers.
 listeningLineSpec :: Spec
