@@ -30,11 +30,6 @@ module Ecluse.Runtime.Server.Internal (
     perimeterGuard,
 
     -- * Graceful shutdown
-    DrainSignal,
-    newDrainSignal,
-    neverDraining,
-    beginDrain,
-    isDraining,
     ShutdownDrainTimeout (..),
     defaultShutdownDrainTimeout,
 
@@ -81,22 +76,12 @@ import Ecluse.Core.Telemetry.Record (MetricsPort (mpRequestPerimeterFault))
 import Ecluse.Core.Worker (Liveness, alwaysLive)
 import Ecluse.Runtime.Env (Env, envDdContext, envDeadlines, envLogEnv, envTelemetry, serveRuntimeOf)
 import Ecluse.Runtime.Log (moduleField, moduleLog)
-import Ecluse.Runtime.Server.Drain (
-    DrainSignal,
-    ShutdownDrainTimeout (..),
-    beginDrain,
-    defaultShutdownDrainTimeout,
-    isDraining,
-    neverDraining,
-    newDrainSignal,
- )
 import Ecluse.Runtime.Server.Halt (
     InteractiveHalt (..),
     defaultInteractiveHalt,
     withInteractiveHalt,
  )
 import Ecluse.Runtime.Server.Middleware (
-    goingAwayMiddleware,
     jsonResponse,
     probeApplication,
     requestTimeout,
@@ -114,17 +99,13 @@ data ServerConfig = ServerConfig
     {- ^ The mounts served. The first whose prefix matches the request's leading segments
     wins, and a path under no mount is the neutral @404@.
     -}
-    , scDrain :: DrainSignal
-    {- ^ The shutdown-drain flag the front door observes. Once raised, the readiness probe
-    fails and every response carries @Connection: close@. Defaults to 'neverDraining'.
-    -}
     , scDrainTimeout :: ShutdownDrainTimeout
     {- ^ How long the graceful drain waits for in-flight requests and in-progress
     artifact streams to finish before the process exits ('defaultShutdownDrainTimeout').
     -}
     , scCheckReady :: IO Readiness
-    {- ^ The readiness verdict the composition root installs, which @\/readyz@ renders and the
-    drain check overrides. Each mount's flip is one way, so readiness never flaps a pod out of rotation.
+    {- ^ The readiness verdict the composition root installs, which @\/readyz@ renders. Each
+    mount's flip is one way, so readiness never flaps a pod out of rotation.
     -}
     , scCheckLive :: IO Liveness
     {- ^ The liveness check @\/livez@ answers from, beyond the listener itself. A worker
@@ -144,7 +125,6 @@ mkServerConfig mounts =
     ServerConfig
         { scPort = defaultPort
         , scMounts = mounts
-        , scDrain = neverDraining
         , scDrainTimeout = defaultShutdownDrainTimeout
         , scCheckReady = pure alwaysReady
         , scCheckLive = pure alwaysLive
@@ -155,21 +135,32 @@ mkServerConfig mounts =
 defaultPort :: Int
 defaultPort = 4873
 
+{- | The bound on the graceful drain, in seconds. The server stops accepting connections,
+waits this long for in-flight requests and artifact streams, then exits regardless.
+-}
+newtype ShutdownDrainTimeout = ShutdownDrainTimeout Int
+    deriving stock (Eq, Show)
+
+{- | The default graceful-drain bound: 30 seconds. It covers an in-flight metadata fetch or
+a moderate artifact stream, and stops a stuck request pinning the old instance.
+-}
+defaultShutdownDrainTimeout :: ShutdownDrainTimeout
+defaultShutdownDrainTimeout = ShutdownDrainTimeout 30
+
 {- | The proxy's WAI 'Application': the request dispatch under the cross-cutting
 middleware stack ('serverMiddleware').
 -}
 application :: ServerConfig -> Env -> Application
-application cfg env = serverMiddleware (envDeadlines env) cfg (dispatch cfg env)
+application cfg env = serverMiddleware (envDeadlines env) (dispatch cfg env)
 
 {- | The WAI 'Application' of a role that serves the health probes and nothing else. Every
 path outside @\/livez@ and @\/readyz@ is the neutral @404@.
 -}
 probeOnlyApplication :: Deadlines -> ServerConfig -> IO Application
-probeOnlyApplication deadlines cfg = pure (serverMiddleware deadlines cfg (probesOf cfg))
+probeOnlyApplication deadlines cfg = pure (serverMiddleware deadlines (probesOf cfg))
 
--- The health probes over one config's drain signal and injected checks.
 probesOf :: ServerConfig -> Application
-probesOf cfg = probeApplication (scDrain cfg) (scCheckReady cfg) (scCheckLive cfg)
+probesOf cfg = probeApplication (scCheckReady cfg) (scCheckLive cfg)
 
 {- | 'application' with the OpenTelemetry server-span middleware wrapped __outermost__, so
 one server span covers the whole request. The wrapper is 'id' when telemetry is off.
@@ -288,31 +279,27 @@ dropTrailingSlashes = dropWhileEnd (== "")
 {- | The cross-cutting stack around the proxy 'Application'. The body cap is not a middleware:
 it would throw across the request perimeter, and @Autohead@ and @Gzip@ fight streaming.
 -}
-serverMiddleware :: Deadlines -> ServerConfig -> Middleware
-serverMiddleware deadlines cfg =
-    realIp
-        . requestTimeout deadlines requestTimeoutSeconds
-        . goingAwayMiddleware (scDrain cfg)
+serverMiddleware :: Deadlines -> Middleware
+serverMiddleware deadlines = realIp . requestTimeout deadlines requestTimeoutSeconds
 
-{- | Serve the front door over one live 'DrainSignal', which the probe, the going-away header,
-and the shutdown handler share. @warp@ drains under 'scDrainTimeout', and a TTY adds Ctrl-D.
+{- | Serve the application built from the config until @SIGTERM@ or @SIGINT@, then let @warp@
+finish in-flight requests within 'scDrainTimeout'. On a TTY, Ctrl-D halts at once.
 -}
 runWarp :: LogEnv -> Text -> ServerConfig -> (ServerConfig -> IO Application) -> IO ()
-runWarp logEnv listener cfg0 getApp = do
-    drain <- newDrainSignal
-    let cfg = cfg0{scDrain = drain}
-        ShutdownDrainTimeout timeoutSecs = scDrainTimeout cfg
-        settings =
-            Warp.setPort (scPort cfg)
-                . Warp.setInstallShutdownHandler (installShutdownHandler drain)
-                . Warp.setGracefulShutdownTimeout (Just timeoutSecs)
-                . Warp.setOnException (scOnException cfg)
-                -- Defence in depth for a fault with no mount context, from a middleware or
-                -- warp itself: a neutral 500 with no detail. A handler escape never gets here.
-                . Warp.setOnExceptionResponse (const onExceptionResponse)
-                $ Warp.defaultSettings
+runWarp logEnv listener cfg getApp = do
     app <- getApp cfg
     withInteractiveHalt defaultInteractiveHalt (serveBound logEnv listener settings app)
+  where
+    ShutdownDrainTimeout timeoutSecs = scDrainTimeout cfg
+    settings =
+        Warp.setPort (scPort cfg)
+            . Warp.setInstallShutdownHandler installShutdownHandler
+            . Warp.setGracefulShutdownTimeout (Just timeoutSecs)
+            . Warp.setOnException (scOnException cfg)
+            -- Defence in depth for a fault with no mount context, from a middleware or
+            -- warp itself: a neutral 500 with no detail. A handler escape never gets here.
+            . Warp.setOnExceptionResponse (const onExceptionResponse)
+            $ Warp.defaultSettings
 
 -- | Bind as 'Warp.runSettings' does, log the bound port, then serve.
 serveBound :: LogEnv -> Text -> Warp.Settings -> Application -> IO ()
@@ -342,14 +329,14 @@ listeningPrefix listener = listener <> " listening on port "
 onExceptionResponse :: Response
 onExceptionResponse = jsonResponse status500 "{\"error\":\"internal server error\"}"
 
-{- On @SIGTERM@ or @SIGINT@, raise the drain before closing the socket, so readiness fails and
-responses carry @Connection: close@ first. 'CatchOnce' leaves the second to the runtime.
+{- On @SIGTERM@ or @SIGINT@, close the listening socket: @warp@ refuses new connections and closes each
+connection after its current response. 'CatchOnce' leaves each signal's second delivery to the runtime.
 -}
-installShutdownHandler :: DrainSignal -> IO () -> IO ()
-installShutdownHandler drain closeSocket =
+installShutdownHandler :: IO () -> IO ()
+installShutdownHandler closeSocket =
     traverse_ install [Posix.sigTERM, Posix.sigINT]
   where
-    install sig = Posix.installHandler sig (Posix.CatchOnce (beginDrain drain >> closeSocket)) Nothing
+    install sig = Posix.installHandler sig (Posix.CatchOnce closeSocket) Nothing
 
 {- | Race a server arm against a never-returning background loop, the single-process shutdown
 shape. 'race_' is the invariant: 'concurrently_' would wait forever, brackets un-unwound.

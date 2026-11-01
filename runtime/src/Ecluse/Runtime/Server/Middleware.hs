@@ -2,18 +2,13 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | The front door's cross-cutting middleware pieces and its control-plane health endpoints: the
-request timeout, the drain-aware going-away header, and the @\/livez@ \/ @\/readyz@ probe
-application. "Ecluse.Runtime.Server"'s @serverMiddleware@ composes the pieces around the proxy
-'Application', and its dispatch answers the probes through 'probeApplication'. The request-body cap
-is a route concern, enforced where the only body-consuming route (publish) reads its body.
+{- | The front door's request timeout and its control-plane health probes, @\/livez@ and @\/readyz@.
+The request-body cap is a route concern, enforced where the only body-consuming route (publish)
+reads its body.
 -}
 module Ecluse.Runtime.Server.Middleware (
     -- * The request timeout
     requestTimeout,
-
-    -- * Drain-aware going-away header
-    goingAwayMiddleware,
 
     -- * Control-plane health probes
     probeApplication,
@@ -25,8 +20,8 @@ module Ecluse.Runtime.Server.Middleware (
 import Data.Aeson (Value, encode, object, (.=))
 import Data.Aeson.Key qualified as Key
 import Data.Map.Strict qualified as Map
-import Network.HTTP.Types (Status, hConnection, hContentType, status200, status404, status503)
-import Network.Wai (Application, Middleware, Response, mapResponseHeaders, modifyResponse, pathInfo, responseLBS)
+import Network.HTTP.Types (Status, hContentType, status200, status404, status503)
+import Network.Wai (Application, Middleware, Response, pathInfo, responseLBS)
 
 import Ecluse.Core.Deadline (Deadlines, timeout)
 import Ecluse.Core.Ecosystem (Ecosystem, ecosystemName)
@@ -36,7 +31,6 @@ import Ecluse.Core.Server.Readiness (
     routable,
  )
 import Ecluse.Core.Worker (Liveness (liveHealthy, liveLastPoll))
-import Ecluse.Runtime.Server.Drain (DrainSignal, isDraining)
 
 {- | Answer an empty @503@ for a request that outlives this many seconds, about one sweep late. Like
 wai-extra's @timeout@, it answers even when a response has already begun.
@@ -45,28 +39,14 @@ requestTimeout :: Deadlines -> Int -> Middleware
 requestTimeout deadlines seconds app request respond =
     timeout deadlines (seconds * 1_000_000) (app request respond) >>= maybe (respond (responseLBS status503 [] "")) pure
 
-{- | While the instance is draining, stamp @Connection: close@ on every response. A keep-alive
-client or a mesh connection pool then stops reusing the socket on a closing instance.
+{- | The control-plane health probes, answered above any mount: @\/livez@ and @\/readyz@ from the
+injected checks. Any other path is a @404@.
 -}
-goingAwayMiddleware :: DrainSignal -> Middleware
-goingAwayMiddleware drain app request respond = do
-    draining <- isDraining drain
-    if draining
-        then modifyResponse closeConnection app request respond
-        else app request respond
-
--- A streaming response keeps streaming: only its headers are rewritten.
-closeConnection :: Response -> Response
-closeConnection = mapResponseHeaders ((hConnection, "close") :)
-
-{- | The control-plane health probes, answered above any mount: @\/livez@ from the injected
-liveness check, @\/readyz@ from the drain signal and startup gate. Any other path is a @404@.
--}
-probeApplication :: DrainSignal -> IO Readiness -> IO Liveness -> Application
-probeApplication drain checkReady checkLiveness request respond =
+probeApplication :: IO Readiness -> IO Liveness -> Application
+probeApplication checkReady checkLiveness request respond =
     case pathInfo request of
         ["livez"] -> checkLiveness >>= respond . livenessResponse
-        ["readyz"] -> readiness drain checkReady >>= respond
+        ["readyz"] -> checkReady >>= respond . readinessResponse
         _ -> respond notFound
 
 {- The @\/livez@ body carries the loop's last recorded progress beside the verdict, so a
@@ -79,15 +59,6 @@ livenessResponse liveness
     body :: Status -> Text -> Response
     body status label =
         jsonResponse status (encode (object ["status" .= label, "lastPoll" .= liveLastPoll liveness]))
-
-{- Readiness stays lenient about public-upstream reachability, because the proxy still serves
-private-upstream hits when public is down. A blip must not flap a healthy pod out of rotation.
--}
-readiness :: DrainSignal -> IO Readiness -> IO Response
-readiness drain checkReady =
-    isDraining drain >>= \case
-        True -> pure (statusOnly status503 "draining")
-        False -> readinessResponse <$> checkReady
 
 {- The body names every configured mount beside the verdict, so an operator sees which ecosystem
 awaits its advisory database while the others keep serving. -}

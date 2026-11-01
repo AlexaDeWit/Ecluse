@@ -38,12 +38,9 @@ import Ecluse.Core.Worker (Liveness (Liveness), alwaysLive)
 import Ecluse.Dredger (dredgerServerConfig)
 import Ecluse.Mirror (mirrorServerConfig)
 import Ecluse.Runtime.Server (
-    ServerConfig (scCheckLive, scCheckReady, scDrain, scDrainTimeout, scMounts, scOnException, scPort),
+    ServerConfig (scCheckLive, scCheckReady, scDrainTimeout, scMounts, scOnException, scPort),
     ShutdownDrainTimeout (ShutdownDrainTimeout),
-    beginDrain,
-    isDraining,
     mkServerConfig,
-    newDrainSignal,
  )
 import Ecluse.Test.Env (withEnvVars)
 import Ecluse.Test.Log (captureStderrWith, captureStdout, newTestLogEnv)
@@ -148,9 +145,8 @@ spec = sequential $ do
                     scPort cfg `shouldBe` 9231
                     null (scMounts cfg) `shouldBe` True
 
-        it "preserves the role probes, exception observer, and live drain signal" $ do
+        it "preserves the role probes and exception observer" $ do
             appConfig <- expectAppConfig [("ECLUSE_SERVER__SHUTDOWN_DRAIN_TIMEOUT", "7")] Nothing
-            drain <- newDrainSignal
             observed <- newIORef False
             let live = Liveness False Nothing
                 cfg =
@@ -158,16 +154,12 @@ spec = sequential $ do
                         (mkServerConfig [])
                             { scCheckReady = pure Latched
                             , scCheckLive = pure live
-                            , scDrain = drain
                             , scOnException = \_ _ -> writeIORef observed True
                             }
             scCheckReady cfg `shouldReturn` Latched
             scCheckLive cfg `shouldReturn` live
             scOnException cfg Nothing (toException (BootAborted "test observer"))
             readIORef observed `shouldReturn` True
-            isDraining (scDrain cfg) `shouldReturn` False
-            beginDrain drain
-            isDraining (scDrain cfg) `shouldReturn` True
 
     describe "the deadline sweeper" $ do
         it "fires a deadline armed inside the role" $ do

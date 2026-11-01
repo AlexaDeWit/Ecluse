@@ -721,7 +721,6 @@ library ecluse-runtime
     Ecluse.Runtime.Queue.Sqs
     Ecluse.Runtime.Queue.Sqs.Internal
     Ecluse.Runtime.Server
-    Ecluse.Runtime.Server.Drain
     Ecluse.Runtime.Server.Halt
     Ecluse.Runtime.Server.Internal
     Ecluse.Runtime.Server.Middleware
@@ -1691,7 +1690,6 @@ test-suite ecluse-runtime-unit
     Ecluse.Runtime.Maintenance.CodeArtifact.Support
     Ecluse.Runtime.Maintenance.CodeArtifactSpec
     Ecluse.Runtime.Queue.SqsSpec
-    Ecluse.Runtime.Server.DrainSpec
     Ecluse.Runtime.Server.HaltSpec
     Ecluse.Runtime.Server.InternalSpec
     Ecluse.Runtime.Server.MiddlewareSpec

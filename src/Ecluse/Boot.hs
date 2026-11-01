@@ -283,7 +283,7 @@ buildMirrorQueue logEnv memoryDepth plan = do
     whenJust (deadLetterTerminusWarning plan (deliveryBudget queue) (deadLetterTerminus queue)) (logBootWarning logEnv)
     pure queue
 
--- | Apply the shared listener settings without replacing role hooks or the launch's drain signal.
+-- | Apply the shared listener settings without replacing role hooks.
 applyServerSettings :: ServerSettings -> ServerConfig -> ServerConfig
 applyServerSettings settings cfg =
     cfg
